@@ -1,0 +1,37 @@
+    /**
+     * Use this method to have this RowMutation applied
+     * across all replicas. This method will take care
+     * of the possibility of a replica being down and hint
+     * the data across to some other replica. 
+     * @param RowMutation the mutation to be applied 
+     *                    across the replicas
+    */
+    public static void insert(RowMutation rm)
+    {
+        /*
+         * Get the N nodes from storage service where the data needs to be
+         * replicated
+         * Construct a message for write
+         * Send them asynchronously to the replicas.
+        */
+        try
+        {
+            logger_.debug(" insert");
+            Map<EndPoint, EndPoint> endpointMap = StorageService.instance().getNStorageEndPointMap(rm.key());
+            // TODO: throw a thrift exception if we do not have N nodes
+            RowMutationMessage rmMsg = new RowMutationMessage(rm); 
+            /* Create the write messages to be sent */
+            Map<EndPoint, Message> messageMap = createWriteMessages(rmMsg, endpointMap);
+            Set<EndPoint> endpoints = messageMap.keySet();
+            for(EndPoint endpoint : endpoints)
+            {
+                MessagingService.getMessagingInstance().sendOneWay(messageMap.get(endpoint), endpoint);
+            }
+        }
+        catch (Exception e)
+        {
+            logger_.info( LogUtil.throwableToString(e) );
+        }
+        return;
+    }
+

@@ -1,0 +1,45 @@
+    /*
+     * Called after the Memtable flushes its in-memory data. This information is
+     * cached in the ColumnFamilyStore. This is useful for reads because the
+     * ColumnFamilyStore first looks in the in-memory store and the into the
+     * disk to find the key. If invoked during recoveryMode the
+     * onMemtableFlush() need not be invoked.
+     *
+     * param @ filename - filename just flushed to disk
+     * param @ bf - bloom filter which indicates the keys that are in this file.
+    */
+    void storeLocation(String filename, BloomFilter bf) throws IOException
+    {
+        boolean doCompaction = false;
+        int ssTableSize = 0;
+    	lock_.writeLock().lock();
+        try
+        {
+            ssTables_.add(filename);
+            SSTable.storeBloomFilter(filename, bf);
+            ssTableSize = ssTables_.size();
+        }
+        finally
+        {
+        	lock_.writeLock().unlock();
+        }
+        if (ssTableSize >= threshHold_ && !isCompacting_.get())
+        {
+            doCompaction = true;
+        }
+
+        if (isCompacting_.get())
+        {
+            if ( ssTableSize % threshHold_ == 0 )
+            {
+                doCompaction = true;
+            }
+        }
+        if ( doCompaction )
+        {
+            logger_.debug("Submitting for  compaction ...");
+            MinorCompactionManager.instance().submit(ColumnFamilyStore.this);
+            logger_.debug("Submitted for compaction ...");
+        }
+    }
+

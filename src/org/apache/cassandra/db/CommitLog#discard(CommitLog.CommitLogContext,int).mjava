@@ -1,0 +1,86 @@
+    /*
+     * Check if old commit logs can be deleted. However we cannot
+     * do this anymore in the Fast Sync mode and hence I think we
+     * should get rid of Fast Sync mode altogether. If there is
+     * a pathological event where few CF's are rarely being updated
+     * then their Memtable never gets flushed.
+     * This will prevent commit logs from being deleted. WE NEED to
+     * fix this using some hueristic and force flushing such Memtables.
+     *
+     * param @ cLogCtx The commitLog context .
+     * param @ id id of the columnFamily being flushed to disk.
+     *
+    */
+    private void discard(CommitLog.CommitLogContext cLogCtx, int id) throws IOException
+    {
+        /* retrieve the commit log header associated with the file in the context */
+        CommitLogHeader commitLogHeader = clHeaders_.get(cLogCtx.file());
+        if(commitLogHeader == null )
+        {
+            if( logFile_.equals(cLogCtx.file()) )
+            {
+                /* this means we are dealing with the current commit log. */
+                commitLogHeader = clHeader_;
+                clHeaders_.put(cLogCtx.file(), clHeader_);
+            }
+            else
+                return;
+        }
+        /*
+         * We do any processing only if there is a change in the position in the context.
+         * This can happen if an older Memtable's flush comes in after a newer Memtable's
+         * flush. Right now this cannot happen since Memtables are flushed on a single
+         * thread.
+        */
+        if ( cLogCtx.position() < commitLogHeader.getPosition(id) )
+            return;
+        commitLogHeader.turnOff(id);
+        /* Sort the commit logs based on creation time */
+        List<String> oldFiles = new ArrayList<String>(clHeaders_.keySet());
+        Collections.sort(oldFiles, new CommitLogFileComparator());
+        List<String> listOfDeletedFiles = new ArrayList<String>();
+        /*
+         * Loop through all the commit log files in the history. Now process
+         * all files that are older than the one in the context. For each of
+         * these files the header needs to modified by performing a bitwise &
+         * of the header with the header of the file in the context. If we
+         * encounter the file in the context in our list of old commit log files
+         * then we update the header and write it back to the commit log.
+        */
+        for(String oldFile : oldFiles)
+        {
+            if(oldFile.equals(cLogCtx.file()))
+            {
+                /*
+                 * We need to turn on again. This is because we always keep
+                 * the bit turned on and the position indicates from where the
+                 * commit log needs to be read. When a flush occurs we turn off
+                 * perform & operation and then turn on with the new position.
+                */
+                commitLogHeader.turnOn(id, cLogCtx.position());
+                writeCommitLogHeader(cLogCtx.file(), commitLogHeader.toByteArray());
+                break;
+            }
+            else
+            {
+                CommitLogHeader oldCommitLogHeader = clHeaders_.get(oldFile);
+                oldCommitLogHeader.and(commitLogHeader);
+                if(oldCommitLogHeader.isSafeToDelete())
+                {
+                	logger_.debug("Deleting commit log:"+ oldFile);
+                    FileUtils.deleteAsync(oldFile);
+                    listOfDeletedFiles.add(oldFile);
+                }
+                else
+                {
+                    writeCommitLogHeader(oldFile, oldCommitLogHeader.toByteArray());
+                }
+            }
+        }
+
+        for ( String deletedFile : listOfDeletedFiles)
+        {
+            clHeaders_.remove(deletedFile);
+        }
+    }
+

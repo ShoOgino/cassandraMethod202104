@@ -1,0 +1,57 @@
+    protected MessagingService()
+    {        
+        for ( ReservedVerbs_ verbs : ReservedVerbs_.values() )
+        {
+            reservedVerbs_.put(verbs.toString(), verbs.toString());
+        }
+        verbHandlers_ = new HashMap<String, IVerbHandler>();        
+        endPoints_ = new HashSet<EndPoint>();
+        /*
+         * Leave callbacks in the cachetable long enough that any related messages will arrive
+         * before the callback is evicted from the table. The concurrency level is set at 128
+         * which is the sum of the threads in the pool that adds shit into the table and the 
+         * pool that retrives the callback from here.
+        */ 
+        int maxSize = MessagingConfig.getMessagingThreadCount();
+        callbackMap_ = new Cachetable<String, IAsyncCallback>( 2 * DatabaseDescriptor.getRpcTimeout() );
+        taskCompletionMap_ = new Cachetable<String, IAsyncResult>( 2 * DatabaseDescriptor.getRpcTimeout() );        
+        
+        messageDeserializationExecutor_ = new DebuggableThreadPoolExecutor( maxSize,
+                maxSize,
+                Integer.MAX_VALUE,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(),
+                new ThreadFactoryImpl("MESSAGING-SERVICE-POOL")
+                );
+                
+        messageSerializerExecutor_ = new DebuggableThreadPoolExecutor( maxSize,
+                maxSize,
+                Integer.MAX_VALUE,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(),
+                new ThreadFactoryImpl("MESSAGE-SERIALIZER-POOL")
+                ); 
+        
+        messageDeserializerExecutor_ = new DebuggableThreadPoolExecutor( maxSize,
+                maxSize,
+                Integer.MAX_VALUE,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(),
+                new ThreadFactoryImpl("MESSAGE-DESERIALIZER-POOL")
+                ); 
+        
+        streamExecutor_ = new DebuggableThreadPoolExecutor( 1,
+                1,
+                Integer.MAX_VALUE,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(),
+                new ThreadFactoryImpl("MESSAGE-STREAMING-POOL")
+                ); 
+                
+        protocol_ = hash(HashingSchemes.MD5, "FB-MESSAGING".getBytes());        
+        /* register the response verb handler */
+        registerVerbHandlers(MessagingService.responseVerbHandler_, new ResponseVerbHandler());
+        /* register stage for response */
+        StageManager.registerStage(MessagingService.responseStage_, new MultiThreadedStage("RESPONSE-STAGE", maxSize) );
+    }
+

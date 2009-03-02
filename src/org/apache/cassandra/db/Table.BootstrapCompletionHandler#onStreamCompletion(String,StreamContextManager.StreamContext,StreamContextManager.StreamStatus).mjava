@@ -1,0 +1,28 @@
+        public void onStreamCompletion(String host, StreamContextManager.StreamContext streamContext, StreamContextManager.StreamStatus streamStatus) throws IOException
+        {                        
+            /* Parse the stream context and the file to the list of SSTables in the associated Column Family Store. */            
+            if ( streamContext.getTargetFile().indexOf("-Data.db") != -1 )
+            {
+                File file = new File( streamContext.getTargetFile() );
+                String fileName = file.getName();
+                /*
+                 * If the file is a Data File we need to load the indicies associated
+                 * with this file. We also need to cache the file name in the SSTables
+                 * list of the associated Column Family. Also merge the CBF into the
+                 * sampler.
+                */                
+                SSTable ssTable = new SSTable(streamContext.getTargetFile() );
+                ssTable.close();
+                logger_.debug("Merging the counting bloom filter in the sampler ...");                
+                String[] peices = FBUtilities.strip(fileName, "-");
+                Table.open(peices[0]).getColumnFamilyStore(peices[1]).addToList(streamContext.getTargetFile());                
+            }
+            
+            EndPoint to = new EndPoint(host, DatabaseDescriptor.getStoragePort());
+            logger_.debug("Sending a bootstrap terminate message with " + streamStatus + " to " + to);
+            /* Send a StreamStatusMessage object which may require the source node to re-stream certain files. */
+            StreamContextManager.StreamStatusMessage streamStatusMessage = new StreamContextManager.StreamStatusMessage(streamStatus);
+            Message message = StreamContextManager.StreamStatusMessage.makeStreamStatusMessage(streamStatusMessage);
+            MessagingService.getMessagingInstance().sendOneWay(message, to);           
+        }
+

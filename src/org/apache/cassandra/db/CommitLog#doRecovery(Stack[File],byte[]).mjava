@@ -1,0 +1,89 @@
+    private void doRecovery(Stack<File> filesNeeded, byte[] header) throws IOException
+    {
+        Table table = Table.open(table_);
+
+        DataInputBuffer bufIn = new DataInputBuffer();
+        DataOutputBuffer bufOut = new DataOutputBuffer();        
+
+        while ( !filesNeeded.isEmpty() )
+        {
+            File file = filesNeeded.pop();
+            // IFileReader reader = SequenceFile.bufferedReader(file.getAbsolutePath(), DatabaseDescriptor.getLogFileSizeThreshold());
+            IFileReader reader = SequenceFile.reader(file.getAbsolutePath());
+            try
+            {
+                Map<String, Row> rows = new HashMap<String, Row>();
+                reader.readDirect(header);
+                /* deserialize the commit log header */
+                bufIn.reset(header, 0, header.length);
+                CommitLogHeader clHeader = CommitLogHeader.serializer().deserialize(bufIn);
+                /* seek to the lowest position */
+                int lowPos = CommitLogHeader.getLowestPosition(clHeader);
+                /*
+                 * If lowPos == 0 then we need to skip the processing of this
+                 * file.
+                */
+                if (lowPos == 0)
+                    break;
+                else
+                    reader.seek(lowPos);
+
+                /* read the logs populate RowMutation and apply */
+                while ( !reader.isEOF() )
+                {
+                    bufOut.reset();
+                    long bytesRead = reader.next(bufOut);
+                    if ( bytesRead == -1 )
+                        break;
+
+                    bufIn.reset(bufOut.getData(), bufOut.getLength());
+                    /* Skip over the commit log key portion */
+                    bufIn.readUTF();
+                    /* Skip over data size */
+                    bufIn.readInt();
+                    
+                    /* read the commit log entry */
+                    try
+                    {                        
+                        Row row = Row.serializer().deserialize(bufIn);
+                        Map<String, ColumnFamily> columnFamilies = new HashMap<String, ColumnFamily>(row.getColumnFamilies());
+                        /* remove column families that have already been flushed */
+                    	Set<String> cNames = columnFamilies.keySet();
+
+                        for ( String cName : cNames )
+                        {
+                        	ColumnFamily columnFamily = columnFamilies.get(cName);
+                        	/* TODO: Remove this to not process Hints */
+                        	if ( !DatabaseDescriptor.isApplicationColumnFamily(cName) )
+                        	{
+                        		row.removeColumnFamily(columnFamily);
+                        		continue;
+                        	}	
+                            int id = table.getColumnFamilyId(columnFamily.name());
+                            if ( clHeader.get(id) == 0 || reader.getCurrentPosition() < clHeader.getPosition(id) )
+                                row.removeColumnFamily(columnFamily);
+                        }
+                        if ( !row.isEmpty() )
+                        {                            
+                        	table.applyNow(row);
+                        }
+                    }
+                    catch ( IOException e )
+                    {
+                        logger_.debug( LogUtil.throwableToString(e) );
+                    }
+                }
+                reader.close();
+                /* apply the rows read */
+                table.flush(true);
+            }
+            catch ( Throwable th )
+            {
+                logger_.info( LogUtil.throwableToString(th) );
+                /* close the reader and delete this commit log. */
+                reader.close();
+                FileUtils.delete( new File[]{file} );
+            }
+        }
+    }
+

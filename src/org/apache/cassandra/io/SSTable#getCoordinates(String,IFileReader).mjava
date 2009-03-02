@@ -1,0 +1,58 @@
+    private Coordinate getCoordinates(String key, IFileReader dataReader) throws IOException
+    {
+    	List<KeyPositionInfo> indexInfo = indexMetadataMap_.get(dataFile_);
+    	int size = (indexInfo == null) ? 0 : indexInfo.size();
+    	long start = 0L;
+    	long end = dataReader.getEOF();
+        if ( size > 0 )
+        {
+            int index = Collections.binarySearch(indexInfo, new KeyPositionInfo(key));
+            if ( index < 0 )
+            {
+                /*
+                 * We are here which means that the requested
+                 * key is not an index.
+                */
+                index = (++index)*(-1);
+                /*
+                 * This means key is not present at all. Hence
+                 * a scan is in order.
+                */
+                start = (index == 0) ? 0 : indexInfo.get(index - 1).position();
+                if ( index < size )
+                {
+                    end = indexInfo.get(index).position();
+                }
+                else
+                {
+                    /* This is the Block Index in the file. */
+                    end = start;
+                }
+            }
+            else
+            {
+                /*
+                 * If we are here that means the key is in the index file
+                 * and we can retrieve it w/o a scan. In reality we would
+                 * like to have a retreive(key, fromPosition) but for now
+                 * we use scan(start, start + 1) - a hack.
+                */
+                start = indexInfo.get(index).position();                
+                end = start;
+            }
+        }
+        else
+        {
+            /*
+             * We are here which means there are less than
+             * 128 keys in the system and hence our only recourse
+             * is a linear scan from start to finish. Automatically
+             * use memory mapping since we have a huge file and very
+             * few keys.
+            */
+            end = dataReader.getEOF();
+        }  
+        
+        return new Coordinate(start, end);
+    }
+

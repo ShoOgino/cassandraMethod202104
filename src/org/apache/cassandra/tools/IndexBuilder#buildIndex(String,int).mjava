@@ -1,0 +1,81 @@
+    private static void buildIndex(String dataFile, int blockCount) throws IOException
+    {
+        String indexFile = dataFile.replace("-Data.", "-Index.");
+        final int bufferSize = 64*1024;
+
+        IFileWriter indexWriter = SequenceFile.bufferedWriter(indexFile, bufferSize);
+        IFileReader dataReader = SequenceFile.bufferedReader(dataFile, bufferSize);
+        DataOutputBuffer bufOut = new DataOutputBuffer();
+        DataInputBuffer bufIn = new DataInputBuffer();
+        /* BloomFilter of all data in the data file */
+        BloomFilter bf = new BloomFilter((SSTable.indexInterval() + 1)*blockCount, 8);
+
+        try
+        {
+            while ( !dataReader.isEOF() )
+            {
+                bufOut.reset();
+                /* Record the position of the key. */
+                long blockIndexOffset = dataReader.getCurrentPosition();
+                dataReader.next(bufOut);
+                bufIn.reset(bufOut.getData(), bufOut.getLength());
+                /* Key just read */
+                String key = bufIn.readUTF();
+                if ( key.equals(SSTable.blockIndexKey_) )
+                {
+                    /* Ignore the size of the data associated with the block index */
+                    bufIn.readInt();
+                    /* Number of keys in the block. */
+                    int blockSize = bufIn.readInt();
+                    /* Largest key in the block */
+                    String largestKey = null;
+
+                    /*
+                     * Read the keys in this block and find the largest key in
+                     * this block. This is the key that gets written into the
+                     * index file.
+                    */
+                    for ( int i = 0; i < blockSize; ++i )
+                    {
+                        String currentKey = bufIn.readUTF();
+                        bf.fill(currentKey);
+                        if ( largestKey == null )
+                        {
+                            largestKey = currentKey;
+                        }
+                        else
+                        {
+                            if ( currentKey.compareTo(largestKey) > 0 )
+                            {
+                                /* record this key */
+                                largestKey = currentKey;
+                            }
+                        }
+                        /* read the position of the key and the size of key data and throws it away. */
+                        bufIn.readLong();
+                        bufIn.readLong();
+                    }
+
+                    /*
+                     * Write into the index file the largest key in the block
+                     * and the offset of the block index in the data file.
+                    */
+                    indexWriter.append(largestKey, BasicUtilities.longToByteArray(blockIndexOffset));
+                }
+            }
+        }
+        finally
+        {
+            dataReader.close();
+            /* Cache the bloom filter */
+            SSTable.storeBloomFilter(dataFile, bf);
+            /* Write the bloom filter into the index file */
+            bufOut.reset();
+            BloomFilter.serializer().serialize(bf, bufOut);
+            byte[] bytes = new byte[bufOut.getLength()];
+            System.arraycopy(bufOut.getData(), 0, bytes, 0, bytes.length);
+            indexWriter.close(bytes, bytes.length);
+            bufOut.close();
+        }
+    }
+

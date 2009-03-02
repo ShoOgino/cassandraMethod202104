@@ -1,0 +1,42 @@
+    /*
+     * Seeks to the specified key on disk.
+    */
+    public void touch(String key, boolean fData) throws IOException
+    {
+        if ( touchCache_.containsKey(key) )
+            return;
+        
+        IFileReader dataReader = SequenceFile.reader(dataFile_); 
+        try
+        {
+        	/* Morph the key */
+        	key = morphKey(key);
+            Coordinate fileCoordinate = getCoordinates(key, dataReader);
+            /* Get offset of key from block Index */
+            dataReader.seek(fileCoordinate.end_);
+            BlockMetadata blockMetadata = dataReader.getBlockMetadata(key);
+            if ( blockMetadata.position_ != -1L )
+            {
+                touchCache_.put(dataFile_ + ":" + key, blockMetadata.position_);                  
+            } 
+            
+            if ( fData )
+            {
+                /* Read the data associated with this key and pull it into the Buffer Cache */
+                if ( blockMetadata.position_ != -1L )
+                {
+                    dataReader.seek(blockMetadata.position_);
+                    DataOutputBuffer bufOut = new DataOutputBuffer();
+                    dataReader.next(bufOut);
+                    bufOut.reset();
+                    logger_.debug("Finished the touch of the key to pull it into buffer cache.");
+                }
+            }
+        }
+        finally
+        {
+            if ( dataReader != null )
+                dataReader.close();
+        }
+    }
+

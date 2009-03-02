@@ -1,0 +1,43 @@
+    public void start() throws Throwable
+    {        
+    	/* Set up the partitioner */
+        initPartitioner();
+        /* Start the DB */
+        storageMetadata_ = DBManager.instance().start();  
+        /* Set up TCP endpoint */
+        tcpAddr_ = new EndPoint(DatabaseDescriptor.getStoragePort());
+        /* Set up UDP endpoint */
+        udpAddr_ = new EndPoint(DatabaseDescriptor.getControlPort());
+        /* Listen for application messages */
+        MessagingService.getMessagingInstance().listen(tcpAddr_, false);
+        /* Listen for control messages */
+        MessagingService.getMessagingInstance().listenUDP(udpAddr_);
+        /* Listen for HTTP messages */
+        MessagingService.getMessagingInstance().listen( new EndPoint(DatabaseDescriptor.getHttpPort() ), true );
+        /* start the analytics context package */
+        AnalyticsContext.instance().start();
+        /* starts a load timer thread */
+        loadTimer_.schedule( new LoadDisseminator(), StorageService.threshold_, StorageService.threshold_);
+        
+        /* report our existence to ZooKeeper instance and start the leader election service */
+        
+        //reportToZookeeper(); 
+        /* start the leader election algorithm */
+        //LeaderElector.instance().start();
+        /* start the map reduce framework */
+        //startMapReduceFramework();
+        
+        /* Start the storage load balancer */
+        storageLoadBalancer_.start();
+        /* Register with the Gossiper for EndPointState notifications */
+        Gossiper.instance().register(this);
+        /*
+         * Start the gossiper with the generation # retrieved from the System
+         * table
+         */
+        Gossiper.instance().start(udpAddr_, storageMetadata_.getGeneration());
+        /* Make sure this token gets gossiped around. */
+        tokenMetadata_.update(storageMetadata_.getStorageId(), StorageService.tcpAddr_);
+        Gossiper.instance().addApplicationState(StorageService.nodeId_, new ApplicationState(storageMetadata_.getStorageId().toString()));
+    }
+

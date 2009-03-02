@@ -1,0 +1,54 @@
+    void applyApplicationStateLocally(EndPoint addr, EndPointState localStatePtr, EndPointState remoteStatePtr)
+    {
+        Map<String, ApplicationState> localAppStateMap = localStatePtr.getApplicationState();
+        Map<String, ApplicationState> remoteAppStateMap = remoteStatePtr.getApplicationState();
+
+        Set<String> remoteKeys = remoteAppStateMap.keySet();
+        for ( String remoteKey : remoteKeys )
+        {
+            ApplicationState remoteAppState = remoteAppStateMap.get(remoteKey);
+            ApplicationState localAppState = localAppStateMap.get(remoteKey);
+
+            /* If state doesn't exist locally for this key then just apply it */
+            if ( localAppState == null )
+            {
+                localStatePtr.addApplicationState(remoteKey, remoteAppState);
+                /* notify interested parties of endpoint state change */
+                EndPointState deltaState = new EndPointState(localStatePtr.getHeartBeatState());
+                deltaState.addApplicationState(remoteKey, remoteAppState);
+                doNotifications(addr, deltaState);
+                continue;
+            }
+
+            int remoteGeneration = remoteStatePtr.getHeartBeatState().getGeneration();
+            int localGeneration = localStatePtr.getHeartBeatState().getGeneration();
+
+            /* If the remoteGeneration is greater than localGeneration then apply state blindly */
+            if ( remoteGeneration > localGeneration )
+            {
+                localStatePtr.addApplicationState(remoteKey, remoteAppState);
+                /* notify interested parties of endpoint state change */
+                EndPointState deltaState = new EndPointState(localStatePtr.getHeartBeatState());
+                deltaState.addApplicationState(remoteKey, remoteAppState);
+                doNotifications(addr, deltaState);
+                continue;
+            }
+
+            /* If the generations are the same then apply state if the remote version is greater than local version. */
+            if ( remoteGeneration == localGeneration )
+            {
+                int remoteVersion = remoteAppState.getStateVersion();
+                int localVersion = localAppState.getStateVersion();
+
+                if ( remoteVersion > localVersion )
+                {
+                    localStatePtr.addApplicationState(remoteKey, remoteAppState);
+                    /* notify interested parties of endpoint state change */
+                    EndPointState deltaState = new EndPointState(localStatePtr.getHeartBeatState());
+                    deltaState.addApplicationState(remoteKey, remoteAppState);
+                    doNotifications(addr, deltaState);
+                }
+            }
+        }
+    }
+

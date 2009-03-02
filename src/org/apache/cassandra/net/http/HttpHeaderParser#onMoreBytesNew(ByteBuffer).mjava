@@ -1,0 +1,134 @@
+    public boolean onMoreBytesNew(ByteBuffer buffer) throws IOException
+    {
+
+        int got;
+        int limit = buffer.limit();
+        int pos = buffer.position();
+
+        if (parseState_ == HeaderParseState.TO_RESET)
+        {
+            resetParserState();
+        }
+
+        while (pos < limit)
+        {
+            switch (parseState_)
+            {
+
+            case START_OF_HEADER_LINE:
+                if ((got = buffer.get(pos)) != '\r')
+                {
+                    parseState_ = HeaderParseState.IN_HEADER_KEY;
+                    break;
+                }
+                else
+                {
+                    pos++;
+                    if (pos == limit) // Need more bytes
+                    {
+                        buffer.position(pos);
+                        parseState_ = HeaderParseState.START_OF_HEADER_LINE_WITH_READ_SLASH_R;
+                        return false;
+                    }
+                }
+            // fall through
+
+            case START_OF_HEADER_LINE_WITH_READ_SLASH_R:
+                // Processed "...\r\n\r\n" - headers are complete
+                if (((char) buffer.get(pos)) == '\n')
+                {
+                    buffer.position(++pos);
+                    parseState_ = HeaderParseState.TO_RESET;
+                    return true;
+                } // TODO: determine whether this \r-eating is valid
+                else
+                {
+                    parseState_ = HeaderParseState.IN_HEADER_KEY;
+                }
+            //fall through
+
+            case IN_HEADER_KEY:
+                // TODO: find out: whether to eat whitespace before a :
+                while (pos < limit && (got = buffer.get(pos)) != ':')
+                {
+                    headerKey_.append((char) got);
+                    pos++;
+                }
+                if (pos < limit)
+                {
+                    pos++; //eating ':'
+                    parseState_ = HeaderParseState.PRE_HEADER_VALUE_WHITESPACE;
+                }
+                break;
+
+            case PRE_HEADER_VALUE_WHITESPACE:
+                while ((((got = buffer.get(pos)) == ' ') || (got == '\t'))
+                        && (++pos < limit))
+                {
+                    ;
+                }
+                if (pos < limit)
+                {
+                    parseState_ = HeaderParseState.IN_HEADER_VALUE;
+                }
+                break;
+
+            case IN_HEADER_VALUE:
+                while (pos < limit && (got = buffer.get(pos)) != '\r')
+                {
+                    headerValue_.append((char) got);
+                    pos++;
+                }
+                if (pos == limit)
+                {
+                    break;
+                }
+
+                pos++;
+                if (pos == limit)
+                {
+                    parseState_ = HeaderParseState.IN_HEADER_VALUE_WITH_READ_SLASH_R;
+                    break;
+                    //buffer.position(pos);
+                    //return false;
+                }
+            // fall through
+
+            case IN_HEADER_VALUE_WITH_READ_SLASH_R:
+                if (((char) buffer.get(pos)) == '\n')
+                {
+                    parseState_ = HeaderParseState.CHECKING_END_OF_VALUE;
+                    pos++;
+                } // TODO: determine whether this \r-eating is valid
+                else
+                {
+                    parseState_ = HeaderParseState.IN_HEADER_VALUE;
+                }
+                break;
+
+            case CHECKING_END_OF_VALUE:
+                switch ((char) buffer.get(pos))
+                {
+                case ' ':
+                case '\t':
+                    parseState_ = HeaderParseState.IN_HEADER_VALUE;
+                    break;
+
+                default:
+                    // Processed "headerKey headerValue\r\n"
+                    finishCurrentHeader_();
+                }
+                break;
+
+            default:
+                assert false;
+                parseState_ = HeaderParseState.START_OF_HEADER_LINE;
+                break;
+            }
+
+        }
+        // Need to read more bytes - get next buffer
+        buffer.position(pos);
+        return false;
+    }
+

@@ -1,0 +1,52 @@
+    private void dumpBlockIndex( SortedMap<String, BlockMetadata> blockIndex) throws IOException
+    {
+        /* Block Index is empty so bail. */
+        if ( blockIndex.size() == 0 )
+            return;
+        
+        DataOutputBuffer bufOut = new DataOutputBuffer();
+        /* 
+         * Record the position where we start writing the block index. This is will be
+         * used as the position of the lastWrittenKey in the block in the index file
+        */
+        long position = dataWriter_.getCurrentPosition();
+        Set<String> keys = blockIndex.keySet();                
+        /* Number of keys in this block */
+        bufOut.writeInt(keys.size());
+        for ( String key : keys )
+        {            
+            bufOut.writeUTF(key);
+            BlockMetadata blockMetadata = blockIndex.get(key);
+            /* position of the key as a relative offset */
+            bufOut.writeLong(position - blockMetadata.position_);
+            bufOut.writeLong(blockMetadata.size_);
+        }
+        /* Write out the block index. */
+        dataWriter_.append(SSTable.blockIndexKey_, bufOut);
+        /* Load this index into the in memory index map */
+        List<KeyPositionInfo> keyPositionInfos = SSTable.indexMetadataMap_.get(dataFile_);
+        if ( keyPositionInfos == null )
+        {
+        	keyPositionInfos = new ArrayList<KeyPositionInfo>();
+        	SSTable.indexMetadataMap_.put(dataFile_, keyPositionInfos);
+        }
+        
+        keyPositionInfos.add(new KeyPositionInfo(blockIndex.firstKey(), position));
+        /*
+        try
+        {
+            keyPositionInfos.add(new KeyPositionInfo(blockIndex.firstKey(), position));
+        }
+        catch(Exception ex)
+        {
+            Set<String> keysInBlock = blockIndex.keySet();
+            for( String keyInBlock : keysInBlock )
+            {
+                logger_.warn("BLOCK KEY: " + keyInBlock);
+            }
+            logger_.warn(LogUtil.throwableToString(ex));
+        }
+        */
+        blockIndex.clear();        
+    }
+

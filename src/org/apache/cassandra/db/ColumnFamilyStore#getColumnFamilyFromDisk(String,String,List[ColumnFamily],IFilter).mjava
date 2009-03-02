@@ -1,0 +1,66 @@
+    /**
+     * Fetch from disk files and go in sorted order  to be efficient
+     * This fn exits as soon as the required data is found.
+     * @param key
+     * @param cf
+     * @param columnFamilies
+     * @param filter
+     * @throws IOException
+     */
+    private void getColumnFamilyFromDisk(String key, String cf, List<ColumnFamily> columnFamilies, IFilter filter) throws IOException
+    {
+        /* Scan the SSTables on disk first */
+        List<String> files = new ArrayList<String>();        
+    	lock_.readLock().lock();
+        try
+        {
+            files.addAll(ssTables_);
+            Collections.sort(files, new FileNameComparator(FileNameComparator.Descending));
+        }
+        finally
+        {
+            lock_.readLock().unlock();
+        }
+    		        	        
+        for (String file : files)
+        {
+            /*
+             * Get the BloomFilter associated with this file. Check if the key
+             * is present in the BloomFilter. If not continue to the next file.
+            */
+            boolean bVal = SSTable.isKeyInFile(key, file);
+            if ( !bVal )
+                continue;
+            ColumnFamily columnFamily = fetchColumnFamily(key, cf, filter, file);
+            long start = System.currentTimeMillis();
+            if (columnFamily != null)
+            {
+	            /*
+	             * TODO
+	             * By using the filter before removing deleted columns 
+	             * we have a efficient implementation of timefilter 
+	             * but for count filter this can return wrong results 
+	             * we need to take care of that later.
+	             */
+                /* suppress columns marked for delete */
+                Map<String, IColumn> columns = columnFamily.getColumns();
+                Set<String> cNames = columns.keySet();
+
+                for (String cName : cNames)
+                {
+                    IColumn column = columns.get(cName);
+                    if (column.isMarkedForDelete())
+                        columns.remove(cName);
+                }
+                columnFamilies.add(columnFamily);
+                if(filter.isDone())
+                {
+                	break;
+                }
+            }
+            logger_.debug("DISK Data structure population  TIME: " + (System.currentTimeMillis() - start)
+                    + " ms.");
+        }
+        files.clear();  	
+    }
+

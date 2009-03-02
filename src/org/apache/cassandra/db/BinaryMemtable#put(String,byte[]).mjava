@@ -1,0 +1,35 @@
+    /*
+     * This version is used by the external clients to put data into
+     * the memtable. This version will respect the threshold and flush
+     * the memtable to disk when the size exceeds the threshold.
+    */
+    void put(String key, byte[] buffer) throws IOException
+    {
+        if (isThresholdViolated() )
+        {
+            lock_.lock();
+            try
+            {
+                ColumnFamilyStore cfStore = Table.open(table_).getColumnFamilyStore(cfName_);
+                if (!isFrozen_)
+                {
+                    isFrozen_ = true;
+                    BinaryMemtableManager.instance().submit(cfStore.getColumnFamilyName(), this);
+                    cfStore.switchBinaryMemtable(key, buffer);
+                }
+                else
+                {
+                    cfStore.applyBinary(key, buffer);
+                }
+            }
+            finally
+            {
+                lock_.unlock();
+            }
+        }
+        else
+        {
+            resolve(key, buffer);
+        }
+    }
+

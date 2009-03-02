@@ -1,0 +1,44 @@
+    synchronized void applyStateLocally(Map<EndPoint, EndPointState> epStateMap)
+    {
+        Set<EndPoint> eps = epStateMap.keySet();
+        for( EndPoint ep : eps )
+        {
+            if ( ep.equals( localEndPoint_ ) )
+                continue;
+
+            EndPointState localEpStatePtr = endPointStateMap_.get(ep);
+            EndPointState remoteState = epStateMap.get(ep);
+            /*
+                If state does not exist just add it. If it does then add it only if the version
+                of the remote copy is greater than the local copy.
+            */
+            if ( localEpStatePtr != null )
+            {
+            	int localGeneration = localEpStatePtr.getHeartBeatState().getGeneration();
+            	int remoteGeneration = remoteState.getHeartBeatState().getGeneration();
+
+            	if (remoteGeneration > localGeneration)
+            	{
+            		handleNewJoin(ep, remoteState);
+            	}
+            	else if ( remoteGeneration == localGeneration )
+            	{
+	                /* manage the membership state */
+	                int localMaxVersion = getMaxEndPointStateVersion(localEpStatePtr);
+	                int remoteMaxVersion = getMaxEndPointStateVersion(remoteState);
+	                if ( remoteMaxVersion > localMaxVersion )
+	                {
+	                    resusitate(ep, localEpStatePtr);
+	                    applyHeartBeatStateLocally(ep, localEpStatePtr, remoteState);
+	                    /* apply ApplicationState */
+	                    applyApplicationStateLocally(ep, localEpStatePtr, remoteState);
+	                }
+            	}
+            }
+            else
+            {
+            	handleNewJoin(ep, remoteState);
+            }
+        }
+    }
+
