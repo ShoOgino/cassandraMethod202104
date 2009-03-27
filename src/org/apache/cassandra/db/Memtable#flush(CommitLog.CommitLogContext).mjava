@@ -1,3 +1,7 @@
+    /*
+     * param recoveryMode - indicates if this was invoked during
+     *                      recovery.
+    */
     void flush(CommitLog.CommitLogContext cLogCtx) throws IOException
     {
         ColumnFamilyStore cfStore = Table.open(table_).getColumnFamilyStore(cfName_);
@@ -10,33 +14,19 @@
             return;
         }
 
+        PartitionerType pType = StorageService.getPartitionerType();
         String directory = DatabaseDescriptor.getDataFileLocation();
         String filename = cfStore.getNextFileName();
-        SSTable ssTable = new SSTable(directory, filename);
-        List<String> keys = new ArrayList<String>( columnFamilies_.keySet() );
-        Collections.sort(keys);
-        DataOutputBuffer buffer = new DataOutputBuffer();
-        /* Use this BloomFilter to decide if a key exists in a SSTable */
-        BloomFilter bf = new BloomFilter(keys.size(), 15);
-        for ( String key : keys )
+        SSTable ssTable = new SSTable(directory, filename, pType);
+        switch (pType) 
         {
-            buffer.reset();
-            ColumnFamily columnFamily = columnFamilies_.get(key);
-            if ( columnFamily != null )
-            {
-                /* serialize the cf with column indexes */
-                ColumnFamily.serializerWithIndexes().serialize( columnFamily, buffer );
-                /* Now write the key and value to disk */
-                ssTable.append(key, buffer);
-                bf.fill(key);
-                columnFamily.clear();
-            }
-        }
-        ssTable.close(bf);
-        cfStore.onMemtableFlush(cLogCtx);
-        cfStore.storeLocation( ssTable.getDataFileLocation(), bf );
-        buffer.close();
-
-        columnFamilies_.clear();
+            case OPHF:
+                flushForOrderPreservingPartitioner(ssTable, cfStore, cLogCtx);
+                break;
+                
+            default:
+                flushForRandomPartitioner(ssTable, cfStore, cLogCtx);
+                break;
+        }        
     }
 
