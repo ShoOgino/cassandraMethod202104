@@ -1,0 +1,31 @@
+    /**
+     * This is an implementation for the multiget version. 
+     * @param readMessages map of key --> ReadMessage to be sent
+     * @return map of key --> Row
+     * @throws IOException
+     * @throws TimeoutException
+     */
+    public static Map<String, Row> doReadProtocol(Map<String, ReadMessage> readMessages) throws IOException,TimeoutException
+    {
+        Map<String, Row> rows = new HashMap<String, Row>();
+        Set<String> keys = readMessages.keySet();
+        /* Find all the suitable endpoints for the keys */
+        Map<String, EndPoint> endPoints = StorageService.instance().findSuitableEndPoints(keys.toArray( new String[0] ));
+        /* Construct the messages to be sent out */
+        Map<String, Message> messages = constructMessages(readMessages);
+        /* Dispatch the messages to the respective endpoints */
+        IAsyncResult iar = dispatchMessages(endPoints, messages);        
+        List<Object[]> results = iar.multiget(2*DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+        
+        for ( Object[] result : results )
+        {
+            byte[] body = (byte[])result[0];
+            DataInputBuffer bufIn = new DataInputBuffer();
+            bufIn.reset(body, body.length);
+            ReadResponseMessage responseMessage = ReadResponseMessage.serializer().deserialize(bufIn);
+            Row row = responseMessage.row();
+            rows.put(row.key(), row);
+        }        
+        return rows;
+    }
+

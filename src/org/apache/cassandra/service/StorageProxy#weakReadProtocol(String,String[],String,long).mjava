@@ -1,0 +1,38 @@
+    /**
+     * This version is used when results for multiple keys needs to be
+     * retrieved.
+     * 
+     * @param tablename name of the table that needs to be queried
+     * @param keys keys whose values we are interested in 
+     * @param columnFamily name of the "column" we are interested in
+     * @param sinceTimestamp this is lower bound of the timestamp
+     * @return a mapping of key --> Row
+     * @throws Exception
+     */
+    public static Map<String, Row> weakReadProtocol(String tablename, String[] keys, String columnFamily, long sinceTimestamp) throws Exception
+    {
+        Row row = null;
+        long startTime = System.currentTimeMillis();
+        Map<String, ReadMessage> readMessages = new HashMap<String, ReadMessage>();
+        for ( String key : keys )
+        {
+            ReadMessage readMessage = new ReadMessage(tablename, key, columnFamily, sinceTimestamp);
+            readMessages.put(key, readMessage);
+        }
+        /* Performs the multiget in parallel */
+        Map<String, Row> rows = doReadProtocol(readMessages);
+        /*
+         * Do the consistency checks for the keys that are being queried
+         * in the background.
+        */
+        for ( String key : keys )
+        {
+            List<EndPoint> endpoints = StorageService.instance().getNLiveStorageEndPoint(key);
+            /* Remove the local storage endpoint from the list. */ 
+            endpoints.remove( StorageService.getLocalStorageEndPoint() );
+            if ( endpoints.size() > 0 && DatabaseDescriptor.getConsistencyCheck())
+                StorageService.instance().doConsistencyCheck(row, endpoints, columnFamily, sinceTimestamp);
+        }
+        return rows;         
+    }
+

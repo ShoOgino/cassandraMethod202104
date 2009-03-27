@@ -1,0 +1,46 @@
+    private static MultiQuorumResponseHandler dispatchMessages(Map<String, ReadMessage[]> readMessages, Map<String, Message[]> messages) throws IOException
+    {
+        Set<String> keys = messages.keySet();
+        /* This maps the keys to the original data read messages */
+        Map<String, ReadMessage> readMessage = new HashMap<String, ReadMessage>();
+        /* This maps the keys to their respective endpoints/replicas */
+        Map<String, EndPoint[]> endpoints = new HashMap<String, EndPoint[]>();
+        /* Groups the messages that need to be sent to the individual keys */
+        Message[][] msgList = new Message[messages.size()][DatabaseDescriptor.getReplicationFactor()];
+        /* Respects the above grouping and provides the endpoints for the above messages */
+        EndPoint[][] epList = new EndPoint[messages.size()][DatabaseDescriptor.getReplicationFactor()];
+        
+        int i = 0;
+        for ( String key : keys )
+        {
+            /* This is the primary */
+            EndPoint dataPoint = StorageService.instance().findSuitableEndPoint(key);
+            List<EndPoint> replicas = new ArrayList<EndPoint>( StorageService.instance().getNLiveStorageEndPoint(key) );
+            replicas.remove(dataPoint);
+            /* Get the messages to be sent index 0 is the data messages and index 1 is the digest message */
+            Message[] message = messages.get(key);           
+            msgList[i][0] = message[0];
+            int N = DatabaseDescriptor.getReplicationFactor();
+            for ( int j = 1; j < N; ++j )
+            {
+                msgList[i][j] = message[1];
+            }
+            /* Get the endpoints to which the above messages need to be sent */
+            epList[i][0] = dataPoint;
+            for ( int j = 1; i < N; ++i )
+            {                
+                epList[i][j] = replicas.get(j - 1);
+            } 
+            /* Data ReadMessage associated with this key */
+            readMessage.put( key, readMessages.get(key)[0] );
+            /* EndPoints for this specific key */
+            endpoints.put(key, epList[i]);
+            ++i;
+        }
+                
+        /* Handles the read semantics for this entire set of keys */
+        MultiQuorumResponseHandler quorumResponseHandlers = new MultiQuorumResponseHandler(readMessage, endpoints);
+        MessagingService.getMessagingInstance().sendRR(msgList, epList, quorumResponseHandlers);
+        return quorumResponseHandlers;
+    }
+

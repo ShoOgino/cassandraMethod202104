@@ -3,32 +3,34 @@
      * across all replicas. This method will take care
      * of the possibility of a replica being down and hint
      * the data across to some other replica. 
-     * @param rm the mutation to be applied across the replicas
+     * @param RowMutation the mutation to be applied 
+     *                    across the replicas
     */
     public static void insert(RowMutation rm)
-	{
+    {
         /*
          * Get the N nodes from storage service where the data needs to be
          * replicated
          * Construct a message for write
          * Send them asynchronously to the replicas.
         */
-        assert rm.key() != null;
-
-		try
-		{
-			Map<EndPoint, EndPoint> endpointMap = StorageService.instance().getNStorageEndPointMap(rm.key());
-			// TODO: throw a thrift exception if we do not have N nodes
-			Map<EndPoint, Message> messageMap = createWriteMessages(rm, endpointMap);
-            logger_.debug("insert writing to [" + StringUtils.join(messageMap.keySet(), ", ") + "]");
-			for (Map.Entry<EndPoint, Message> entry : messageMap.entrySet())
-			{
-				MessagingService.getMessagingInstance().sendOneWay(entry.getValue(), entry.getKey());
-			}
-		}
+        try
+        {
+            logger_.debug(" insert");
+            Map<EndPoint, EndPoint> endpointMap = StorageService.instance().getNStorageEndPointMap(rm.key());
+            // TODO: throw a thrift exception if we do not have N nodes
+            RowMutationMessage rmMsg = new RowMutationMessage(rm); 
+            /* Create the write messages to be sent */
+            Map<EndPoint, Message> messageMap = createWriteMessages(rmMsg, endpointMap);
+            Set<EndPoint> endpoints = messageMap.keySet();
+            for(EndPoint endpoint : endpoints)
+            {
+                MessagingService.getMessagingInstance().sendOneWay(messageMap.get(endpoint), endpoint);
+            }
+        }
         catch (Exception e)
         {
-            logger_.error( LogUtil.throwableToString(e) );
+            logger_.info( LogUtil.throwableToString(e) );
         }
         return;
     }

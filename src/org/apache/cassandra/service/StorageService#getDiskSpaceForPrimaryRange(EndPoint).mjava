@@ -1,0 +1,61 @@
+    /**
+     * Get the estimated disk space of the target endpoint in its
+     * primary range.
+     * @param target whose primary range we are interested in.
+     * @return disk space of the target in the primary range.
+     */
+    private double getDiskSpaceForPrimaryRange(EndPoint target)
+    {
+        double primaryDiskSpace = 0d;
+        Map<BigInteger, EndPoint> tokenToEndPointMap = tokenMetadata_.cloneTokenEndPointMap();
+        Set<BigInteger> tokens = tokenToEndPointMap.keySet();
+        Range[] allRanges = getAllRanges(tokens);
+        Arrays.sort(allRanges);
+        /* Mapping from Range to its ordered position on the ring */
+        Map<Range, Integer> rangeIndex = new HashMap<Range, Integer>();
+        for ( int i = 0; i < allRanges.length; ++i )
+        {
+            rangeIndex.put(allRanges[i], i);
+        }
+        /* Get the coefficients for the equations */
+        List<double[]> equations = new ArrayList<double[]>();
+        /* Get the endpoint to range map */
+        Map<EndPoint, List<Range>> endPointToRangesMap = constructEndPointToRangesMap();
+        Set<EndPoint> eps = endPointToRangesMap.keySet();
+        
+        for ( EndPoint ep : eps )
+        {
+            List<Range> ranges = endPointToRangesMap.get(ep);
+            double[] equation = new double[allRanges.length];
+            for ( Range range : ranges )
+            {                
+                int index = rangeIndex.get(range);
+                equation[index] = 1;
+            }
+            equations.add(equation);
+        }
+        double[][] coefficients = equations.toArray( new double[0][0] );
+        
+        /* Get the constants which are the aggregate disk space for each endpoint */
+        double[] constants = new double[allRanges.length];
+        int index = 0;
+        for ( EndPoint ep : eps )
+        {
+            /* reset the port back to control port */
+            ep.setPort(DatabaseDescriptor.getControlPort());
+            String lInfo = null;
+            if ( ep.equals(StorageService.udpAddr_) )
+                lInfo = getLoadInfo();
+            else                
+                lInfo = getLoadInfo(ep);
+            LoadInfo li = new LoadInfo(lInfo);
+            constants[index++] = FileUtils.stringToFileSize(li.diskSpace());
+        }
+        
+        RealMatrix matrix = new RealMatrixImpl(coefficients);
+        double[] solutions = matrix.solve(constants);
+        Range primaryRange = getPrimaryRangeForEndPoint(target);
+        primaryDiskSpace = solutions[rangeIndex.get(primaryRange)];
+        return primaryDiskSpace;
+    }
+
