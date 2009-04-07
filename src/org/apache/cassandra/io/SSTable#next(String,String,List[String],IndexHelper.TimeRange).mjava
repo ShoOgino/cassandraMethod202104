@@ -1,22 +1,25 @@
-    public DataInputBuffer next(String key, String cf, List<String> cNames, IndexHelper.TimeRange timeRange) throws IOException
+    public DataInputBuffer next(final String clientKey, String cfName, List<String> columnNames, IndexHelper.TimeRange timeRange) throws IOException
     {
-        DataInputBuffer bufIn = new DataInputBuffer();
         IFileReader dataReader = null;
         try
         {
             dataReader = SequenceFile.reader(dataFile_);
+            // dataReader = SequenceFile.chksumReader(dataFile_, 4*1024*1024);
+
             /* Morph key into actual key based on the partition type. */
-            key = morphKey(key);
-            Coordinate fileCoordinate = getCoordinates(key, dataReader);
+            String decoratedKey = StorageService.getPartitioner().decorateKey(clientKey);
+            Coordinate fileCoordinate = getCoordinates(decoratedKey, dataReader);
             /*
              * we have the position we have to read from in order to get the
              * column family, get the column family and column(s) needed.
             */
             DataOutputBuffer bufOut = new DataOutputBuffer();
-            long bytesRead = dataReader.next(key, bufOut, cf, cNames, timeRange, fileCoordinate);
-            if (bytesRead != -1L)
+            DataInputBuffer bufIn = new DataInputBuffer();
+
+            long bytesRead = dataReader.next(decoratedKey, bufOut, cfName, columnNames, timeRange, fileCoordinate);
+            if ( bytesRead != -1L )
             {
-                if (bufOut.getLength() > 0)
+                if ( bufOut.getLength() > 0 )
                 {
                     bufIn.reset(bufOut.getData(), bufOut.getLength());
                     /* read the key even though we do not use it */
@@ -24,6 +27,7 @@
                     bufIn.readInt();
                 }
             }
+            return bufIn;
         }
         finally
         {
@@ -32,6 +36,5 @@
                 dataReader.close();
             }
         }
-        return bufIn;
     }
 
