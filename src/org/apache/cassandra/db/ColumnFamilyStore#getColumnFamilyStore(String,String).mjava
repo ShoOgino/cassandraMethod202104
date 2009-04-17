@@ -1,7 +1,5 @@
-    ColumnFamilyStore(String table, String columnFamily) throws IOException
+    public static ColumnFamilyStore getColumnFamilyStore(String table, String columnFamily) throws IOException
     {
-        table_ = table;
-        columnFamily_ = columnFamily;
         /*
          * Get all data files associated with old Memtables for this table.
          * These files are named as follows <Table>-1.db, ..., <Table>-n.db. Get
@@ -18,8 +16,8 @@
             {
                 String filename = file.getName();
                 String[] tblCfName = getTableAndColumnFamilyName(filename);
-                
-                if (tblCfName[0].equals(table_)
+
+                if (tblCfName[0].equals(table)
                         && tblCfName[1].equals(columnFamily))
                 {
                     int index = getIndexFromFileName(filename);
@@ -29,19 +27,20 @@
         }
         Collections.sort(indices);
         int value = (indices.size() > 0) ? (indices.get(indices.size() - 1)) : 0;
-        fileIndexGenerator_.set(value);
-        memtable_ = new AtomicReference<Memtable>( new Memtable(table_, columnFamily_) );
-        binaryMemtable_ = new AtomicReference<BinaryMemtable>( new BinaryMemtable(table_, columnFamily_) );
-        
+
+        ColumnFamilyStore cfs = new ColumnFamilyStore(table, columnFamily, value);
+
+        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
         try
         {
-            MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-            mbs.registerMBean(this, new ObjectName(
-                    "org.apache.cassandra.db:type=ColumnFamilyStore-" + columnFamily_));
+            mbs.registerMBean(cfs, new ObjectName(
+                    "org.apache.cassandra.db:type=ColumnFamilyStore-" + table + "." + columnFamily));
         }
         catch (Exception e)
         {
-            logger_.error(LogUtil.throwableToString(e));
+            throw new RuntimeException(e);
         }
+
+        return cfs;
     }
 
