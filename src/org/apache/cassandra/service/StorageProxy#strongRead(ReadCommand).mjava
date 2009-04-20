@@ -1,0 +1,84 @@
+    /*
+     * This function executes the read protocol.
+        // 1. Get the N nodes from storage service where the data needs to be
+        // replicated
+        // 2. Construct a message for read\write
+         * 3. Set one of teh messages to get teh data and teh rest to get teh digest
+        // 4. SendRR ( to all the nodes above )
+        // 5. Wait for a response from atleast X nodes where X <= N and teh data node
+         * 6. If the digest matches return teh data.
+         * 7. else carry out read repair by getting data from all the nodes.
+        // 5. return success
+     */
+    private static Row strongRead(ReadCommand command) throws IOException, TimeoutException
+    {
+        // TODO: throw a thrift exception if we do not have N nodes
+
+        ReadCommand readMessageDigestOnly = command.copy();
+        readMessageDigestOnly.setDigestQuery(true);
+
+        Row row = null;
+        Message message = command.makeReadMessage();
+        Message messageDigestOnly = readMessageDigestOnly.makeReadMessage();
+
+        IResponseResolver<Row> readResponseResolver = new ReadResponseResolver();
+        QuorumResponseHandler<Row> quorumResponseHandler = new QuorumResponseHandler<Row>(
+                DatabaseDescriptor.getReplicationFactor(),
+                readResponseResolver);
+        EndPoint dataPoint = StorageService.instance().findSuitableEndPoint(command.key);
+        List<EndPoint> endpointList = new ArrayList<EndPoint>(Arrays.asList(StorageService.instance().getNStorageEndPoint(command.key)));
+        /* Remove the local storage endpoint from the list. */
+        endpointList.remove(dataPoint);
+        EndPoint[] endPoints = new EndPoint[endpointList.size() + 1];
+        Message messages[] = new Message[endpointList.size() + 1];
+
+        /*
+         * First message is sent to the node that will actually get
+         * the data for us. The other two replicas are only sent a
+         * digest query.
+        */
+        endPoints[0] = dataPoint;
+        messages[0] = message;
+        for (int i = 1; i < endPoints.length; i++)
+        {
+            endPoints[i] = endpointList.get(i - 1);
+            messages[i] = messageDigestOnly;
+        }
+        logger_.debug("strongread reading " + command + " from " + StringUtils.join(endPoints, ", "));
+
+        try
+        {
+            MessagingService.getMessagingInstance().sendRR(messages, endPoints, quorumResponseHandler);
+
+            long startTime2 = System.currentTimeMillis();
+            row = quorumResponseHandler.get();
+            logger_.debug("quorumResponseHandler: " + (System.currentTimeMillis() - startTime2) + " ms.");
+        }
+        catch (DigestMismatchException ex)
+        {
+            if ( DatabaseDescriptor.getConsistencyCheck())
+            {
+                IResponseResolver<Row> readResponseResolverRepair = new ReadResponseResolver();
+                QuorumResponseHandler<Row> quorumResponseHandlerRepair = new QuorumResponseHandler<Row>(
+                        DatabaseDescriptor.getReplicationFactor(),
+                        readResponseResolverRepair);
+                command.setDigestQuery(false);
+                logger_.info("DigestMismatchException: " + command.key);
+                Message messageRepair = command.makeReadMessage();
+                MessagingService.getMessagingInstance().sendRR(messageRepair, endPoints,
+                                                               quorumResponseHandlerRepair);
+                try
+                {
+                    row = quorumResponseHandlerRepair.get();
+                }
+                catch (DigestMismatchException e)
+                {
+                    // TODO should this be a thrift exception?
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+
+        return row;
+    }
+
