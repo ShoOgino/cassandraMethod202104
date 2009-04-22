@@ -1,0 +1,48 @@
+    @Test
+    public void testGetRowOffsetCountFromDisk() throws Throwable
+    {
+        Table table = Table.open("Table1");
+        
+        RowMutation rm = new RowMutation(TABLE_NAME,KEY2);
+        ColumnFamily cf = new ColumnFamily("Standard1","Standard");
+        // First write 5, 6
+        cf.addColumn(new Column("col5", "val5".getBytes(), 1L));
+        cf.addColumn(new Column("col6", "val6".getBytes(), 1L));
+        rm.add(cf);
+
+        rm.apply();
+        Row result = table.getRow(KEY2, "Standard1:col5");
+        ColumnFamily cres = result.getColumnFamily("Standard1");
+        assertNotNull(cres.getColumn("col5"));
+
+        table.getColumnFamilyStore("Standard1").forceBlockingFlush();
+        // Flushed memtable to disk, we're now inserting into a new memtable
+
+        rm = new RowMutation(TABLE_NAME, KEY2);
+        cf = new ColumnFamily("Standard1","Standard");
+        // now write 7, 8, 4 into new memtable
+        cf.addColumn(new Column("col7", "val7".getBytes(), 1L));
+        cf.addColumn(new Column("col8", "val8".getBytes(), 1L));
+        cf.addColumn(new Column("col4", "val4".getBytes(), 1L));
+        rm.add(cf);
+        rm.apply();
+
+        // Check col5 is still around
+        result = table.getRow(KEY2, "Standard1:col5");
+        cres = result.getColumnFamily("Standard1");
+        assertNotNull(cres.getColumn("col5"));
+
+        // Read back 3 cols from start -- should see 4,5,6 NOT 4,7,8
+        result = table.getRow(KEY2, "Standard1", 0, 3);
+        cres = result.getColumnFamily("Standard1");
+        assertNotNull(cres);
+        assertEquals(cres.getColumnCount(), 3);
+
+        // Should have col4, col5, and col6
+        assertNotNull(cres.getColumn("col4"));
+        assertNotNull(cres.getColumn("col5"));
+        assertNotNull(cres.getColumn("col6"));
+        // not 8
+        assertNull(cres.getColumn("col8"));
+    }
+
