@@ -1,0 +1,28 @@
+    @Test
+    public void testSingleWrite() throws IOException {
+        File f = File.createTempFile("sstable", "");
+        SSTable ssTable;
+
+        // write test data
+        ssTable = new SSTable(f.getParent(), f.getName(), new OrderPreservingPartitioner());
+        BloomFilter bf = new BloomFilter(1000, 8);
+        Random random = new Random();
+        byte[] bytes = new byte[1024];
+        random.nextBytes(bytes);
+
+        String key = Integer.toString(1);
+        ssTable.append(key, bytes);
+        bf.add(key);
+        ssTable.close(bf);
+
+        // verify
+        SSTable.indexMetadataMap_.clear();
+        ssTable = new SSTable(f.getPath() + "-Data.db", new OrderPreservingPartitioner());
+        FileStruct fs = new FileStruct(SequenceFile.bufferedReader(ssTable.dataFile_, 128 * 1024), new OrderPreservingPartitioner());
+        fs.seekTo(key);
+        int size = fs.getBufIn().readInt();
+        byte[] bytes2 = new byte[size];
+        fs.getBufIn().readFully(bytes2);
+        assert Arrays.equals(bytes2, bytes);
+    }
+
