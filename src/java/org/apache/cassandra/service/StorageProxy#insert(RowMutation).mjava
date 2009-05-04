@@ -7,8 +7,6 @@
     */
     public static void insert(RowMutation rm)
 	{
-        // TODO check for valid Table, ColumnFamily
-
         /*
          * Get the N nodes from storage service where the data needs to be
          * replicated
@@ -16,21 +14,30 @@
          * Send them asynchronously to the replicas.
         */
 
+        long startTime = System.currentTimeMillis();
 		try
 		{
 			Map<EndPoint, EndPoint> endpointMap = StorageService.instance().getNStorageEndPointMap(rm.key());
 			// TODO: throw a thrift exception if we do not have N nodes
 			Map<EndPoint, Message> messageMap = createWriteMessages(rm, endpointMap);
-            logger_.debug("insert writing to [" + StringUtils.join(messageMap.keySet(), ", ") + "]");
+            logger.debug("insert writing to [" + StringUtils.join(messageMap.keySet(), ", ") + "]");
 			for (Map.Entry<EndPoint, Message> entry : messageMap.entrySet())
 			{
 				MessagingService.getMessagingInstance().sendOneWay(entry.getValue(), entry.getKey());
 			}
 		}
-        catch (Exception e)
+        catch (IOException e)
         {
-            logger_.error( LogUtil.throwableToString(e) );
+            throw new RuntimeException(e);
         }
-        return;
+        finally
+        {
+            if (writeOperations++ == Integer.MAX_VALUE)
+            {
+                writeOperations = 1;
+                writeLatency = 0;
+            }
+            writeLatency += System.currentTimeMillis() - startTime;
+        }
     }
 
