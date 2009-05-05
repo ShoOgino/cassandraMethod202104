@@ -1,0 +1,38 @@
+    private static void deleteHintedData(String key) throws Exception
+    {
+        // delete the row from Application CFs: find the largest timestamp in any of
+        // the data columns, and delete the entire CF with that value for the tombstone.
+
+        // Note that we delete all data associated with the key: this may be more than
+        // we sent earlier in sendMessage, since HH is not serialized with writes.
+        // This is sub-optimal but okay, since HH is just an effort to make a recovering
+        // node more consistent than it would have been; we can rely on the other
+        // consistency mechanisms to finish the job in this corner case.
+        RowMutation rm = new RowMutation(DatabaseDescriptor.getTables().get(0), key_);
+        Table table = Table.open(DatabaseDescriptor.getTables().get(0));
+        Row row = table.get(key); // not necessary to do removeDeleted here
+        Collection<ColumnFamily> cfs = row.getColumnFamilies();
+        for (ColumnFamily cf : cfs)
+        {
+            Set<IColumn> columns = cf.getAllColumns();
+            long maxTS = Long.MIN_VALUE;
+            if (!cf.isSuper())
+            {
+                for (IColumn col : columns)
+                    maxTS = Math.max(maxTS, col.timestamp());
+            }
+            else
+            {
+                for (IColumn col : columns)
+                {
+                    maxTS = Math.max(maxTS, col.timestamp());
+                    Collection<IColumn> subColumns = col.getSubColumns();
+                    for (IColumn subCol : subColumns)
+                        maxTS = Math.max(maxTS, subCol.timestamp());
+                }
+            }
+            rm.delete(cf.name(), maxTS);
+        }
+        rm.apply();
+    }
+

@@ -10,10 +10,9 @@
         // 6. Do major compaction to clean up all deletes etc.
         // 7. I guess we r done
         Table table = Table.open(DatabaseDescriptor.getTables().get(0));
-        ColumnFamily hintColumnFamily = null;
         try
         {
-            hintColumnFamily = table.get(key_, Table.hints_);
+            ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(table.get(key_, Table.hints_), Integer.MAX_VALUE);
             if (hintColumnFamily == null)
             {
                 columnFamilyStore.forceFlush();
@@ -28,26 +27,18 @@
             for (IColumn keyColumn : keys)
             {
                 Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                // endpoints could be null if the server were terminated during a previous runHints
-                // after deleteEndPoint but before deleteKey.
-                boolean allsuccess = true;
-                if (endpoints != null)
+                int deleted = 0;
+                for (IColumn endpoint : endpoints)
                 {
-                    for (IColumn endpoint : endpoints)
+                    if (sendMessage(endpoint.name(), keyColumn.name()))
                     {
-                        if (sendMessage(endpoint.name(), keyColumn.name()))
-                        {
-                            deleteEndPoint(endpoint.name(), keyColumn.name());
-                        }
-                        else
-                        {
-                            allsuccess = false;
-                        }
+                        deleteEndPoint(endpoint.name(), keyColumn.name(), keyColumn.timestamp());
+                        deleted++;
                     }
                 }
-                if (allsuccess)
+                if (deleted == endpoints.size())
                 {
-                    deleteKey(keyColumn.name());
+                    deleteHintedData(keyColumn.name());
                 }
             }
             columnFamilyStore.forceFlush();
