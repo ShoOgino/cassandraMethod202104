@@ -9,18 +9,11 @@
      * to get the latest data.
      *
      */
-    void  doFileCompaction(List<String> files,  int minBufferSize) throws IOException
+    private void doFileCompaction(List<String> files,  int minBufferSize) throws IOException
     {
-    	String newfile = null;
-        long startTime = System.currentTimeMillis();
-        long totalBytesRead = 0;
-        long totalBytesWritten = 0;
-        long totalkeysRead = 0;
-        long totalkeysWritten = 0;
-        // Calculate the expected compacted filesize
-        long expectedCompactedFileSize = getExpectedCompactedFileSize(files);
-        String compactionFileLocation = DatabaseDescriptor.getCompactionFileLocation(expectedCompactedFileSize);
+        String compactionFileLocation = DatabaseDescriptor.getCompactionFileLocation(getExpectedCompactedFileSize(files));
         // If the compaction file path is null that means we have no space left for this compaction.
+        // try again w/o the largest one.
         if( compactionFileLocation == null )
         {
             String maxFile = getMaxSizeFile( files );
@@ -28,7 +21,15 @@
             doFileCompaction(files , minBufferSize);
             return;
         }
+
+        String newfile = null;
+        long startTime = System.currentTimeMillis();
+        long totalBytesRead = 0;
+        long totalBytesWritten = 0;
+        long totalkeysRead = 0;
+        long totalkeysWritten = 0;
         PriorityQueue<FileStruct> pq = initializePriorityQueue(files, null, minBufferSize);
+
         if (pq.size() > 0)
         {
             String mergedFileName = getTempFileName( files );
@@ -106,7 +107,7 @@
                         }
                         catch ( Exception ex)
                         {
-                            ex.printStackTrace();
+                            logger_.error("empty sstable file " + filestruct.getFileName(), ex);
                             filestruct.close();
                             continue;
                         }
@@ -165,10 +166,10 @@
                 }
                 if ( newfile != null )
                 {
-                    ssTables_.add(newfile);
                     logger_.debug("Inserting bloom filter for file " + newfile);
                     SSTable.storeBloomFilter(newfile, compactedBloomFilter);
-                    totalBytesWritten = (new File(newfile)).length();
+                    ssTables_.add(newfile);
+                    totalBytesWritten += (new File(newfile)).length();
                 }
             }
             finally
@@ -180,10 +181,8 @@
                 SSTable.delete(file);
             }
         }
-        logger_.debug("Total time taken for compaction  ..."
-                + (System.currentTimeMillis() - startTime));
-        logger_.debug("Total bytes Read for compaction  ..." + totalBytesRead);
-        logger_.debug("Total bytes written for compaction  ..."
-                + totalBytesWritten + "   Total keys read ..." + totalkeysRead);
+        String format = "Compacted [%s] to %s.  %d/%d bytes for %d/%d keys read/written.  Time: %dms.";
+        long dTime = System.currentTimeMillis() - startTime;
+        logger_.info(String.format(format, StringUtils.join(files, ", "), newfile, totalBytesRead, totalBytesWritten, totalkeysRead, totalkeysWritten, dTime));
     }
 
