@@ -6,86 +6,20 @@
      */
     public List<String> getKeyRange(final String startWith, final String stopAt, int maxResults) throws IOException, ExecutionException, InterruptedException
     {
-        // (OPP key decoration is a no-op so using the "decorated" comparator against raw keys is fine)
-        final Comparator<String> comparator = StorageService.getPartitioner().getDecoratedKeyComparator();
-
-        // create a CollatedIterator that will return unique keys from different sources
-        // (current memtable, historical memtables, and SSTables) in the correct order.
-        List<Iterator<String>> iterators = new ArrayList<Iterator<String>>();
+        // TODO we need a better way to keep compactions from stomping on reads than One Big Lock per CF.
         for (String cfName : getApplicationColumnFamilies())
         {
-            ColumnFamilyStore cfs = getColumnFamilyStore(cfName);
-
-            // memtable keys: current and historical
-            Iterator<Memtable> memtables = (Iterator<Memtable>) IteratorUtils.chainedIterator(
-                    IteratorUtils.singletonIterator(cfs.getMemtable()),
-                    ColumnFamilyStore.getUnflushedMemtables(cfName).iterator());
-            while (memtables.hasNext())
-            {
-                iterators.add(IteratorUtils.filteredIterator(memtables.next().sortedKeyIterator(), new Predicate()
-                {
-                    public boolean evaluate(Object key)
-                    {
-                        String st = (String)key;
-                        return comparator.compare(startWith, st) <= 0 && (stopAt.isEmpty() || comparator.compare(st, stopAt) <= 0);
-                    }
-                }));
-            }
-
-            // sstables
-            for (String filename : cfs.getSSTableFilenames())
-            {
-                FileStruct fs = new FileStruct(SequenceFile.reader(filename), StorageService.getPartitioner());
-                fs.seekTo(startWith);
-                iterators.add(fs);
-            }
+            getColumnFamilyStore(cfName).getReadLock().lock();
         }
-        Iterator<String> collated = IteratorUtils.collatedIterator(comparator, iterators);
-
         try
         {
-            // pull keys out of the CollatedIterator.  checking tombstone status is expensive,
-            // so we set an arbitrary limit on how many we'll do at once.
-            List<String> keys = new ArrayList<String>();
-            String last = null, current = null;
-            while (keys.size() < maxResults)
-            {
-                if (!collated.hasNext())
-                {
-                    break;
-                }
-                current = collated.next();
-                if (!current.equals(last))
-                {
-                    if (!stopAt.isEmpty() && comparator.compare(stopAt, current) < 0)
-                    {
-                        break;
-                    }
-                    last = current;
-                    // make sure there is actually non-tombstone content associated w/ this key
-                    // TODO record the key source(s) somehow and only check that source (e.g., memtable or sstable)
-                    for (String cfName : getApplicationColumnFamilies())
-                    {
-                        ColumnFamilyStore cfs = getColumnFamilyStore(cfName);
-                        ColumnFamily cf = cfs.getColumnFamily(current, cfName, new IdentityFilter(), Integer.MAX_VALUE);
-                        if (cf != null && cf.getColumns().size() > 0)
-                        {
-                            keys.add(current);
-                            break;
-                        }
-                    }
-                }
-            }
-            return keys;
+            return getKeyRangeUnsafe(startWith, stopAt, maxResults);
         }
         finally
         {
-            for (Iterator iter : iterators)
+            for (String cfName : getApplicationColumnFamilies())
             {
-                if (iter instanceof FileStruct)
-                {
-                    ((FileStruct)iter).close();
-                }
+                getColumnFamilyStore(cfName).getReadLock().unlock();
             }
         }
     }
