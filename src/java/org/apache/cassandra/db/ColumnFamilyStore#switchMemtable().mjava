@@ -6,8 +6,17 @@
     */
     void switchMemtable()
     {
-        getMemtablesPendingFlushNotNull(columnFamily_).add(memtable_.get()); // it's ok for the MT to briefly be both active and pendingFlush
-        memtable_.set(new Memtable(table_, columnFamily_));
+        memtableLock_.writeLock().lock();
+        try
+        {
+            logger_.info(columnFamily_ + " has reached its threshold; switching in a fresh Memtable");
+            getMemtablesPendingFlushNotNull(columnFamily_).add(memtable_); // it's ok for the MT to briefly be both active and pendingFlush
+            memtable_ = new Memtable(table_, columnFamily_);
+        }
+        finally
+        {
+            memtableLock_.writeLock().unlock();
+        }
 
         if (memtableSwitchCount == Integer.MAX_VALUE)
         {
