@@ -38,39 +38,46 @@
             }
         }
         Iterator<String> collated = IteratorUtils.collatedIterator(comparator, iterators);
+        Iterable<String> reduced = new ReducingIterator<String>(collated) {
+            String current;
+
+            public void reduce(String current)
+            {
+                 this.current = current;
+            }
+
+            protected String getReduced()
+            {
+                return current;
+            }
+        };
 
         try
         {
             // pull keys out of the CollatedIterator.  checking tombstone status is expensive,
             // so we set an arbitrary limit on how many we'll do at once.
             List<String> keys = new ArrayList<String>();
-            String last = null, current = null;
-            while (keys.size() < maxResults)
+            for (String current : reduced)
             {
-                if (!collated.hasNext())
+                if (!stopAt.isEmpty() && comparator.compare(stopAt, current) < 0)
                 {
                     break;
                 }
-                current = collated.next();
-                if (!current.equals(last))
+                // make sure there is actually non-tombstone content associated w/ this key
+                // TODO record the key source(s) somehow and only check that source (e.g., memtable or sstable)
+                for (String cfName : getApplicationColumnFamilies())
                 {
-                    if (!stopAt.isEmpty() && comparator.compare(stopAt, current) < 0)
+                    ColumnFamilyStore cfs = getColumnFamilyStore(cfName);
+                    ColumnFamily cf = cfs.getColumnFamily(current, cfName, new IdentityFilter(), Integer.MAX_VALUE);
+                    if (cf != null && cf.getColumns().size() > 0)
                     {
+                        keys.add(current);
                         break;
                     }
-                    last = current;
-                    // make sure there is actually non-tombstone content associated w/ this key
-                    // TODO record the key source(s) somehow and only check that source (e.g., memtable or sstable)
-                    for (String cfName : getApplicationColumnFamilies())
-                    {
-                        ColumnFamilyStore cfs = getColumnFamilyStore(cfName);
-                        ColumnFamily cf = cfs.getColumnFamily(current, cfName, new IdentityFilter(), Integer.MAX_VALUE);
-                        if (cf != null && cf.getColumns().size() > 0)
-                        {
-                            keys.add(current);
-                            break;
-                        }
-                    }
+                }
+                if (keys.size() >= maxResults)
+                {
+                    break;
                 }
             }
             return keys;
