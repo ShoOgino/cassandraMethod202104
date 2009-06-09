@@ -1,87 +1,25 @@
     private void loadIndexFile() throws IOException
     {
-        logger_.debug("Loading indexes from " + dataFile_);
-        IFileReader indexReader = null;
-        /* Read all block indexes to maintain an index in memory */
-        try
+        BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(), "r");
+        ArrayList<KeyPosition> indexEntries = new ArrayList<KeyPosition>();
+
+        int i = 0;
+        long indexSize = input.length();
+        while (true)
         {
-            indexReader = SequenceFile.bufferedReader(dataFile_, 4 * 1024 * 1024);
-            long size = indexReader.getEOF();
-
-            /* load the bloom filter into memory */
-            loadBloomFilter(indexReader, size);
-            /* read the position of the last block index */
-            byte[] bytes = new byte[8];
-            /* seek to the position to read the relative position of the first block index */
-            indexReader.seek(size - 16L);
-            /* the beginning of the first block index */
-            long currentPosition = indexReader.getCurrentPosition();
-            indexReader.readDirect(bytes);
-            long firstBlockIndexPosition = BasicUtilities.byteArrayToLong(bytes);
-            List<KeyPositionInfo> KeyPositions = new ArrayList<KeyPositionInfo>();
-            indexMetadataMap_.put(dataFile_, KeyPositions);
-            DataOutputBuffer bufOut = new DataOutputBuffer();
-            DataInputBuffer bufIn = new DataInputBuffer();
-
-            long nextPosition = currentPosition - firstBlockIndexPosition;
-            indexReader.seek(nextPosition);
-            /* read the block indexes from the end of the file till we hit the first one. */
-            while (nextPosition > 0)
+            long indexPosition = input.getFilePointer();
+            if (indexPosition == indexSize)
             {
-                bufOut.reset();
-                /* position @ the current block index being processed */
-                currentPosition = indexReader.getCurrentPosition();
-                long bytesRead = indexReader.next(bufOut);
-                if (bytesRead != -1)
-                {
-                    bufIn.reset(bufOut.getData(), bufOut.getLength());
-                    /* read the block key. */
-                    String blockIndexKey = bufIn.readUTF();
-                    if (!blockIndexKey.equals(SSTable.blockIndexKey_))
-                    {
-                        break;
-                    }
-                    /* read the size of the block index */
-                    bufIn.readInt();
-                    /* Number of keys in the block. */
-                    int keys = bufIn.readInt();
-                    String largestKeyInBlock;
-                    for (int i = 0; i < keys; ++i)
-                    {
-                        String keyInBlock = bufIn.readUTF();
-                        if (i == 0)
-                        {
-                            largestKeyInBlock = keyInBlock;
-                            /* relative offset in the block for the key*/
-                            bufIn.readLong();
-                            /* size of data associated with the key */
-                            bufIn.readLong();
-                            /* load the actual position of the block index into the index map */
-                            KeyPositions.add(new KeyPositionInfo(largestKeyInBlock, currentPosition, partitioner_));
-                        }
-                        else
-                        {
-                            /*
-                             * This is not the key we are looking for. So read its position
-                             * and the size of the data associated with it. This was stored
-                             * as the BlockMetadata.
-                            */
-                            bufIn.readLong();
-                            bufIn.readLong();
-                        }
-                    }
-                }
+                break;
             }
-            bufIn.close();
-            bufOut.close();
-            Collections.sort(KeyPositions);
-        }
-        finally
-        {
-            if (indexReader != null)
+            String decoratedKey = input.readUTF();
+            input.readLong();
+            if (i++ % indexInterval_ == 0)
             {
-                indexReader.close();
+                indexEntries.add(new KeyPosition(decoratedKey, indexPosition, partitioner_));
             }
         }
+
+        indexMetadataMap_.put(dataFile_, indexEntries);
     }
 

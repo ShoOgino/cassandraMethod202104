@@ -1,17 +1,27 @@
         /**
          * This method dumps the next key/value into the DataOuputStream
-         * passed in.
+         * passed in. Always use this method to query for application
+         * specific data as it will have indexes.
          *
-         * @param key     - key we are interested in.
-         * @param bufOut  DataOutputStream that needs to be filled.
-         * @param section region of the file that needs to be read
-         * @return total number of bytes read/considered
+         * @param key       key we are interested in.
+         * @param bufOut    DataOutputStream that needs to be filled.
+         * @param columnFamilyName name of the columnFamily
+         * @param columnNames columnNames we are interested in
+         * OR
+         * @param timeRange time range we are interested in
+         * @param position
+         * @return number of bytes that were read.
+         * @throws IOException
          */
-        public long next(String key, DataOutputBuffer bufOut, Coordinate section) throws IOException
+        public long next(String key, DataOutputBuffer bufOut, String columnFamilyName, List<String> columnNames, IndexHelper.TimeRange timeRange, long position) throws IOException
         {
+            assert !columnFamilyName.contains(":");
+            assert timeRange == null || columnNames == null; // at most one may be non-null
+
             long bytesRead = -1L;
-            if (isEOF() || seekTo(key, section) < 0)
+            if (isEOF() || seekTo(position) < 0)
                 return bytesRead;
+
             /* note the position where the key starts */
             long startPosition = file_.getFilePointer();
             String keyInDisk = file_.readUTF();
@@ -30,19 +40,18 @@
                  * is passed in. If not then we skip over this key and
                  * position ourselves to read the next one.
                 */
-                int dataSize = file_.readInt();
                 if (keyInDisk.equals(key))
                 {
-                    /* write the key into buffer */
-                    bufOut.writeUTF(keyInDisk);
-                    /* write data size into buffer */
-                    bufOut.writeInt(dataSize);
-                    /* write the data into buffer */
-                    bufOut.write(file_, dataSize);
+                    if (timeRange == null) {
+                        readColumns(key, bufOut, columnFamilyName, columnNames);
+                    } else {
+                        readTimeRange(key, bufOut, columnFamilyName, timeRange);
+                    }
                 }
                 else
                 {
                     /* skip over data portion */
+                    int dataSize = file_.readInt();
                     file_.seek(dataSize + file_.getFilePointer());
                 }
 
