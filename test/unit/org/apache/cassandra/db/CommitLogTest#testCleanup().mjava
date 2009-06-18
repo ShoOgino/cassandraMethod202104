@@ -1,0 +1,31 @@
+    @Test
+    public void testCleanup() throws IOException, ExecutionException, InterruptedException
+    {
+        assert CommitLog.getSegmentCount() == 0;
+        CommitLog.setSegmentSize(1000);
+
+        Table table = Table.open("Table1");
+        ColumnFamilyStore store1 = table.getColumnFamilyStore("Standard1");
+        ColumnFamilyStore store2 = table.getColumnFamilyStore("Standard2");
+        RowMutation rm;
+        byte[] value = new byte[501];
+
+        // add data.  use relatively large values to force quick segment creation since we have a low flush threshold in the test config.
+        for (int i = 0; i < 10; i++)
+        {
+            rm = new RowMutation("Table1", "key1");
+            rm.add("Standard1:Column1", value, 0);
+            rm.add("Standard2:Column1", value, 0);
+            rm.apply();
+        }
+        assert CommitLog.getSegmentCount() > 1;
+
+        // nothing should get removed after flushing just Standard1
+        store1.forceBlockingFlush();
+        assert CommitLog.getSegmentCount() > 1;
+
+        // after flushing Standard2 we should be able to clean out all segments
+        store2.forceBlockingFlush();
+        assert CommitLog.getSegmentCount() == 1;
+    }
+
