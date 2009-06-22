@@ -5,43 +5,46 @@
         // 1. Scan through all the keys that we need to handoff
         // 2. For each key read the list of recepients if teh endpoint matches send
         // 3. Delete that recepient from the key if write was successful
-        Table table = Table.open(DatabaseDescriptor.getTables().get(0));
-        try
+        for ( String tableName:DatabaseDescriptor.getTables() )
         {
-            ColumnFamily hintedColumnFamily = table.get(key_, Table.hints_);
-            if (hintedColumnFamily == null)
+            Table table = Table.open(tableName);
+            try
             {
-                return;
-            }
-            Collection<IColumn> keys = hintedColumnFamily.getAllColumns();
-            if (keys == null)
-            {
-                return;
-            }
-
-            for (IColumn keyColumn : keys)
-            {
-                Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                for (IColumn endpoint : endpoints)
+                ColumnFamily hintedColumnFamily = table.get(key_, Table.hints_);
+                if (hintedColumnFamily == null)
                 {
-                    if (endpoint.name().equals(endPoint.getHost()) && sendMessage(endpoint.name(), keyColumn.name()))
+                    return;
+                }
+                Collection<IColumn> keys = hintedColumnFamily.getAllColumns();
+                if (keys == null)
+                {
+                    return;
+                }
+
+                for (IColumn keyColumn : keys)
+                {
+                    Collection<IColumn> endpoints = keyColumn.getSubColumns();
+                    for (IColumn endpoint : endpoints)
                     {
-                        deleteEndPoint(endpoint.name(), keyColumn.name(), keyColumn.timestamp());
-                        if (endpoints.size() == 1)
+                        if (endpoint.name().equals(endPoint.getHost()) && sendMessage(endpoint.name(), null, keyColumn.name()))
                         {
-                            deleteHintedData(keyColumn.name());
+                            deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), keyColumn.timestamp());
+                            if (endpoints.size() == 1)
+                            {
+                                deleteHintedData(tableName, keyColumn.name());
+                            }
                         }
                     }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            logger_.error(ex.getMessage());
-        }
-        finally
-        {
-            logger_.debug("Finished hinted handoff for endpoint " + endPoint.getHost());
+            catch (Exception ex)
+            {
+                logger_.error(ex.getMessage());
+            }
+            finally
+            {
+                logger_.debug("Finished hinted handoff for endpoint " + endPoint.getHost());
+            }            
         }
     }
 

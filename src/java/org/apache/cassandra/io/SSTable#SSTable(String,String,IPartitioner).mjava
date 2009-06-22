@@ -1,12 +1,27 @@
     /**
-     * This ctor is used for writing data into the SSTable. Use this
-     * version for non DB writes to the SSTable.
+     * This ctor basically gets passed in the full path name
+     * of the data file associated with this SSTable. Use this
+     * ctor to read the data in this file.
      */
-    public SSTable(String directory, String filename, IPartitioner partitioner) throws IOException
+    public SSTable(String dataFileName, String tableName, IPartitioner partitioner) throws IOException
     {
-        dataFile_ = directory + System.getProperty("file.separator") + filename + "-Data.db";
+        dataFile_ = dataFileName;
         partitioner_ = partitioner;
-        dataWriter_ = SequenceFile.bufferedWriter(dataFile_, 4 * 1024 * 1024);
-        indexRAF_ = new BufferedRandomAccessFile(indexFilename(), "rw", 1024 * 1024);
+        table_ = tableName;
+        /*
+         * this is to prevent multiple threads from
+         * loading the same index files multiple times
+         * into memory.
+        */
+        synchronized (indexLoadLock_)
+        {
+            if (indexMetadataMap_.get(dataFile_) == null)
+            {
+                long start = System.currentTimeMillis();
+                loadIndexFile();
+                loadBloomFilter();
+                logger_.debug("INDEX LOAD TIME: " + (System.currentTimeMillis() - start) + " ms.");
+            }
+        }
     }
 

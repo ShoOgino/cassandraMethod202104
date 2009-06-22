@@ -9,48 +9,51 @@
         // 5. Now force a flush
         // 6. Do major compaction to clean up all deletes etc.
         // 7. I guess we r done
-        Table table = Table.open(DatabaseDescriptor.getTables().get(0));
-        try
+        for ( String tableName:DatabaseDescriptor.getTables() )
         {
-            ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(table.get(key_, Table.hints_), Integer.MAX_VALUE);
-            if (hintColumnFamily == null)
+            Table table = Table.open(tableName);
+            try
             {
-                columnFamilyStore.forceFlush();
-                return;
-            }
-            Collection<IColumn> keys = hintColumnFamily.getAllColumns();
-            if (keys == null)
-            {
-                return;
-            }
-
-            for (IColumn keyColumn : keys)
-            {
-                Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                int deleted = 0;
-                for (IColumn endpoint : endpoints)
+                ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(table.get(key_, Table.hints_), Integer.MAX_VALUE);
+                if (hintColumnFamily == null)
                 {
-                    if (sendMessage(endpoint.name(), keyColumn.name()))
+                    columnFamilyStore.forceFlush();
+                    return;
+                }
+                Collection<IColumn> keys = hintColumnFamily.getAllColumns();
+                if (keys == null)
+                {
+                    return;
+                }
+
+                for (IColumn keyColumn : keys)
+                {
+                    Collection<IColumn> endpoints = keyColumn.getSubColumns();
+                    int deleted = 0;
+                    for (IColumn endpoint : endpoints)
                     {
-                        deleteEndPoint(endpoint.name(), keyColumn.name(), keyColumn.timestamp());
-                        deleted++;
+                        if (sendMessage(endpoint.name(), tableName, keyColumn.name()))
+                        {
+                            deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), keyColumn.timestamp());
+                            deleted++;
+                        }
+                    }
+                    if (deleted == endpoints.size())
+                    {
+                        deleteHintedData(tableName, keyColumn.name());
                     }
                 }
-                if (deleted == endpoints.size())
-                {
-                    deleteHintedData(keyColumn.name());
-                }
+                columnFamilyStore.forceFlush();
+                columnFamilyStore.forceCompaction(null, null, 0, null);
             }
-            columnFamilyStore.forceFlush();
-            columnFamilyStore.forceCompaction(null, null, 0, null);
-        }
-        catch (Exception ex)
-        {
-            logger_.error(ex.getMessage());
-        }
-        finally
-        {
-            logger_.debug("Finished hinted handoff of " + columnFamilyStore.columnFamily_);
+            catch (Exception ex)
+            {
+                logger_.error(ex.getMessage());
+            }
+            finally
+            {
+                logger_.debug("Finished hinted handoff of " + columnFamilyStore.columnFamily_);
+            }
         }
     }
 
