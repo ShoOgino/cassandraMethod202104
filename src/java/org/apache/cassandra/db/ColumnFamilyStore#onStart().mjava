@@ -1,7 +1,7 @@
     void onStart() throws IOException
     {
         /* Do major compaction */
-        List<File> ssTables = new ArrayList<File>();
+        List<File> sstableFiles = new ArrayList<File>();
         String[] dataFileDirectories = DatabaseDescriptor.getAllDataFileLocations();
         for (String directory : dataFileDirectories)
         {
@@ -21,21 +21,32 @@
                     && tblCfName[1].equals(columnFamily_)
                     && filename.contains("-Data.db"))
                 {
-                    ssTables.add(file.getAbsoluteFile());
+                    sstableFiles.add(file.getAbsoluteFile());
                 }
             }
         }
-        Collections.sort(ssTables, new FileUtils.FileComparator());
+        Collections.sort(sstableFiles, new FileUtils.FileComparator());
         List<String> filenames = new ArrayList<String>();
-        for (File ssTable : ssTables)
+        for (File ssTable : sstableFiles)
         {
             filenames.add(ssTable.getAbsolutePath());
         }
 
-        /* There are no files to compact just add to the list of SSTables */
-        ssTables_.addAll(filenames);
         /* Load the index files and the Bloom Filters associated with them. */
-        SSTable.onStart(filenames);
+        for (String filename : filenames)
+        {
+            try
+            {
+                SSTable sstable = SSTable.open(filename, StorageService.getPartitioner());
+                ssTables_.put(filename, sstable);
+            }
+            catch (IOException ex)
+            {
+                logger_.info("Deleting corrupted file " + filename);
+                FileUtils.delete(filename);
+                logger_.warn(LogUtil.throwableToString(ex));
+            }
+        }
         MinorCompactionManager.instance().submit(ColumnFamilyStore.this);
         if (columnFamily_.equals(Table.hints_))
         {

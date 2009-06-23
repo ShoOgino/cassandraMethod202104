@@ -45,8 +45,6 @@
         int expectedBloomFilterSize = SSTable.getApproximateKeyCount(files);
         expectedBloomFilterSize = (expectedBloomFilterSize > 0) ? expectedBloomFilterSize : SSTable.indexInterval();
         logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
-        /* Create the bloom filter for the compacted file. */
-        BloomFilter compactedBloomFilter = new BloomFilter(expectedBloomFilterSize, 15);
         List<ColumnFamily> columnFamilies = new ArrayList<ColumnFamily>();
 
         while (pq.size() > 0 || lfs.size() > 0)
@@ -111,13 +109,11 @@
 
                 if (ssTable == null)
                 {
-                    ssTable = new SSTable(compactionFileLocation, mergedFileName, StorageService.getPartitioner());
+                    ssTable = new SSTable(compactionFileLocation, mergedFileName, expectedBloomFilterSize, StorageService.getPartitioner());
                 }
                 ssTable.append(lastkey, bufOut);
-
-                /* Fill the bloom filter with the key */
-                doFill(compactedBloomFilter, lastkey);
                 totalkeysWritten++;
+
                 for (FileStruct filestruct : lfs)
                 {
                     try
@@ -151,8 +147,8 @@
         if (ssTable != null)
         {
             // TODO if all the keys were the same nothing will be done here
-            ssTable.close(compactedBloomFilter);
-            newfile = ssTable.getDataFileLocation();
+            ssTable.close();
+            newfile = ssTable.getFilename();
         }
         lock_.writeLock().lock();
         try
@@ -160,17 +156,15 @@
             for (String file : files)
             {
                 ssTables_.remove(file);
-                SSTable.removeAssociatedBloomFilter(file);
             }
             if (newfile != null)
             {
-                SSTable.storeBloomFilter(newfile, compactedBloomFilter);
-                ssTables_.add(newfile);
+                ssTables_.put(newfile, ssTable);
                 totalBytesWritten += (new File(newfile)).length();
             }
             for (String file : files)
             {
-                SSTable.open(file, null).delete();
+                SSTable.get(file).delete();
             }
         }
         finally
@@ -178,9 +172,9 @@
             lock_.writeLock().unlock();
         }
 
-        String format = "Compacted [%s] to %s.  %d/%d bytes for %d/%d keys read/written.  Time: %dms.";
+        String format = "Compacted to %s.  %d/%d bytes for %d/%d keys read/written.  Time: %dms.";
         long dTime = System.currentTimeMillis() - startTime;
-        logger_.info(String.format(format, StringUtils.join(files, ", "), newfile, totalBytesRead, totalBytesWritten, totalkeysRead, totalkeysWritten, dTime));
+        logger_.info(String.format(format, newfile, totalBytesRead, totalBytesWritten, totalkeysRead, totalkeysWritten, dTime));
         return files.size();
     }
 
