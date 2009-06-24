@@ -1,6 +1,7 @@
-    private static void deliverAllHints(ColumnFamilyStore columnFamilyStore)
+    /** hintStore must be the hints columnfamily from the system table */
+    private static void deliverAllHints(ColumnFamilyStore hintStore) throws DigestMismatchException, IOException, InvalidRequestException, TimeoutException
     {
-        logger_.debug("Started hinted handoff of " + columnFamilyStore.columnFamily_);
+        logger_.debug("Started deliverAllHints");
 
         // 1. Scan through all the keys that we need to handoff
         // 2. For each key read the list of recepients and send
@@ -9,51 +10,36 @@
         // 5. Now force a flush
         // 6. Do major compaction to clean up all deletes etc.
         // 7. I guess we r done
-        for ( String tableName:DatabaseDescriptor.getTables() )
+        for (String tableName : DatabaseDescriptor.getTables())
         {
-            try
+            ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(tableName, Table.HINTS_CF, new IdentityFilter()), Integer.MAX_VALUE);
+            if (hintColumnFamily == null)
             {
-                Table table = Table.open(tableName);
-                ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(table.get(key_, Table.hints_), Integer.MAX_VALUE);
-                if (hintColumnFamily == null)
-                {
-                    columnFamilyStore.forceFlush();
-                    return;
-                }
-                Collection<IColumn> keys = hintColumnFamily.getAllColumns();
-                if (keys == null)
-                {
-                    return;
-                }
+                continue;
+            }
+            Collection<IColumn> keys = hintColumnFamily.getAllColumns();
 
-                for (IColumn keyColumn : keys)
+            for (IColumn keyColumn : keys)
+            {
+                Collection<IColumn> endpoints = keyColumn.getSubColumns();
+                int deleted = 0;
+                for (IColumn endpoint : endpoints)
                 {
-                    Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                    int deleted = 0;
-                    for (IColumn endpoint : endpoints)
+                    if (sendMessage(endpoint.name(), tableName, keyColumn.name()))
                     {
-                        if (sendMessage(endpoint.name(), tableName, keyColumn.name()))
-                        {
-                            deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), keyColumn.timestamp());
-                            deleted++;
-                        }
-                    }
-                    if (deleted == endpoints.size())
-                    {
-                        deleteHintedData(tableName, keyColumn.name());
+                        deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), keyColumn.timestamp());
+                        deleted++;
                     }
                 }
-                columnFamilyStore.forceFlush();
-                columnFamilyStore.forceCompaction(null, null, 0, null);
-            }
-            catch (Exception ex)
-            {
-                logger_.error("error delivering hints", ex);
-            }
-            finally
-            {
-                logger_.debug("Finished hinted handoff of " + columnFamilyStore.columnFamily_);
+                if (deleted == endpoints.size())
+                {
+                    deleteHintedData(tableName, keyColumn.name());
+                }
             }
         }
+        hintStore.forceFlush();
+        hintStore.forceCompaction(null, null, 0, null);
+
+        logger_.debug("Finished deliverAllHints");
     }
 
