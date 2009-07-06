@@ -38,12 +38,13 @@
         }
 
         String mergedFileName = getTempFileName(files);
-        SSTable ssTable = null;
+        SSTableWriter writer = null;
+        SSTableReader ssTable = null;
         String lastkey = null;
         List<FileStruct> lfs = new ArrayList<FileStruct>();
         DataOutputBuffer bufOut = new DataOutputBuffer();
-        int expectedBloomFilterSize = SSTable.getApproximateKeyCount(files);
-        expectedBloomFilterSize = (expectedBloomFilterSize > 0) ? expectedBloomFilterSize : SSTable.indexInterval();
+        int expectedBloomFilterSize = SSTableReader.getApproximateKeyCount(files);
+        expectedBloomFilterSize = (expectedBloomFilterSize > 0) ? expectedBloomFilterSize : SSTableReader.indexInterval();
         if (logger_.isDebugEnabled())
           logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
         List<ColumnFamily> columnFamilies = new ArrayList<ColumnFamily>();
@@ -108,12 +109,12 @@
                     bufOut.write(filestruct.getBufIn(), size);
                 }
 
-                if (ssTable == null)
+                if (writer == null)
                 {
                     String fname = new File(compactionFileLocation, mergedFileName).getAbsolutePath();
-                    ssTable = new SSTable(fname, expectedBloomFilterSize, StorageService.getPartitioner());
+                    writer = new SSTableWriter(fname, expectedBloomFilterSize, StorageService.getPartitioner());
                 }
-                ssTable.append(lastkey, bufOut);
+                writer.append(lastkey, bufOut);
                 totalkeysWritten++;
 
                 for (FileStruct filestruct : lfs)
@@ -146,11 +147,11 @@
                 }
             }
         }
-        if (ssTable != null)
+        if (writer != null)
         {
             // TODO if all the keys were the same nothing will be done here
-            ssTable.close();
-            newfile = ssTable.getFilename();
+            ssTable = writer.closeAndOpenReader();
+            newfile = writer.getFilename();
         }
         lock_.writeLock().lock();
         try
@@ -166,7 +167,7 @@
             }
             for (String file : files)
             {
-                SSTable.get(file).delete();
+                SSTableReader.get(file).delete();
             }
         }
         finally
