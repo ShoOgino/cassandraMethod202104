@@ -3,8 +3,23 @@
      * only the latest version of a column is returned
      */
     public ColumnFamily getColumnFamily(QueryFilter filter)
-    throws IOException, ExecutionException, InterruptedException
+    throws IOException
     {
+        String[] values = RowMutation.getColumnAndColumnFamily(filter.columnFamilyColumn);
+
+        // if we are querying subcolumns of a supercolumn, fetch the supercolumn with NQF, then filter in-memory.
+        if (values.length > 1)
+        {
+            QueryFilter nameFilter = new NamesQueryFilter(filter.key, values[0], values[1]);
+            ColumnFamily cf = getColumnFamily(nameFilter);
+            for (IColumn column : cf.getAllColumns())
+            {
+                filter.filterSuperColumn((SuperColumn) column);
+            }
+            return removeDeleted(cf);
+        }
+
+        // we are querying top-level columns, do a merging fetch with indexes.
         sstableLock_.readLock().lock();
         List<ColumnIterator> iterators = new ArrayList<ColumnIterator>();
         try
@@ -53,7 +68,7 @@
             Comparator<IColumn> comparator = filter.getColumnComparator();
             Iterator collated = IteratorUtils.collatedIterator(comparator, iterators);
             if (!collated.hasNext())
-                return ColumnFamily.create(table_, filter.getColumnFamilyName());
+                return ColumnFamily.create(table_, columnFamily_);
 
             filter.collectColumns(returnCF, collated);
 
