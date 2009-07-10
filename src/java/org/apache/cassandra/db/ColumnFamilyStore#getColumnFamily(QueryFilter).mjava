@@ -1,0 +1,80 @@
+    /**
+     * get a list of columns starting from a given column, in a specified order
+     * only the latest version of a column is returned
+     */
+    public ColumnFamily getColumnFamily(QueryFilter filter)
+    throws IOException, ExecutionException, InterruptedException
+    {
+        sstableLock_.readLock().lock();
+        List<ColumnIterator> iterators = new ArrayList<ColumnIterator>();
+        try
+        {
+            final ColumnFamily returnCF;
+            ColumnIterator iter;
+        
+            /* add the current memtable */
+            memtableLock_.readLock().lock();
+            try
+            {
+                iter = filter.getMemColumnIterator(memtable_);
+                returnCF = iter.getColumnFamily();
+            }
+            finally
+            {
+                memtableLock_.readLock().unlock();            
+            }        
+            iterators.add(iter);
+
+            /* add the memtables being flushed */
+            List<Memtable> memtables = getUnflushedMemtables(filter.getColumnFamilyName());
+            for (Memtable memtable:memtables)
+            {
+                iter = filter.getMemColumnIterator(memtable);
+                returnCF.delete(iter.getColumnFamily());
+                iterators.add(iter);
+            }
+
+            /* add the SSTables on disk */
+            List<SSTableReader> sstables = new ArrayList<SSTableReader>(ssTables_.values());
+            for (SSTableReader sstable : sstables)
+            {
+                iter = filter.getSSTableColumnIterator(sstable);
+                if (iter.hasNext())
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                    iterators.add(iter);
+                }
+                else
+                {
+                    iter.close();
+                }
+            }
+
+            Comparator<IColumn> comparator = filter.getColumnComparator();
+            Iterator collated = IteratorUtils.collatedIterator(comparator, iterators);
+            if (!collated.hasNext())
+                return ColumnFamily.create(table_, filter.getColumnFamilyName());
+
+            filter.collectColumns(returnCF, collated);
+
+            return removeDeleted(returnCF);
+        }
+        finally
+        {
+            /* close all cursors */
+            for (ColumnIterator ci : iterators)
+            {
+                try
+                {
+                    ci.close();
+                }
+                catch (Throwable th)
+                {
+                    logger_.error(th);
+                }
+            }
+
+            sstableLock_.readLock().unlock();
+        }
+    }
+
