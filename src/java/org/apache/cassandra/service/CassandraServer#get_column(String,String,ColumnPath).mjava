@@ -1,0 +1,41 @@
+    public Column get_column(String table, String key, ColumnPath column_path)
+    throws InvalidRequestException, NotFoundException
+    {
+        logger.debug("get_column");
+        ThriftValidation.validateColumnPath(table, column_path);
+
+        QueryPath path = new QueryPath(column_path.column_family, column_path.super_column);
+        ColumnFamily cfamily = readColumnFamily(new SliceByNamesReadCommand(table, key, path, Arrays.asList(column_path.column)));
+        // TODO can we leverage getSlice here and just check that it returns one column?
+        if (cfamily == null)
+        {
+            throw new NotFoundException();
+        }
+        Collection<IColumn> columns = null;
+        if (column_path.super_column != null)
+        {
+            IColumn column = cfamily.getColumn(column_path.super_column);
+            if (column != null)
+            {
+                columns = column.getSubColumns();
+            }
+        }
+        else
+        {
+            columns = cfamily.getAllColumns();
+        }
+        if (columns == null || columns.size() == 0)
+        {
+            throw new NotFoundException();
+        }
+
+        assert columns.size() == 1;
+        IColumn column = columns.iterator().next();
+        if (column.isMarkedForDelete())
+        {
+            throw new NotFoundException();
+        }
+
+        return new Column(column.name(), column.value(), column.timestamp());
+    }
+
