@@ -5,14 +5,17 @@
      */
     public ColumnFamily getColumnFamily(QueryFilter filter, int gcBefore) throws IOException
     {
+        assert columnFamily_.equals(filter.getColumnFamilyName());
+
         // if we are querying subcolumns of a supercolumn, fetch the supercolumn with NQF, then filter in-memory.
         if (filter.path.superColumnName != null)
         {
-            QueryFilter nameFilter = new NamesQueryFilter(filter.key, new QueryPath(filter.path.columnFamilyName), filter.path.superColumnName);
+            AbstractType comparator = DatabaseDescriptor.getType(table_, columnFamily_);
+            QueryFilter nameFilter = new NamesQueryFilter(filter.key, new QueryPath(columnFamily_), filter.path.superColumnName);
             ColumnFamily cf = getColumnFamily(nameFilter);
             if (cf != null)
             {
-                for (IColumn column : cf.getAllColumns())
+                for (IColumn column : cf.getSortedColumns())
                 {
                     filter.filterSuperColumn((SuperColumn) column);
                 }
@@ -32,7 +35,7 @@
             memtableLock_.readLock().lock();
             try
             {
-                iter = filter.getMemColumnIterator(memtable_);
+                iter = filter.getMemColumnIterator(memtable_, getComparator());
                 returnCF = iter.getColumnFamily();
             }
             finally
@@ -45,7 +48,7 @@
             List<Memtable> memtables = getUnflushedMemtables(filter.getColumnFamilyName());
             for (Memtable memtable:memtables)
             {
-                iter = filter.getMemColumnIterator(memtable);
+                iter = filter.getMemColumnIterator(memtable, getComparator());
                 returnCF.delete(iter.getColumnFamily());
                 iterators.add(iter);
             }
@@ -54,7 +57,7 @@
             List<SSTableReader> sstables = new ArrayList<SSTableReader>(ssTables_.values());
             for (SSTableReader sstable : sstables)
             {
-                iter = filter.getSSTableColumnIterator(sstable);
+                iter = filter.getSSTableColumnIterator(sstable, getComparator());
                 if (iter.hasNext()) // initializes iter.CF
                 {
                     returnCF.delete(iter.getColumnFamily());
@@ -62,7 +65,7 @@
                 iterators.add(iter);
             }
 
-            Comparator<IColumn> comparator = filter.getColumnComparator();
+            Comparator<IColumn> comparator = filter.getColumnComparator(getComparator());
             Iterator collated = IteratorUtils.collatedIterator(comparator, iterators);
             if (!collated.hasNext())
                 return null;
