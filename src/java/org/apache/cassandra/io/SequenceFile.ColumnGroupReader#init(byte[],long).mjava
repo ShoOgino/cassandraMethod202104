@@ -1,56 +1,47 @@
         private void init(byte[] startColumn, long position) throws IOException
         {
-            String keyInDisk = null;
-            if (seekTo(position) >= 0)
-                keyInDisk = file_.readUTF();
+            seek(position);
+            String keyInDisk = file_.readUTF();
+            assert keyInDisk.equals(key_);
 
-            if ( keyInDisk != null && keyInDisk.equals(key_))
+            /* read off the size of this row */
+            int dataSize = file_.readInt();
+            /* skip the bloomfilter */
+            int totalBytesRead = IndexHelper.skipBloomFilter(file_);
+            /* read off the index flag, it has to be true */
+            boolean hasColumnIndexes = file_.readBoolean();
+            totalBytesRead += 1;
+
+            /* read the index */
+            List<IndexHelper.ColumnIndexInfo> colIndexList = new ArrayList<IndexHelper.ColumnIndexInfo>();
+            if (hasColumnIndexes)
+                totalBytesRead += IndexHelper.deserializeIndex(getTableName(), cfName_, file_, colIndexList);
+
+            /* need to do two things here.
+             * 1. move the file pointer to the beginning of the list of stored columns
+             * 2. calculate the size of all columns */
+            String cfName = file_.readUTF();
+            cfType_ = file_.readUTF();
+            String comparatorName = file_.readUTF();
+            assert comparatorName.equals(comparator_.getClass().getCanonicalName());
+            String subComparatorName = file_.readUTF(); // subcomparator
+            localDeletionTime_ = file_.readInt();
+            markedForDeleteAt_ = file_.readLong();
+            int totalNumCols = file_.readInt();
+            allColumnsSize_ = dataSize - (totalBytesRead + 4 * utfPrefix_ + cfName.length() + cfType_.length() + comparatorName.length() + subComparatorName.length() + 4 + 8 + 4);
+
+            columnStartPosition_ = file_.getFilePointer();
+            columnIndexList_ = getFullColumnIndexList(colIndexList, totalNumCols);
+
+            if (startColumn.length == 0 && !isAscending_)
             {
-                /* read off the size of this row */
-                int dataSize = file_.readInt();
-                /* skip the bloomfilter */
-                int totalBytesRead = IndexHelper.skipBloomFilter(file_);
-                /* read off the index flag, it has to be true */
-                boolean hasColumnIndexes = file_.readBoolean();
-                totalBytesRead += 1;
-
-                /* read the index */
-                List<IndexHelper.ColumnIndexInfo> colIndexList = new ArrayList<IndexHelper.ColumnIndexInfo>();
-                if (hasColumnIndexes)
-                    totalBytesRead += IndexHelper.deserializeIndex(getTableName(), cfName_, file_, colIndexList);
-
-                /* need to do two things here.
-                 * 1. move the file pointer to the beginning of the list of stored columns
-                 * 2. calculate the size of all columns */
-                String cfName = file_.readUTF();
-                cfType_ = file_.readUTF();
-                String comparatorName = file_.readUTF();
-                assert comparatorName.equals(comparator_.getClass().getCanonicalName());
-                String subComparatorName = file_.readUTF(); // subcomparator
-                localDeletionTime_ = file_.readInt();
-                markedForDeleteAt_ = file_.readLong();
-                int totalNumCols = file_.readInt();
-                allColumnsSize_ = dataSize - (totalBytesRead + 4 * utfPrefix_ + cfName.length() + cfType_.length() + comparatorName.length() + subComparatorName.length() + 4 + 8 + 4);
-
-                columnStartPosition_ = file_.getFilePointer();
-                columnIndexList_ = getFullColumnIndexList(colIndexList, totalNumCols);
-
-                if (startColumn.length == 0 && !isAscending_)
-                {
-                    /* in this case, we assume that we want to scan from the largest column in descending order. */
-                    curRangeIndex_ = columnIndexList_.size() - 1;
-                }
-                else
-                {
-                    int index = Collections.binarySearch(columnIndexList_, new IndexHelper.ColumnIndexInfo(startColumn, 0, 0, comparator_));
-                    curRangeIndex_ = index < 0 ? (++index) * (-1) - 1 : index;
-                }
+                /* in this case, we assume that we want to scan from the largest column in descending order. */
+                curRangeIndex_ = columnIndexList_.size() - 1;
             }
             else
             {
-                /* no keys found in this file because of a false positive in BF */
-                curRangeIndex_ = -1;
-                columnIndexList_ = new ArrayList<IndexHelper.ColumnIndexInfo>();
+                int index = Collections.binarySearch(columnIndexList_, new IndexHelper.ColumnIndexInfo(startColumn, 0, 0, comparator_));
+                curRangeIndex_ = index < 0 ? (++index) * (-1) - 1 : index;
             }
         }
 
