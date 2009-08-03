@@ -1,25 +1,26 @@
         public void onStreamCompletion(String host, StreamContextManager.StreamContext streamContext, StreamContextManager.StreamStatus streamStatus) throws IOException
         {                        
-            /* Parse the stream context and the file to the list of SSTables in the associated Column Family Store. */            
+            /* Parse the stream context and the file to the list of SSTables in the associated Column Family Store. */
             if (streamContext.getTargetFile().contains("-Data.db"))
             {
+                String tableName = streamContext.getTable();
                 File file = new File( streamContext.getTargetFile() );
                 String fileName = file.getName();
-                String [] temp = null;
-                String tableName;
-                temp = fileName.split("-");
-                tableName = temp[0];
-                /*
-                 * If the file is a Data File we need to load the indicies associated
-                 * with this file. We also need to cache the file name in the SSTables
-                 * list of the associated Column Family. Also merge the CBF into the
-                 * sampler.
-                */                
-                SSTableReader sstable = SSTableReader.open(streamContext.getTargetFile());
-                if (logger_.isDebugEnabled())
-                  logger_.debug("Merging the counting bloom filter in the sampler ...");                
-                String[] peices = FBUtilities.strip(fileName, "-");
-                Table.open(peices[0]).getColumnFamilyStore(peices[1]).addToList(sstable);                
+                String [] temp = fileName.split("-");
+                
+                //Open the file to see if all parts are now here
+                SSTableReader sstable = null;
+                try 
+                {
+                    sstable = SSTableReader.open(streamContext.getTargetFile());
+                    //TODO add a sanity check that this sstable has all its parts and is ok
+                    Table.open(tableName).getColumnFamilyStore(temp[0]).addToList(sstable);
+                    logger_.info("Bootstrap added " + sstable.getFilename());
+                }
+                catch (IOException e)
+                {
+                    logger_.error("Not able to bootstrap with file " + streamContext.getTargetFile(), e);                    
+                }
             }
             
             EndPoint to = new EndPoint(host, DatabaseDescriptor.getStoragePort());
