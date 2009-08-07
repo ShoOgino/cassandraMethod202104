@@ -4,39 +4,31 @@
             String keyInDisk = file_.readUTF();
             assert keyInDisk.equals(key_);
 
-            /* read off the size of this row */
-            int dataSize = file_.readInt();
-            /* skip the bloomfilter */
-            int totalBytesRead = IndexHelper.skipBloomFilter(file_);
-            /* read off the index flag, it has to be true */
-            boolean hasColumnIndexes = file_.readBoolean();
-            totalBytesRead += 1;
+            file_.readInt(); // row size
+            IndexHelper.skipBloomFilter(file_);
 
             /* read the index */
-            List<IndexHelper.ColumnIndexInfo> colIndexList = new ArrayList<IndexHelper.ColumnIndexInfo>();
-            if (hasColumnIndexes)
-                totalBytesRead += IndexHelper.deserializeIndex(SSTableReader.parseTableName(file_.getPath()), cfName_, file_, colIndexList);
+            indexList_ = IndexHelper.deserializeIndex(SSTableReader.parseTableName(file_.getPath()), cfName_, file_);
 
             /* need to do two things here.
              * 1. move the file pointer to the beginning of the list of stored columns
              * 2. calculate the size of all columns */
             emptyColumnFamily = ColumnFamily.serializer().deserializeEmpty(file_);
-            int totalNumCols = file_.readInt();
-            totalBytesRead += emptyColumnFamily.serializedSize();
-            allColumnsSize_ = dataSize - totalBytesRead;
+            file_.readInt(); // column count
 
             columnStartPosition_ = file_.getFilePointer();
-            columnIndexList_ = getFullColumnIndexList(colIndexList);
 
             if (startColumn.length == 0 && !isAscending_)
             {
                 /* in this case, we assume that we want to scan from the largest column in descending order. */
-                curRangeIndex_ = columnIndexList_.size() - 1;
+                curRangeIndex_ = indexList_.size() - 1;
             }
             else
             {
-                int index = Collections.binarySearch(columnIndexList_, new IndexHelper.ColumnIndexInfo(startColumn, 0, comparator_));
-                curRangeIndex_ = index < 0 ? (++index) * (-1) - 1 : index;
+                int index = Collections.binarySearch(indexList_, new IndexHelper.IndexInfo(startColumn, startColumn, 0, 0, comparator_));
+                curRangeIndex_ = index < 0 ? -1 * (index + 1): index;
+                if (curRangeIndex_ < 0)
+                    curRangeIndex_ = 0;
             }
         }
 
