@@ -1,0 +1,31 @@
+        public ColumnGroupReader(String filename, String key, long position) throws IOException
+        {
+            this.file = new BufferedRandomAccessFile(filename, "r");
+
+            file.seek(position);
+            String keyInDisk = file.readUTF();
+            assert keyInDisk.equals(key);
+
+            file.readInt(); // row size
+            IndexHelper.skipBloomFilter(file);
+            indexes = IndexHelper.deserializeIndex(file);
+
+            /* need to do two things here.
+             * 1. move the file pointer to the beginning of the list of stored columns
+             * 2. calculate the size of all columns */
+            emptyColumnFamily = ColumnFamily.serializer().deserializeEmpty(file);
+            file.readInt(); // column count
+
+            columnStartPosition = file.getFilePointer();
+
+            if (startColumn.length == 0 && !isAscending)
+            {
+                /* in this case, we assume that we want to scan from the largest column in descending order. */
+                curRangeIndex = indexes.size() - 1;
+            }
+            else
+            {
+                curRangeIndex = IndexHelper.indexFor(startColumn, indexes, comparator);
+            }
+        }
+
