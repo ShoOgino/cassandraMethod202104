@@ -1,4 +1,4 @@
-    private RangeReply getKeyRangeUnsafe(final String cfName, final String startWith, final String stopAt, int maxResults) throws IOException, ExecutionException, InterruptedException
+    private RangeReply getKeyRangeUnsafe(final String startWith, final String stopAt, int maxResults) throws IOException, ExecutionException, InterruptedException
     {
         // (OPP key decoration is a no-op so using the "decorated" comparator against raw keys is fine)
         final Comparator<String> comparator = StorageService.getPartitioner().getDecoratedKeyComparator();
@@ -6,7 +6,6 @@
         // create a CollatedIterator that will return unique keys from different sources
         // (current memtable, historical memtables, and SSTables) in the correct order.
         List<Iterator<String>> iterators = new ArrayList<Iterator<String>>();
-        ColumnFamilyStore cfs = getColumnFamilyStore(cfName);
 
         // we iterate through memtables with a priority queue to avoid more sorting than necessary.
         // this predicate throws out the keys before the start of our range.
@@ -20,15 +19,15 @@
         };
 
         // current memtable keys.  have to go through the CFS api for locking.
-        iterators.add(IteratorUtils.filteredIterator(cfs.memtableKeyIterator(), p));
+        iterators.add(IteratorUtils.filteredIterator(memtableKeyIterator(), p));
         // historical memtables
-        for (Memtable memtable : ColumnFamilyStore.getUnflushedMemtables(cfName))
+        for (Memtable memtable : ColumnFamilyStore.getUnflushedMemtables(columnFamily_))
         {
             iterators.add(IteratorUtils.filteredIterator(Memtable.getKeyIterator(memtable.getKeys()), p));
         }
 
         // sstables
-        for (SSTableReader sstable : cfs.getSSTables())
+        for (SSTableReader sstable : getSSTables())
         {
             FileStruct fs = sstable.getFileStruct();
             fs.seekTo(startWith);
@@ -65,8 +64,8 @@
                 }
                 // make sure there is actually non-tombstone content associated w/ this key
                 // TODO record the key source(s) somehow and only check that source (e.g., memtable or sstable)
-                QueryFilter filter = new SliceQueryFilter(current, new QueryPath(cfName), ArrayUtils.EMPTY_BYTE_ARRAY, ArrayUtils.EMPTY_BYTE_ARRAY, true, 1);
-                if (cfs.getColumnFamily(filter, Integer.MAX_VALUE) != null)
+                QueryFilter filter = new SliceQueryFilter(current, new QueryPath(columnFamily_), ArrayUtils.EMPTY_BYTE_ARRAY, ArrayUtils.EMPTY_BYTE_ARRAY, true, 1);
+                if (getColumnFamily(filter, Integer.MAX_VALUE) != null)
                 {
                     keys.add(current);
                 }
