@@ -1,12 +1,24 @@
     public static RowMutation getRowMutation(String table, BatchMutation batchMutation)
     {
         RowMutation rm = new RowMutation(table, batchMutation.key.trim());
-        for (String cfname : batchMutation.cfmap.keySet())
+        for (Map.Entry<String, List<ColumnOrSuperColumn>> entry : batchMutation.cfmap.entrySet())
         {
-            List<org.apache.cassandra.service.Column> list = batchMutation.cfmap.get(cfname);
-            for (org.apache.cassandra.service.Column column : list)
+            String cfName = entry.getKey();
+            for (ColumnOrSuperColumn cosc : entry.getValue())
             {
-                rm.add(new QueryPath(cfname, null, column.name), column.value, column.timestamp);
+                if (cosc.column == null)
+                {
+                    assert cosc.super_column != null;
+                    for (org.apache.cassandra.service.Column column : cosc.super_column.columns)
+                    {
+                        rm.add(new QueryPath(cfName, cosc.super_column.name, column.name), column.value, column.timestamp);
+                    }
+                }
+                else
+                {
+                    assert cosc.super_column == null;
+                    rm.add(new QueryPath(cfName, null, cosc.column.name), cosc.column.value, cosc.column.timestamp);
+                }
             }
         }
         return rm;
