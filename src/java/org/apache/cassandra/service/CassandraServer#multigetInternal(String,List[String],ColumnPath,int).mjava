@@ -1,0 +1,49 @@
+    private Map<String, ColumnOrSuperColumn> multigetInternal(String table, List<String> keys, ColumnPath column_path, int consistency_level)
+    throws InvalidRequestException
+    {
+        ThriftValidation.validateColumnPath(table, column_path);
+
+        QueryPath path = new QueryPath(column_path.column_family, column_path.super_column);
+        List<byte[]> nameAsList = Arrays.asList(column_path.column == null ? column_path.super_column : column_path.column);
+        List<ReadCommand> commands = new ArrayList<ReadCommand>();
+        for (String key: keys)
+        {
+            commands.add(new SliceByNamesReadCommand(table, key, path, nameAsList));
+        }
+
+        Map<String, ColumnOrSuperColumn> columnFamiliesMap = new HashMap<String, ColumnOrSuperColumn>();
+        Map<String, Collection<IColumn>> columnsMap = multigetColumns(commands, consistency_level);
+
+        for (ReadCommand command: commands)
+        {
+            ColumnOrSuperColumn columnorsupercolumn;
+
+            Collection<IColumn> columns = columnsMap.get(command.key);
+            if (columns == null)
+            {
+               columnorsupercolumn = new ColumnOrSuperColumn();
+            }
+            else
+            {
+                assert columns.size() == 1;
+                IColumn column = columns.iterator().next();
+
+
+                if (column.isMarkedForDelete())
+                {
+                    columnorsupercolumn = new ColumnOrSuperColumn();
+                }
+                else
+                {
+                    columnorsupercolumn = column instanceof org.apache.cassandra.db.Column
+                                          ? new ColumnOrSuperColumn(new Column(column.name(), column.value(), column.timestamp()), null)
+                                          : new ColumnOrSuperColumn(null, new SuperColumn(column.name(), thriftifySubColumns(column.getSubColumns())));
+                }
+
+            }
+            columnFamiliesMap.put(command.key, columnorsupercolumn);
+        }
+
+        return columnFamiliesMap;
+    }
+
