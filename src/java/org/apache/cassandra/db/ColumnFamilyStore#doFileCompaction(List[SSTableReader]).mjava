@@ -9,17 +9,17 @@
     * to get the latest data.
     *
     */
-    private int doFileCompaction(List<String> files) throws IOException
+    private int doFileCompaction(List<SSTableReader> sstables) throws IOException
     {
-        logger_.info("Compacting [" + StringUtils.join(files, ",") + "]");
-        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, getExpectedCompactedFileSize(files));
+        logger_.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
+        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, getExpectedCompactedFileSize(sstables));
         // If the compaction file path is null that means we have no space left for this compaction.
         // try again w/o the largest one.
         if (compactionFileLocation == null)
         {
-            String maxFile = getMaxSizeFile(files);
-            files.remove(maxFile);
-            return doFileCompaction(files);
+            SSTableReader maxFile = getMaxSizeFile(sstables);
+            sstables.remove(maxFile);
+            return doFileCompaction(sstables);
         }
 
         String newfile = null;
@@ -28,7 +28,7 @@
         long totalBytesWritten = 0;
         long totalkeysRead = 0;
         long totalkeysWritten = 0;
-        PriorityQueue<FileStruct> pq = initializePriorityQueue(files, null);
+        PriorityQueue<FileStruct> pq = initializePriorityQueue(sstables, null);
 
         if (pq.isEmpty())
         {
@@ -43,7 +43,7 @@
         String lastkey = null;
         List<FileStruct> lfs = new ArrayList<FileStruct>();
         DataOutputBuffer bufOut = new DataOutputBuffer();
-        int expectedBloomFilterSize = SSTableReader.getApproximateKeyCount(files);
+        int expectedBloomFilterSize = SSTableReader.getApproximateKeyCount(sstables);
         expectedBloomFilterSize = (expectedBloomFilterSize > 0) ? expectedBloomFilterSize : SSTableReader.indexInterval();
         if (logger_.isDebugEnabled())
           logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
@@ -132,18 +132,15 @@
         sstableLock_.writeLock().lock();
         try
         {
-            for (String file : files)
-            {
-                ssTables_.remove(file);
-            }
             if (newfile != null)
             {
                 ssTables_.put(newfile, ssTable);
                 totalBytesWritten += (new File(newfile)).length();
             }
-            for (String file : files)
+            for (SSTableReader sstable : sstables)
             {
-                SSTableReader.get(file).delete();
+                ssTables_.remove(sstable.getFilename());
+                sstable.delete();
             }
         }
         finally
@@ -154,6 +151,6 @@
         String format = "Compacted to %s.  %d/%d bytes for %d/%d keys read/written.  Time: %dms.";
         long dTime = System.currentTimeMillis() - startTime;
         logger_.info(String.format(format, newfile, totalBytesRead, totalBytesWritten, totalkeysRead, totalkeysWritten, dTime));
-        return files.size();
+        return sstables.size();
     }
 
