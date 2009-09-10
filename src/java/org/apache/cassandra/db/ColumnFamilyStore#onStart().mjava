@@ -10,7 +10,7 @@
             for (File file : files)
             {
                 String filename = file.getName();
-                if (((file.length() == 0) || (filename.contains("-" + SSTable.TEMPFILE_MARKER))) && (filename.contains(columnFamily_)))
+                if (((file.length() == 0 && !filename.endsWith("-Compacted")) || (filename.contains("-" + SSTable.TEMPFILE_MARKER))) && (filename.contains(columnFamily_)))
                 {
                     file.delete();
                     continue;
@@ -27,9 +27,13 @@
         Collections.sort(sstableFiles, new FileUtils.FileComparator());
 
         /* Load the index files and the Bloom Filters associated with them. */
+        List<SSTableReader> sstables = new ArrayList<SSTableReader>();
         for (File file : sstableFiles)
         {
             String filename = file.getAbsolutePath();
+            if (SSTable.deleteIfCompacted(filename))
+                continue;
+
             SSTableReader sstable;
             try
             {
@@ -40,8 +44,9 @@
                 logger_.error("Corrupt file " + filename + "; skipped", ex);
                 continue;
             }
-            ssTables_.add(sstable);
+            sstables.add(sstable);
         }
+        ssTables_.onStart(sstables);
 
         // submit initial check-for-compaction request
         MinorCompactionManager.instance().submit(ColumnFamilyStore.this);

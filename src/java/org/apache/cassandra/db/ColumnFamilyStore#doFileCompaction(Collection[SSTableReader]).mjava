@@ -9,7 +9,7 @@
     * to get the latest data.
     *
     */
-    private int doFileCompaction(List<SSTableReader> sstables) throws IOException
+    private int doFileCompaction(Collection<SSTableReader> sstables) throws IOException
     {
         logger_.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
         String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, getExpectedCompactedFileSize(sstables));
@@ -22,29 +22,28 @@
             return doFileCompaction(sstables);
         }
 
-        String newfile = null;
         long startTime = System.currentTimeMillis();
         long totalBytesRead = 0;
-        long totalBytesWritten = 0;
         long totalkeysRead = 0;
         long totalkeysWritten = 0;
         PriorityQueue<FileStruct> pq = initializePriorityQueue(sstables, null);
 
         if (pq.isEmpty())
         {
-            logger_.warn("Nothing to compact (all files empty or corrupt)");
+            logger_.warn("Nothing to compact (all files empty or corrupt). This should not happen.");
             // TODO clean out bad files, if any
             return 0;
         }
 
-        String mergedFileName = getTempSSTableFileName();
-        SSTableWriter writer = null;
+        int expectedBloomFilterSize = SSTableReader.getApproximateKeyCount(sstables);
+        if (expectedBloomFilterSize < 0)
+            expectedBloomFilterSize = SSTableReader.indexInterval();
+        String newFilename = new File(compactionFileLocation, getTempSSTableFileName()).getAbsolutePath();
+        SSTableWriter writer = new SSTableWriter(newFilename, expectedBloomFilterSize, StorageService.getPartitioner());
         SSTableReader ssTable = null;
         String lastkey = null;
         List<FileStruct> lfs = new ArrayList<FileStruct>();
         DataOutputBuffer bufOut = new DataOutputBuffer();
-        int expectedBloomFilterSize = SSTableReader.getApproximateKeyCount(sstables);
-        expectedBloomFilterSize = (expectedBloomFilterSize > 0) ? expectedBloomFilterSize : SSTableReader.indexInterval();
         if (logger_.isDebugEnabled())
           logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
         List<ColumnFamily> columnFamilies = new ArrayList<ColumnFamily>();
@@ -96,11 +95,6 @@
                     ColumnFamily.serializer().serializeWithIndexes(filestruct.getColumnFamily(), bufOut);
                 }
 
-                if (writer == null)
-                {
-                    String fname = new File(compactionFileLocation, mergedFileName).getAbsolutePath();
-                    writer = new SSTableWriter(fname, expectedBloomFilterSize, StorageService.getPartitioner());
-                }
                 writer.append(lastkey, bufOut);
                 totalkeysWritten++;
 
@@ -123,34 +117,14 @@
                 }
             }
         }
-        if (writer != null)
-        {
-            // TODO if all the keys were the same nothing will be done here
-            ssTable = writer.closeAndOpenReader();
-            newfile = writer.getFilename();
-        }
-        sstableLock_.writeLock().lock();
-        try
-        {
-            if (newfile != null)
-            {
-                ssTables_.add(ssTable);
-                totalBytesWritten += (new File(newfile)).length();
-            }
-            for (SSTableReader sstable : sstables)
-            {
-                ssTables_.remove(sstable);
-                sstable.delete();
-            }
-        }
-        finally
-        {
-            sstableLock_.writeLock().unlock();
-        }
+        ssTable = writer.closeAndOpenReader();
+        ssTables_.add(ssTable);
+        ssTables_.markCompacted(sstables);
+        MinorCompactionManager.instance().submit(ColumnFamilyStore.this);
 
         String format = "Compacted to %s.  %d/%d bytes for %d/%d keys read/written.  Time: %dms.";
         long dTime = System.currentTimeMillis() - startTime;
-        logger_.info(String.format(format, newfile, totalBytesRead, totalBytesWritten, totalkeysRead, totalkeysWritten, dTime));
+        logger_.info(String.format(format, writer.getFilename(), totalBytesRead, ssTable.length(), totalkeysRead, totalkeysWritten, dTime));
         return sstables.size();
     }
 
