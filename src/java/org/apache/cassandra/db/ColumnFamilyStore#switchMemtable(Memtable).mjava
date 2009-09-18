@@ -1,0 +1,44 @@
+    void switchMemtable(Memtable oldMemtable)
+    {
+        CommitLog.CommitLogContext ctx = null;
+        /**
+         *  If we can get the writelock, that means no new updates can come in and 
+         *  all ongoing updates to memtables have completed. We can get the tail
+         *  of the log and use it as the starting position for log replay on recovery.
+         *  
+         *  By holding the flusherLock_, we don't need the memetableLock any more.
+         */
+        Table.flusherLock_.writeLock().lock();
+        try
+        {
+            try
+            {
+                ctx = CommitLog.open().getContext();
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+
+            if (oldMemtable.isFrozen())
+            {
+                return;
+            }
+            logger_.info(columnFamily_ + " has reached its threshold; switching in a fresh Memtable");
+            oldMemtable.freeze();
+            getMemtablesPendingFlushNotNull(columnFamily_).add(oldMemtable); // it's ok for the MT to briefly be both active and pendingFlush
+            submitFlush(oldMemtable, ctx);
+            memtable_ = new Memtable(table_, columnFamily_);
+
+            if (memtableSwitchCount == Integer.MAX_VALUE)
+            {
+                memtableSwitchCount = 0;
+            }
+            memtableSwitchCount++;
+        }
+        finally
+        {
+            Table.flusherLock_.writeLock().unlock();
+        }
+    }
+
