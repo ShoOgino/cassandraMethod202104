@@ -4,8 +4,6 @@
          *  If we can get the writelock, that means no new updates can come in and 
          *  all ongoing updates to memtables have completed. We can get the tail
          *  of the log and use it as the starting position for log replay on recovery.
-         *  
-         *  By holding the flusherLock_, we don't need the memetableLock any more.
          */
         Table.flusherLock_.writeLock().lock();
         try
@@ -18,8 +16,7 @@
             }
             logger_.info(columnFamily_ + " has reached its threshold; switching in a fresh Memtable");
             oldMemtable.freeze();
-            getMemtablesPendingFlushNotNull(columnFamily_).add(oldMemtable); // it's ok for the MT to briefly be both active and pendingFlush
-            final Future<?> future = submitFlush(oldMemtable);
+            final Condition condition = submitFlush(oldMemtable);
             memtable_ = new Memtable(table_, columnFamily_);
             // a second executor that makes sure the onMemtableFlushes get called in the right order,
             // while keeping the wait-for-flush (future.get) out of anything latency-sensitive.
@@ -29,7 +26,7 @@
                 {
                     try
                     {
-                        future.get();
+                        condition.await();
                         onMemtableFlush(ctx);
                     }
                     catch (Exception e)
