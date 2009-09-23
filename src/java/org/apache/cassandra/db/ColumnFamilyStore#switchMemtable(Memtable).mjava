@@ -1,6 +1,5 @@
-    void switchMemtable(Memtable oldMemtable)
+    Future<?> switchMemtable(Memtable oldMemtable) throws IOException
     {
-        CommitLog.CommitLogContext ctx = null;
         /**
          *  If we can get the writelock, that means no new updates can come in and 
          *  all ongoing updates to memtables have completed. We can get the tail
@@ -11,34 +10,43 @@
         Table.flusherLock_.writeLock().lock();
         try
         {
-            try
-            {
-                ctx = CommitLog.open().getContext();
-            }
-            catch (IOException e)
-            {
-                throw new RuntimeException(e);
-            }
+            final CommitLog.CommitLogContext ctx = CommitLog.open().getContext();
 
             if (oldMemtable.isFrozen())
             {
-                return;
+                return null;
             }
             logger_.info(columnFamily_ + " has reached its threshold; switching in a fresh Memtable");
             oldMemtable.freeze();
             getMemtablesPendingFlushNotNull(columnFamily_).add(oldMemtable); // it's ok for the MT to briefly be both active and pendingFlush
-            submitFlush(oldMemtable, ctx);
+            final Future<?> future = submitFlush(oldMemtable, ctx);
             memtable_ = new Memtable(table_, columnFamily_);
-
+            // a second executor that makes sure the onMemtableFlushes get called in the right order,
+            // while keeping the wait-for-flush (future.get) out of anything latency-sensitive.
+            return commitLogUpdater_.submit(new Runnable()
+            {
+                public void run()
+                {
+                    try
+                    {
+                        future.get();
+                        onMemtableFlush(ctx);
+                    }
+                    catch (Exception e)
+                    {
+                        throw new RuntimeException(e);
+                    }
+                }
+            });
+        }
+        finally
+        {
+            Table.flusherLock_.writeLock().unlock();
             if (memtableSwitchCount == Integer.MAX_VALUE)
             {
                 memtableSwitchCount = 0;
             }
             memtableSwitchCount++;
-        }
-        finally
-        {
-            Table.flusherLock_.writeLock().unlock();
         }
     }
 
