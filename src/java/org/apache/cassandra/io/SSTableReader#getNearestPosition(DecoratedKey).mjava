@@ -1,28 +1,21 @@
-    /**
-     * returns the position in the data file to find the given key, or -1 if the key is not present
-     */
-    public long getPosition(String decoratedKey) throws IOException
+    /** like getPosition, but if key is not found will return the location of the first key _greater_ than the desired one, or -1 if no such key exists. */
+    public long getNearestPosition(DecoratedKey decoratedKey) throws IOException
     {
-        if (!bf.isPresent(decoratedKey))
-            return -1;
         long start = getIndexScanPosition(decoratedKey, partitioner);
         if (start < 0)
         {
-            return -1;
+            return 0;
         }
-
-        // TODO mmap the index file?
         BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(path), "r");
         input.seek(start);
-        int i = 0;
         try
         {
-            do
+            while (true)
             {
-                String indexDecoratedKey;
+                DecoratedKey indexDecoratedKey;
                 try
                 {
-                    indexDecoratedKey = input.readUTF();
+                    indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
                 }
                 catch (EOFException e)
                 {
@@ -30,18 +23,13 @@
                 }
                 long position = input.readLong();
                 int v = partitioner.getDecoratedKeyComparator().compare(indexDecoratedKey, decoratedKey);
-                if (v == 0)
-                {
+                if (v >= 0)
                     return position;
-                }
-                if (v > 0)
-                    return -1;
-            } while  (++i < INDEX_INTERVAL);
+            }
         }
         finally
         {
             input.close();
         }
-        return -1;
     }
 
