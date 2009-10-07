@@ -3,6 +3,8 @@
         storageMetadata_ = SystemTable.initMetadata();
         tcpAddr_ = new EndPoint(DatabaseDescriptor.getStoragePort());
         udpAddr_ = new EndPoint(DatabaseDescriptor.getControlPort());
+        isBootstrapMode = !(DatabaseDescriptor.getSeeds().contains(udpAddr_.getHost()) || SystemTable.isBootstrapped());
+
         /* Listen for application messages */
         MessagingService.instance().listen(tcpAddr_);
         /* Listen for control messages */
@@ -14,19 +16,6 @@
         /* starts a load timer thread */
         loadTimer_.schedule( new LoadDisseminator(), StorageService.threshold_, StorageService.threshold_);
         
-        /* Start the storage load balancer */
-        storageLoadBalancer_.start();
-        /* Register with the Gossiper for EndPointState notifications */
-        Gossiper.instance().register(this);
-        /*
-         * Start the gossiper with the generation # retrieved from the System
-         * table
-         */
-        Gossiper.instance().start(udpAddr_, storageMetadata_.getGeneration());
-        /* Make sure this token gets gossiped around. */
-        tokenMetadata_.update(storageMetadata_.getToken(), StorageService.tcpAddr_, isBootstrapMode);
-        ApplicationState state = new ApplicationState(StorageService.getPartitioner().getTokenFactory().toString(storageMetadata_.getToken()));
-        Gossiper.instance().addApplicationState(StorageService.nodeId_, state);
         if (isBootstrapMode)
         {
             logger_.info("Starting in bootstrap mode (first, sleeping to get load information)");
@@ -66,8 +55,18 @@
                     updateToken(t);
                 }
             }
-            doBootstrap(StorageService.getLocalStorageEndPoint());
+
+            BootStrapper bs = new BootStrapper(new EndPoint[] {getLocalStorageEndPoint()}, storageMetadata_.getToken());
+            bootStrapper_.submit(bs);
             Gossiper.instance().addApplicationState(BOOTSTRAP_MODE, new ApplicationState(""));
         }
+
+        storageLoadBalancer_.start();
+        Gossiper.instance().register(this);
+        Gossiper.instance().start(udpAddr_, storageMetadata_.getGeneration());
+        /* Make sure this token gets gossiped around. */
+        tokenMetadata_.update(storageMetadata_.getToken(), StorageService.tcpAddr_, isBootstrapMode);
+        ApplicationState state = new ApplicationState(StorageService.getPartitioner().getTokenFactory().toString(storageMetadata_.getToken()));
+        Gossiper.instance().addApplicationState(StorageService.nodeId_, state);
     }
 
