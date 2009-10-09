@@ -13,55 +13,13 @@
         SelectorManager.getSelectorManager().start();
         SelectorManager.getUdpSelectorManager().start();
 
-        /* starts a load timer thread */
-        loadTimer_.schedule( new LoadDisseminator(), StorageService.threshold_, StorageService.threshold_);
-        
+        StorageLoadBalancer.instance().startBroadcasting();
+
         if (isBootstrapMode)
         {
-            logger_.info("Starting in bootstrap mode (first, sleeping to get load information)");
-            // wait for node information to be available.  if the rest of the cluster just came up,
-            // this could be up to threshold_ ms (currently 5 minutes).
-            try
-            {
-                while (storageLoadBalancer_.getLoadInfo().isEmpty())
-                {
-                    Thread.sleep(100);
-                }
-                // one more sleep in case there are some stragglers
-                Thread.sleep(BootStrapper.INITIAL_DELAY);
-            }
-            catch (InterruptedException e)
-            {
-                throw new AssertionError(e);
-            }
-
-            // if initialtoken was specified, use that.  otherwise, pick a token to assume half the load of the most-loaded node.
-            if (DatabaseDescriptor.getInitialToken() == null)
-            {
-                double maxLoad = 0;
-                EndPoint maxEndpoint = null;
-                for (Map.Entry<EndPoint,Double> entry : storageLoadBalancer_.getLoadInfo().entrySet())
-                {
-                    if (maxEndpoint == null || entry.getValue() > maxLoad)
-                    {
-                        maxEndpoint = entry.getKey();
-                        maxLoad = entry.getValue();
-                    }
-                }
-                if (!maxEndpoint.equals(getLocalStorageEndPoint()))
-                {
-                    Token<?> t = getBootstrapTokenFrom(maxEndpoint);
-                    logger_.info("Setting token to " + t + " to assume load from " + maxEndpoint.getHost());
-                    updateToken(t);
-                }
-            }
-
-            BootStrapper bs = new BootStrapper(new EndPoint[] {getLocalStorageEndPoint()}, storageMetadata_.getToken());
-            bootStrapper_.submit(bs);
-            Gossiper.instance().addApplicationState(BOOTSTRAP_MODE, new ApplicationState(""));
+            BootStrapper.startBootstrap();
         }
 
-        storageLoadBalancer_.start();
         Gossiper.instance().register(this);
         Gossiper.instance().start(udpAddr_, storageMetadata_.getGeneration());
         /* Make sure this token gets gossiped around. */

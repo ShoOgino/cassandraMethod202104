@@ -1,8 +1,16 @@
     public StorageService()
     {
+        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+        try
+        {
+            mbs.registerMBean(this, new ObjectName("org.apache.cassandra.service:type=StorageService"));
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+
         bootstrapSet = new HashSet<EndPoint>();
-        init();
-        storageLoadBalancer_ = new StorageLoadBalancer(this);
         endPointSnitch_ = DatabaseDescriptor.getEndPointSnitch();
 
         /* register the verb handlers */
@@ -11,37 +19,15 @@
         MessagingService.instance().registerVerbHandlers(mutationVerbHandler_, new RowMutationVerbHandler());
         MessagingService.instance().registerVerbHandlers(readRepairVerbHandler_, new ReadRepairVerbHandler());
         MessagingService.instance().registerVerbHandlers(readVerbHandler_, new ReadVerbHandler());
-        MessagingService.instance().registerVerbHandlers(bootStrapInitiateVerbHandler_, new Table.BootStrapInitiateVerbHandler());
-        MessagingService.instance().registerVerbHandlers(bootStrapInitiateDoneVerbHandler_, new StorageService.BootstrapInitiateDoneVerbHandler());
-        MessagingService.instance().registerVerbHandlers(bootStrapTerminateVerbHandler_, new StreamManager.BootstrapTerminateVerbHandler());
         MessagingService.instance().registerVerbHandlers(dataFileVerbHandler_, new DataFileVerbHandler() );
         MessagingService.instance().registerVerbHandlers(mbrshipCleanerVerbHandler_, new MembershipCleanerVerbHandler() );
-        MessagingService.instance().registerVerbHandlers(bsMetadataVerbHandler_, new BootstrapMetadataVerbHandler() );
         MessagingService.instance().registerVerbHandlers(rangeVerbHandler_, new RangeVerbHandler());
-        MessagingService.instance().registerVerbHandlers(bootstrapTokenVerbHandler_, new IVerbHandler()
-        {
-            public void doVerb(Message message)
-            {
-                List<String> tokens = getSplits(2);
-                assert tokens.size() == 3 : tokens.size();
-                Message response;
-                try
-                {
-                    response = message.getReply(getLocalStorageEndPoint(), tokens.get(1).getBytes("UTF-8"));
-                }
-                catch (UnsupportedEncodingException e)
-                {
-                    throw new AssertionError();
-                }
-                MessagingService.instance().sendOneWay(response, message.getFrom());
-            }
-        });
-        
-        /* register the stage for the mutations */
-        consistencyManager_ = new DebuggableThreadPoolExecutor(DatabaseDescriptor.getConsistencyThreads(),
-                                                               DatabaseDescriptor.getConsistencyThreads(),
-                                                               Integer.MAX_VALUE, TimeUnit.SECONDS,
-                                                               new LinkedBlockingQueue<Runnable>(), new NamedThreadFactory("CONSISTENCY-MANAGER"));
+        // see BootStrapper for a summary of how the bootstrap verbs interact
+        MessagingService.instance().registerVerbHandlers(bootstrapMetadataVerbHandler_, new BootstrapMetadataVerbHandler() );
+        MessagingService.instance().registerVerbHandlers(bootStrapInitiateVerbHandler_, new BootStrapper.BootStrapInitiateVerbHandler());
+        MessagingService.instance().registerVerbHandlers(bootStrapInitiateDoneVerbHandler_, new BootStrapper.BootstrapInitiateDoneVerbHandler());
+        MessagingService.instance().registerVerbHandlers(bootStrapTerminateVerbHandler_, new BootStrapper.BootstrapTerminateVerbHandler());
+        MessagingService.instance().registerVerbHandlers(bootstrapTokenVerbHandler_, new BootStrapper.BootstrapTokenVerbHandler());
         
         StageManager.registerStage(StorageService.mutationStage_,
                                    new MultiThreadedStage(StorageService.mutationStage_, DatabaseDescriptor.getConcurrentWriters()));
