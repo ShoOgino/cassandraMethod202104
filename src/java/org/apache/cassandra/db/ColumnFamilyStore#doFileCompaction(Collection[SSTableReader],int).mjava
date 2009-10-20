@@ -1,0 +1,73 @@
+    /*
+    * This function does the actual compaction for files.
+    * It maintains a priority queue of with the first key from each file
+    * and then removes the top of the queue and adds it to the SStable and
+    * repeats this process while reading the next from each file until its
+    * done with all the files . The SStable to which the keys are written
+    * represents the new compacted file. Before writing if there are keys
+    * that occur in multiple files and are the same then a resolution is done
+    * to get the latest data.
+    *
+    */
+    int doFileCompaction(Collection<SSTableReader> sstables, int gcBefore) throws IOException
+    {
+        if (DatabaseDescriptor.isSnapshotBeforeCompaction())
+            Table.open(table_).snapshot("compact-" + columnFamily_);
+        logger_.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
+        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, getExpectedCompactedFileSize(sstables));
+        // If the compaction file path is null that means we have no space left for this compaction.
+        // try again w/o the largest one.
+        if (compactionFileLocation == null)
+        {
+            SSTableReader maxFile = getMaxSizeFile(sstables);
+            List<SSTableReader> smallerSSTables = new ArrayList<SSTableReader>(sstables);
+            smallerSSTables.remove(maxFile);
+            return doFileCompaction(smallerSSTables);
+        }
+
+        long startTime = System.currentTimeMillis();
+        long totalkeysWritten = 0;
+
+        // TODO the int cast here is potentially buggy
+        int expectedBloomFilterSize = Math.max(SSTableReader.indexInterval(), (int)SSTableReader.getApproximateKeyCount(sstables));
+        if (logger_.isDebugEnabled())
+          logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+
+        SSTableWriter writer;
+        CompactionIterator ci = new CompactionIterator(sstables, gcBefore); // retain a handle so we can call close()
+        Iterator nni = new FilterIterator(ci, PredicateUtils.notNullPredicate());
+
+        try
+        {
+            if (!ci.hasNext())
+            {
+                logger_.warn("Nothing to compact (all files empty or corrupt). This should not happen.");
+                return 0;
+            }
+
+            String newFilename = new File(compactionFileLocation, getTempSSTableFileName()).getAbsolutePath();
+            writer = new SSTableWriter(newFilename, expectedBloomFilterSize, StorageService.getPartitioner());
+
+            while (nni.hasNext())
+            {
+                CompactionIterator.CompactedRow row = (CompactionIterator.CompactedRow) nni.next();
+                writer.append(row.key, row.buffer);
+                totalkeysWritten++;
+            }
+        }
+        finally
+        {
+            ci.close();
+        }
+
+        SSTableReader ssTable = writer.closeAndOpenReader();
+        ssTables_.add(ssTable);
+        ssTables_.markCompacted(sstables);
+        CompactionManager.instance().submit(ColumnFamilyStore.this);
+
+        String format = "Compacted to %s.  %d/%d bytes for %d keys.  Time: %dms.";
+        long dTime = System.currentTimeMillis() - startTime;
+        logger_.info(String.format(format, writer.getFilename(), getTotalBytes(sstables), ssTable.length(), totalkeysWritten, dTime));
+        return sstables.size();
+    }
+
