@@ -1,0 +1,54 @@
+    /*
+     * This method needs to figure out the files on disk
+     * locally for each range and then stream them using
+     * the Bootstrap protocol to the target endpoint.
+    */
+    private void doTransfer(InetAddress target, List<Range> ranges) throws IOException
+    {
+        if ( ranges.size() == 0 )
+        {
+            if (logger_.isDebugEnabled())
+              logger_.debug("No ranges to give scram ...");
+            return;
+        }
+        
+        /* Just for debugging process - remove later */            
+        for ( Range range : ranges )
+        {
+            StringBuilder sb = new StringBuilder("");                
+            sb.append(range.toString());
+            sb.append(" ");            
+            if (logger_.isDebugEnabled())
+              logger_.debug("Beginning transfer process to " + target + " for ranges " + sb.toString());                
+        }
+      
+        /*
+         * (1) First we dump all the memtables to disk.
+         * (2) Run a version of compaction which will basically
+         *     put the keys in the range specified into a directory
+         *     named as per the endpoint it is destined for inside the
+         *     bootstrap directory.
+         * (3) Handoff the data.
+        */
+        List<String> tables = DatabaseDescriptor.getTables();
+        for ( String tName : tables )
+        {
+            Table table = Table.open(tName);
+            if (logger_.isDebugEnabled())
+              logger_.debug("Flushing memtables ...");
+            table.flush(false);
+            if (logger_.isDebugEnabled())
+              logger_.debug("Forcing compaction ...");
+            /* Get the counting bloom filter for each endpoint and the list of files that need to be streamed */
+            List<String> fileList = new ArrayList<String>();
+            for (SSTableReader sstable : table.forceAntiCompaction(ranges, target))
+            {
+                fileList.add(sstable.indexFilename());
+                fileList.add(sstable.filterFilename());
+                fileList.add(sstable.getFilename());
+            }
+            doHandoff(target, fileList, tName);
+            //In Handoff, Streaming the file also deletes the file, so no cleanup needed            
+        }
+    }
+

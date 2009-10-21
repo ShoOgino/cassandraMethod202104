@@ -1,0 +1,46 @@
+    /*
+        Use this version for fire and forget style messaging.
+    */
+    public void sendOneWay(Message message, InetAddress to)
+    {        
+        // do local deliveries        
+        if ( message.getFrom().equals(to) )
+        {            
+            MessagingService.receive(message);
+            return;
+        }
+        
+        TcpConnection connection = null;
+        try
+        {
+            Message processedMessage = SinkManager.processClientMessageSink(message);
+            if (processedMessage == null)
+            {
+                return;
+            }
+            connection = MessagingService.getConnection(processedMessage.getFrom(), to);
+            connection.write(message);
+        }
+        catch (SocketException se)
+        {
+            // Shutting down the entire pool. May be too conservative an approach.
+            MessagingService.getConnectionPool(message.getFrom(), to).shutdown();
+            logger_.error("socket error writing to " + to, se);
+        }
+        catch (IOException e)
+        {
+            if (connection != null)
+            {
+                connection.errorClose();
+            }
+            logger_.error("unexpected error writing " + message, e);
+        }
+        finally
+        {
+            if (connection != null)
+            {
+                connection.close();
+            }
+        }
+    }
+
