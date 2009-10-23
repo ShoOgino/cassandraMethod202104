@@ -1,12 +1,38 @@
     protected CompactedRow getReduced()
     {
-        try
+        assert rows.size() > 0;
+        DataOutputBuffer buffer = new DataOutputBuffer();
+        DecoratedKey key = rows.get(0).getKey();
+
+        ColumnFamily cf = null;
+        for (IteratingRow row : rows)
         {
-            return getReducedRaw();
+            ColumnFamily thisCF;
+            try
+            {
+                thisCF = row.getColumnFamily();
+            }
+            catch (IOException e)
+            {
+                logger.error("Skipping row " + key + " in " + row.getPath(), e);
+                continue;
+            }
+            if (cf == null)
+            {
+                cf = thisCF;
+            }
+            else
+            {
+                cf.addAll(thisCF);
+            }
         }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
+        rows.clear();
+
+        ColumnFamily cfPurged = ColumnFamilyStore.removeDeleted(cf, gcBefore);
+        if (cfPurged == null)
+            return null;
+        ColumnFamily.serializer().serializeWithIndexes(cfPurged, buffer);
+
+        return new CompactedRow(key, buffer);
     }
 
