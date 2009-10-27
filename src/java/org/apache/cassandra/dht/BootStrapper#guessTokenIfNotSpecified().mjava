@@ -1,0 +1,34 @@
+    public static void guessTokenIfNotSpecified() throws IOException
+    {
+        StorageService ss = StorageService.instance();
+        StorageLoadBalancer slb = StorageLoadBalancer.instance();
+
+        slb.waitForLoadInfo();
+
+        // if initialtoken was specified, use that.  otherwise, pick a token to assume half the load of the most-loaded node.
+        if (DatabaseDescriptor.getInitialToken() == null)
+        {
+            double maxLoad = 0;
+            InetAddress maxEndpoint = null;
+            for (Map.Entry<InetAddress,Double> entry : slb.getLoadInfo().entrySet())
+            {
+                if (maxEndpoint == null || entry.getValue() > maxLoad)
+                {
+                    maxEndpoint = entry.getKey();
+                    maxLoad = entry.getValue();
+                }
+            }
+            if (maxEndpoint == null)
+            {
+                throw new RuntimeException("No bootstrap sources found");
+            }
+
+            if (!maxEndpoint.equals(FBUtilities.getLocalAddress()))
+            {
+                Token<?> t = getBootstrapTokenFrom(maxEndpoint);
+                logger.info("New token will be " + t + " to assume load from " + maxEndpoint);
+                ss.setToken(t);
+            }
+        }
+    }
+
