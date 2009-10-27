@@ -1,4 +1,4 @@
-    public static void startBootstrap() throws IOException
+    public void startBootstrap() throws IOException
     {
         logger_.info("Starting in bootstrap mode (first, sleeping to get load information)");
 
@@ -33,8 +33,30 @@
             }
         }
 
-        BootStrapper bs = new BootStrapper(Arrays.asList(FBUtilities.getLocalAddress()), ss.getLocalToken());
-        bootstrapExecutor_.submit(bs);
+        new Thread(new Runnable()
+        {
+            public void run()
+            {
+                // Mark as not bootstrapping to calculate ranges correctly
+                for (int i=0; i< targets_.size(); i++)
+                {
+                    tokenMetadata_.update(tokens_[i], targets_.get(i), false);
+                }
+
+                Map<Range, List<BootstrapSourceTarget>> rangesWithSourceTarget = getRangesWithSourceTarget();
+                if (logger_.isDebugEnabled())
+                        logger_.debug("Beginning bootstrap process for [" + StringUtils.join(targets_, ", ") + "] ...");
+                /* Send messages to respective folks to stream data over to the new nodes being bootstrapped */
+                try
+                {
+                    LeaveJoinProtocolHelper.assignWork(rangesWithSourceTarget);
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+        }).start();
         Gossiper.instance().addApplicationState(StorageService.BOOTSTRAP_MODE, new ApplicationState(""));
     }
 
