@@ -1,0 +1,67 @@
+    private ColumnFamily getColumnFamilyInternal(QueryFilter filter, int gcBefore) throws IOException
+    {
+        // we are querying top-level columns, do a merging fetch with indexes.
+        List<ColumnIterator> iterators = new ArrayList<ColumnIterator>();
+        try
+        {
+            final ColumnFamily returnCF;
+            ColumnIterator iter;
+
+            /* add the current memtable */
+            Table.flusherLock_.readLock().lock();
+            try
+            {
+                iter = filter.getMemColumnIterator(memtable_, getComparator());
+                returnCF = iter.getColumnFamily();
+            }
+            finally
+            {
+                Table.flusherLock_.readLock().unlock();
+            }
+            iterators.add(iter);
+
+            /* add the memtables being flushed */
+            List<Memtable> memtables = getUnflushedMemtables(filter.getColumnFamilyName());
+            for (Memtable memtable:memtables)
+            {
+                iter = filter.getMemColumnIterator(memtable, getComparator());
+                returnCF.delete(iter.getColumnFamily());
+                iterators.add(iter);
+            }
+
+            /* add the SSTables on disk */
+            for (SSTableReader sstable : ssTables_)
+            {
+                iter = filter.getSSTableColumnIterator(sstable);
+                if (iter.hasNext()) // initializes iter.CF
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                }
+                iterators.add(iter);
+            }
+
+            Comparator<IColumn> comparator = filter.getColumnComparator(getComparator());
+            Iterator collated = IteratorUtils.collatedIterator(comparator, iterators);
+            if (!collated.hasNext())
+                return null;
+
+            filter.collectCollatedColumns(returnCF, collated, gcBefore);
+            return returnCF;
+        }
+        finally
+        {
+            /* close all cursors */
+            for (ColumnIterator ci : iterators)
+            {
+                try
+                {
+                    ci.close();
+                }
+                catch (Throwable th)
+                {
+                    logger_.error("error closing " + ci, th);
+                }
+            }
+        }
+    }
+
