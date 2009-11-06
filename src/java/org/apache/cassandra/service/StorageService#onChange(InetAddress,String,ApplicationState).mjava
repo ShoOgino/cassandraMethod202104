@@ -1,48 +1,26 @@
-    /**
-     *  Called when there is a change in application state. In particular
-     *  we are interested in new tokens as a result of a new node or an
-     *  existing node moving to a new location on the ring.
-    */
+    /*
+     * onChange only ever sees one ApplicationState piece change at a time, so we perform a kind of state machine here.
+     * We are concerned with two events: knowing the token associated with an enpoint, and knowing its operation mode.
+     * Nodes can start in either bootstrap or normal mode, and from bootstrap mode can change mode to normal.
+     * A node in bootstrap mode needs to have pendingranges set in TokenMetadata; a node in normal mode
+     * should instead be part of the token ring.
+     */
     public void onChange(InetAddress endpoint, String stateName, ApplicationState state)
     {
-        if (StorageService.MODE.equals(stateName))
+        Token token = getPartitioner().getTokenFactory().fromString(state.getValue());
+
+        if (STATE_BOOTSTRAPPING.equals(stateName))
         {
-            String mode = state.getValue();
             if (logger_.isDebugEnabled())
-                logger_.debug(endpoint + " is in " + mode + " mode");
-            boolean bootstrapState = mode.equals(MODE_MOVING);
-            tokenMetadata_.setBootstrapping(endpoint,  bootstrapState);
+                logger_.debug(endpoint + " state bootstrapping, token " + token);
+            updateBootstrapRanges(token, endpoint);
         }
-
-        if (StorageService.NODE_ID.equals(stateName))
+        else if (STATE_NORMAL.equals(stateName))
         {
-            Token newToken = getPartitioner().getTokenFactory().fromString(state.getValue());
             if (logger_.isDebugEnabled())
-              logger_.debug("CHANGE IN STATE FOR " + endpoint + " - has token " + newToken);
-
-            if (tokenMetadata_.isMember(endpoint))
-            {
-                Token oldToken = tokenMetadata_.getToken(endpoint);
-
-                /*
-                 * If oldToken is not equal to
-                 * the newToken this means that the node is being relocated
-                 * to another position in the ring.
-                */
-                if (!oldToken.equals(newToken))
-                {
-                    if (logger_.isDebugEnabled())
-                        logger_.debug("Relocation for endpoint " + endpoint);
-                    updateForeignToken(newToken, endpoint);
-                }
-            }
-            else
-            {
-                /*
-                 * This is a new node and we just update the token map.
-                */
-                updateForeignToken(newToken, endpoint);
-            }
+                logger_.debug(endpoint + " state normal, token " + token);
+            tokenMetadata_.removePendingRanges(endpoint);
+            updateForeignToken(token, endpoint);
         }
     }
 
