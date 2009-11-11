@@ -1,0 +1,43 @@
+    /**
+     * split out files on disk locally for each range and then stream them to the target endpoint
+    */
+    public static void transferRanges(InetAddress target, Collection<Range> ranges, Runnable callback)
+    {
+        assert ranges.size() > 0;
+
+        if (logger.isDebugEnabled())
+            logger.debug("Beginning transfer process to " + target + " for ranges " + StringUtils.join(ranges, ", "));
+
+        /*
+         * (1) dump all the memtables to disk.
+         * (2) anticompaction -- split out the keys in the range specified
+         * (3) transfer the data.
+        */
+        List<String> tables = DatabaseDescriptor.getTables();
+        for (String tName : tables)
+        {
+            try
+            {
+                Table table = Table.open(tName);
+                if (logger.isDebugEnabled())
+                  logger.debug("Flushing memtables ...");
+                table.flush(false);
+                if (logger.isDebugEnabled())
+                  logger.debug("Performing anticompaction ...");
+                /* Get the list of files that need to be streamed */
+                List<String> fileList = new ArrayList<String>();
+                for (SSTableReader sstable : table.forceAntiCompaction(ranges, target))
+                {
+                    fileList.addAll(sstable.getAllFilenames());
+                }
+                transferOneTable(target, fileList, tName); // also deletes the file, so no further cleanup needed
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+        }
+        if (callback != null)
+            callback.run();
+    }
+
