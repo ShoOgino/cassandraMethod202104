@@ -1,8 +1,6 @@
     public void start() throws IOException
     {
         storageMetadata_ = SystemTable.initMetadata();
-        isBootstrapMode = DatabaseDescriptor.isAutoBootstrap()
-                          && !(DatabaseDescriptor.getSeeds().contains(FBUtilities.getLocalAddress()) || SystemTable.isBootstrapped());
 
         /* Listen for application messages */
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -20,15 +18,14 @@
         Gossiper.instance().register(this);
         Gossiper.instance().start(FBUtilities.getLocalAddress(), storageMetadata_.getGeneration());
 
-        if (isBootstrapMode)
+        if (DatabaseDescriptor.isAutoBootstrap()
+            && !(DatabaseDescriptor.getSeeds().contains(FBUtilities.getLocalAddress()) || SystemTable.isBootstrapped()))
         {
             logger_.info("Starting in bootstrap mode (first, sleeping to get load information)");
             StorageLoadBalancer.instance().waitForLoadInfo();
             logger_.info("... got load info");
             Token token = BootStrapper.getBootstrapToken(tokenMetadata_, StorageLoadBalancer.instance().getLoadInfo());
-            SystemTable.updateToken(token); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-            Gossiper.instance().addApplicationState(StorageService.STATE_BOOTSTRAPPING, new ApplicationState(partitioner_.getTokenFactory().toString(getLocalToken())));
-            new BootStrapper(replicationStrategy_, FBUtilities.getLocalAddress(), getLocalToken(), tokenMetadata_).startBootstrap(); // handles token update
+            startBootstrap(token);
             // don't finish startup (enabling thrift) until after bootstrap is done
             while (isBootstrapMode)
             {
@@ -46,7 +43,7 @@
         {
             SystemTable.setBootstrapped(true);
             Token token = storageMetadata_.getToken();
-            setToken(token);
+            tokenMetadata_.update(token, FBUtilities.getLocalAddress());
             Gossiper.instance().addApplicationState(StorageService.STATE_NORMAL, new ApplicationState(partitioner_.getTokenFactory().toString(token)));
         }
 

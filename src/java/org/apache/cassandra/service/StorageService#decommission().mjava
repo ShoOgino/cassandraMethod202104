@@ -1,4 +1,4 @@
-    public void decommission()
+    public void decommission() throws InterruptedException
     {
         if (!tokenMetadata_.isMember(FBUtilities.getLocalAddress()))
             throw new UnsupportedOperationException("local node is not a member of the token ring yet");
@@ -10,40 +10,17 @@
         logger_.info("DECOMMISSIONING");
         Gossiper.instance().addApplicationState(STATE_LEAVING, new ApplicationState(getLocalToken().toString()));
         logger_.info("decommission sleeping " + Streaming.RING_DELAY);
-        try
-        {
-            Thread.sleep(Streaming.RING_DELAY);
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
-        }
+        Thread.sleep(Streaming.RING_DELAY);
 
-        Multimap<Range, InetAddress> rangesMM = getChangedRangesForLeaving(FBUtilities.getLocalAddress());
-        if (logger_.isDebugEnabled())
-            logger_.debug("Ranges needing transfer are [" + StringUtils.join(rangesMM.keySet(), ",") + "]");
-        final Set<Map.Entry<Range, InetAddress>> pending = new HashSet<Map.Entry<Range, InetAddress>>(rangesMM.entries());
-        for (final Map.Entry<Range, InetAddress> entry : rangesMM.entries())
+        Runnable finishLeaving = new Runnable()
         {
-            final Range range = entry.getKey();
-            final InetAddress newEndpoint = entry.getValue();
-            final Runnable callback = new Runnable()
+            public void run()
             {
-                public synchronized void run()
-                {
-                    pending.remove(entry);
-                    if (pending.isEmpty())
-                        finishLeaving();
-                }
-            };
-            StageManager.getStage(streamStage_).execute(new Runnable()
-            {
-                public void run()
-                {
-                    // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-                    Streaming.transferRanges(newEndpoint, Arrays.asList(range), callback);
-                }
-            });
-        }
+                Gossiper.instance().stop();
+                logger_.info("DECOMMISSION FINISHED.");
+                // let op be responsible for killing the process
+            }
+        };
+        unbootstrap(finishLeaving);
     }
 
