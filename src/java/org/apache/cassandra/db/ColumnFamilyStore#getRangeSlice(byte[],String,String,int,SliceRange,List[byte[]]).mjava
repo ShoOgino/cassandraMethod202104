@@ -1,0 +1,32 @@
+    /**
+     *
+     * @param super_column
+     * @param startKey key to start at (inclusive). empty string = start at the beginning.
+     * @param finishKey key to stop at (inclusive). empty string = stop at the end.
+     * @param keyMax maximum number of keys to process, regardless of startKey/finishKey
+     * @param sliceRange may be null if columnNames is specified. specifies contiguous columns to return in what order.
+     * @param columnNames may be null if sliceRange is specified. specifies which columns to return in what order.      @return list of key->list<column> tuples.
+     * @throws IOException
+     * @throws ExecutionException
+     * @throws InterruptedException
+     */
+    public RangeSliceReply getRangeSlice(byte[] super_column, final String startKey, final String finishKey, int keyMax, SliceRange sliceRange, List<byte[]> columnNames)
+    throws IOException, ExecutionException, InterruptedException
+    {
+        RangeReply rr = getKeyRangeRaw(startKey, finishKey, keyMax);
+        List<Row> rows = new ArrayList<Row>(rr.keys.size());
+        final QueryPath queryPath =  new QueryPath(columnFamily_, super_column, null);
+        final SortedSet<byte[]> columnNameSet = new TreeSet<byte[]>(getComparator());
+        if (columnNames != null)
+            columnNameSet.addAll(columnNames);
+        for (String key : rr.keys)
+        {
+            Row row = new Row(table_, key);
+            QueryFilter filter = sliceRange == null ? new NamesQueryFilter(key, queryPath, columnNameSet) : new SliceQueryFilter(key, queryPath, sliceRange.start, sliceRange.finish, sliceRange.reversed, sliceRange.count);
+            row.addColumnFamily(getColumnFamily(filter));
+            rows.add(row);
+        }
+
+        return new RangeSliceReply(rows, rr.rangeCompletedLocally);
+    }
+
