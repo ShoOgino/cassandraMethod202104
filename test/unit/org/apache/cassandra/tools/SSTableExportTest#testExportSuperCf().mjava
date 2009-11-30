@@ -1,0 +1,40 @@
+    @Test
+    public void testExportSuperCf() throws IOException
+    {
+        File tempSS = createTemporarySSTable("Keyspace1", "Super4");
+        ColumnFamily cfamily = ColumnFamily.create("Keyspace1", "Super4");
+        IPartitioner<?> partitioner = DatabaseDescriptor.getPartitioner();
+        DataOutputBuffer dob = new DataOutputBuffer();
+        SSTableWriter writer = new SSTableWriter(tempSS.getPath(), 2, partitioner);
+        
+        // Add rowA
+        cfamily.addColumn(new QueryPath("Super4", "superA".getBytes(), "colA".getBytes()), "valA".getBytes(), 1, false);
+        ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+        writer.append(partitioner.decorateKey("rowA"), dob);
+        dob.reset();
+        cfamily.clear();
+        
+        // Add rowB
+        cfamily.addColumn(new QueryPath("Super4", "superB".getBytes(), "colB".getBytes()), "valB".getBytes(), 1, false);
+        ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+        writer.append(partitioner.decorateKey("rowB"), dob);
+        dob.reset();
+        cfamily.clear();
+     
+        SSTableReader reader = writer.closeAndOpenReader(0);
+        
+        // Export to JSON and verify
+        File tempJson = File.createTempFile("Super4", ".json");
+        SSTableExport.export(reader, new PrintStream(tempJson.getPath()));
+        
+        JSONObject json = (JSONObject)JSONValue.parse(new FileReader(tempJson));
+        
+        JSONObject rowA = (JSONObject)json.get("rowA");
+        JSONObject superA = (JSONObject)rowA.get(cfamily.getComparator().getString("superA".getBytes()));
+        JSONArray subColumns = (JSONArray)superA.get("subColumns");
+        JSONArray colA = (JSONArray)subColumns.get(0);
+        
+        assert Arrays.equals(hexToBytes((String)colA.get(1)), "valA".getBytes());
+        assert !(Boolean)colA.get(3);       
+    }
+

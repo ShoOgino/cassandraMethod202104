@@ -1,0 +1,40 @@
+    @Test
+    public void testExportSimpleCf() throws IOException
+    {
+        File tempSS = createTemporarySSTable("Keyspace1", "Standard1");
+        ColumnFamily cfamily = ColumnFamily.create("Keyspace1", "Standard1");
+        IPartitioner<?> partitioner = DatabaseDescriptor.getPartitioner();
+        DataOutputBuffer dob = new DataOutputBuffer();
+        SSTableWriter writer = new SSTableWriter(tempSS.getPath(), 2, partitioner);
+        
+        // Add rowA
+        cfamily.addColumn(new QueryPath("Standard1", null, "colA".getBytes()), "valA".getBytes(), 1, false);
+        ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+        writer.append(partitioner.decorateKey("rowA"), dob);
+        dob.reset();
+        cfamily.clear();
+        
+        // Add rowB
+        cfamily.addColumn(new QueryPath("Standard1", null, "colB".getBytes()), "valB".getBytes(), 1, false);
+        ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+        writer.append(partitioner.decorateKey("rowB"), dob);
+        dob.reset();
+        cfamily.clear();
+     
+        SSTableReader reader = writer.closeAndOpenReader(0);
+        
+        // Export to JSON and verify
+        File tempJson = File.createTempFile("Standard1", ".json");
+        SSTableExport.export(reader, new PrintStream(tempJson.getPath()));
+        
+        JSONObject json = (JSONObject)JSONValue.parse(new FileReader(tempJson));
+        
+        JSONArray rowA = (JSONArray)json.get("rowA");
+        JSONArray colA = (JSONArray)rowA.get(0);
+        assert Arrays.equals(hexToBytes((String)colA.get(1)), "valA".getBytes());
+        
+        JSONArray rowB = (JSONArray)json.get("rowB");
+        JSONArray colB = (JSONArray)rowB.get(0);
+        assert !(Boolean)colB.get(3);
+    }
+
