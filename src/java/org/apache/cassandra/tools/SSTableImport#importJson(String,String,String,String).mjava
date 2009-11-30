@@ -1,0 +1,52 @@
+    /**
+     * Convert a JSON formatted file to an SSTable.
+     * 
+     * @param jsonFile the file containing JSON formatted data
+     * @param keyspace keyspace the data belongs to
+     * @param cf column family the data belongs to
+     * @param ssTablePath file to write the SSTable to
+     * @throws IOException for errors reading/writing input/output
+     * @throws ParseException for errors encountered parsing JSON input
+     */
+    private static void importJson(String jsonFile, String keyspace, String cf, String ssTablePath)
+    throws IOException, ParseException
+    {
+        ColumnFamily cfamily = ColumnFamily.create(keyspace, cf);
+        String cfType = cfamily.type();    // Super or Standard
+        IPartitioner<?> partitioner = DatabaseDescriptor.getPartitioner();
+        DataOutputBuffer dob = new DataOutputBuffer();
+        
+        try
+        {
+            JSONObject json = (JSONObject)JSONValue.parse(new FileReader(jsonFile));
+            SSTableWriter writer = new SSTableWriter(ssTablePath, json.size(), partitioner);
+            List<DecoratedKey<?>> decoratedKeys = new ArrayList<DecoratedKey<?>>();
+            
+            for (String key : (Set<String>)json.keySet())
+                decoratedKeys.add(partitioner.decorateKey(key));
+            Collections.sort(decoratedKeys);
+
+            for (DecoratedKey<?> rowKey : decoratedKeys)
+            {
+                JSONObject value = (JSONObject)json.get(rowKey.key);
+                
+                if (cfType.equals("Super"))
+                    addToSuperCF(value, cfamily);
+                else
+                    addToStandardCF(value, cfamily);
+                           
+                ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+                writer.append(rowKey, dob);
+                dob.reset();
+                cfamily.clear();
+            }
+            
+            writer.closeAndOpenReader(0);
+        }
+        catch (ClassCastException cce)
+        {
+            //throw cce;
+            throw new RuntimeException("Invalid JSON input, or incorrect column family");
+        }
+    }
+
