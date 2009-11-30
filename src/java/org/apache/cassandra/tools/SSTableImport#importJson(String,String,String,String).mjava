@@ -8,7 +8,7 @@
      * @throws IOException for errors reading/writing input/output
      * @throws ParseException for errors encountered parsing JSON input
      */
-    private static void importJson(String jsonFile, String keyspace, String cf, String ssTablePath)
+    public static void importJson(String jsonFile, String keyspace, String cf, String ssTablePath)
     throws IOException, ParseException
     {
         ColumnFamily cfamily = ColumnFamily.create(keyspace, cf);
@@ -19,6 +19,11 @@
         try
         {
             JSONObject json = (JSONObject)JSONValue.parse(new FileReader(jsonFile));
+            
+            // FIXME: see http://code.google.com/p/json-simple/issues/detail?id=13
+            if (json == null)
+                throw new RuntimeException("Error parsing JSON input!");
+            
             SSTableWriter writer = new SSTableWriter(ssTablePath, json.size(), partitioner);
             List<DecoratedKey<?>> decoratedKeys = new ArrayList<DecoratedKey<?>>();
             
@@ -28,12 +33,10 @@
 
             for (DecoratedKey<?> rowKey : decoratedKeys)
             {
-                JSONObject value = (JSONObject)json.get(rowKey.key);
-                
                 if (cfType.equals("Super"))
-                    addToSuperCF(value, cfamily);
+                    addToSuperCF((JSONObject)json.get(rowKey.key), cfamily);
                 else
-                    addToStandardCF(value, cfamily);
+                    addToStandardCF((JSONArray)json.get(rowKey.key), cfamily);
                            
                 ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
                 writer.append(rowKey, dob);
@@ -45,8 +48,7 @@
         }
         catch (ClassCastException cce)
         {
-            //throw cce;
-            throw new RuntimeException("Invalid JSON input, or incorrect column family");
+            throw new RuntimeException("Invalid JSON input, or incorrect column family.", cce);
         }
     }
 
