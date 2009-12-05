@@ -4,38 +4,25 @@
      * @param columnFamilies
      * @throws IOException
      */
-    public void forceTableFlush(String tableName, String... columnFamilies) throws IOException
+    public void forceTableFlush(final String tableName, final String... columnFamilies) throws IOException
     {
-        if (DatabaseDescriptor.getTable(tableName) == null)
-        {
-            throw new IOException("Table " + tableName + "does not exist");
-        }
-
-        Table table = Table.open(tableName);
-        Set<String> positiveColumnFamilies = table.getColumnFamilies();
-
-        // no columnFamilies means flush'em all.
-        if (columnFamilies == null || columnFamilies.length == 0)
-        {
-            columnFamilies = positiveColumnFamilies.toArray(new String[positiveColumnFamilies.size()]);
-        }
-
-        for (String columnFamily : columnFamilies)
-        {
-
-            if (positiveColumnFamilies.contains(columnFamily))
+        foreachColumnFamily(new Function<ColumnFamilyStore, IOException>()
             {
-                ColumnFamilyStore cfStore = table.getColumnFamilyStore(columnFamily);
-                logger_.debug("Forcing binary flush on keyspace " + tableName + ", CF " + columnFamily);
-                cfStore.forceFlushBinary();
-                logger_.debug("Forcing flush on keyspace " + tableName + ", CF " + columnFamily);
-                cfStore.forceFlush();
-            }
-            else
-            {
-                // this means there was a cf passed in that is not recognized in the keyspace. report it and continue.
-                logger_.warn(String.format("Invalid column family specified: %s. Proceeding with others.", columnFamily));
-            }
-        }
+                public IOException apply(ColumnFamilyStore cfStore)
+                {
+                    try
+                    {
+                        logger_.debug("Forcing binary flush on keyspace " + tableName + ", CF " + cfStore.getColumnFamilyName());
+                        cfStore.forceFlushBinary();
+                        logger_.debug("Forcing flush on keyspace " + tableName + ", CF " + cfStore.getColumnFamilyName());
+                        cfStore.forceFlush();
+                    }
+                    catch(IOException e)
+                    {
+                        return e;
+                    }
+                    return null;
+                }
+            }, tableName, columnFamilies);
     }
 
