@@ -1,13 +1,11 @@
-    static List<String> getKeyRange(RangeCommand rawCommand) throws IOException, UnavailableException, TimedOutException
+    static List<String> getKeyRange(RangeCommand command) throws IOException, UnavailableException, TimedOutException
     {
         long startTime = System.currentTimeMillis();
         TokenMetadata tokenMetadata = StorageService.instance().getTokenMetadata();
-        List<String> allKeys = new ArrayList<String>();
-        RangeCommand command = rawCommand;
+        Set<String> uniqueKeys = new HashSet<String>(command.maxResults);
 
         InetAddress endPoint = StorageService.instance().findSuitableEndPoint(command.startWith);
         InetAddress startEndpoint = endPoint;
-        InetAddress wrapEndpoint = tokenMetadata.getFirstEndpoint();
 
         do
         {
@@ -27,49 +25,9 @@
                 throw new TimedOutException();
             }
             RangeReply rangeReply = RangeReply.read(responseBody);
-            List<String> rangeKeys = rangeReply.keys;
+            uniqueKeys.addAll(rangeReply.keys);
 
-            // combine keys from most recent response with the others seen so far
-            if (rangeKeys.size() > 0)
-            {
-                if (allKeys.size() > 0)
-                {
-                    if (keyComparator.compare(rangeKeys.get(rangeKeys.size() - 1), allKeys.get(0)) <= 0)
-                    {
-                        // unlikely, but possible
-                        if (rangeKeys.get(rangeKeys.size() - 1).equals(allKeys.get(0)))
-                        {
-                            rangeKeys.remove(rangeKeys.size() - 1);
-                        }
-                        rangeKeys.addAll(allKeys);
-                        allKeys = rangeKeys;
-                    }
-                    else if (keyComparator.compare(allKeys.get(allKeys.size() - 1), rangeKeys.get(0)) <= 0)
-                    {
-                        // common case. deal with simple start/end key overlaps
-                        if (allKeys.get(allKeys.size() - 1).equals(rangeKeys.get(0)))
-                        {
-                            allKeys.remove(allKeys.size() - 1);
-                        }
-                        allKeys.addAll(rangeKeys);
-                    }
-                    else
-                    {
-                        // deal with potential large overlap from scanning the first endpoint, which contains
-                        // both the smallest and largest keys
-                        HashSet<String> keys = new HashSet<String>(allKeys);
-                        keys.addAll(rangeKeys);
-                        allKeys = new ArrayList<String>(keys);
-                        Collections.sort(allKeys);
-                    }
-                }
-                else
-                {
-                    allKeys = rangeKeys;
-                }
-            }
-
-            if (allKeys.size() >= rawCommand.maxResults || rangeReply.rangeCompletedLocally)
+            if (uniqueKeys.size() >= command.maxResults || rangeReply.rangeCompletedLocally)
             {
                 break;
             }
@@ -81,15 +39,15 @@
             // so starting with the largest in our scan of the next node means we'd never see keys from the middle.
             do
             {
-                endPoint = tokenMetadata.getSuccessor(endPoint); // TODO move this into the Strategies & modify for RackAwareStrategy
+                endPoint = tokenMetadata.getSuccessor(endPoint);
             } while (!FailureDetector.instance().isAlive(endPoint));
-            int maxResults = endPoint.equals(wrapEndpoint) ? rawCommand.maxResults : rawCommand.maxResults - allKeys.size();
-            command = new RangeCommand(command.table, command.columnFamily, command.startWith, command.stopAt, maxResults);
         } while (!endPoint.equals(startEndpoint));
 
         rangeStats.add(System.currentTimeMillis() - startTime);
-        return (allKeys.size() > rawCommand.maxResults)
-               ? allKeys.subList(0, rawCommand.maxResults)
+        List<String> allKeys = new ArrayList<String>(uniqueKeys);
+        Collections.sort(allKeys, keyComparator);
+        return (allKeys.size() > command.maxResults)
+               ? allKeys.subList(0, command.maxResults)
                : allKeys;
     }
 
