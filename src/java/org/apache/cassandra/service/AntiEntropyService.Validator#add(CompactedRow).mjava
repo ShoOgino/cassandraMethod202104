@@ -1,0 +1,58 @@
+        /**
+         * Called (in order) for every row present in the CF.
+         * Hashes the row, and adds it to the tree being built.
+         *
+         * There are three possible cases:
+         *  1. Token is greater than range.right (we haven't generated a range for it yet),
+         *  2. Token is less than/equal to range.left (the range was valid),
+         *  3. Token is contained in the range (the range is in progress).
+         *
+         * Additionally, there is a special case for the minimum token, because
+         * although it sorts first, it is contained in the last possible range.
+         *
+         * @param row The row.
+         */
+        public void add(CompactedRow row)
+        {
+            if (mintoken != null)
+            {
+                assert ranges != null : "Validator was not prepared()";
+
+                // check for the minimum token special case
+                if (row.key.token.compareTo(mintoken) == 0)
+                {
+                    // and store it to be appended when we complete
+                    minrows.add(rowHash(row));
+                    validated++;
+                    return;
+                }
+                mintoken = null;
+            }
+
+            if (!ranges.hasNext())
+                return;
+
+            MerkleTree.TreeRange range = ranges.peek();
+            // generate new ranges as long as case 1 is true
+            while (range.right().compareTo(row.key.token) < 0)
+            {
+                // token is past the current range: finalize
+                range.validate(rows);
+                rows.clear();
+
+                // and generate a new range
+                ranges.next();
+                if (!ranges.hasNext())
+                    return;
+                range = ranges.peek();
+            }
+
+            // if case 2 is true, ignore the token
+            if (row.key.token.compareTo(range.left()) <= 0)
+                return;
+            
+            // case 3 must be true: buffer the hashed row
+            rows.add(rowHash(row));
+            validated++;
+        }
+
