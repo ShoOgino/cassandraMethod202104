@@ -32,9 +32,36 @@
         }
         else if (STATE_LEFT.equals(stateName))
         {
-            Token token = getPartitioner().getTokenFactory().fromString(state.getValue());
-            assert tokenMetadata_.getToken(endpoint).equals(token);
-            tokenMetadata_.removeEndpoint(endpoint);
+            // STATE_LEFT state is of form (REMOVE_TOKEN|LEFT_NORMALLY)<StateDelimiter><token>
+            String stateValue = state.getValue();
+            int index = stateValue.indexOf(StateDelimiter);
+            assert (index != -1);
+            String typeOfState = stateValue.substring(0, index);
+            Token token = getPartitioner().getTokenFactory().fromString(stateValue.substring(index + 1));
+
+            if (typeOfState.equals(LEFT_NORMALLY))
+            {
+                if (tokenMetadata_.isMember(endpoint))
+                {
+                    if (logger_.isDebugEnabled())
+                        logger_.debug(endpoint + " state left, token " + token);
+                    assert tokenMetadata_.getToken(endpoint).equals(token);
+                    tokenMetadata_.removeEndpoint(endpoint);
+                }
+            }
+            else
+            {
+                assert (typeOfState.equals(REMOVE_TOKEN));
+                InetAddress endPointThatLeft = tokenMetadata_.getEndPoint(token);
+                if (logger_.isDebugEnabled())
+                    logger_.debug("Token " + token + " removed manually (endpoint was " + ((endPointThatLeft == null) ? "unknown" : endPointThatLeft) + ")");
+                if (endPointThatLeft != null)
+                {
+                    restoreReplicaCount(endPointThatLeft);
+                    tokenMetadata_.removeEndpoint(endPointThatLeft);
+                }
+            }
+
             replicationStrategy_.removeObsoletePendingRanges();
         }
     }

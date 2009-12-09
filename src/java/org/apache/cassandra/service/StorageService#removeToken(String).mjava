@@ -1,0 +1,31 @@
+    public void removeToken(String tokenString)
+    {
+        Token token = partitioner_.getTokenFactory().fromString(tokenString);
+
+        // Here we could refuse the operation from continuing if we
+        // cannot find the endpoint for this token from metadata, but
+        // that would prevent this command from being issued by a node
+        // that has never seen the failed node.
+        InetAddress endPoint = tokenMetadata_.getEndPoint(token);
+        if (endPoint != null)
+        {
+            // Let's make sure however that we're not removing a live
+            // token (member)
+            if (Gossiper.instance().getLiveMembers().contains(endPoint))
+                throw new UnsupportedOperationException("Node " + endPoint + " is alive and owns this token. Use decommission command to remove it from the ring");
+
+            restoreReplicaCount(endPoint);
+            tokenMetadata_.removeEndpoint(endPoint);
+            replicationStrategy_.removeObsoletePendingRanges();
+        }
+
+        // This is not the cleanest way as we're adding STATE_LEFT for
+        // a foreign token to our own EP state. Another way would be
+        // to add new AP state for this command, but that would again
+        // increase the amount of data to be gossiped in the cluster -
+        // not good. REMOVE_TOKEN|LEFT_NORMALLY is used to distinguish
+        // between removetoken command and normal state left, so it is
+        // not so bad.
+        Gossiper.instance().addApplicationState(STATE_LEFT, new ApplicationState(REMOVE_TOKEN + StateDelimiter + token.toString()));
+    }
+
