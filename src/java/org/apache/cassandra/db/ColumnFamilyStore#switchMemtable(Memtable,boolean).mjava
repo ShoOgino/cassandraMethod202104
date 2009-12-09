@@ -1,4 +1,4 @@
-    Future<?> switchMemtable(Memtable oldMemtable) throws IOException
+    Future<?> switchMemtable(Memtable oldMemtable, final boolean writeCommitLog) throws IOException
     {
         /**
          *  If we can get the writelock, that means no new updates can come in and 
@@ -8,7 +8,7 @@
         Table.flusherLock_.writeLock().lock();
         try
         {
-            final CommitLog.CommitLogContext ctx = CommitLog.open().getContext();
+            final CommitLog.CommitLogContext ctx = CommitLog.open().getContext(); // this is harmless if !writeCommitLog
 
             if (oldMemtable.isFrozen())
             {
@@ -27,7 +27,12 @@
                     try
                     {
                         condition.await();
-                        onMemtableFlush(ctx);
+                        if (writeCommitLog)
+                        {
+                            // if we're not writing to the commit log, we are replaying the log, so marking
+                            // the log header with "you can discard anything written before the context" is not valid
+                            onMemtableFlush(ctx);
+                        }
                     }
                     catch (Exception e)
                     {
