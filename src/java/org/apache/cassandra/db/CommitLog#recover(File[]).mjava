@@ -25,11 +25,13 @@
                 if (logger_.isDebugEnabled())
                     logger_.debug("Reading mutation at " + reader.getFilePointer());
 
+                long claimedCRC32;
                 byte[] bytes;
                 try
                 {
                     bytes = new byte[(int) reader.readLong()]; // readlong can throw EOFException too
                     reader.readFully(bytes);
+                    claimedCRC32 = reader.readLong();
                 }
                 catch (EOFException e)
                 {
@@ -37,8 +39,16 @@
                     break;
                 }
                 bufIn.reset(bytes, bytes.length);
+                Checksum checksum = new CRC32();
+                checksum.update(bytes, 0, bytes.length);
+                if (claimedCRC32 != checksum.getValue())
+                {
+                    // this part of the log must not have been fsynced.  probably the rest is bad too,
+                    // but just in case there is no harm in trying them.
+                    continue;
+                }
 
-                /* read the commit log entry */
+                /* deserialize the commit log entry */
                 final RowMutation rm = RowMutation.serializer().deserialize(bufIn);
                 if (logger_.isDebugEnabled())
                     logger_.debug(String.format("replaying mutation for %s.%s: %s",
