@@ -11,9 +11,6 @@
     public RangeReply getKeyRangeRaw(final DecoratedKey startWith, final DecoratedKey stopAt, int maxResults)
     throws IOException, ExecutionException, InterruptedException
     {
-        // (OPP key decoration is a no-op so using the "decorated" comparator against raw keys is fine)
-        final Comparator<DecoratedKey> comparator = partitioner.getDecoratedKeyComparator();
-
         // create a CollatedIterator that will return unique keys from different sources
         // (current memtable, historical memtables, and SSTables) in the correct order.
         List<Iterator<DecoratedKey>> iterators = new ArrayList<Iterator<DecoratedKey>>();
@@ -24,8 +21,8 @@
         {
             public boolean apply(DecoratedKey key)
             {
-                return comparator.compare(startWith, key) <= 0
-                       && (stopAt.isEmpty() || comparator.compare(key,  stopAt) <= 0);
+                return startWith.compareTo(key) <= 0
+                       && (stopAt.isEmpty() || key.compareTo(stopAt) <= 0);
             }
         };
 
@@ -65,7 +62,7 @@
             iterators.add(iter);
         }
 
-        Iterator<DecoratedKey> collated = IteratorUtils.collatedIterator(comparator, iterators);
+        Iterator<DecoratedKey> collated = IteratorUtils.collatedIterator(DecoratedKey.comparator, iterators);
         Iterable<DecoratedKey> reduced = new ReducingIterator<DecoratedKey, DecoratedKey>(collated) {
             DecoratedKey current;
 
@@ -87,7 +84,7 @@
             boolean rangeCompletedLocally = false;
             for (DecoratedKey current : reduced)
             {
-                if (!stopAt.isEmpty() && comparator.compare( stopAt, current) < 0)
+                if (!stopAt.isEmpty() && stopAt.compareTo(current) < 0)
                 {
                     rangeCompletedLocally = true;
                     break;

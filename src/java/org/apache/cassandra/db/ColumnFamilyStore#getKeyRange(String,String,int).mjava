@@ -9,8 +9,6 @@
     {
         final DecoratedKey startWithDK = partitioner.decorateKey(startWith);
         final DecoratedKey stopAtDK = partitioner.decorateKey(stopAt);
-        // (OPP key decoration is a no-op so using the "decorated" comparator against raw keys is fine)
-        final Comparator<DecoratedKey> comparator = partitioner.getDecoratedKeyComparator();
 
         // create a CollatedIterator that will return unique keys from different sources
         // (current memtable, historical memtables, and SSTables) in the correct order.
@@ -22,8 +20,8 @@
         {
             public boolean apply(DecoratedKey key)
             {
-                return comparator.compare(startWithDK, key) <= 0
-                       && (stopAt.isEmpty() || comparator.compare(key, stopAtDK) <= 0);
+                return startWithDK.compareTo(key) <= 0
+                       && (stopAt.isEmpty() || key.compareTo(stopAtDK) <= 0);
             }
         };
 
@@ -63,7 +61,7 @@
             iterators.add(iter);
         }
 
-        Iterator<DecoratedKey> collated = IteratorUtils.collatedIterator(comparator, iterators);
+        Iterator<DecoratedKey> collated = IteratorUtils.collatedIterator(DecoratedKey.comparator, iterators);
         Iterable<DecoratedKey> reduced = new ReducingIterator<DecoratedKey, DecoratedKey>(collated) {
             DecoratedKey current;
 
@@ -86,7 +84,7 @@
             boolean rangeCompletedLocally = false;
             for (DecoratedKey current : reduced)
             {
-                if (!stopAt.isEmpty() && comparator.compare(stopAtDK, current) < 0)
+                if (!stopAt.isEmpty() && stopAtDK.compareTo(current) < 0)
                 {
                     rangeCompletedLocally = true;
                     break;
