@@ -1,7 +1,5 @@
         /**
-         * If we have a recently generated cached tree, respond with it immediately:
-         * Otherwise, trigger a readonly compaction which will broadcast the tree
-         * upon completion.
+         * Trigger a readonly compaction which will broadcast the tree upon completion.
          */
         public void doVerb(Message message)
         { 
@@ -11,30 +9,13 @@
 
             try
             {
-                CFTuple request = this.deserialize(buffer);
-
-                // check for cached local tree
-                InetAddress local = FBUtilities.getLocalAddress();
-                MerkleTree cached = AntiEntropyService.instance().getCachedTree(request.table, request.cf, local);
-                if (cached != null)
-                {
-                    if (local.equals(message.getFrom()))
-                    {
-                        // we are the requestor, and we already have a cached tree
-                        return;
-                    }
-                    // respond immediately with the recently generated tree
-                    Validator valid = new Validator(request, message.getFrom(), cached);
-                    Message response = TreeResponseVerbHandler.makeVerb(local, valid);
-                    MessagingService.instance().sendOneWay(response, message.getFrom());
-                    logger.debug("Answered request from " + message.getFrom() + " for " + request + " with cached tree.");
-                    return;
-                }
+                CFPair request = this.deserialize(buffer);
 
                 // trigger readonly-compaction
                 logger.debug("Queueing readonly compaction for request from " + message.getFrom() + " for " + request);
-                Table table = Table.open(request.table);
-                CompactionManager.instance.submitReadonly(table.getColumnFamilyStore(request.cf), message.getFrom());
+                Table table = Table.open(request.left);
+                CompactionManager.instance.submitReadonly(table.getColumnFamilyStore(request.right),
+                                                          message.getFrom());
             }
             catch (IOException e)
             {
