@@ -1,0 +1,50 @@
+    /**
+     * Handle node leaving the ring. This can be either because the node was removed manually by
+     * removetoken command or because of decommission or loadbalance
+     *
+     * @param endPoint If reason for leaving is decommission or loadbalance (LEFT_NORMALLY),
+     * endPoint is the leaving node. If reason manual removetoken (REMOVE_TOKEN), endPoint
+     * parameter is ignored and the operation is based on the token inside moveValue.
+     * @param moveValue (REMOVE_TOKEN|LEFT_NORMALLY)<Delimiter><token>
+     */
+    private void handleStateLeft(InetAddress endPoint, String moveValue)
+    {
+        int index = moveValue.indexOf(Delimiter);
+        assert (index != -1);
+        String typeOfState = moveValue.substring(0, index);
+        Token token = getPartitioner().getTokenFactory().fromString(moveValue.substring(index + 1));
+
+        // endPoint itself is leaving
+        if (typeOfState.equals(LEFT_NORMALLY))
+        {
+            if (logger_.isDebugEnabled())
+                logger_.debug("Node " + endPoint + " state left, token " + token);
+
+            // If the node is member, remove all references to it. If not, call
+            // removeBootstrapToken just in case it is there (very unlikely chain of events)
+            if (tokenMetadata_.isMember(endPoint))
+            {
+                if (!tokenMetadata_.getToken(endPoint).equals(token))
+                    logger_.warn("Node " + endPoint + " 'left' token mismatch. Long network partition?");
+                tokenMetadata_.removeEndpoint(endPoint);
+            }
+        }
+        else
+        {
+            // if we're here, endPoint is not leaving but broadcasting remove token command
+            assert (typeOfState.equals(REMOVE_TOKEN));
+            InetAddress endPointThatLeft = tokenMetadata_.getEndPoint(token);
+            if (logger_.isDebugEnabled())
+                logger_.debug("Token " + token + " removed manually (endpoint was " + ((endPointThatLeft == null) ? "unknown" : endPointThatLeft) + ")");
+            if (endPointThatLeft != null)
+            {
+                restoreReplicaCount(endPointThatLeft);
+                tokenMetadata_.removeEndpoint(endPointThatLeft);
+            }
+        }
+
+        // remove token from bootstrap tokens just in case it is still there
+        tokenMetadata_.removeBootstrapToken(token);
+        calculatePendingRanges();
+    }
+

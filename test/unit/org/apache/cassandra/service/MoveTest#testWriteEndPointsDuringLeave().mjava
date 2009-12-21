@@ -1,0 +1,57 @@
+    /**
+     * Test whether write endpoints is correct when the node is leaving. Uses
+     * StorageService.onChange and does not manipulate token metadata directly.
+     */
+    @Test
+    public void testWriteEndPointsDuringLeave() throws UnknownHostException
+    {
+        StorageService ss = StorageService.instance();
+
+        TokenMetadata tmd = ss.getTokenMetadata();
+        tmd.clearUnsafe();
+        IPartitioner partitioner = new RandomPartitioner();
+        AbstractReplicationStrategy testStrategy = new RackUnawareStrategy(tmd, partitioner, 3);
+
+        IPartitioner oldPartitioner = ss.setPartitionerUnsafe(partitioner);
+        AbstractReplicationStrategy oldStrategy = ss.setReplicationStrategyUnsafe(testStrategy);
+
+        ArrayList<Token> endPointTokens = new ArrayList<Token>();
+        ArrayList<Token> keyTokens = new ArrayList<Token>();
+        List<InetAddress> hosts = new ArrayList<InetAddress>();
+
+        createInitialRing(ss, partitioner, endPointTokens, keyTokens, hosts, 5);
+
+        // Third node leaves
+        ss.onChange(hosts.get(2), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_LEAVING + StorageService.Delimiter + partitioner.getTokenFactory().toString(endPointTokens.get(2))));
+
+        // check that it is correctly marked as leaving in tmd
+        assertTrue(tmd.isLeaving(hosts.get(2)));
+
+        // check that pending ranges are correct (primary range should go to 1st node, first
+        // replica range to 4th node and 2nd replica range to 5th node)
+        assertTrue(tmd.getPendingRanges(hosts.get(0)).get(0).equals(new Range(endPointTokens.get(1),
+                                                                              endPointTokens.get(2))));
+        assertTrue(tmd.getPendingRanges(hosts.get(3)).get(0).equals(new Range(endPointTokens.get(4),
+                                                                              endPointTokens.get(0))));
+        assertTrue(tmd.getPendingRanges(hosts.get(4)).get(0).equals(new Range(endPointTokens.get(0),
+                                                                              endPointTokens.get(1))));
+
+        for (int i=0; i<keyTokens.size(); ++i)
+        {
+            Collection<InetAddress> endPoints = testStrategy.getWriteEndpoints(keyTokens.get(i), testStrategy.getNaturalEndpoints(keyTokens.get(i)));
+
+            // Original third node does not store replicas for 4th and 5th node (ranges 20-30
+            // and 30-40 respectively), so their write endpoints count should be still 3. The
+            // third node stores data for ranges 40-0, 0-10 and 10-20, so writes falling to
+            // these ranges should have four endpoints now. keyTokens[2] is 25 and keyTokens[3]
+            // is 35, so these are the ones that should have 3 endpoints.
+            if (i==2 || i==3)
+                assertTrue(endPoints.size() == 3);
+            else
+                assertTrue(endPoints.size() == 4);
+        }
+
+        ss.setPartitionerUnsafe(oldPartitioner);
+        ss.setReplicationStrategyUnsafe(oldStrategy);
+    }
+

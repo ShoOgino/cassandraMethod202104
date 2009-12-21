@@ -1,0 +1,69 @@
+    @Test
+    public void testStateJumpToBootstrap() throws UnknownHostException
+    {
+        StorageService ss = StorageService.instance();
+        TokenMetadata tmd = ss.getTokenMetadata();
+        tmd.clearUnsafe();
+        IPartitioner partitioner = new RandomPartitioner();
+        AbstractReplicationStrategy testStrategy = new RackUnawareStrategy(tmd, partitioner, 3);
+
+        IPartitioner oldPartitioner = ss.setPartitionerUnsafe(partitioner);
+        AbstractReplicationStrategy oldStrategy = ss.setReplicationStrategyUnsafe(testStrategy);
+
+        ArrayList<Token> endPointTokens = new ArrayList<Token>();
+        ArrayList<Token> keyTokens = new ArrayList<Token>();
+        List<InetAddress> hosts = new ArrayList<InetAddress>();
+
+        // create a ring or 5 nodes
+        createInitialRing(ss, partitioner, endPointTokens, keyTokens, hosts, 5);
+
+        // node 2 leaves
+        ss.onChange(hosts.get(2), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_LEAVING + StorageService.Delimiter + partitioner.getTokenFactory().toString(endPointTokens.get(2))));
+
+        // don't bother to test pending ranges here, that is extensively tested by other
+        // tests. Just check that the node is in appropriate lists.
+        assertTrue(tmd.isMember(hosts.get(2)));
+        assertTrue(tmd.isLeaving(hosts.get(2)));
+        assertTrue(tmd.getBootstrapTokens().isEmpty());
+
+        // Bootstrap the node immedidiately to keyTokens.get(4) without going through STATE_LEFT
+        ss.onChange(hosts.get(2), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_BOOTSTRAPPING + StorageService.Delimiter + partitioner.getTokenFactory().toString(keyTokens.get(4))));
+
+        assertFalse(tmd.isMember(hosts.get(2)));
+        assertFalse(tmd.isLeaving(hosts.get(2)));
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(4)).equals(hosts.get(2)));
+
+        // Bootstrap node hosts.get(3) to keyTokens.get(1)
+        ss.onChange(hosts.get(3), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_BOOTSTRAPPING + StorageService.Delimiter + partitioner.getTokenFactory().toString(keyTokens.get(1))));
+
+        assertFalse(tmd.isMember(hosts.get(3)));
+        assertFalse(tmd.isLeaving(hosts.get(3)));
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(4)).equals(hosts.get(2)));
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(1)).equals(hosts.get(3)));
+
+        // Bootstrap node hosts.get(2) further to keyTokens.get(3)
+        ss.onChange(hosts.get(2), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_BOOTSTRAPPING + StorageService.Delimiter + partitioner.getTokenFactory().toString(keyTokens.get(3))));
+
+        assertFalse(tmd.isMember(hosts.get(2)));
+        assertFalse(tmd.isLeaving(hosts.get(2)));
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(3)).equals(hosts.get(2)));
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(4)) == null);
+        assertTrue(tmd.getBootstrapTokens().get(keyTokens.get(1)).equals(hosts.get(3)));
+
+        // Go to normal again for both nodes
+        ss.onChange(hosts.get(2), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_NORMAL + StorageService.Delimiter + partitioner.getTokenFactory().toString(keyTokens.get(3))));
+        ss.onChange(hosts.get(3), StorageService.MOVE_STATE, new ApplicationState(StorageService.STATE_NORMAL + StorageService.Delimiter + partitioner.getTokenFactory().toString(keyTokens.get(2))));
+
+        assertTrue(tmd.isMember(hosts.get(2)));
+        assertFalse(tmd.isLeaving(hosts.get(2)));
+        assertTrue(tmd.getToken(hosts.get(2)).equals(keyTokens.get(3)));
+        assertTrue(tmd.isMember(hosts.get(3)));
+        assertFalse(tmd.isLeaving(hosts.get(3)));
+        assertTrue(tmd.getToken(hosts.get(3)).equals(keyTokens.get(2)));
+
+        assertTrue(tmd.getBootstrapTokens().isEmpty());
+
+        ss.setPartitionerUnsafe(oldPartitioner);
+        ss.setReplicationStrategyUnsafe(oldStrategy);
+    }
+
