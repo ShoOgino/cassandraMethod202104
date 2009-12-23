@@ -1,17 +1,30 @@
-    public void checkAllColumnFamilies()
+    public void checkAllColumnFamilies() throws IOException
     {
+        // perform estimates
         for (String tableName : DatabaseDescriptor.getTables())
         {
-            try
+            for (final ColumnFamilyStore cfs : Table.open(tableName).getColumnFamilyStores().values())
             {
-                for (ColumnFamilyStore cfs : Table.open(tableName).getColumnFamilyStores().values())
+                Runnable runnable = new Runnable()
                 {
-                    submitMinor(cfs);
-                }
+                    public void run ()
+                    {
+                        logger.debug("Estimating compactions for " + cfs.columnFamily_);
+                        final Set<List<SSTableReader>> buckets = getCompactionBuckets(cfs.getSSTables(), 50L * 1024L * 1024L);
+                        updateEstimateFor(cfs, buckets);
+                    }
+                };
+                executor.submit(runnable);
             }
-            catch (IOException e)
+        }
+        
+        // actually schedule compactions.  done in a second pass so all the estimates occur before we
+        // bog down the executor in actual compactions.
+        for (String tableName : DatabaseDescriptor.getTables())
+        {
+            for (final ColumnFamilyStore cfs : Table.open(tableName).getColumnFamilyStores().values())
             {
-                throw new RuntimeException(e);
+                submitMinorIfNeeded(cfs);
             }
         }
     }
