@@ -1,44 +1,38 @@
-    /*
-    * This function does the actual compaction for files.
-    * It maintains a priority queue of with the first key from each file
-    * and then removes the top of the queue and adds it to the SStable and
-    * repeats this process while reading the next from each file until its
-    * done with all the files . The SStable to which the keys are written
-    * represents the new compacted file. Before writing if there are keys
-    * that occur in multiple files and are the same then a resolution is done
-    * to get the latest data.
-    *
-    * The collection of sstables passed may be empty (but not null); even if
-    * it is not empty, it may compact down to nothing if all rows are deleted.
-    */
-    int doFileCompaction(Collection<SSTableReader> sstables, int gcBefore) throws IOException
+    /**
+     * For internal use and testing only.  The rest of the system should go through the submit* methods,
+     * which are properly serialized.
+     */
+    int doCompaction(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, int gcBefore) throws IOException
     {
+        // The collection of sstables passed may be empty (but not null); even if
+        // it is not empty, it may compact down to nothing if all rows are deleted.
+        Table table = cfs.getTable();
         if (DatabaseDescriptor.isSnapshotBeforeCompaction())
-            Table.open(table_).snapshot("compact-" + columnFamily_);
-        logger_.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
-        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, getExpectedCompactedFileSize(sstables));
+            table.snapshot("compact-" + cfs.columnFamily_);
+        logger.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
+        String compactionFileLocation = table.getDataFileLocation(cfs.getExpectedCompactedFileSize(sstables));
         // If the compaction file path is null that means we have no space left for this compaction.
         // try again w/o the largest one.
         if (compactionFileLocation == null)
         {
-            SSTableReader maxFile = getMaxSizeFile(sstables);
+            SSTableReader maxFile = cfs.getMaxSizeFile(sstables);
             List<SSTableReader> smallerSSTables = new ArrayList<SSTableReader>(sstables);
             smallerSSTables.remove(maxFile);
-            return doFileCompaction(smallerSSTables, gcBefore);
+            return doCompaction(cfs, smallerSSTables, gcBefore);
         }
 
         // new sstables from flush can be added during a compaction, but only the compaction can remove them,
         // so in our single-threaded compaction world this is a valid way of determining if we're compacting
         // all the sstables (that existed when we started)
-        boolean major = sstables.size() == ssTables_.size();
+        boolean major = cfs.isCompleteSSTables(sstables);
 
         long startTime = System.currentTimeMillis();
         long totalkeysWritten = 0;
 
         // TODO the int cast here is potentially buggy
         int expectedBloomFilterSize = Math.max(SSTableReader.indexInterval(), (int)SSTableReader.getApproximateKeyCount(sstables));
-        if (logger_.isDebugEnabled())
-          logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+        if (logger.isDebugEnabled())
+          logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
 
         SSTableWriter writer;
         CompactionIterator ci = new CompactionIterator(sstables, gcBefore, major); // retain a handle so we can call close()
@@ -51,15 +45,15 @@
                 // don't mark compacted in the finally block, since if there _is_ nondeleted data,
                 // we need to sync it (via closeAndOpen) first, so there is no period during which
                 // a crash could cause data loss.
-                ssTables_.markCompacted(sstables);
+                cfs.markCompacted(sstables);
                 return 0;
             }
 
-            String newFilename = new File(compactionFileLocation, getTempSSTableFileName()).getAbsolutePath();
+            String newFilename = new File(compactionFileLocation, cfs.getTempSSTableFileName()).getAbsolutePath();
             writer = new SSTableWriter(newFilename, expectedBloomFilterSize, StorageService.getPartitioner());
 
             // validate the CF as we iterate over it
-            AntiEntropyService.IValidator validator = AntiEntropyService.instance().getValidator(table_, columnFamily_, null, major);
+            AntiEntropyService.IValidator validator = AntiEntropyService.instance().getValidator(table.name, cfs.getColumnFamilyName(), null, major);
             validator.prepare();
             while (nni.hasNext())
             {
@@ -75,15 +69,14 @@
             ci.close();
         }
 
-        SSTableReader ssTable = writer.closeAndOpenReader(DatabaseDescriptor.getKeysCachedFraction(table_));
-        ssTables_.add(ssTable);
-        ssTables_.markCompacted(sstables);
+        SSTableReader ssTable = writer.closeAndOpenReader(DatabaseDescriptor.getKeysCachedFraction(table.name));
+        cfs.replaceCompactedSSTables(sstables, Arrays.asList(ssTable));
         gcAfterRpcTimeout();
-        CompactionManager.instance.submitMinor(ColumnFamilyStore.this);
+        instance.submitMinor(cfs);
 
         String format = "Compacted to %s.  %d/%d bytes for %d keys.  Time: %dms.";
         long dTime = System.currentTimeMillis() - startTime;
-        logger_.info(String.format(format, writer.getFilename(), getTotalBytes(sstables), ssTable.length(), totalkeysWritten, dTime));
+        logger.info(String.format(format, writer.getFilename(), SSTable.getTotalBytes(sstables), ssTable.length(), totalkeysWritten, dTime));
         return sstables.size();
     }
 

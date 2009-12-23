@@ -1,7 +1,7 @@
     @Test
     public void testCompactionPurge() throws IOException, ExecutionException, InterruptedException
     {
-        CompactionManager.instance.disableCompactions();
+        CompactionManager.instance.disableAutoCompaction();
 
         Table table = Table.open(TABLE1);
         String cfName = "Standard1";
@@ -40,12 +40,12 @@
         rm.add(new QueryPath(cfName, null, "0".getBytes()), new byte[0], 0);
         rm.apply();
         store.forceBlockingFlush();
-        store.doFileCompaction(sstablesIncomplete, Integer.MAX_VALUE);
+        CompactionManager.instance.doCompaction(store, sstablesIncomplete, CompactionManager.getDefaultGCBefore());
         ColumnFamily cf = table.getColumnFamilyStore(cfName).getColumnFamily(new IdentityQueryFilter(key, new QueryPath(cfName)));
         assert cf.getColumnCount() == 10;
 
         // major compact and test that all columns but the resurrected one is completely gone
-        store.doFileCompaction(store.getSSTables(), Integer.MAX_VALUE);
+        CompactionManager.instance.submitMajor(store, 0, Integer.MAX_VALUE).get();
         cf = table.getColumnFamilyStore(cfName).getColumnFamily(new IdentityQueryFilter(key, new QueryPath(cfName)));
         assert cf.getColumnCount() == 1;
         assert cf.getColumn(String.valueOf(5).getBytes()) != null;

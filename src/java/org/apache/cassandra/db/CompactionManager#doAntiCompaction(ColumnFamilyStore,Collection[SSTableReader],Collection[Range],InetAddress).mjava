@@ -2,18 +2,21 @@
      * This function is used to do the anti compaction process , it spits out the file which has keys that belong to a given range
      * If the target is not specified it spits out the file as a compacted file with the unecessary ranges wiped out.
      *
+     * @param cfs
      * @param sstables
      * @param ranges
      * @param target
      * @return
-     * @throws IOException
+     * @throws java.io.IOException
      */
-    List<SSTableReader> doFileAntiCompaction(Collection<SSTableReader> sstables, final Collection<Range> ranges, InetAddress target) throws IOException
+    private List<SSTableReader> doAntiCompaction(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, Collection<Range> ranges, InetAddress target)
+            throws IOException
     {
-        logger_.info("AntiCompacting [" + StringUtils.join(sstables, ",") + "]");
+        Table table = cfs.getTable();
+        logger.info("AntiCompacting [" + StringUtils.join(sstables, ",") + "]");
         // Calculate the expected compacted filesize
-        long expectedRangeFileSize = getExpectedCompactedFileSize(sstables) / 2;
-        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table_, expectedRangeFileSize);
+        long expectedRangeFileSize = cfs.getExpectedCompactedFileSize(sstables) / 2;
+        String compactionFileLocation = DatabaseDescriptor.getDataFileLocationForTable(table.name, expectedRangeFileSize);
         if (compactionFileLocation == null)
         {
             throw new UnsupportedOperationException("disk full");
@@ -29,11 +32,11 @@
         long totalkeysWritten = 0;
 
         int expectedBloomFilterSize = Math.max(SSTableReader.indexInterval(), (int)(SSTableReader.getApproximateKeyCount(sstables) / 2));
-        if (logger_.isDebugEnabled())
-          logger_.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+        if (logger.isDebugEnabled())
+          logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
 
         SSTableWriter writer = null;
-	CompactionIterator ci = new AntiCompactionIterator(sstables, ranges, getDefaultGCBefore(), sstables.size() == ssTables_.size());
+        CompactionIterator ci = new AntiCompactionIterator(sstables, ranges, getDefaultGCBefore(), cfs.isCompleteSSTables(sstables));
         Iterator<CompactionIterator.CompactedRow> nni = new FilterIterator(ci, PredicateUtils.notNullPredicate());
 
         try
@@ -46,14 +49,14 @@
             while (nni.hasNext())
             {
                 CompactionIterator.CompactedRow row = nni.next();
-		if (writer == null)
-		{
-		    FileUtils.createDirectory(compactionFileLocation);
-		    String newFilename = new File(compactionFileLocation, getTempSSTableFileName()).getAbsolutePath();
-		    writer = new SSTableWriter(newFilename, expectedBloomFilterSize, StorageService.getPartitioner());
-		}
-		writer.append(row.key, row.buffer);
-		totalkeysWritten++;
+                if (writer == null)
+                {
+                    FileUtils.createDirectory(compactionFileLocation);
+                    String newFilename = new File(compactionFileLocation, cfs.getTempSSTableFileName()).getAbsolutePath();
+                    writer = new SSTableWriter(newFilename, expectedBloomFilterSize, StorageService.getPartitioner());
+                }
+                writer.append(row.key, row.buffer);
+                totalkeysWritten++;
             }
         }
         finally
@@ -63,10 +66,10 @@
 
         if (writer != null)
         {
-            results.add(writer.closeAndOpenReader(DatabaseDescriptor.getKeysCachedFraction(table_)));
+            results.add(writer.closeAndOpenReader(DatabaseDescriptor.getKeysCachedFraction(table.name)));
             String format = "AntiCompacted to %s.  %d/%d bytes for %d keys.  Time: %dms.";
             long dTime = System.currentTimeMillis() - startTime;
-            logger_.info(String.format(format, writer.getFilename(), getTotalBytes(sstables), results.get(0).length(), totalkeysWritten, dTime));
+            logger.info(String.format(format, writer.getFilename(), SSTable.getTotalBytes(sstables), results.get(0).length(), totalkeysWritten, dTime));
         }
 
         return results;
