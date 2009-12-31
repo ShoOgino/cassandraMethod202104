@@ -1,13 +1,13 @@
     /**
      * returns the position in the data file to find the given key, or -1 if the key is not present
      */
-    public long getPosition(DecoratedKey decoratedKey) throws IOException
+    public PositionSize getPosition(DecoratedKey decoratedKey) throws IOException
     {
         if (!bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
-            return -1;
+            return null;
         if (keyCache != null)
         {
-            Long cachedPosition = keyCache.get(decoratedKey);
+            PositionSize cachedPosition = keyCache.get(decoratedKey);
             if (cachedPosition != null)
             {
                 return cachedPosition;
@@ -16,7 +16,7 @@
         long start = getIndexScanPosition(decoratedKey);
         if (start < 0)
         {
-            return -1;
+            return null;
         }
 
         FileDataInput input = new MappedFileDataInput(indexBuffer, indexFilename());
@@ -31,19 +31,30 @@
             }
             catch (EOFException e)
             {
-                return -1;
+                return null;
             }
             long position = input.readLong();
             int v = indexDecoratedKey.compareTo(decoratedKey);
             if (v == 0)
             {
+                PositionSize info;
+                if (input.getFilePointer() < input.length())
+                {
+                    int utflen = input.readUnsignedShort();
+                    input.skipBytes(utflen);
+                    info = new PositionSize(position, input.readLong() - position);
+                }
+                else
+                {
+                    info = new PositionSize(position, length() - position);
+                }
                 if (keyCache != null)
-                    keyCache.put(decoratedKey, position);
-                return position;
+                    keyCache.put(decoratedKey, info);
+                return info;
             }
             if (v > 0)
-                return -1;
+                return null;
         } while  (++i < INDEX_INTERVAL);
-        return -1;
+        return null;
     }
 

@@ -1,0 +1,30 @@
+    SSTableReader(String filename, IPartitioner partitioner, List<KeyPosition> indexPositions, BloomFilter bloomFilter, ConcurrentLinkedHashMap<DecoratedKey, PositionSize> keyCache)
+            throws IOException
+    {
+        super(filename, partitioner);
+        indexBuffer = mmap(indexFilename());
+        if (DatabaseDescriptor.getDiskAccessMode() == DatabaseDescriptor.DiskAccessMode.mmap)
+        {
+            int bufferCount = 1 + (int) (new File(path).length() / BUFFER_SIZE);
+            buffers = new MappedByteBuffer[bufferCount];
+            long remaining = length();
+            for (int i = 0; i < bufferCount; i++)
+            {
+                buffers[i] = mmap(path, i * BUFFER_SIZE, (int) Math.min(remaining, BUFFER_SIZE));
+                remaining -= BUFFER_SIZE;
+            }
+        }
+        else
+        {
+            assert DatabaseDescriptor.getDiskAccessMode() == DatabaseDescriptor.DiskAccessMode.standard;
+            buffers = null;
+        }
+
+        this.indexPositions = indexPositions;
+        this.bf = bloomFilter;
+        phantomReference = new FileDeletingReference(this, finalizerQueue);
+        finalizers.add(phantomReference);
+        openedFiles.put(filename, this);
+        this.keyCache = keyCache;
+    }
+
