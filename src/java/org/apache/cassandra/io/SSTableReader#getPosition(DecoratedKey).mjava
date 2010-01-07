@@ -25,42 +25,59 @@
                 return info;
         }
 
-        FileDataInput input = new MappedFileDataInput(indexBuffer, indexFilename());
-        input.seek(sampledPosition.position);
-        int i = 0;
-        do
+        long p = sampledPosition.position;
+        FileDataInput input;
+        if (indexBuffers == null)
         {
-            DecoratedKey indexDecoratedKey;
-            try
+            input = new BufferedRandomAccessFile(indexFilename(), "r");
+            input.seek(p);
+        }
+        else
+        {
+            input = new MappedFileDataInput(indexBuffers[bufferIndex(p)], indexFilename(), (int)(p % BUFFER_SIZE));
+        }
+        try
+        {
+            int i = 0;
+            do
             {
-                indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
-            }
-            catch (EOFException e)
-            {
-                return null;
-            }
-            long position = input.readLong();
-            int v = indexDecoratedKey.compareTo(decoratedKey);
-            if (v == 0)
-            {
-                PositionSize info;
-                if (input.getFilePointer() < input.length())
+                DecoratedKey indexDecoratedKey;
+                try
                 {
-                    int utflen = input.readUnsignedShort();
-                    input.skipBytes(utflen);
-                    info = new PositionSize(position, input.readLong() - position);
+                    indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
                 }
-                else
+                catch (EOFException e)
                 {
-                    info = new PositionSize(position, length() - position);
+                    return null;
                 }
-                if (keyCache != null)
-                    keyCache.put(decoratedKey, info);
-                return info;
-            }
-            if (v > 0)
-                return null;
-        } while  (++i < INDEX_INTERVAL);
+                long position = input.readLong();
+                int v = indexDecoratedKey.compareTo(decoratedKey);
+                if (v == 0)
+                {
+                    PositionSize info;
+                    if (input.getFilePointer() < input.length())
+                    {
+                        int utflen = input.readUnsignedShort();
+                        if (utflen != input.skipBytes(utflen))
+                            throw new EOFException();
+                        info = new PositionSize(position, input.readLong() - position);
+                    }
+                    else
+                    {
+                        info = new PositionSize(position, length() - position);
+                    }
+                    if (keyCache != null)
+                        keyCache.put(decoratedKey, info);
+                    return info;
+                }
+                if (v > 0)
+                    return null;
+            } while  (++i < INDEX_INTERVAL);
+        }
+        finally
+        {
+            input.close();
+        }
         return null;
     }
 
