@@ -8,33 +8,41 @@
         // 2. For each key read the list of recipients if the endpoint matches send
         // 3. Delete that recipient from the key if write was successful
         Table systemTable = Table.open(Table.SYSTEM_TABLE);
+        ColumnFamilyStore hintStore = systemTable.getColumnFamilyStore(HINTS_CF);
         for (String tableName : DatabaseDescriptor.getTables())
         {
-            ColumnFamily hintedColumnFamily = ColumnFamilyStore.removeDeleted(systemTable.get(tableName, HINTS_CF), Integer.MAX_VALUE);
-            if (hintedColumnFamily == null)
+            byte[] startColumn = ArrayUtils.EMPTY_BYTE_ARRAY;
+            while (true)
             {
-                continue;
-            }
-            Collection<IColumn> keys = hintedColumnFamily.getSortedColumns();
-
-            for (IColumn keyColumn : keys)
-            {
-                String keyStr = new String(keyColumn.name(), "UTF-8");
-                Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                for (IColumn hintEndPoint : endpoints)
+                QueryFilter filter = new SliceQueryFilter(tableName, new QueryPath(HINTS_CF), startColumn, ArrayUtils.EMPTY_BYTE_ARRAY, false, PAGE_SIZE);
+                ColumnFamily hintedColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), Integer.MAX_VALUE);
+                if (hintedColumnFamily == null)
                 {
-                    if (Arrays.equals(hintEndPoint.name(), targetEPBytes) && sendMessage(endPoint, tableName, keyStr))
+                    break;
+                }
+                Collection<IColumn> keys = hintedColumnFamily.getSortedColumns();
+
+                for (IColumn keyColumn : keys)
+                {
+                    String keyStr = new String(keyColumn.name(), "UTF-8");
+                    Collection<IColumn> endpoints = keyColumn.getSubColumns();
+                    for (IColumn hintEndPoint : endpoints)
                     {
-                        if (endpoints.size() == 1)
+                        if (Arrays.equals(hintEndPoint.name(), targetEPBytes) && sendMessage(endPoint, tableName, keyStr))
                         {
-                            deleteHintKey(tableName, keyColumn.name());
+                            if (endpoints.size() == 1)
+                            {
+                                deleteHintKey(tableName, keyColumn.name());
+                            }
+                            else
+                            {
+                                deleteEndPoint(hintEndPoint.name(), tableName, keyColumn.name(), System.currentTimeMillis());
+                            }
+                            break;
                         }
-                        else
-                        {
-                            deleteEndPoint(hintEndPoint.name(), tableName, keyColumn.name(), System.currentTimeMillis());
-                        }
-                        break;
                     }
+
+                    startColumn = keyColumn.name(); // repeating the last as the first is fine since we just deleted it
                 }
             }
         }

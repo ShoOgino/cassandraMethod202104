@@ -13,29 +13,36 @@
         // 7. I guess we are done
         for (String tableName : DatabaseDescriptor.getTables())
         {
-            ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(new IdentityQueryFilter(tableName, new QueryPath(HINTS_CF))), Integer.MAX_VALUE);
-            if (hintColumnFamily == null)
+            byte[] startColumn = ArrayUtils.EMPTY_BYTE_ARRAY;
+            while (true)
             {
-                continue;
-            }
-            Collection<IColumn> keys = hintColumnFamily.getSortedColumns();
-
-            for (IColumn keyColumn : keys)
-            {
-                Collection<IColumn> endpoints = keyColumn.getSubColumns();
-                String keyStr = new String(keyColumn.name(), "UTF-8");
-                int deleted = 0;
-                for (IColumn endpoint : endpoints)
+                QueryFilter filter = new SliceQueryFilter(tableName, new QueryPath(HINTS_CF), startColumn, ArrayUtils.EMPTY_BYTE_ARRAY, false, PAGE_SIZE);
+                ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), Integer.MAX_VALUE);
+                if (hintColumnFamily == null)
                 {
-                    if (sendMessage(InetAddress.getByAddress(endpoint.name()), tableName, keyStr))
-                    {
-                        deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), System.currentTimeMillis());
-                        deleted++;
-                    }
+                    break;
                 }
-                if (deleted == endpoints.size())
+                Collection<IColumn> keys = hintColumnFamily.getSortedColumns();
+
+                for (IColumn keyColumn : keys)
                 {
-                    deleteHintKey(tableName, keyColumn.name());
+                    Collection<IColumn> endpoints = keyColumn.getSubColumns();
+                    String keyStr = new String(keyColumn.name(), "UTF-8");
+                    int deleted = 0;
+                    for (IColumn endpoint : endpoints)
+                    {
+                        if (sendMessage(InetAddress.getByAddress(endpoint.name()), tableName, keyStr))
+                        {
+                            deleteEndPoint(endpoint.name(), tableName, keyColumn.name(), System.currentTimeMillis());
+                            deleted++;
+                        }
+                    }
+                    if (deleted == endpoints.size())
+                    {
+                        deleteHintKey(tableName, keyColumn.name());
+                    }
+
+                    startColumn = keyColumn.name(); // repeating the last as the first is fine since we just deleted it
                 }
             }
         }
