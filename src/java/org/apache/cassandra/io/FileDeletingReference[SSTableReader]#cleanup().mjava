@@ -3,35 +3,10 @@
         if (deleteOnCleanup)
         {
             // this is tricky because the mmapping might not have been finalized yet,
-            // and delete will until it is.  additionally, we need to make sure to
+            // and delete will fail until it is.  additionally, we need to make sure to
             // delete the data file first, so on restart the others will be recognized as GCable
-            // even if the compaction file deletion occurs next.
-            new Thread(new Runnable()
-            {
-                public void run()
-                {
-                    File datafile = new File(path);
-                    for (int i = 0; i < DeletionService.MAX_RETRIES; i++)
-                    {
-                        if (datafile.delete())
-                            break;
-                        try
-                        {
-                            Thread.sleep(10000);
-                        }
-                        catch (InterruptedException e)
-                        {
-                            throw new AssertionError(e);
-                        }
-                    }
-                    if (datafile.exists())
-                        throw new RuntimeException("Unable to delete " + path);
-                    SSTable.logger.info("Deleted " + path);
-                    DeletionService.submitDeleteWithRetry(SSTable.indexFilename(path));
-                    DeletionService.submitDeleteWithRetry(SSTable.filterFilename(path));
-                    DeletionService.submitDeleteWithRetry(SSTable.compactedFilename(path));
-                }
-            }, "Cleanup " + path).start();
+            // even if the compaction marker gets deleted next.
+            timer.schedule(new CleanupTask(), RETRY_DELAY);
         }
     }
 
