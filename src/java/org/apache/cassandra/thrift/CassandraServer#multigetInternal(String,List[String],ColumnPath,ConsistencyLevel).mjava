@@ -13,36 +13,20 @@
         }
 
         Map<String, ColumnOrSuperColumn> columnFamiliesMap = new HashMap<String, ColumnOrSuperColumn>();
-        Map<String, Collection<IColumn>> columnsMap = multigetColumns(commands, consistency_level);
+        Map<String, ColumnFamily> cfamilies = readColumnFamily(commands, consistency_level);
 
         for (ReadCommand command: commands)
         {
-            ColumnOrSuperColumn columnorsupercolumn;
-
-            Collection<IColumn> columns = columnsMap.get(command.key);
-            if (columns == null)
+            ColumnFamily cf = cfamilies.get(command.key);
+            if (cf == null)
             {
-               columnorsupercolumn = new ColumnOrSuperColumn();
+                columnFamiliesMap.put(command.key, new ColumnOrSuperColumn());
             }
             else
             {
-                assert columns.size() == 1;
-                IColumn column = columns.iterator().next();
-
-
-                if (column.isMarkedForDelete())
-                {
-                    columnorsupercolumn = new ColumnOrSuperColumn();
-                }
-                else
-                {
-                    columnorsupercolumn = column instanceof org.apache.cassandra.db.Column
-                                          ? createColumnOrSuperColumn_Column(new Column(column.name(), column.value(), column.timestamp()))
-                                          : createColumnOrSuperColumn_SuperColumn(new SuperColumn(column.name(), thriftifySubColumns(column.getSubColumns())));
-                }
-
+                List<ColumnOrSuperColumn> tcolumns = thriftifyColumnFamily(cf, command.queryPath.superColumnName != null, false);
+                columnFamiliesMap.put(command.key, tcolumns.size() > 0 ? tcolumns.iterator().next() : new ColumnOrSuperColumn());
             }
-            columnFamiliesMap.put(command.key, columnorsupercolumn);
         }
 
         return columnFamiliesMap;
