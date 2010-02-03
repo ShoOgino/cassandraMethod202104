@@ -2,13 +2,14 @@
      * @param startWith key to start with, inclusive.  empty string = start at beginning.
      * @param stopAt key to stop at, inclusive.  empty string = stop only when keys are exhausted.
      * @param maxResults
+     * @param includeStartKey
      * @return list of keys between startWith and stopAt
 
        TODO refactor better.  this is just getKeyRange w/o the deletion check, for the benefit of
        range_slice.  still opens one randomaccessfile per key, which sucks.  something like compactioniterator
        would be better.
      */
-    private boolean getKeyRange(List<String> keys, final DecoratedKey startWith, final DecoratedKey stopAt, int maxResults)
+    private boolean getKeyRange(List<String> keys, final DecoratedKey startWith, final DecoratedKey stopAt, int maxResults, boolean includeStartKey)
     throws IOException, ExecutionException, InterruptedException
     {
         // getKeyRange requires start <= stop.  getRangeSlice handles range wrapping if necessary.
@@ -82,14 +83,20 @@
         try
         {
             // pull keys out of the CollatedIterator
-            boolean rangeCompletedLocally = false;
+            boolean first = true;
             for (DecoratedKey current : reduced)
             {
                 if (!stopAt.isEmpty() && stopAt.compareTo(current) < 0)
                 {
                     return true;
                 }
-                keys.add(current.key);
+
+                if (includeStartKey || !first || !current.equals(startWith))
+                {
+                    keys.add(current.key);
+                }
+                first = false;
+
                 if (keys.size() >= maxResults)
                 {
                     return true;
