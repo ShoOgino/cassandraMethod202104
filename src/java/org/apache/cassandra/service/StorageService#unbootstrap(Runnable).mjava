@@ -1,42 +1,54 @@
     private void unbootstrap(final Runnable onFinish)
     {
-        Multimap<Range, InetAddress> rangesMM = getChangedRangesForLeaving(FBUtilities.getLocalAddress());
-        if (logger_.isDebugEnabled())
-            logger_.debug("Ranges needing transfer are [" + StringUtils.join(rangesMM.keySet(), ",") + "]");
-
-        if (rangesMM.isEmpty())
+        final CountDownLatch latch = new CountDownLatch(DatabaseDescriptor.getNonSystemTables().size());
+        for (final String table : DatabaseDescriptor.getNonSystemTables())
         {
-            // nothing needs transfer, so leave immediately.  this can happen when replication factor == number of nodes.
-            leaveRing();
-            onFinish.run();
-            return;
-        }
-
-        final Set<Map.Entry<Range, InetAddress>> pending = new HashSet<Map.Entry<Range, InetAddress>>(rangesMM.entries());
-        for (final Map.Entry<Range, InetAddress> entry : rangesMM.entries())
-        {
-            final Range range = entry.getKey();
-            final InetAddress newEndpoint = entry.getValue();
-            final Runnable callback = new Runnable()
+            Multimap<Range, InetAddress> rangesMM = getChangedRangesForLeaving(table, FBUtilities.getLocalAddress());
+            if (logger_.isDebugEnabled())
+                logger_.debug("Ranges needing transfer are [" + StringUtils.join(rangesMM.keySet(), ",") + "]");
+            if (rangesMM.isEmpty())
             {
-                public synchronized void run()
+                latch.countDown();
+                continue;
+            }
+
+            final Set<Map.Entry<Range, InetAddress>> pending = Collections.synchronizedSet(new HashSet<Map.Entry<Range, InetAddress>>(rangesMM.entries()));
+            for (final Map.Entry<Range, InetAddress> entry : rangesMM.entries())
+            {
+                final Range range = entry.getKey();
+                final InetAddress newEndpoint = entry.getValue();
+                final Runnable callback = new Runnable()
                 {
-                    pending.remove(entry);
-                    if (pending.isEmpty())
+                    public void run()
                     {
-                        leaveRing();
-                        onFinish.run();
+                        pending.remove(entry);
+                        if (pending.isEmpty())
+                            latch.countDown();
                     }
-                }
-            };
-            StageManager.getStage(StageManager.STREAM_STAGE).execute(new Runnable()
-            {
-                public void run()
+                };
+                StageManager.getStage(StageManager.STREAM_STAGE).execute(new Runnable()
                 {
-                    // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-                    StreamOut.transferRanges(newEndpoint, Arrays.asList(range), callback);
-                }
-            });
+                    public void run()
+                    {
+                        // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
+                        StreamOut.transferRanges(newEndpoint, table, Arrays.asList(range), callback);
+                    }
+                });
+            }
         }
+
+        // wait for the transfer runnables to signal the latch.
+        logger_.debug("waiting for stream aks.");
+        try
+        {
+            latch.await();
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+        logger_.debug("stream acks all received.");
+        leaveRing();
+        onFinish.run();
     }
 

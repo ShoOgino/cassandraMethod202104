@@ -1,0 +1,42 @@
+    private void testSourceTargetComputation(String table, int numOldNodes, int replicationFactor) throws UnknownHostException
+    {
+        StorageService ss = StorageService.instance;
+
+        generateFakeEndpoints(numOldNodes);
+        Token myToken = StorageService.getPartitioner().getRandomToken();
+        InetAddress myEndpoint = InetAddress.getByName("127.0.0.1");
+
+        TokenMetadata tmd = ss.getTokenMetadata();
+        assertEquals(numOldNodes, tmd.sortedTokens().size());
+        BootStrapper b = new BootStrapper(myEndpoint, myToken, tmd);
+        Multimap<Range, InetAddress> res = b.getRangesWithSources(table);
+        
+        int transferCount = 0;
+        for (Map.Entry<Range, Collection<InetAddress>> e : res.asMap().entrySet())
+        {
+            assert e.getValue() != null && e.getValue().size() > 0 : StringUtils.join(e.getValue(), ", ");
+            transferCount++;
+        }
+
+        assertEquals(replicationFactor, transferCount);
+        IFailureDetector mockFailureDetector = new IFailureDetector()
+        {
+            public boolean isAlive(InetAddress ep)
+            {
+                return true;
+            }
+
+            public void interpret(InetAddress ep) { throw new UnsupportedOperationException(); }
+            public void report(InetAddress ep) { throw new UnsupportedOperationException(); }
+            public void registerFailureDetectionEventListener(IFailureDetectionEventListener listener) { throw new UnsupportedOperationException(); }
+            public void unregisterFailureDetectionEventListener(IFailureDetectionEventListener listener) { throw new UnsupportedOperationException(); }
+            public void remove(InetAddress ep) { throw new UnsupportedOperationException(); }
+        };
+        Multimap<InetAddress, Range> temp = BootStrapper.getWorkMap(res, mockFailureDetector);
+        // there isn't any point in testing the size of these collections for any specific size.  When a random partitioner
+        // is used, they will vary.
+        assert temp.keySet().size() > 0;
+        assert temp.asMap().values().iterator().next().size() > 0;
+        assert !temp.keySet().iterator().next().equals(myEndpoint);
+    }
+

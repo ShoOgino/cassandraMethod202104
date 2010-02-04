@@ -1,5 +1,5 @@
     /**
-     * Called when endPoint is removed from the ring without proper
+     * Called when an endPoint is removed from the ring without proper
      * STATE_LEAVING -> STATE_LEFT sequence. This function checks
      * whether this node becomes responsible for new ranges as a
      * consequence and streams data if needed.
@@ -13,50 +13,58 @@
     {
         InetAddress myAddress = FBUtilities.getLocalAddress();
 
-        // get all ranges that change ownership (that is, a node needs
-        // to take responsibility for new range)
-        Multimap<Range, InetAddress> changedRanges = getChangedRangesForLeaving(endPoint);
-
-        // check if any of these ranges are coming our way
-        Set<Range> myNewRanges = new HashSet<Range>();
-        for (Map.Entry<Range, InetAddress> entry : changedRanges.entries())
+        for (String table : DatabaseDescriptor.getNonSystemTables())
         {
-            if (entry.getValue().equals(myAddress))
-                myNewRanges.add(entry.getKey());
-        }
+            // get all ranges that change ownership (that is, a node needs
+            // to take responsibility for new range)
+            Multimap<Range, InetAddress> changedRanges = getChangedRangesForLeaving(table, endPoint);
 
-        if (!myNewRanges.isEmpty())
-        {
-            if (logger_.isDebugEnabled())
-                logger_.debug(endPoint + " was removed, my added ranges: " + StringUtils.join(myNewRanges, ", "));
-
-            Multimap<Range, InetAddress> rangeAddresses = replicationStrategy_.getRangeAddresses(tokenMetadata_);
-            Multimap<InetAddress, Range> sourceRanges = HashMultimap.create();
-            IFailureDetector failureDetector = FailureDetector.instance;
-
-            // find alive sources for our new ranges
-            for (Range myNewRange : myNewRanges)
+            // check if any of these ranges are coming our way
+            Set<Range> myNewRanges = new HashSet<Range>();
+            for (Map.Entry<Range, InetAddress> entry : changedRanges.entries())
             {
-                List<InetAddress> sources = DatabaseDescriptor.getEndPointSnitch().getSortedListByProximity(myAddress, rangeAddresses.get(myNewRange));
-
-                assert (!sources.contains(myAddress));
-
-                for (InetAddress source : sources)
-                {
-                    if (source.equals(endPoint))
-                        continue;
-
-                    if (failureDetector.isAlive(source))
-                    {
-                        sourceRanges.put(source, myNewRange);
-                        break;
-                    }
-                }
+                if (entry.getValue().equals(myAddress))
+                    myNewRanges.add(entry.getKey());
             }
 
-            // Finally we have a list of addresses and ranges to stream. Proceed to stream
-            for (Map.Entry<InetAddress, Collection<Range>> entry : sourceRanges.asMap().entrySet())
-                StreamIn.requestRanges(entry.getKey(), entry.getValue());
+            if (!myNewRanges.isEmpty())
+            {
+                if (logger_.isDebugEnabled())
+                    logger_.debug(endPoint + " was removed, my added ranges: " + StringUtils.join(myNewRanges, ", "));
+
+                Multimap<Range, InetAddress> rangeAddresses = getReplicationStrategy(table).getRangeAddresses(tokenMetadata_, table);
+                Multimap<InetAddress, Range> sourceRanges = HashMultimap.create();
+                IFailureDetector failureDetector = FailureDetector.instance;
+
+                // find alive sources for our new ranges
+                for (Range myNewRange : myNewRanges)
+                {
+                    List<InetAddress> sources = DatabaseDescriptor.getEndPointSnitch(table).getSortedListByProximity(myAddress, rangeAddresses.get(myNewRange));
+
+                    assert (!sources.contains(myAddress));
+
+                    for (InetAddress source : sources)
+                    {
+                        if (source.equals(endPoint))
+                            continue;
+
+                        if (failureDetector.isAlive(source))
+                        {
+                            sourceRanges.put(source, myNewRange);
+                            break;
+                        }
+                    }
+                }
+
+                // Finally we have a list of addresses and ranges to
+                // stream. Proceed to stream
+                for (Map.Entry<InetAddress, Collection<Range>> entry : sourceRanges.asMap().entrySet())
+                {
+                    if (logger_.isDebugEnabled())
+                        logger_.debug("Requesting from " + entry.getKey() + " ranges " + StringUtils.join(entry.getValue(), ", "));
+                    StreamIn.requestRanges(entry.getKey(), table, entry.getValue());
+                }
+            }
         }
     }
 
