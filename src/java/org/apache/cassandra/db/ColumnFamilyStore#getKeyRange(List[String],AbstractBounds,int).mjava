@@ -1,22 +1,20 @@
     /**
-     * @param startWith key to start with, inclusive.  empty string = start at beginning.
-     * @param stopAt key to stop at, inclusive.  empty string = stop only when keys are exhausted.
+     * @param range: either a Bounds, which includes start key, or a Range, which does not.
      * @param maxResults
-     * @param includeStartKey
      * @return list of keys between startWith and stopAt
 
        TODO refactor better.  this is just getKeyRange w/o the deletion check, for the benefit of
        range_slice.  still opens one randomaccessfile per key, which sucks.  something like compactioniterator
        would be better.
      */
-    private boolean getKeyRange(List<String> keys, final DecoratedKey startWith, final DecoratedKey stopAt, int maxResults, boolean includeStartKey)
+    private boolean getKeyRange(List<String> keys, final AbstractBounds range, int maxResults)
     throws IOException, ExecutionException, InterruptedException
     {
-        // getKeyRange requires start <= stop.  getRangeSlice handles range wrapping if necessary.
-        assert stopAt.isEmpty() || startWith.compareTo(stopAt) <= 0;
+        final DecoratedKey startWith = new DecoratedKey(range.left, null);
+        final DecoratedKey stopAt = new DecoratedKey(range.right, null);
         // create a CollatedIterator that will return unique keys from different sources
         // (current memtable, historical memtables, and SSTables) in the correct order.
-        List<Iterator<DecoratedKey>> iterators = new ArrayList<Iterator<DecoratedKey>>();
+        final List<Iterator<DecoratedKey>> iterators = new ArrayList<Iterator<DecoratedKey>>();
 
         // we iterate through memtables with a priority queue to avoid more sorting than necessary.
         // this predicate throws out the keys before the start of our range.
@@ -91,7 +89,7 @@
                     return true;
                 }
 
-                if (includeStartKey || !first || !current.equals(startWith))
+                if (range instanceof Bounds || !first || !current.equals(startWith))
                 {
                     keys.add(current.key);
                 }
