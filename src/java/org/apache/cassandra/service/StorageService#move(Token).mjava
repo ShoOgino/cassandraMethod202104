@@ -3,14 +3,17 @@
      *
      * @param token new token to boot to, or if null, find balanced token to boot to
      */
-    private void move(final Token token) throws InterruptedException
+    private void move(final Token token) throws IOException, InterruptedException
     {
         for (String table : DatabaseDescriptor.getTables())
         {
             if (tokenMetadata_.getPendingRanges(table, FBUtilities.getLocalAddress()).size() > 0)
                 throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
         }
+        if (token != null && tokenMetadata_.sortedTokens().contains(token))
+            throw new IOException("target token " + token + " is already owned by another node");
 
+        // leave the ring
         logger_.info("starting move. leaving token " + getLocalToken());
         startLeaving();
         logger_.info("move sleeping " + RING_DELAY);
@@ -21,8 +24,11 @@
             public void runMayThrow() throws IOException
             {
                 Token bootstrapToken = token;
-                if (bootstrapToken == null)
-                    bootstrapToken = BootStrapper.getBalancedToken(tokenMetadata_, StorageLoadBalancer.instance.getLoadInfo());
+		if (bootstrapToken == null)
+		{
+		    StorageLoadBalancer.instance.waitForLoadInfo();
+		    bootstrapToken = BootStrapper.getBalancedToken(tokenMetadata_, StorageLoadBalancer.instance.getLoadInfo());
+		}
                 logger_.info("re-bootstrapping to new token " + bootstrapToken);
                 startBootstrap(bootstrapToken);
             }
