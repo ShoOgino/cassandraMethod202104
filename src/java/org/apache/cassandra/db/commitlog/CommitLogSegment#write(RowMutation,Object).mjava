@@ -1,0 +1,49 @@
+    public CommitLogSegment.CommitLogContext write(RowMutation rowMutation, Object serializedRow) throws IOException
+    {
+        long currentPosition = -1L;
+        try
+        {
+            currentPosition = logWriter.getFilePointer();
+            CommitLogSegment.CommitLogContext cLogCtx = new CommitLogSegment.CommitLogContext(currentPosition);
+            Table table = Table.open(rowMutation.getTable());
+
+            // update header
+            for (ColumnFamily columnFamily : rowMutation.getColumnFamilies())
+            {
+                int id = table.getColumnFamilyId(columnFamily.name());
+                if (!header.isDirty(id))
+                {
+                    header.turnOn(id, logWriter.getFilePointer());
+                    seekAndWriteCommitLogHeader(header.toByteArray());
+                }
+            }
+
+            // write mutation, w/ checksum
+            Checksum checkum = new CRC32();
+            if (serializedRow instanceof DataOutputBuffer)
+            {
+                DataOutputBuffer buffer = (DataOutputBuffer) serializedRow;
+                logWriter.writeLong(buffer.getLength());
+                logWriter.write(buffer.getData(), 0, buffer.getLength());
+                checkum.update(buffer.getData(), 0, buffer.getLength());
+            }
+            else
+            {
+                assert serializedRow instanceof byte[];
+                byte[] bytes = (byte[]) serializedRow;
+                logWriter.writeLong(bytes.length);
+                logWriter.write(bytes);
+                checkum.update(bytes, 0, bytes.length);
+            }
+            logWriter.writeLong(checkum.getValue());
+
+            return cLogCtx;
+        }
+        catch (IOException e)
+        {
+            if (currentPosition != -1)
+                logWriter.seek(currentPosition);
+            throw e;
+        }
+    }
+

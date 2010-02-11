@@ -1,0 +1,59 @@
+    /**
+     * Delete log segments whose contents have been turned into SSTables. NOT threadsafe.
+     *
+     * param @ context The commitLog context .
+     * param @ id id of the columnFamily being flushed to disk.
+     *
+    */
+    private void discardCompletedSegmentsInternal(CommitLogSegment.CommitLogContext context, int id) throws IOException
+    {
+        if (logger.isDebugEnabled())
+            logger.debug("discard completed log segments for " + context + ", column family " + id + ". CFIDs are " + Table.TableMetadata.getColumnFamilyIDString());
+
+        /*
+         * log replay assumes that we only have to look at entries past the last
+         * flush position, so verify that this flush happens after the last.
+        */
+        assert context.position > context.getSegment().getHeader().getPosition(id) : "discard called on obsolete context " + context;
+
+        /*
+         * Loop through all the commit log files in the history. Now process
+         * all files that are older than the one in the context. For each of
+         * these files the header needs to modified by resetting the dirty
+         * bit corresponding to the flushed CF.
+        */
+        for (CommitLogSegment segment : segments)
+        {
+            CommitLogHeader header = segment.getHeader();
+            if (segment.equals(context.getSegment()))
+            {
+                // we can't just mark the segment where the flush happened clean,
+                // since there may have been writes to it between when the flush
+                // started and when it finished. so mark the flush position as
+                // the replay point for this CF, instead.
+                if (logger.isDebugEnabled())
+                    logger.debug("Marking replay position " + context.position + " on commit log " + segment);
+                header.turnOn(id, context.position);
+                segment.writeHeader();
+                break;
+            }
+
+            header.turnOff(id);
+            if (header.isSafeToDelete())
+            {
+                logger.info("Discarding obsolete commit log:" + segment);
+                segment.close();
+                DeletionService.submitDelete(segment.getPath());
+                // usually this will be the first (remaining) segment, but not always, if segment A contains
+                // writes to a CF that is unflushed but is followed by segment B whose CFs are all flushed.
+                segments.remove(segment);
+            }
+            else
+            {
+                if (logger.isDebugEnabled())
+                    logger.debug("Not safe to delete commit log " + segment + "; dirty is " + header.dirtyString());
+                segment.writeHeader();
+            }
+        }
+    }
+

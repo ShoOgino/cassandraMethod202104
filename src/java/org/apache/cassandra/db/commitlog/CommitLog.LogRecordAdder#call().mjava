@@ -1,36 +1,14 @@
-        public CommitLog.CommitLogContext call() throws Exception
+        public CommitLogSegment.CommitLogContext call() throws Exception
         {
-            long currentPosition = -1L;
-            try
+            CommitLogSegment.CommitLogContext context = currentSegment().write(rowMutation, serializedRow);
+
+            // roll log if necessary
+            if (currentSegment().length() >= SEGMENT_SIZE)
             {
-                currentPosition = logWriter.getFilePointer();
-                CommitLogContext cLogCtx = new CommitLogContext(logFile, currentPosition);
-                maybeUpdateHeader(rowMutation);
-                Checksum checkum = new CRC32();
-                if (serializedRow instanceof DataOutputBuffer)
-                {
-                    DataOutputBuffer buffer = (DataOutputBuffer) serializedRow;
-                    logWriter.writeLong(buffer.getLength());
-                    logWriter.write(buffer.getData(), 0, buffer.getLength());
-                    checkum.update(buffer.getData(), 0, buffer.getLength());
-                }
-                else
-                {
-                    assert serializedRow instanceof byte[];
-                    byte[] bytes = (byte[]) serializedRow;
-                    logWriter.writeLong(bytes.length);
-                    logWriter.write(bytes);
-                    checkum.update(bytes, 0, bytes.length);
-                }
-                logWriter.writeLong(checkum.getValue());
-                maybeRollLog();
-                return cLogCtx;
+                sync();
+                segments.add(new CommitLogSegment(currentSegment().getHeader().getColumnFamilyCount()));
             }
-            catch (IOException e)
-            {
-                if ( currentPosition != -1 )
-                    logWriter.seek(currentPosition);
-                throw e;
-            }
+
+            return context;
         }
 
