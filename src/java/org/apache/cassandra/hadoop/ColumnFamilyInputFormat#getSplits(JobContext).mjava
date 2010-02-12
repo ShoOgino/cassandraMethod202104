@@ -6,16 +6,36 @@
         predicate = predicateFromString(conf.get(PREDICATE_CONFIG));
         validateConfiguration();
 
-        List<TokenRange> map = getRangeMap();
-        ArrayList<InputSplit> splits = new ArrayList<InputSplit>();
-        for (TokenRange entry : map)
+        // cannonical ranges and nodes holding replicas
+        List<TokenRange> masterRangeNodes = getRangeMap();
+
+        // cannonical ranges, split into pieces:
+        // for each range, pick a live owner and ask it to compute bite-sized splits
+        // TODO parallelize this thread-per-range
+        Map<TokenRange, List<String>> splitRanges = new HashMap<TokenRange, List<String>>();
+        for (TokenRange range : masterRangeNodes)
         {
-            if (logger.isDebugEnabled())
-                logger.debug("split range is [" + entry.start_token + ", " + entry.end_token + "]");
-            String[] endpoints = entry.endpoints.toArray(new String[0]);
-            splits.add(new ColumnFamilySplit(keyspace, columnFamily, predicate, entry.start_token, entry.end_token, endpoints));
+            splitRanges.put(range, getSubSplits(range));
         }
 
+        // turn the sub-ranges into InputSplits
+        ArrayList<InputSplit> splits = new ArrayList<InputSplit>();
+        for (Map.Entry<TokenRange, List<String>> entry : splitRanges.entrySet())
+        {
+            TokenRange range = entry.getKey();
+            List<String> tokens = entry.getValue();
+            String[] endpoints = range.endpoints.toArray(new String[range.endpoints.size()]);
+
+            int i = 1;
+            for ( ; i < tokens.size(); i++)
+            {
+                ColumnFamilySplit split = new ColumnFamilySplit(keyspace, columnFamily, predicate, tokens.get(i - 1), tokens.get(i), endpoints);
+                logger.info("adding " + split);
+                splits.add(split);
+            }
+        }
+        assert splits.size() > 0;
+        
         return splits;
     }
 
