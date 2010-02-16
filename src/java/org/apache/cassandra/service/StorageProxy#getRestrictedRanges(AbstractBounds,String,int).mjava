@@ -1,0 +1,44 @@
+    /**
+     * compute all ranges we're going to query, in sorted order, so that we get the correct results back.
+     *  1) computing range intersections is necessary because nodes can be replica destinations for many ranges,
+     *     so if we do not restrict each scan to the specific range we want we will get duplicate results.
+     *  2) sorting the intersection ranges is necessary because wraparound node ranges can be discontiguous.
+     *     Consider a 2-node ring, (D, T] and (T, D]. A query for [A, Z] will intersect the 2nd node twice,
+     *     at [A, D] and (T, Z]. We need to scan the (D, T] range in between those, or we will skip those
+     *     results entirely if the limit is low enough.
+     *  3) we unwrap the intersection ranges because otherwise we get results in the wrong order.
+     *     Consider a 2-node ring, (D, T] and (T, D].  A query for [D, Z] will get results in the wrong
+     *     order if we use (T, D] directly -- we need to start with that range, because our query starts with
+     *     D, but we don't want any other results from it until after the (D, T] range.  Unwrapping so that
+     *     the ranges we consider are (D, T], (T, MIN], (MIN, D] fixes this.
+     */
+    private static List<Pair<AbstractBounds, List<InetAddress>>> getRestrictedRanges(AbstractBounds queryRange, String keyspace, int responseCount)
+    throws UnavailableException
+    {
+        TokenMetadata tokenMetadata = StorageService.instance.getTokenMetadata();
+        Iterator<Token> iter = TokenMetadata.ringIterator(tokenMetadata.sortedTokens(), queryRange.left);
+        List<Pair<AbstractBounds, List<InetAddress>>> ranges = new ArrayList<Pair<AbstractBounds, List<InetAddress>>>();
+        while (iter.hasNext())
+        {
+            Token nodeToken = iter.next();
+            Range nodeRange = new Range(tokenMetadata.getPredecessor(nodeToken), nodeToken);
+            List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(keyspace, nodeToken);
+            if (endpoints.size() < responseCount)
+                throw new UnavailableException();
+
+            DatabaseDescriptor.getEndPointSnitch(keyspace).sortByProximity(FBUtilities.getLocalAddress(), endpoints);
+            List<InetAddress> endpointsForCL = endpoints.subList(0, responseCount);
+            Set<AbstractBounds> restrictedRanges = queryRange.restrictTo(nodeRange);
+            for (AbstractBounds range : restrictedRanges)
+            {
+                for (AbstractBounds unwrapped : range.unwrap())
+                {
+                    if (logger.isDebugEnabled())
+                        logger.debug("Adding to restricted ranges " + unwrapped + " for " + nodeRange);
+                    ranges.add(new Pair<AbstractBounds, List<InetAddress>>(unwrapped, endpointsForCL));
+                }
+            }
+        }
+        return ranges;
+    }
+
