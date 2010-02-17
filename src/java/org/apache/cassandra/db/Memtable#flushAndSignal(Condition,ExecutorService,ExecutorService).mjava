@@ -1,21 +1,14 @@
     public void flushAndSignal(final Condition condition, ExecutorService sorter, final ExecutorService writer)
     {
         ColumnFamilyStore.getMemtablesPendingFlushNotNull(columnfamilyName).add(this); // it's ok for the MT to briefly be both active and pendingFlush
-        sorter.submit(new Runnable()
+        writer.submit(new WrappedRunnable()
         {
-            public void run()
+            public void runMayThrow() throws IOException
             {
-                final List<DecoratedKey> sortedKeys = getSortedKeys();
-                writer.submit(new WrappedRunnable()
-                {
-                    public void runMayThrow() throws IOException
-                    {
-                        ColumnFamilyStore cfs = Table.open(table).getColumnFamilyStore(columnfamilyName);
-                        cfs.addSSTable(writeSortedContents(sortedKeys));
-                        ColumnFamilyStore.getMemtablesPendingFlushNotNull(columnfamilyName).remove(Memtable.this);
-                        condition.signalAll();
-                    }
-                });
+                ColumnFamilyStore cfs = Table.open(table).getColumnFamilyStore(columnfamilyName);
+                cfs.addSSTable(writeSortedContents());
+                ColumnFamilyStore.getMemtablesPendingFlushNotNull(columnfamilyName).remove(Memtable.this);
+                condition.signalAll();
             }
         });
     }
