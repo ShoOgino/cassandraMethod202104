@@ -1,14 +1,23 @@
-    // Establish a thrift connection to cassandra instance
+    /**
+     * Establish a thrift connection to cassandra instance
+     *
+     * @param server - hostname or IP of the server
+     * @param port   - Thrift port number
+     */
     public static void connect(String server, int port)
     {
+
         TSocket socket = new TSocket(server, port);
 
         if (transport_ != null)
             transport_.close();
 
-        if (css_.framed) {
+        if (css_.framed)
+        {
             transport_ = new TFramedTransport(socket);
-        } else {
+        }
+        else 
+        {
             transport_ = socket;
         }
 
@@ -19,16 +28,38 @@
         {
             transport_.open();
         }
-        catch(Exception e)
+        catch (Exception e)
         {
             // Should move this to Log4J as well probably...
-            System.err.println("Exception " + e.getMessage());            
-            e.printStackTrace();
+            css_.err.format("Exception connecting to %s/%d - %s\n", server, port, e.getMessage());
+
+            if (css_.debug)
+                e.printStackTrace();
+
+            return;
         }
 
         thriftClient_ = cassandraClient;
         cliClient_ = new CliClient(css_, thriftClient_);
-        
+
+        // Lookup the cluster name, this is to make it clear which cluster the user is connected to
+        String clusterName;
+
+        try
+        {
+            clusterName = thriftClient_.get_string_property("cluster name");
+        }
+        catch (Exception e)
+        {
+
+            css_.err.println("Exception retrieving information about the cassandra node, check you have connected to the thrift port.");
+
+            if (css_.debug)
+                e.printStackTrace();
+
+            return;
+        }
+
         // Extend the completer with keyspace and column family data.
         try
         {
@@ -37,7 +68,7 @@
                 // Ignore system column family
                 if (keyspace.equals(SYSTEM_TABLE))
                     continue;
-                
+
                 for (String cf : cliClient_.getCFMetaData(keyspace).keySet())
                 {
                     for (String cmd : completer_.getKeyspaceCommands())
@@ -48,8 +79,12 @@
         catch (Exception e)
         {
             // Yes, we really do want to ignore any exceptions encountered here.
+            if (css_.debug)
+                e.printStackTrace();
+
+            return;
         }
 
-        css_.out.printf("Connected to %s/%d\n", server, port);
+        css_.out.printf("Connected to: \"%s\" on %s/%d%n", clusterName, server, port);
     }
 
