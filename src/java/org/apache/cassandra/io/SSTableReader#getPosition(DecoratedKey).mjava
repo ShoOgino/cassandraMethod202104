@@ -3,21 +3,29 @@
      */
     public PositionSize getPosition(DecoratedKey decoratedKey) throws IOException
     {
+        // first, check bloom filter
         if (!bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
             return null;
-        if (keyCache.getCapacity() > 0)
+
+        // next, the key cache
+        Pair<Descriptor, DecoratedKey> unifiedKey = new Pair<Descriptor, DecoratedKey>(desc, decoratedKey);
+        if (keyCache != null && keyCache.getCapacity() > 0)
         {
-            PositionSize cachedPosition = keyCache.get(decoratedKey);
+            PositionSize cachedPosition = keyCache.get(unifiedKey);
             if (cachedPosition != null)
             {
                 return cachedPosition;
             }
         }
+
+        // next, see if the sampled index says it's impossible for the key to be present
         KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
         {
             return null;
         }
+
+        // handle exact sampled index hit
         if (spannedIndexDataPositions != null)
         {
             PositionSize info = spannedIndexDataPositions.get(sampledPosition);
@@ -25,6 +33,7 @@
                 return info;
         }
 
+        // scan the on-disk index, starting at the nearest sampled position
         long p = sampledPosition.position;
         FileDataInput input;
         if (indexBuffers == null)
@@ -66,8 +75,8 @@
                     {
                         info = new PositionSize(position, length() - position);
                     }
-                    if (keyCache.getCapacity() > 0)
-                        keyCache.put(decoratedKey, info);
+                    if (keyCache != null && keyCache.getCapacity() > 0)
+                        keyCache.put(unifiedKey, info);
                     return info;
                 }
                 if (v > 0)
