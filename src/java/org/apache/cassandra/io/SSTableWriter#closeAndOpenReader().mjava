@@ -1,5 +1,25 @@
     public SSTableReader closeAndOpenReader() throws IOException
     {
-        return closeAndOpenReader(false);
+        // bloom filter
+        FileOutputStream fos = new FileOutputStream(filterFilename());
+        DataOutputStream stream = new DataOutputStream(fos);
+        BloomFilter.serializer().serialize(bf, stream);
+        stream.flush();
+        fos.getFD().sync();
+        stream.close();
+
+        // index
+        indexFile.getChannel().force(true);
+        indexFile.close();
+
+        // main data
+        dataFile.close(); // calls force
+
+        String newpath = getFilename();
+        rename(indexFilename());
+        rename(filterFilename());
+        newpath = rename(newpath); // important to do this last since index & filter file names are derived from it
+
+        return new SSTableReader(newpath, partitioner, indexPositions, spannedIndexDataPositions, bf);
     }
 
