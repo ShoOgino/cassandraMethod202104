@@ -4,31 +4,36 @@
         ArrayList<WriteResponseHandler> responseHandlers = new ArrayList<WriteResponseHandler>();
 
         RowMutation mostRecentRowMutation = null;
+        StorageService ss = StorageService.instance;
         try
         {
-            for (RowMutation rm: mutations)
+            for (RowMutation rm : mutations)
             {
                 mostRecentRowMutation = rm;
-                List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(rm.getTable(), rm.key());
-                Map<InetAddress, InetAddress> endpointMap = StorageService.instance.getHintedEndpointMap(rm.getTable(), rm.key(), naturalEndpoints);
-                int blockFor = determineBlockFor(naturalEndpoints.size(), endpointMap.size(), consistency_level);
-                
+                String table = rm.getTable();
+                AbstractReplicationStrategy rs = ss.getReplicationStrategy(table);
+
+                List<InetAddress> naturalEndpoints = ss.getNaturalEndpoints(table, rm.key());
+                Collection<InetAddress> writeEndpoints = rs.getWriteEndpoints(StorageService.getPartitioner().getToken(rm.key()), table, naturalEndpoints);
+                Multimap<InetAddress, InetAddress> hintedEndpoints = rs.getHintedEndpoints(table, writeEndpoints);
+                int blockFor = determineBlockFor(writeEndpoints.size(), consistency_level);
+
                 // avoid starting a write we know can't achieve the required consistency
-                assureSufficientLiveNodes(endpointMap, blockFor, consistency_level);
+                assureSufficientLiveNodes(blockFor, writeEndpoints, hintedEndpoints, consistency_level);
                 
-                // send out the writes, as in insert() above, but this time with a callback that tracks responses
-                final WriteResponseHandler responseHandler = StorageService.instance.getWriteResponseHandler(blockFor, consistency_level, rm.getTable());
+                // send out the writes, as in mutate() above, but this time with a callback that tracks responses
+                final WriteResponseHandler responseHandler = ss.getWriteResponseHandler(blockFor, consistency_level, table);
                 responseHandlers.add(responseHandler);
                 Message unhintedMessage = null;
-                for (Map.Entry<InetAddress, InetAddress> entry : endpointMap.entrySet())
+                for (Map.Entry<InetAddress, Collection<InetAddress>> entry : hintedEndpoints.asMap().entrySet())
                 {
-                    InetAddress naturalTarget = entry.getKey();
-                    InetAddress maybeHintedTarget = entry.getValue();
-    
-                    if (naturalTarget.equals(maybeHintedTarget))
+                    InetAddress destination = entry.getKey();
+                    Collection<InetAddress> targets = entry.getValue();
+
+                    if (targets.size() == 1 && targets.iterator().next().equals(destination))
                     {
-                        // not hinted
-                        if (naturalTarget.equals(FBUtilities.getLocalAddress()))
+                        // unhinted writes
+                        if (destination.equals(FBUtilities.getLocalAddress()))
                         {
                             insertLocalMessage(rm, responseHandler);
                         }
@@ -41,20 +46,27 @@
                                 MessagingService.instance.addCallback(responseHandler, unhintedMessage.getMessageId());
                             }
                             if (logger.isDebugEnabled())
-                                logger.debug("insert writing key " + rm.key() + " to " + unhintedMessage.getMessageId() + "@" + naturalTarget);
-                            MessagingService.instance.sendOneWay(unhintedMessage, naturalTarget);
+                                logger.debug("insert writing key " + rm.key() + " to " + unhintedMessage.getMessageId() + "@" + destination);
+                            MessagingService.instance.sendOneWay(unhintedMessage, destination);
                         }
                     }
                     else
                     {
+                        // hinted
                         Message hintedMessage = rm.makeRowMutationMessage();
-                        hintedMessage.addHeader(RowMutation.HINT, naturalTarget.getAddress());
-                        // (hints are part of the callback and count towards consistency only under CL.ANY
-                        if (consistency_level == ConsistencyLevel.ANY)
+                        for (InetAddress target : targets)
+                        {
+                            if (!target.equals(destination))
+                            {
+                                addHintHeader(hintedMessage, target);
+                                if (logger.isDebugEnabled())
+                                    logger.debug("insert writing key " + rm.key() + " to " + hintedMessage.getMessageId() + "@" + destination + " for " + target);
+                            }
+                        }
+                        // (non-destination hints are part of the callback and count towards consistency only under CL.ANY)
+                        if (writeEndpoints.contains(destination) || consistency_level == ConsistencyLevel.ANY)
                             MessagingService.instance.addCallback(responseHandler, hintedMessage.getMessageId());
-                        if (logger.isDebugEnabled())
-                            logger.debug("insert writing key " + rm.key() + " to " + hintedMessage.getMessageId() + "@" + maybeHintedTarget + " for " + naturalTarget);
-                        MessagingService.instance.sendOneWay(hintedMessage, maybeHintedTarget);
+                        MessagingService.instance.sendOneWay(hintedMessage, destination);
                     }
                 }
             }

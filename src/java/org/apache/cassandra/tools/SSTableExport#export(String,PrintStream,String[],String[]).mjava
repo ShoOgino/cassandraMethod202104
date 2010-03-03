@@ -1,0 +1,55 @@
+    /**
+     * Export specific rows from an SSTable and write the resulting JSON to a PrintStream.
+     * 
+     * @param ssTableFile the SSTable to export the rows from
+     * @param outs PrintStream to write the output to
+     * @param keys the keys corresponding to the rows to export
+     * @throws IOException on failure to read/write input/output
+     */
+    public static void export(String ssTableFile, PrintStream outs, String[] keys, String[] excludes)
+    throws IOException
+    {
+        SSTableReader reader = SSTableReader.open(ssTableFile);
+        SSTableScanner scanner = reader.getScanner(INPUT_FILE_BUFFER_SIZE);
+        IPartitioner<?> partitioner = DatabaseDescriptor.getPartitioner();    
+        Set<String> excludeSet = new HashSet<String>(Arrays.asList(excludes));
+        int i = 0;
+        
+        outs.println("{");
+        
+        for (String key : keys)
+        {
+            if (excludeSet.contains(key))
+                continue;
+            DecoratedKey<?> dk = partitioner.decorateKey(key);
+            scanner.seekTo(dk);
+            
+            i++;
+            
+            if (scanner.hasNext())
+            {
+                IteratingRow row = scanner.next();
+                try
+                {
+                    String jsonOut = serializeRow(row);
+                    if (i != 1)
+                        outs.println(",");
+                    outs.print("  " + jsonOut);
+                }
+                catch (IOException ioexc)
+                {
+                    System.err.println("WARNING: Corrupt row " + key + " (skipping).");
+                    continue;
+                }
+                catch (OutOfMemoryError oom)
+                {
+                    System.err.println("ERROR: Out of memory deserializing row " + key);
+                    continue;
+                }
+            }
+        }
+        
+        outs.println("\n}");
+        outs.flush();
+    }
+

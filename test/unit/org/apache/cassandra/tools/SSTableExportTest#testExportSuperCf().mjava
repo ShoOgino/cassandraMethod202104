@@ -20,12 +20,19 @@
         writer.append(partitioner.decorateKey("rowB"), dob);
         dob.reset();
         cfamily.clear();
-     
+
+        // Add rowExclude
+        cfamily.addColumn(new QueryPath("Super4", "superX".getBytes(), "colX".getBytes()), "valX".getBytes(), 1, false);
+        ColumnFamily.serializer().serializeWithIndexes(cfamily, dob);
+        writer.append(partitioner.decorateKey("rowExclude"), dob);
+        dob.reset();
+        cfamily.clear();
+
         SSTableReader reader = writer.closeAndOpenReader();
         
         // Export to JSON and verify
         File tempJson = File.createTempFile("Super4", ".json");
-        SSTableExport.export(reader, new PrintStream(tempJson.getPath()));
+        SSTableExport.export(reader, new PrintStream(tempJson.getPath()), new String[]{"rowExclude"});
         
         JSONObject json = (JSONObject)JSONValue.parse(new FileReader(tempJson));
         
@@ -33,8 +40,9 @@
         JSONObject superA = (JSONObject)rowA.get(cfamily.getComparator().getString("superA".getBytes()));
         JSONArray subColumns = (JSONArray)superA.get("subColumns");
         JSONArray colA = (JSONArray)subColumns.get(0);
-        
+        JSONObject rowExclude = (JSONObject)json.get("rowExclude");
         assert Arrays.equals(hexToBytes((String)colA.get(1)), "valA".getBytes());
-        assert !(Boolean)colA.get(3);       
+        assert !(Boolean)colA.get(3);
+        assert rowExclude == null;
     }
 
