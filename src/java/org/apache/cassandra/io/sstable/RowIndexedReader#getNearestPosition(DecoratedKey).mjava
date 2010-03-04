@@ -1,0 +1,37 @@
+    /** like getPosition, but if key is not found will return the location of the first key _greater_ than the desired one, or -1 if no such key exists. */
+    public long getNearestPosition(DecoratedKey decoratedKey) throws IOException
+    {
+        KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
+        if (sampledPosition == null)
+        {
+            return 0;
+        }
+
+        // can't use a MappedFileDataInput here, since we might cross a segment boundary while scanning
+        BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(), "r");
+        input.seek(sampledPosition.position);
+        try
+        {
+            while (true)
+            {
+                DecoratedKey indexDecoratedKey;
+                try
+                {
+                    indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
+                }
+                catch (EOFException e)
+                {
+                    return -1;
+                }
+                long position = input.readLong();
+                int v = indexDecoratedKey.compareTo(decoratedKey);
+                if (v >= 0)
+                    return position;
+            }
+        }
+        finally
+        {
+            input.close();
+        }
+    }
+
