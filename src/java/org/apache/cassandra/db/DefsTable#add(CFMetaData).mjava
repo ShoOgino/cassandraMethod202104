@@ -1,38 +1,35 @@
     /** add a column family. */
-    public static synchronized void add(CFMetaData cfm) throws IOException, ConfigurationException
+    public static Future add(final CFMetaData cfm)
     {
-        Table.openLock.lock();
-        try
+        return executor.submit(new WrappedRunnable() 
         {
-            // make sure the ks is real and the cf doesn't already exist.
-            KSMetaData ksm = DatabaseDescriptor.getTableDefinition(cfm.tableName);
-            if (ksm == null)
-                throw new ConfigurationException("Keyspace does not already exist.");
-            else if (ksm.cfMetaData().containsKey(cfm.cfName))
-                throw new ConfigurationException("CF is already defined in that keyspace.");
-
-            // clone ksm but include the new cf def.
-            List<CFMetaData> newCfs = new ArrayList<CFMetaData>(ksm.cfMetaData().values());
-            newCfs.add(cfm);
-            ksm = new KSMetaData(ksm.name, ksm.strategyClass, ksm.replicationFactor, ksm.snitch, newCfs.toArray(new CFMetaData[newCfs.size()]));
-
-            // store it.
-            UUID newVersion = UUIDGen.makeType1UUIDFromHost(FBUtilities.getLocalAddress());
-            RowMutation rm = new RowMutation(Table.DEFINITIONS, newVersion.toString());
-            rm.add(new QueryPath(SCHEMA_CF, null, ksm.name.getBytes()), KSMetaData.serialize(ksm), System.currentTimeMillis());
-            rm.apply();
-
-            // reinitialize the table.
-            DatabaseDescriptor.setTableDefinition(ksm, newVersion);
-            Table.close(ksm.name);
-            Table.open(ksm.name);
-            
-            // force creation of a new commit log segment.
-            CommitLog.instance().forceNewSegment();
-        }
-        finally
-        {
-            Table.openLock.unlock();
-        }
+            protected void runMayThrow() throws Exception
+            {
+                // make sure the ks is real and the cf doesn't already exist.
+                KSMetaData ksm = DatabaseDescriptor.getTableDefinition(cfm.tableName);
+                if (ksm == null)
+                    throw new ConfigurationException("Keyspace does not already exist.");
+                else if (ksm.cfMetaData().containsKey(cfm.cfName))
+                    throw new ConfigurationException("CF is already defined in that keyspace.");
+        
+                // clone ksm but include the new cf def.
+                List<CFMetaData> newCfs = new ArrayList<CFMetaData>(ksm.cfMetaData().values());
+                newCfs.add(cfm);
+                ksm = new KSMetaData(ksm.name, ksm.strategyClass, ksm.replicationFactor, ksm.snitch, newCfs.toArray(new CFMetaData[newCfs.size()]));
+        
+                // store it.
+                UUID newVersion = UUIDGen.makeType1UUIDFromHost(FBUtilities.getLocalAddress());
+                RowMutation rm = new RowMutation(Table.DEFINITIONS, newVersion.toString());
+                rm.add(new QueryPath(SCHEMA_CF, null, ksm.name.getBytes()), KSMetaData.serialize(ksm), System.currentTimeMillis());
+                rm.apply();
+        
+                // reinitialize the table.
+                Table.open(ksm.name).addCf(cfm.cfName);
+                DatabaseDescriptor.setTableDefinition(ksm, newVersion);
+                
+                // force creation of a new commit log segment.
+                CommitLog.instance().forceNewSegment();    
+            }
+        });     
     }
 
