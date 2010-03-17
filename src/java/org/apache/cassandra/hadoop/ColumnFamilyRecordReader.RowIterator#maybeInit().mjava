@@ -1,5 +1,9 @@
         private void maybeInit()
         {
+            // check if we need another batch 
+            if (rows != null && i >= rows.size())
+                rows = null;
+            
             if (rows != null)
                 return;
             TSocket socket = new TSocket(getLocation(),
@@ -14,8 +18,19 @@
             {
                 throw new RuntimeException(e);
             }
-            KeyRange keyRange = new KeyRange(rowCount)
-                                .setStart_token(split.getStartToken())
+            
+            if (startToken == null)
+            {
+                startToken = split.getStartToken();
+            } 
+            else if (startToken.equals(split.getEndToken()))
+            {
+                rows = null;
+                return;
+            }
+            
+            KeyRange keyRange = new KeyRange(batchRowCount)
+                                .setStart_token(startToken)
                                 .setEnd_token(split.getEndToken());
             try
             {
@@ -24,6 +39,21 @@
                                                predicate,
                                                keyRange,
                                                ConsistencyLevel.ONE);
+                    
+                // nothing new? reached the end
+                if (rows.isEmpty())
+                {
+                    rows = null;
+                    return;
+                }
+                               
+                // reset to iterate through this new batch
+                i = 0;
+                
+                // prepare for the next slice to be read
+                KeySlice lastRow = rows.get(rows.size() - 1);
+                IPartitioner p = DatabaseDescriptor.getPartitioner();
+                startToken = p.getTokenFactory().toString(p.getToken(lastRow.getKey()));
             }
             catch (Exception e)
             {
