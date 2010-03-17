@@ -1,7 +1,7 @@
     /**
      * returns the position in the data file to find the given key, or -1 if the key is not present
      */
-    public PositionSize getPosition(DecoratedKey decoratedKey) throws IOException
+    public PositionSize getPosition(DecoratedKey decoratedKey)
     {
         // first, check bloom filter
         if (!bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
@@ -35,18 +35,18 @@
 
         // scan the on-disk index, starting at the nearest sampled position
         long p = sampledPosition.position;
-        FileDataInput input;
-        if (indexBuffers == null)
-        {
-            input = new BufferedRandomAccessFile(indexFilename(), "r");
-            ((BufferedRandomAccessFile)input).seek(p);
-        }
-        else
-        {
-            input = new MappedFileDataInput(indexBuffers[bufferIndex(p)], indexFilename(), (int)(p % BUFFER_SIZE));
-        }
+        FileDataInput input = null;
         try
         {
+            if (indexBuffers == null)
+            {
+                input = new BufferedRandomAccessFile(indexFilename(), "r");
+                ((BufferedRandomAccessFile)input).seek(p);
+            }
+            else
+            {
+                input = new MappedFileDataInput(indexBuffers[bufferIndex(p)], indexFilename(), (int)(p % BUFFER_SIZE));
+            }
             int i = 0;
             do
             {
@@ -83,9 +83,21 @@
                     return null;
             } while  (++i < INDEX_INTERVAL);
         }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
         finally
         {
-            input.close();
+            try
+            {
+                if (input != null)
+                    input.close();
+            }
+            catch (IOException e)
+            {
+                logger.error("error closing file", e);
+            }
         }
         return null;
     }

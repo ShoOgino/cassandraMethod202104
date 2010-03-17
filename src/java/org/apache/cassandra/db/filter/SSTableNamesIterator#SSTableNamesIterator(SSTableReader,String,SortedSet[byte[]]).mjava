@@ -1,15 +1,16 @@
-    public SSTableNamesIterator(SSTableReader ssTable, String key, SortedSet<byte[]> columnNames) throws IOException
+    public SSTableNamesIterator(SSTableReader ssTable, String key, SortedSet<byte[]> columnNames)
     {
         assert columnNames != null;
         this.columns = columnNames;
 
         DecoratedKey decoratedKey = ssTable.getPartitioner().decorateKey(key);
 
-        FileDataInput file = ssTable.getFileDataInput(decoratedKey, DatabaseDescriptor.getIndexedReadBufferSizeInKB() * 1024);
-        if (file == null)
-            return;
+        FileDataInput file = null;
         try
         {
+            file = ssTable.getFileDataInput(decoratedKey, DatabaseDescriptor.getIndexedReadBufferSizeInKB() * 1024);
+            if (file == null)
+                return;
             DecoratedKey keyInDisk = ssTable.getPartitioner().convertFromDiskFormat(file.readUTF());
             assert keyInDisk.equals(decoratedKey) : keyInDisk;
             file.readInt(); // data size
@@ -66,11 +67,22 @@
                 }
             }
         }
+        catch (IOException e)
+        {
+           throw new IOError(e); 
+        }
         finally
         {
-            file.close();
+            try
+            {
+                if (file != null)
+                    file.close();
+            }
+            catch (IOException e)
+            {
+                logger.error("error closing file", e);
+            }
         }
-
         iter = cf.getSortedColumns().iterator();
     }
 
