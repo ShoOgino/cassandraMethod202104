@@ -1,0 +1,41 @@
+    @Test
+    public void dropCf() throws IOException, ExecutionException, InterruptedException
+    {
+        // sanity
+        final KSMetaData ks = DatabaseDescriptor.getTableDefinition("Keyspace1");
+        assert ks != null;
+        final CFMetaData cfm = ks.cfMetaData().get("Standard1");
+        assert cfm != null;
+        
+        // write some data, force a flush, then verify that files exist on disk.
+        RowMutation rm = new RowMutation(ks.name, "dropCf");
+        for (int i = 0; i < 100; i++)
+            rm.add(new QueryPath(cfm.cfName, null, ("col" + i).getBytes()), "anyvalue".getBytes(), 1L);
+        rm.apply();
+        ColumnFamilyStore store = Table.open(cfm.tableName).getColumnFamilyStore(cfm.cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        store.getFlushPath();
+        assert DefsTable.getFiles(cfm.tableName, cfm.cfName).size() > 0;
+        
+        DefsTable.drop(cfm, true).get();
+        
+        assert !DatabaseDescriptor.getTableDefinition(ks.name).cfMetaData().containsKey(cfm.cfName);
+        
+        // any write should fail.
+        rm = new RowMutation(ks.name, "dropCf");
+        try
+        {
+            rm.add(new QueryPath("Standard1", null, "col0".getBytes()), "value0".getBytes(), 1L);
+            rm.apply();
+            assert false : "This mutation should have failed since the CF no longer exists.";
+        }
+        catch (Throwable th)
+        {
+            assert th instanceof IllegalArgumentException;
+        }
+        
+        // verify that the files are gone.
+        assert DefsTable.getFiles(cfm.tableName, cfm.cfName).size() == 0;
+    }    
+
