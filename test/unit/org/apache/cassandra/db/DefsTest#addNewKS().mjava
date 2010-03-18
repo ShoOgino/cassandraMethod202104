@@ -1,0 +1,27 @@
+    @Test
+    public void addNewKS() throws IOException, ExecutionException, InterruptedException
+    {
+        CFMetaData newCf = new CFMetaData("NewKeyspace1", "AddedStandard1", "Standard", new UTF8Type(), null, "A new cf for a new ks", 0, 0);
+        KSMetaData newKs = new KSMetaData(newCf.tableName, RackAwareStrategy.class, 5, new EndPointSnitch(), newCf);
+        
+        int segmentCount = CommitLog.instance().getSegmentCount();
+        DefsTable.add(newKs).get();
+        assert CommitLog.instance().getSegmentCount() == segmentCount + 1;
+        
+        assert DatabaseDescriptor.getTableDefinition(newCf.tableName) != null;
+        assert DatabaseDescriptor.getTableDefinition(newCf.tableName) == newKs;
+
+        // test reads and writes.
+        RowMutation rm = new RowMutation(newCf.tableName, "key0");
+        rm.add(new QueryPath(newCf.cfName, null, "col0".getBytes()), "value0".getBytes(), 1L);
+        rm.apply();
+        ColumnFamilyStore store = Table.open(newCf.tableName).getColumnFamilyStore(newCf.cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        
+        ColumnFamily cfam = store.getColumnFamily(new NamesQueryFilter("key0", new QueryPath(newCf.cfName), "col0".getBytes()));
+        assert cfam.getColumn("col0".getBytes()) != null;
+        IColumn col = cfam.getColumn("col0".getBytes());
+        assert Arrays.equals("value0".getBytes(), col.value());
+    }
+
