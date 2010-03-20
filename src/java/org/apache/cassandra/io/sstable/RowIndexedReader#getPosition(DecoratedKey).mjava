@@ -19,23 +19,19 @@
         }
 
         // next, see if the sampled index says it's impossible for the key to be present
-        KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
+        IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
-        {
             return null;
-        }
 
         // handle exact sampled index hit
-        if (spannedIndexDataPositions != null)
-        {
-            PositionSize info = spannedIndexDataPositions.get(sampledPosition);
-            if (info != null)
-                return info;
-        }
-
-        // scan the on-disk index, starting at the nearest sampled position
-        long p = sampledPosition.position;
-        FileDataInput input = null;
+        PositionSize info = indexSummary.getSpannedPosition(sampledPosition);
+        if (info != null)
+            return info;
+  
+        // get either a buffered or a mmap'd input for the on-disk index
+        long p = sampledPosition.indexPosition;
+        FileDataInput input;
+        int bufferIndex = bufferIndex(p);
         try
         {
             if (indexBuffers == null)
@@ -45,43 +41,44 @@
             }
             else
             {
-                input = new MappedFileDataInput(indexBuffers[bufferIndex(p)], indexFilename(), (int)(p % BUFFER_SIZE));
+                input = new MappedFileDataInput(indexBuffers[bufferIndex], indexFilename(), BUFFER_SIZE * bufferIndex, (int)(p % BUFFER_SIZE));
             }
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+
+        // scan the on-disk index, starting at the nearest sampled position
+        try
+        {
             int i = 0;
             do
             {
-                DecoratedKey indexDecoratedKey;
-                try
+                // if using mmapped i/o, skip to the next mmap buffer if necessary
+                if (input.isEOF() || indexSummary.getSpannedPosition(input.getAbsolutePosition()) != null)
                 {
-                    indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
+                    if (indexBuffers == null || ++bufferIndex == indexBuffers.length)
+                        break;
+                    input = new MappedFileDataInput(indexBuffers[bufferIndex], indexFilename(), BUFFER_SIZE * bufferIndex, 0);
+                    continue;
                 }
-                catch (EOFException e)
-                {
-                    return null;
-                }
-                long position = input.readLong();
+
+                // read key & data position from index entry
+                DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(input.readUTF());
+                long dataPosition = input.readLong();
+
                 int v = indexDecoratedKey.compareTo(decoratedKey);
                 if (v == 0)
                 {
-                    PositionSize info;
-                    if (!input.isEOF())
-                    {
-                        int utflen = input.readUnsignedShort();
-                        if (utflen != input.skipBytes(utflen))
-                            throw new EOFException();
-                        info = new PositionSize(position, input.readLong() - position);
-                    }
-                    else
-                    {
-                        info = new PositionSize(position, length() - position);
-                    }
+                    info = getDataPositionSize(input, dataPosition);
                     if (keyCache != null && keyCache.getCapacity() > 0)
                         keyCache.put(unifiedKey, info);
                     return info;
                 }
                 if (v > 0)
                     return null;
-            } while  (++i < INDEX_INTERVAL);
+            } while  (++i < IndexSummary.INDEX_INTERVAL);
         }
         catch (IOException e)
         {
