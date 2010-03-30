@@ -2,39 +2,42 @@
     {
         // we are querying top-level columns, do a merging fetch with indexes.
         List<ColumnIterator> iterators = new ArrayList<ColumnIterator>();
+        final ColumnFamily returnCF = ColumnFamily.create(table_, columnFamily_);
         try
         {
-            final ColumnFamily returnCF;
             ColumnIterator iter;
 
             /* add the current memtable */
             Table.flusherLock.readLock().lock();
             try
             {
-                iter = filter.getMemColumnIterator(memtable_, getComparator());
-                // TODO this is a little subtle: the Memtable ColumnIterator has to be a shallow clone of the source CF,
-                // with deletion times set correctly, so we can use it as the "base" CF to add query results to.
-                // (for sstable ColumnIterators we do not care if it is a shallow clone or not.)
-                returnCF = iter.getColumnFamily();
+                iter = filter.getMemtableColumnIterator(memtable_, getComparator(), gcBefore);
             }
             finally
             {
                 Table.flusherLock.readLock().unlock();
             }
-            iterators.add(iter);
+            if (iter != null)
+            {
+                returnCF.delete(iter.getColumnFamily());
+                iterators.add(iter);
+            }
 
             /* add the memtables being flushed */
             for (Memtable memtable : getMemtablesPendingFlush())
             {
-                iter = filter.getMemColumnIterator(memtable, getComparator());
-                returnCF.delete(iter.getColumnFamily());
-                iterators.add(iter);
+                iter = filter.getMemtableColumnIterator(memtable, getComparator(), gcBefore);
+                if (iter != null)
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                    iterators.add(iter);
+                }
             }
 
             /* add the SSTables on disk */
             for (SSTableReader sstable : ssTables_)
             {
-                iter = filter.getSSTableColumnIterator(sstable);
+                iter = filter.getSSTableColumnIterator(sstable, gcBefore);
                 if (iter.hasNext()) // initializes iter.CF
                 {
                     returnCF.delete(iter.getColumnFamily());
@@ -48,7 +51,7 @@
                 return null;
 
             filter.collectCollatedColumns(returnCF, collated, gcBefore);
-            return returnCF;
+            return returnCF; // caller is responsible for final removeDeleted
         }
         finally
         {
