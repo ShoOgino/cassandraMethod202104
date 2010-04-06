@@ -1,0 +1,26 @@
+    @Override
+    public void applyModels() throws IOException
+    {
+        KSMetaData ksm = DatabaseDescriptor.getTableDefinition(name);
+        // remove the table from the static instances.
+        Table table = Table.clear(ksm.name);
+        if (table == null)
+            throw new IOException("Table is not active. " + ksm.name);
+        
+        // remove all cfs from the table instance.
+        for (CFMetaData cfm : ksm.cfMetaData().values())
+        {
+            CFMetaData.purge(cfm);
+            table.dropCf(cfm.cfName);
+            SystemTable.markForRemoval(cfm);
+        }
+                        
+        // reset defs.
+        DatabaseDescriptor.clearTableDefinition(ksm, newVersion);
+        CommitLog.instance().forceNewSegment();
+        Migration.cleanupDeadFiles(blockOnFileDeletion);
+        
+        // clear up any local hinted data for this keyspace.
+        HintedHandOffManager.renameHints(name, null);
+    }
+

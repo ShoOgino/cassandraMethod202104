@@ -1,0 +1,43 @@
+    /** apply changes */
+    public final void apply() throws IOException
+    {
+        // ensure migration is serial. don't apply unless the previous version matches.
+        if (!DatabaseDescriptor.getDefsVersion().equals(lastVersion))
+            throw new IOException("Previous version mismatch. cannot apply.");
+        // write to schema
+        assert rm != null;
+        rm.apply();
+        
+        // write migration.
+        long now = System.currentTimeMillis();
+        byte[] buf = getBytes();
+        RowMutation migration = new RowMutation(Table.DEFINITIONS, MIGRATIONS_KEY);
+        migration.add(new QueryPath(MIGRATIONS_CF, null, UUIDGen.decompose(newVersion)), buf, now);
+        migration.apply();
+        
+        // note that we storing this in the system table, which is not replicated, instead of the definitions table, which is.
+        logger.debug("Applying migration " + newVersion.toString());
+        migration = new RowMutation(Table.DEFINITIONS, LAST_MIGRATION_KEY);
+        migration.add(new QueryPath(SCHEMA_CF, null, LAST_MIGRATION_KEY.getBytes()), UUIDGen.decompose(newVersion), now);
+        migration.apply();
+        
+        // flush changes out of memtables so we don't need to rely on the commit log.
+        for (Future f : Table.open(Table.DEFINITIONS).flush())
+        {
+            try
+            {
+                f.get();
+            }
+            catch (InterruptedException e)
+            {
+                throw new IOException(e);
+            }
+            catch (ExecutionException e)
+            {
+                throw new IOException(e);
+            }
+        }
+        
+        applyModels(); 
+    }
+

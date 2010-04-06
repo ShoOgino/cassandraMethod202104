@@ -1,0 +1,53 @@
+    @Test
+    public void testMigrations() throws IOException, ConfigurationException
+    {
+        // do a save. make sure it doesn't mess with the defs version.
+        assert DatabaseDescriptor.getDefsVersion() == null;
+        UUID ver0 = UUIDGen.makeType1UUIDFromHost(FBUtilities.getLocalAddress());
+        DefsTable.dumpToStorage(ver0);
+        assert DatabaseDescriptor.getDefsVersion() == null;
+        
+        // add a cf.
+        CFMetaData newCf1 = new CFMetaData("Keyspace1", "MigrationCf_1", "Standard", new UTF8Type(), null, "Migration CF ", 0, 0);
+        Migration m1 = new AddColumnFamily(newCf1);
+        m1.apply();
+        UUID ver1 = m1.getVersion();
+        assert DatabaseDescriptor.getDefsVersion().equals(ver1);
+        
+        // rename it.
+        Migration m2 = new RenameColumnFamily("Keyspace1", "MigrationCf_1", "MigrationCf_2");
+        m2.apply();
+        UUID ver2 = m2.getVersion();
+        assert DatabaseDescriptor.getDefsVersion().equals(ver2);
+        
+        // drop it.
+        Migration m3 = new DropColumnFamily("Keyspace1", "MigrationCf_2", true);
+        m3.apply();
+        UUID ver3 = m3.getVersion();
+        assert DatabaseDescriptor.getDefsVersion().equals(ver3);
+        
+        // now lets load the older migrations to see if that code works.
+        Collection<IColumn> serializedMigrations = Migration.getLocalMigrations(ver1, ver3);
+        assert serializedMigrations.size() == 3;
+        
+        // test deserialization of the migrations.
+        Migration[] reconstituded = new Migration[3];
+        int i = 0;
+        for (IColumn col : serializedMigrations)
+        {
+            UUID version = UUIDGen.makeType1UUID(col.name());
+            reconstituded[i] = Migration.deserialize(new ByteArrayInputStream(col.value()));
+            assert version.equals(reconstituded[i].getVersion());
+            i++;
+        }
+        
+        assert m1.getClass().equals(reconstituded[0].getClass());
+        assert m2.getClass().equals(reconstituded[1].getClass());
+        assert m3.getClass().equals(reconstituded[2].getClass());
+        
+        // verify that the row mutations are the same. rather than exposing the private fields, serialize and verify.
+        assert Arrays.equals(getBytes(m1), getBytes(reconstituded[0]));
+        assert Arrays.equals(getBytes(m2), getBytes(reconstituded[1]));
+        assert Arrays.equals(getBytes(m3), getBytes(reconstituded[2]));
+    }
+

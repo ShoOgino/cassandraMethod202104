@@ -1,0 +1,20 @@
+    @Override
+    public void applyModels() throws IOException
+    {
+        // reinitialize the table.
+        KSMetaData existing = DatabaseDescriptor.getTableDefinition(tableName);
+        CFMetaData cfm = existing.cfMetaData().get(cfName);
+        KSMetaData ksm = makeNewKeyspaceDefinition(existing);
+        CFMetaData.purge(cfm);
+        DatabaseDescriptor.setTableDefinition(ksm, newVersion);
+        Table.open(ksm.name).dropCf(cfm.cfName);
+        
+        // indicate that some files need to be deleted (eventually)
+        SystemTable.markForRemoval(cfm);
+        
+        // we don't really need a new segment, but let's force it to be consistent with other operations.
+        CommitLog.instance().forceNewSegment();
+
+        Migration.cleanupDeadFiles(blockOnFileDeletion);   
+    }
+
