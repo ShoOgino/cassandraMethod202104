@@ -1,5 +1,28 @@
     public void system_rename_column_family(String keyspace, String old_name, String new_name) throws InvalidRequestException, TException
     {
         checkLoginAuthorized(AccessLevel.FULL);
+        
+        // if there is anything going on in the migration stage, fail.
+        if (StageManager.getStage(StageManager.MIGRATION_STAGE).getQueue().size() > 0)
+            throw new InvalidRequestException("This node appears to be handling gossiped migrations.");
+
+        try
+        {
+            RenameColumnFamily rename = new RenameColumnFamily(keyspace, old_name, new_name);
+            rename.apply();
+            rename.announce();
+        }
+        catch (ConfigurationException e)
+        {
+            InvalidRequestException ex = new InvalidRequestException(e.getMessage());
+            ex.initCause(e);
+            throw ex;
+        }
+        catch (IOException e)
+        {
+            InvalidRequestException ex = new InvalidRequestException(e.getMessage());
+            ex.initCause(e);
+            throw ex;
+        }
     }
 
