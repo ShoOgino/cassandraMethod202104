@@ -1,0 +1,40 @@
+    /** someone sent me their data definitions */
+    public void doVerb(final Message message)
+    {
+        try
+        {
+            // these are the serialized row mutations that I must apply.
+            // check versions at every step along the way to make sure migrations are not applied out of order.
+            Collection<Column> cols = MigrationManager.makeColumns(message);
+            for (Column col : cols)
+            {
+                final UUID version = UUIDGen.makeType1UUID(col.name());
+                if (version.timestamp() > DatabaseDescriptor.getDefsVersion().timestamp())
+                {
+                    final Migration m = Migration.deserialize(new ByteArrayInputStream(col.value()));
+                    assert m.getVersion().equals(version);
+                    StageManager.getStage(StageManager.MIGRATION_STAGE).submit(new WrappedRunnable()
+                    {
+                        @Override
+                        protected void runMayThrow() throws Exception
+                        {
+                            // check to make sure the current version is before this one.
+                            if (DatabaseDescriptor.getDefsVersion().timestamp() >= version.timestamp())
+                                logger.debug("Not applying " + version.toString());
+                            else
+                            {
+                                logger.debug("Applying {} from {}", m.getClass().getSimpleName(), message.getFrom());
+                                m.apply();
+                                m.announce();
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        catch (IOException ex)
+        {
+            throw new IOError(ex);
+        }
+    }
+
