@@ -1,0 +1,35 @@
+    public static void loadSchemas() throws IOException
+    {
+        // we can load tables from local storage if a version is set in the system table and that acutally maps to
+        // real data in the definitions table.  If we do end up loading from xml, store the defintions so that we
+        // don't load from xml anymore.
+        UUID uuid = Migration.getLastMigrationId();
+        if (uuid == null)
+            logger.warn("Couldn't detect any schema definitions in local storage. I hope you've got a plan.");
+        else
+        {
+            logger.info("Loading schema version " + uuid.toString());
+            Collection<KSMetaData> tableDefs = DefsTable.loadFromStorage(uuid);   
+            for (KSMetaData def : tableDefs)
+            {
+                DatabaseDescriptor.setTableDefinition(def, uuid);
+                // this part creates storage and jmx objects.
+                Table.open(def.name);
+            }
+            
+            // since we loaded definitions from local storage, log a warning if definitions exist in xml.
+            try
+            {
+                XMLUtils xmlUtils = new XMLUtils(configFileName);
+                NodeList tablesxml = xmlUtils.getRequestedNodeList("/Storage/Keyspaces/Keyspace");
+                if (tablesxml.getLength() > 0)
+                    logger.warn("Schema definitions were defined both locally and in storage-conf.xml. Definitions in storage-conf.xml were ignored.");
+            }
+            catch (Exception ex)
+            {
+                logger.warn("Problem checking for schema defintions in xml", ex);
+            }
+        }
+        CFMetaData.fixMaxId();
+    }
+

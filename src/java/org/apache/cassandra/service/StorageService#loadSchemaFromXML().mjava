@@ -1,0 +1,33 @@
+    /**
+     * load schema from xml. This can only be done on a fresh system.
+     * @throws ConfigurationException
+     * @throws IOException
+     */
+    public void loadSchemaFromXML() throws ConfigurationException, IOException
+    {
+        // blow up if there is a schema saved.
+        if (DatabaseDescriptor.getDefsVersion().timestamp() > 0 || Migration.getLastMigrationId() != null)
+            throw new ConfigurationException("Cannot load from XML on top of pre-existing schemas.");
+        DatabaseDescriptor.readTablesFromXml();
+        assert DatabaseDescriptor.getDefsVersion().timestamp() > 0;
+        DefsTable.dumpToStorage(DatabaseDescriptor.getDefsVersion());
+        // flush system and definition tables.
+        Collection<Future> flushers = new ArrayList<Future>();
+        flushers.addAll(Table.open(Table.SYSTEM_TABLE).flush());
+        flushers.addAll(Table.open(Table.DEFINITIONS).flush());
+        for (Future f : flushers)
+        {
+            try
+            {
+                f.get();
+            }
+            catch (Exception e)
+            {
+                ConfigurationException ce = new ConfigurationException(e.getMessage());
+                ce.initCause(e);
+                throw ce;
+            }
+        }
+        
+    }
+
