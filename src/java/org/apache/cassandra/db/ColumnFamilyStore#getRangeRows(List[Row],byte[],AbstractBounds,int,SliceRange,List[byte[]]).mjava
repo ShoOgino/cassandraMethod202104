@@ -1,0 +1,71 @@
+    /**
+      * Fetch a range of rows and columns from memtables/sstables.
+      * 
+      * @param rows The resulting rows fetched during this operation 
+      * @param superColumn Super column to filter by
+      * @param range Either a Bounds, which includes start key, or a Range, which does not.
+      * @param maxResults Maximum rows to return
+      * @param sliceRange Information on how to slice columns
+      * @param columnNames Column names to filter by 
+      * @return true if we found all keys we were looking for, otherwise false
+     */
+    private boolean getRangeRows(List<Row> rows, byte[] superColumn, final AbstractBounds range, int maxResults, SliceRange sliceRange, List<byte[]> columnNames)
+    throws ExecutionException, InterruptedException
+    {
+        final DecoratedKey startWith = new DecoratedKey(range.left, null);
+        final DecoratedKey stopAt = new DecoratedKey(range.right, null);
+        
+        final int gcBefore = CompactionManager.getDefaultGCBefore();
+
+        final QueryPath queryPath =  new QueryPath(columnFamily_, superColumn, null);
+        final SortedSet<byte[]> columnNameSet = new TreeSet<byte[]>(getComparator());
+        if (columnNames != null)
+            columnNameSet.addAll(columnNames);
+
+        final QueryFilter filter = sliceRange == null ? QueryFilter.getNamesFilter(null, queryPath, columnNameSet)
+                                                      : QueryFilter.getSliceFilter(null, queryPath, sliceRange.start, sliceRange.finish, sliceRange.bitmasks, sliceRange.reversed, sliceRange.count);
+
+        Collection<Memtable> memtables = new ArrayList<Memtable>(memtablesPendingFlush);
+
+        Collection<SSTableReader> sstables = new ArrayList<SSTableReader>();
+        Iterables.addAll(sstables, ssTables_);
+
+        RowIterator iterator = RowIteratorFactory.getIterator(memtable_, memtables, sstables, startWith, stopAt, filter, getComparator(), gcBefore);
+
+        try
+        {
+            // pull rows out of the iterator
+            boolean first = true;
+            IPartitioner partitioner = StorageService.getPartitioner(); 
+            while(iterator.hasNext())
+            {
+                Row current = iterator.next();
+            	// TODO store decoratedkey in row?
+                DecoratedKey key = partitioner.decorateKey(current.key);
+
+                if (!stopAt.isEmpty() && stopAt.compareTo(key) < 0)
+                    return true;
+
+                // skip first one
+                if(range instanceof Bounds || !first || !key.equals(startWith))
+                    rows.add(current);
+                first = false;
+
+                if (rows.size() >= maxResults)
+                    return true;
+            }
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                iterator.close();
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+        }
+    }
+

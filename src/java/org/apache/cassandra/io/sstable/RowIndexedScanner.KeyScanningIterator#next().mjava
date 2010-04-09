@@ -1,11 +1,24 @@
-        public IteratingRow next()
+        public IColumnIterator next()
         {
             try
             {
                 if (row != null)
-                    row.skipRemaining();
+                    file.seek(finishedAt);
                 assert !file.isEOF();
-                return row = new IteratingRow(file, sstable);
+
+                DecoratedKey key = StorageService.getPartitioner().convertFromDiskFormat(file.readUTF());
+                int dataSize = file.readInt();
+                dataStart = file.getFilePointer();
+                finishedAt = dataStart + dataSize;
+
+                if (filter == null)
+                {
+                    return row = new SSTableIdentityIterator(sstable, file, key, dataStart, finishedAt);
+                }
+                else
+                {
+                    return row = filter.getSSTableColumnIterator(sstable, file, key, dataStart);
+                }
             }
             catch (IOException e)
             {

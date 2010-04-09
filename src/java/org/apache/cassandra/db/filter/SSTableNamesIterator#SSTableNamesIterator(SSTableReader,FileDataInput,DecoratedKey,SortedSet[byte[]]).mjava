@@ -1,0 +1,41 @@
+    public SSTableNamesIterator(SSTableReader ssTable, FileDataInput file, DecoratedKey key, SortedSet<byte[]> columnNames)
+    {
+        assert columnNames != null;
+
+        this.columns = columnNames;
+        this.decoratedKey = key;
+
+        if (file == null)
+        {
+            try
+            {
+                file = ssTable.getFileDataInput(decoratedKey, DatabaseDescriptor.getIndexedReadBufferSizeInKB() * 1024);
+                if (file == null)
+                    return;
+                DecoratedKey keyInDisk = ssTable.getPartitioner().convertFromDiskFormat(file.readUTF());
+                assert keyInDisk.equals(decoratedKey)
+                       : String.format("%s != %s in %s", keyInDisk, decoratedKey, file.getPath());
+                file.readInt(); // data size
+            }
+            catch (IOException e)
+            {
+               throw new IOError(e);
+            }
+        }
+
+        try
+        {
+            List<byte[]> filteredColumnNames = getFilteredColumns(file, columnNames);
+            if (filteredColumnNames.isEmpty())
+                return;
+
+            getColumns(ssTable, file, columnNames, filteredColumnNames);
+        }
+        catch (IOException e)
+        {
+           throw new IOError(e); 
+        }
+        
+        iter = cf.getSortedColumns().iterator();
+    }
+

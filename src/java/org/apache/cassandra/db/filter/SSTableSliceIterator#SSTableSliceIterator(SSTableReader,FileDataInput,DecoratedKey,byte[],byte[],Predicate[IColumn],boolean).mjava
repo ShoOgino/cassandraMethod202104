@@ -1,0 +1,30 @@
+    public SSTableSliceIterator(SSTableReader ssTable, FileDataInput file, DecoratedKey key, byte[] startColumn, byte[] finishColumn, Predicate<IColumn> predicate, boolean reversed) 
+    {
+        this.reversed = reversed;
+        this.predicate = predicate;
+        this.comparator = ssTable.getColumnComparator();
+        this.startColumn = startColumn;
+        this.finishColumn = finishColumn;
+        this.decoratedKey = key;
+
+        if (file == null)
+        {
+            file = ssTable.getFileDataInput(decoratedKey, DatabaseDescriptor.getSlicedReadBufferSizeInKB() * 1024);
+            if (file == null)
+                return;
+            try
+            {
+                DecoratedKey keyInDisk = ssTable.getPartitioner().convertFromDiskFormat(file.readUTF());
+                assert keyInDisk.equals(decoratedKey)
+                       : String.format("%s != %s in %s", keyInDisk, decoratedKey, file.getPath());
+                file.readInt(); // row size
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+        }
+
+        reader = new ColumnGroupReader(ssTable, file);
+    }
+

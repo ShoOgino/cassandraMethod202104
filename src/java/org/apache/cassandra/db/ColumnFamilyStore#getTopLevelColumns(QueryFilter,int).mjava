@@ -1,17 +1,17 @@
     private ColumnFamily getTopLevelColumns(QueryFilter filter, int gcBefore)
     {
         // we are querying top-level columns, do a merging fetch with indexes.
-        List<ColumnIterator> iterators = new ArrayList<ColumnIterator>();
+        List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
         final ColumnFamily returnCF = ColumnFamily.create(table_, columnFamily_);
         try
         {
-            ColumnIterator iter;
+            IColumnIterator iter;
 
             /* add the current memtable */
             Table.flusherLock.readLock().lock();
             try
             {
-                iter = filter.getMemtableColumnIterator(memtable_, getComparator(), gcBefore);
+                iter = filter.getMemtableColumnIterator(memtable_, getComparator());
             }
             finally
             {
@@ -26,7 +26,7 @@
             /* add the memtables being flushed */
             for (Memtable memtable : getMemtablesPendingFlush())
             {
-                iter = filter.getMemtableColumnIterator(memtable, getComparator(), gcBefore);
+                iter = filter.getMemtableColumnIterator(memtable, getComparator());
                 if (iter != null)
                 {
                     returnCF.delete(iter.getColumnFamily());
@@ -37,7 +37,7 @@
             /* add the SSTables on disk */
             for (SSTableReader sstable : ssTables_)
             {
-                iter = filter.getSSTableColumnIterator(sstable, gcBefore);
+                iter = filter.getSSTableColumnIterator(sstable);
                 if (iter.hasNext()) // initializes iter.CF
                 {
                     returnCF.delete(iter.getColumnFamily());
@@ -53,10 +53,14 @@
             filter.collectCollatedColumns(returnCF, collated, gcBefore);
             return returnCF; // caller is responsible for final removeDeleted
         }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
         finally
         {
             /* close all cursors */
-            for (ColumnIterator ci : iterators)
+            for (IColumnIterator ci : iterators)
             {
                 try
                 {
