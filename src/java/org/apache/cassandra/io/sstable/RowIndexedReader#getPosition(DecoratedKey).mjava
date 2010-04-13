@@ -23,15 +23,9 @@
         if (sampledPosition == null)
             return null;
 
-        // handle exact sampled index hit
-        PositionSize info = indexSummary.getSpannedPosition(sampledPosition);
-        if (info != null)
-            return info;
-  
         // get either a buffered or a mmap'd input for the on-disk index
         long p = sampledPosition.indexPosition;
         FileDataInput input;
-        int bufferIndex = bufferIndex(p);
         try
         {
             if (indexBuffers == null)
@@ -41,7 +35,7 @@
             }
             else
             {
-                input = new MappedFileDataInput(indexBuffers[bufferIndex], indexFilename(), BUFFER_SIZE * bufferIndex, (int)(p % BUFFER_SIZE));
+                input = indexInputAt(p);
             }
         }
         catch (IOException e)
@@ -55,12 +49,33 @@
             int i = 0;
             do
             {
+                // handle exact sampled index hit
+                IndexSummary.KeyPosition kp = indexSummary.getSpannedIndexPosition(input.getAbsolutePosition());
+                if (kp != null && kp.key.equals(decoratedKey))
+                    return indexSummary.getSpannedDataPosition(kp);
+
                 // if using mmapped i/o, skip to the next mmap buffer if necessary
-                if (input.isEOF() || indexSummary.getSpannedPosition(input.getAbsolutePosition()) != null)
+                if (input.isEOF() || kp != null)
                 {
-                    if (indexBuffers == null || ++bufferIndex == indexBuffers.length)
+                    if (indexBuffers == null) // not mmap-ing, just one index input
                         break;
-                    input = new MappedFileDataInput(indexBuffers[bufferIndex], indexFilename(), BUFFER_SIZE * bufferIndex, 0);
+
+                    FileDataInput oldInput = input;
+                    if (kp == null)
+                    {
+                        input = indexInputAt(input.getAbsolutePosition());
+                    }
+                    else
+                    {
+                        long nextUnspannedPostion = input.getAbsolutePosition()
+                                                    + 2 + FBUtilities.encodedUTF8Length(StorageService.getPartitioner().convertToDiskFormat(kp.key))
+                                                    + 8;
+                        input = indexInputAt(nextUnspannedPostion);
+                    }
+                    oldInput.close();
+                    if (input == null)
+                        break;
+
                     continue;
                 }
 
@@ -71,7 +86,7 @@
                 int v = indexDecoratedKey.compareTo(decoratedKey);
                 if (v == 0)
                 {
-                    info = getDataPositionSize(input, dataPosition);
+                    PositionSize info = getDataPositionSize(input, dataPosition);
                     if (keyCache != null && keyCache.getCapacity() > 0)
                         keyCache.put(unifiedKey, info);
                     return info;
