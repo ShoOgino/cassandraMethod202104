@@ -1,10 +1,19 @@
-    void loadIndexFile() throws IOException
+    /**
+     * @param recreatebloom If true, rebuild the bloom filter based on keys from the index.
+     */
+    void loadIndexFile(boolean recreatebloom) throws IOException
     {
+
         // we read the positions in a BRAF so we don't have to worry about an entry spanning a mmap boundary.
         // any entries that do, we force into the in-memory sample so key lookup can always bsearch within
         // a single mmapped segment.
         indexSummary = new IndexSummary();
         BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(), "r");
+        if (recreatebloom)
+        {
+            // estimate key count based on index length
+            bf = BloomFilter.getFilter((int)(input.length() / 32), 15);
+        }
         try
         {
             long indexSize = input.length();
@@ -16,6 +25,10 @@
                     break;
                 }
                 DecoratedKey decoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                if (recreatebloom)
+                {
+                    bf.add(decoratedKey.key);
+                }
                 long dataPosition = input.readLong();
                 long nextIndexPosition = input.getFilePointer();
                 // read the next index entry to see how big the row is
