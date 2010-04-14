@@ -1,13 +1,14 @@
     @Test
     public void renameCf() throws ConfigurationException, IOException, ExecutionException, InterruptedException
     {
+        DecoratedKey dk = Util.dk("key0");
         final KSMetaData ks = DatabaseDescriptor.getTableDefinition("Keyspace2");
         assert ks != null;
         final CFMetaData oldCfm = ks.cfMetaData().get("Standard1");
         assert oldCfm != null;
         
         // write some data, force a flush, then verify that files exist on disk.
-        RowMutation rm = new RowMutation(ks.name, "key0");
+        RowMutation rm = new RowMutation(ks.name, dk.key);
         for (int i = 0; i < 100; i++)
             rm.add(new QueryPath(oldCfm.cfName, null, ("col" + i).getBytes()), "anyvalue".getBytes(), 1L);
         rm.apply();
@@ -29,16 +30,16 @@
         // do some reads.
         store = Table.open(oldCfm.tableName).getColumnFamilyStore(cfName);
         assert store != null;
-        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getSliceFilter("key0", new QueryPath(cfName), "".getBytes(), "".getBytes(), null, false, 1000));
+        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getSliceFilter(dk, new QueryPath(cfName), "".getBytes(), "".getBytes(), null, false, 1000));
         assert cfam.getSortedColumns().size() == 100; // should be good enough?
         
         // do some writes
-        rm = new RowMutation(ks.name, "key0");
+        rm = new RowMutation(ks.name, dk.key);
         rm.add(new QueryPath(cfName, null, "col5".getBytes()), "updated".getBytes(), 2L);
         rm.apply();
         store.forceBlockingFlush();
         
-        cfam = store.getColumnFamily(QueryFilter.getNamesFilter("key0", new QueryPath(cfName), "col5".getBytes()));
+        cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(cfName), "col5".getBytes()));
         assert cfam.getColumnCount() == 1;
         assert Arrays.equals(cfam.getColumn("col5".getBytes()).value(), "updated".getBytes());
     }
