@@ -1,0 +1,41 @@
+    public void refreshEndpointMap()
+    {
+        for (String seed : seeds_)
+        {
+            try
+            {
+                TSocket socket = new TSocket(seed, port_);
+                TBinaryProtocol binaryProtocol = new TBinaryProtocol(socket, false, false);
+                Cassandra.Client client = new Cassandra.Client(binaryProtocol);
+                socket.open();
+
+                List<TokenRange> ring = client.describe_ring(keyspace);
+                BiMap<Token, InetAddress> tokenEndpointMap = HashBiMap.create();
+                
+                for (TokenRange range : ring)
+                {
+                    Token<?> token = StorageService.getPartitioner().getTokenFactory().fromString(range.start_token);
+                    String host = range.endpoints.get(0);
+                    
+                    try
+                    {
+                        tokenEndpointMap.put(token, InetAddress.getByName(host));
+                    }
+                    catch (UnknownHostException e)
+                    {
+                        throw new AssertionError(e); // host strings are IPs
+                    }
+                }
+
+                tokenMetadata = new TokenMetadata(tokenEndpointMap);
+
+                break;
+            }
+            catch (TException e)
+            {
+                /* let the Exception go and try another seed. log this though */
+                logger_.debug("Error contacting seed " + seed + " " + e.getMessage());
+            }
+        }
+    }
+
