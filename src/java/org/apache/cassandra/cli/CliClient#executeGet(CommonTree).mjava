@@ -1,7 +1,7 @@
     // Execute GET statement
     private void executeGet(CommonTree ast) throws TException, NotFoundException, InvalidRequestException, UnavailableException, TimedOutException, UnsupportedEncodingException, IllegalAccessException, InstantiationException, ClassNotFoundException
     {
-        if (!CliMain.isConnected())
+        if (!CliMain.isConnected() || !hasKeySpace())
             return;
 
         // This will never happen unless the grammar is broken
@@ -10,18 +10,17 @@
         CommonTree columnFamilySpec = (CommonTree)ast.getChild(0);
         assert(columnFamilySpec.getType() == CliParser.NODE_COLUMN_ACCESS);
 
-        String tableName = CliCompiler.getTableName(columnFamilySpec);
         String key = CliCompiler.getKey(columnFamilySpec);
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec); 
         
-        if (!(getCFMetaData(tableName).containsKey(columnFamily)))
+        if (!(keyspacesMap.get(keySpace).containsKey(columnFamily)))
         {
             css_.out.println("No such column family: " + columnFamily);
             return;
         }
         
-        boolean isSuper = getCFMetaData(tableName).get(columnFamily).get("Type").equals("Super") ? true : false;
+        boolean isSuper = keyspacesMap.get(keySpace).get(columnFamily).get("Type").equals("Super") ? true : false;
         
         byte[] superColumnName = null;
         byte[] columnName = null;
@@ -29,7 +28,7 @@
         // table.cf['key'] -- row slice
         if (columnSpecCnt == 0)
         {
-            doSlice(tableName, key, columnFamily, superColumnName);
+            doSlice(keySpace, key, columnFamily, superColumnName);
             return;
         }
         
@@ -39,7 +38,7 @@
             if (isSuper)
             {
                 superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes("UTF-8");
-                doSlice(tableName, key, columnFamily, superColumnName);
+                doSlice(keySpace, key, columnFamily, superColumnName);
                 return;
             }
             else
@@ -62,8 +61,8 @@
         
         // Perform a get(), print out the results.
         ColumnPath path = new ColumnPath(columnFamily).setSuper_column(superColumnName).setColumn(columnName);
-        Column column = thriftClient_.get(tableName, key.getBytes(), path, ConsistencyLevel.ONE).column;
-        css_.out.printf("=> (column=%s, value=%s, timestamp=%d)\n", formatColumnName(tableName, columnFamily, column),
+        Column column = thriftClient_.get(key.getBytes(), path, ConsistencyLevel.ONE).column;
+        css_.out.printf("=> (column=%s, value=%s, timestamp=%d)\n", formatColumnName(keySpace, columnFamily, column),
                         new String(column.value, "UTF-8"), column.timestamp);
     }
 
