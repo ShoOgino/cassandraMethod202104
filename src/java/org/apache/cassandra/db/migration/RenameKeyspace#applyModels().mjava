@@ -5,7 +5,22 @@
             renameKsStorageFiles(oldName, newName);
         
         KSMetaData oldKsm = DatabaseDescriptor.getTableDefinition(oldName);
-        KSMetaData newKsm = KSMetaData.rename(oldKsm, newName, true);
+        for (CFMetaData cfm : oldKsm.cfMetaData().values())
+            CFMetaData.purge(cfm);
+        KSMetaData newKsm = rename(oldKsm, newName, true);
+        for (CFMetaData cfm : newKsm.cfMetaData().values())
+        {
+            try
+            {
+                CFMetaData.map(cfm);
+            }
+            catch (ConfigurationException ex)
+            {
+                // throwing RTE since this this means that the table,cf already maps to a different ID, which it can't
+                // since we've already checked for an existing table with the same name.
+                throw new RuntimeException(ex);
+            }
+        }
         // ^^ at this point, the static methods in CFMetaData will start returning references to the new table, so
         // it helps if the node is reasonably quiescent with respect to this ks.
         DatabaseDescriptor.clearTableDefinition(oldKsm, newVersion);
