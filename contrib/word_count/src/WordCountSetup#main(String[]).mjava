@@ -1,44 +1,34 @@
     public static void main(String[] args) throws Exception
     {
-        StorageService.instance.initClient();
-        logger.info("Sleeping " + WordCount.RING_DELAY);
-        Thread.sleep(WordCount.RING_DELAY);
-        assert !StorageService.instance.getLiveNodes().isEmpty();
+        Cassandra.Iface client = createConnection();
 
-        RowMutation rm;
-        ColumnFamily cf;
-        byte[] columnName;
+        setupKeyspace(client);
 
-        // text0: no rows
+        client.set_keyspace(WordCount.KEYSPACE);
+
+        Map<byte[], Map<String,List<Mutation>>> mutationMap;
+        Column c;
 
         // text1: 1 row, 1 word
-        columnName = "text1".getBytes();
-        rm = new RowMutation(WordCount.KEYSPACE, "Key0".getBytes());
-        cf = ColumnFamily.create(WordCount.KEYSPACE, WordCount.COLUMN_FAMILY);
-        cf.addColumn(new Column(columnName, "word1".getBytes(), 0));
-        rm.add(cf);
-        StorageProxy.mutateBlocking(Arrays.asList(rm), ConsistencyLevel.ONE);
+        c = new Column("text1".getBytes(), "word1".getBytes(), System.currentTimeMillis());
+        mutationMap = getMutationMap("key0".getBytes(), WordCount.COLUMN_FAMILY, c);
+        client.batch_mutate(mutationMap, ConsistencyLevel.ONE);
         logger.info("added text1");
 
-        // text2: 1 row, 2 words
-        columnName = "text2".getBytes();
-        rm = new RowMutation(WordCount.KEYSPACE, "Key0".getBytes());
-        cf = ColumnFamily.create(WordCount.KEYSPACE, WordCount.COLUMN_FAMILY);
-        cf.addColumn(new Column(columnName, "word1 word2".getBytes(), 0));
-        rm.add(cf);
-        StorageProxy.mutateBlocking(Arrays.asList(rm), ConsistencyLevel.ONE);
+        // text1: 1 row, 2 word
+        c = new Column("text2".getBytes(), "word1 word2".getBytes(), System.currentTimeMillis());
+        mutationMap = getMutationMap("key0".getBytes(), WordCount.COLUMN_FAMILY, c);
+        client.batch_mutate(mutationMap, ConsistencyLevel.ONE);
         logger.info("added text2");
 
         // text3: 1000 rows, 1 word
-        columnName = "text3".getBytes();
-        for (int i = 0; i < 1000; i++)
+        mutationMap = new HashMap<byte[],Map<String,List<Mutation>>>();
+        for (int i=0; i<1000; i++)
         {
-            rm = new RowMutation(WordCount.KEYSPACE, ("Key" + i).getBytes());
-            cf = ColumnFamily.create(WordCount.KEYSPACE, WordCount.COLUMN_FAMILY);
-            cf.addColumn(new Column(columnName, "word1".getBytes(), 0));
-            rm.add(cf);
-            StorageProxy.mutateBlocking(Arrays.asList(rm), ConsistencyLevel.ONE);
+            c = new Column("text3".getBytes(), "word1".getBytes(), System.currentTimeMillis());
+            addToMutationMap(mutationMap, ("key" + i).getBytes(), WordCount.COLUMN_FAMILY, c);
         }
+        client.batch_mutate(mutationMap, ConsistencyLevel.ONE);
         logger.info("added text3");
 
         System.exit(0);
