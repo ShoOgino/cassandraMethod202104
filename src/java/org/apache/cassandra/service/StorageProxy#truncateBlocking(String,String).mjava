@@ -1,0 +1,37 @@
+    /**
+     * Performs the truncate operatoin, which effectively deletes all data from
+     * the column family cfname
+     * @param keyspace
+     * @param cfname
+     * @throws UnavailableException If some of the hosts in the ring are down.
+     * @throws TimeoutException
+     * @throws IOException
+     */
+    public static void truncateBlocking(String keyspace, String cfname) throws UnavailableException, TimeoutException, IOException
+    {
+        logger.debug("Starting a blocking truncate operation on keyspace {}, CF ", keyspace, cfname);
+        if (isAnyHostDown())
+        {
+            logger.info("Cannot perform truncate, some hosts are down");
+            // Since the truncate operation is so aggressive and is typically only
+            // invoked by an admin, for simplicity we require that all nodes are up
+            // to perform the operation.
+            throw new UnavailableException();
+        }
+
+        Set<InetAddress> allEndpoints = Gossiper.instance.getLiveMembers();
+        int blockFor = allEndpoints.size();
+        allEndpoints.remove(FBUtilities.getLocalAddress());
+        final TruncateResponseHandler responseHandler = new TruncateResponseHandler(blockFor, keyspace);
+
+        // Send out the truncate calls and track the responses with the callbacks.
+        logger.debug("Starting to send truncate messages to hosts {}", allEndpoints);
+        truncateLocal(keyspace, cfname, responseHandler);
+        truncateRemotes(keyspace, cfname, allEndpoints, responseHandler);
+
+        // Wait for all
+        logger.debug("Sent all truncate messages, now waiting for {} responses", blockFor);
+        responseHandler.get();
+        logger.debug("truncate done");
+    }
+

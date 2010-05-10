@@ -1,0 +1,26 @@
+    public SSTableReader closeAndOpenReader(long maxDataAge) throws IOException
+    {
+        // bloom filter
+        FileOutputStream fos = new FileOutputStream(filterFilename());
+        DataOutputStream stream = new DataOutputStream(fos);
+        BloomFilter.serializer().serialize(bf, stream);
+        stream.flush();
+        fos.getFD().sync();
+        stream.close();
+
+        // index
+        indexFile.getChannel().force(true);
+        indexFile.close();
+
+        // main data
+        dataFile.close(); // calls force
+
+        Descriptor newdesc = desc.asTemporary(false);
+        rename(indexFilename());
+        rename(filterFilename());
+        rename(getFilename());
+
+        indexSummary.complete();
+        return new RowIndexedReader(newdesc, partitioner, indexSummary, bf, maxDataAge);
+    }
+
