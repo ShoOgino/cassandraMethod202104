@@ -12,7 +12,7 @@
      *     D, but we don't want any other results from it until after the (D, T] range.  Unwrapping so that
      *     the ranges we consider are (D, T], (T, MIN], (MIN, D] fixes this.
      */
-    private static List<Pair<AbstractBounds, List<InetAddress>>> getRestrictedRanges(AbstractBounds queryRange, String keyspace)
+    private static List<Pair<AbstractBounds, List<InetAddress>>> getRestrictedRanges(AbstractBounds queryRange, String keyspace, int responseCount)
     throws UnavailableException
     {
         TokenMetadata tokenMetadata = StorageService.instance.getTokenMetadata();
@@ -23,8 +23,11 @@
             Token nodeToken = iter.next();
             Range nodeRange = new Range(tokenMetadata.getPredecessor(nodeToken), nodeToken);
             List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(keyspace, nodeToken);
+            if (endpoints.size() < responseCount)
+                throw new UnavailableException();
 
             DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getLocalAddress(), endpoints);
+            List<InetAddress> endpointsForCL = endpoints.subList(0, responseCount);
             Set<AbstractBounds> restrictedRanges = queryRange.restrictTo(nodeRange);
             for (AbstractBounds range : restrictedRanges)
             {
@@ -32,7 +35,7 @@
                 {
                     if (logger.isDebugEnabled())
                         logger.debug("Adding to restricted ranges " + unwrapped + " for " + nodeRange);
-                    ranges.add(new Pair<AbstractBounds, List<InetAddress>>(unwrapped, endpoints));
+                    ranges.add(new Pair<AbstractBounds, List<InetAddress>>(unwrapped, endpointsForCL));
                 }
             }
         }
