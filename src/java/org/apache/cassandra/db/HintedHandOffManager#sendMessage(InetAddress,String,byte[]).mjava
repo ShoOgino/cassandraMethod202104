@@ -1,4 +1,4 @@
-    private static boolean sendMessage(InetAddress endpoint, String tableName, byte[] key) throws IOException
+    private static boolean sendMessage(InetAddress endpoint, String tableName, byte[] key) throws IOException, UnavailableException
     {
         if (!Gossiper.instance.isKnownEndpoint(endpoint))
         {
@@ -20,8 +20,12 @@
                 rm.add(cf);
         }
         Message message = rm.makeRowMutationMessage();
-        WriteResponseHandler responseHandler = new WriteResponseHandler(1, tableName);
-        MessagingService.instance.sendRR(message, new InetAddress[] { endpoint }, responseHandler);
+        InetAddress [] endpoints = new InetAddress[] { endpoint };
+        AbstractReplicationStrategy rs = StorageService.instance.getReplicationStrategy(tableName);
+        List<InetAddress> endpointlist = Arrays.asList(endpoints);
+        Multimap<InetAddress, InetAddress> hintedEndpoints = rs.getHintedEndpoints(endpointlist);
+        WriteResponseHandler responseHandler = new WriteResponseHandler(endpointlist, hintedEndpoints, ConsistencyLevel.ALL, tableName);
+        MessagingService.instance.sendRR(message, endpoints, responseHandler);
 
         try
         {
