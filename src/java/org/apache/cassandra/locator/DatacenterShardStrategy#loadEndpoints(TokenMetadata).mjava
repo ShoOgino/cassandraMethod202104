@@ -1,39 +1,29 @@
     private synchronized void loadEndpoints(TokenMetadata metadata) throws UnknownHostException
     {
-        this.tokens = new ArrayList<Token>(metadata.sortedTokens());
-        String localDC = ((AbstractRackAwareSnitch)snitch_).getDatacenter(InetAddress.getLocalHost());
-        dcMap = new HashMap<String, List<Token>>();
-        for (Token token : this.tokens)
+        String localDC = snitch.getDatacenter(DatabaseDescriptor.getListenAddress());
+        assert (localDC != null) : "Invalid configuration, Coldn't find the host: " + FBUtilities.getLocalAddress();
+        // re -init the map
+        dcTokens = new HashMap<String, List<Token>>();
+        List<Token> tokens = metadata.sortedTokens();
+        for (Token token : tokens)
         {
-            InetAddress endpoint = metadata.getEndpoint(token);
-            String dataCenter = ((AbstractRackAwareSnitch)snitch_).getDatacenter(endpoint);
-            if (dataCenter.equals(localDC))
-            {
-                localEndpoints.add(endpoint);
-            }
-            List<Token> lst = dcMap.get(dataCenter);
+            InetAddress endPoint = metadata.getEndpoint(token);
+            String dataCenter = snitch.getDatacenter(endPoint);
+            // add tokens to dcmap.
+            List<Token> lst = dcTokens.get(dataCenter);
             if (lst == null)
             {
                 lst = new ArrayList<Token>();
             }
             lst.add(token);
-            dcMap.put(dataCenter, lst);
+            dcTokens.put(dataCenter, lst);
         }
-        for (Entry<String, List<Token>> entry : dcMap.entrySet())
+        for (Entry<String, List<Token>> entry : dcTokens.entrySet())
         {
             List<Token> valueList = entry.getValue();
             Collections.sort(valueList);
-            dcMap.put(entry.getKey(), valueList);
+            dcTokens.put(entry.getKey(), valueList);
         }
-        for (Entry<String, Integer> entry : dcReplicationFactor.entrySet())
-        {
-            String datacenter = entry.getKey();
-            int qFactor = (entry.getValue() / 2 + 1);
-            quorumRepFactor.put(datacenter, qFactor);
-            if (datacenter.equals(localDC))
-            {
-                locQFactor = qFactor;
-            }
-        }
+        tokensize = tokens.size();
     }
 

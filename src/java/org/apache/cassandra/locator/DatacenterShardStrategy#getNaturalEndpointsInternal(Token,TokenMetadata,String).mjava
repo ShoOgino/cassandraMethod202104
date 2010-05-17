@@ -1,34 +1,34 @@
-    private ArrayList<InetAddress> getNaturalEndpointsInternal(Token searchToken, TokenMetadata metadata) throws IOException
+    private ArrayList<InetAddress> getNaturalEndpointsInternal(Token searchToken, TokenMetadata metadata, String table) throws UnknownHostException
     {
         ArrayList<InetAddress> endpoints = new ArrayList<InetAddress>();
 
-        if (metadata.sortedTokens().size() == 0)
+        if (metadata.sortedTokens().isEmpty())
             return endpoints;
 
-        if (null == tokens || tokens.size() != metadata.sortedTokens().size())
-        {
+        if (tokensize != metadata.sortedTokens().size())
             loadEndpoints(metadata);
-        }
 
-        for (String dc : dcMap.keySet())
+        for (String dc : dcTokens.keySet())
         {
-            int replicas_ = dcReplicationFactor.get(dc);
-            ArrayList<InetAddress> forloopReturn = new ArrayList<InetAddress>(replicas_);
-            List<Token> tokens = dcMap.get(dc);
+            int replicas = getReplicationFactor(dc, table);
+        	int dcEpCount = 0;
+            List<Token> tokens = dcTokens.get(dc);
             boolean bOtherRack = false;
             boolean doneDataCenterItr;
             // Add the node at the index by default
             Iterator<Token> iter = TokenMetadata.ringIterator(tokens, searchToken);
             InetAddress primaryHost = metadata.getEndpoint(iter.next());
-            forloopReturn.add(primaryHost);
-
-            while (forloopReturn.size() < replicas_ && iter.hasNext())
+            endpoints.add(primaryHost);
+            dcEpCount++;
+            
+            while (dcEpCount < replicas && iter.hasNext())
             {
                 Token t = iter.next();
-                InetAddress endpointOfInterest = metadata.getEndpoint(t);
-                if (forloopReturn.size() < replicas_ - 1)
+                InetAddress endPointOfInterest = metadata.getEndpoint(t);
+                if (dcEpCount < replicas - 1)
                 {
-                    forloopReturn.add(endpointOfInterest);
+                    endpoints.add(endPointOfInterest);
+                    dcEpCount++;
                     continue;
                 }
                 else
@@ -39,10 +39,10 @@
                 // Now try to find one on a different rack
                 if (!bOtherRack)
                 {
-                    AbstractRackAwareSnitch snitch = (AbstractRackAwareSnitch)snitch_;
-                    if (!snitch.getRack(primaryHost).equals(snitch.getRack(endpointOfInterest)))
+                    if (!snitch.getRack(primaryHost).equals(snitch.getRack(endPointOfInterest)))
                     {
-                        forloopReturn.add(metadata.getEndpoint(t));
+                        endpoints.add(metadata.getEndpoint(t));
+                        dcEpCount++;
                         bOtherRack = true;
                     }
                 }
@@ -58,19 +58,19 @@
             * exit. Otherwise just loop through the list and add until we
             * have N nodes.
             */
-            if (forloopReturn.size() < replicas_)
+            if (dcEpCount < replicas)
             {
                 iter = TokenMetadata.ringIterator(tokens, searchToken);
-                while (forloopReturn.size() < replicas_ && iter.hasNext())
+                while (dcEpCount < replicas && iter.hasNext())
                 {
                     Token t = iter.next();
-                    if (!forloopReturn.contains(metadata.getEndpoint(t)))
+                    if (!endpoints.contains(metadata.getEndpoint(t)))
                     {
-                        forloopReturn.add(metadata.getEndpoint(t));
+                    	endpoints.add(metadata.getEndpoint(t));
+                    	dcEpCount++;
                     }
                 }
             }
-            endpoints.addAll(forloopReturn);
         }
 
         return endpoints;

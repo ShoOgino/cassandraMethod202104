@@ -1,10 +1,11 @@
     public static void mutateBlocking(List<RowMutation> mutations, ConsistencyLevel consistency_level) throws UnavailableException, TimeoutException
     {
         long startTime = System.nanoTime();
-        ArrayList<WriteResponseHandler> responseHandlers = new ArrayList<WriteResponseHandler>();
+        ArrayList<AbstractWriteResponseHandler> responseHandlers = new ArrayList<AbstractWriteResponseHandler>();
 
         RowMutation mostRecentRowMutation = null;
         StorageService ss = StorageService.instance;
+        
         try
         {
             for (RowMutation rm : mutations)
@@ -16,13 +17,11 @@
                 List<InetAddress> naturalEndpoints = ss.getNaturalEndpoints(table, rm.key());
                 Collection<InetAddress> writeEndpoints = rs.getWriteEndpoints(StorageService.getPartitioner().getToken(rm.key()), table, naturalEndpoints);
                 Multimap<InetAddress, InetAddress> hintedEndpoints = rs.getHintedEndpoints(writeEndpoints);
-                int blockFor = determineBlockFor(writeEndpoints.size(), consistency_level);
-
-                // avoid starting a write we know can't achieve the required consistency
-                assureSufficientLiveNodes(blockFor, writeEndpoints, hintedEndpoints, consistency_level);
                 
                 // send out the writes, as in mutate() above, but this time with a callback that tracks responses
-                final WriteResponseHandler responseHandler = ss.getWriteResponseHandler(blockFor, consistency_level, table);
+                final AbstractWriteResponseHandler responseHandler = rs.getWriteResponseHandler(writeEndpoints, hintedEndpoints, consistency_level, table);
+                responseHandler.assureSufficientLiveNodes();
+
                 responseHandlers.add(responseHandler);
                 Message unhintedMessage = null;
                 for (Map.Entry<InetAddress, Collection<InetAddress>> entry : hintedEndpoints.asMap().entrySet())
@@ -71,7 +70,7 @@
                 }
             }
             // wait for writes.  throws timeoutexception if necessary
-            for( WriteResponseHandler responseHandler : responseHandlers )
+            for (AbstractWriteResponseHandler responseHandler : responseHandlers)
             {
                 responseHandler.get();
             }

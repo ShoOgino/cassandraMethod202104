@@ -1,30 +1,36 @@
     public DatacenterShardStrategy(TokenMetadata tokenMetadata, IEndpointSnitch snitch) throws ConfigurationException
     {
         super(tokenMetadata, snitch);
-        if (!(snitch instanceof AbstractRackAwareSnitch))
-        {
+        if ((!(snitch instanceof AbstractRackAwareSnitch)))
             throw new IllegalArgumentException("DatacenterShardStrategy requires a rack-aware endpointsnitch");
-        }
+        this.snitch = (AbstractRackAwareSnitch)snitch;
 
-        // load replication factors for each DC
         ClassLoader loader = PropertyFileSnitch.class.getClassLoader();
-        URL scpurl = loader.getResource(DATACENTER_PROPERTIES_FILENAME);
+        URL scpurl = loader.getResource(DATACENTER_PROPERTY_FILENAME);
         if (scpurl == null)
-            throw new ConfigurationException("unable to locate " + DATACENTER_PROPERTIES_FILENAME);
-
-        String rackPropertyFilename = scpurl.getFile();
+        {
+            throw new RuntimeException("unable to locate " + DATACENTER_PROPERTY_FILENAME);
+        }
+        String dcPropertyFile = scpurl.getFile();
         try
         {
-            Properties p = new Properties();
-            p.load(new FileReader(rackPropertyFilename));
-            for (Entry<Object, Object> entry : p.entrySet())
+            Properties props = new Properties();
+            props.load(new FileReader(dcPropertyFile));
+            for (Object key : props.keySet())
             {
-                dcReplicationFactor.put((String)entry.getKey(), Integer.valueOf((String)entry.getValue()));
+                String[] keys = ((String)key).split(":");
+                Map<String, Integer> map = datacenters.get(keys[0]);
+                if (null == map)
+                {
+                    map = new HashMap<String, Integer>();
+                }
+                map.put(keys[1], Integer.parseInt((String)props.get(key)));
+                datacenters.put(keys[0], map);
             }
         }
         catch (IOException ioe)
         {
-            throw new ConfigurationException("Could not process " + rackPropertyFilename, ioe);
+            throw new IOError(ioe);
         }
     }
 
