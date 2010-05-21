@@ -1,0 +1,53 @@
+    /**
+     * gets called during startup if we notice a mismatch between the current migration version and the one saved. This
+     * can only happen as a result of the commit log recovering schema updates, which overwrites lastVersionId.
+     * 
+     * This method silently eats IOExceptions thrown by Migration.apply() as a result of applying a migration out of
+     * order.
+     */
+    public static void applyMigrations(UUID from, UUID to) throws IOException
+    {
+        List<Future> updates = new ArrayList<Future>();
+        Collection<IColumn> migrations = Migration.getLocalMigrations(from, to);
+        for (IColumn col : migrations)
+        {
+            final Migration migration = Migration.deserialize(new ByteArrayInputStream(col.value()));
+            Future update = StageManager.getStage(StageManager.MIGRATION_STAGE).submit(new Runnable() 
+            {
+                public void run()
+                {
+                    try
+                    {
+                        migration.apply();
+                    }
+                    catch (ConfigurationException ex)
+                    {
+                        // this happens if we try to apply something that's already been applied. ignore and proceed.
+                    }
+                    catch (IOException ex)
+                    {
+                        throw new RuntimeException(ex);
+                    }
+                }
+            });
+            updates.add(update);
+        }
+        
+        // wait on all the updates before proceeding.
+        for (Future f : updates)
+        {
+            try
+            {
+                f.get();
+            }
+            catch (InterruptedException e)
+            {
+                throw new IOException(e);
+            }
+            catch (ExecutionException e)
+            {
+                throw new IOException(e);
+            }
+        }
+    }
+
