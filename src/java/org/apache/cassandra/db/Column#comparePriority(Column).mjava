@@ -1,17 +1,43 @@
     // note that we do not call this simply compareTo since it also makes sense to compare Columns by name
-    public long comparePriority(Column o)
+    public ClockRelationship comparePriority(Column o)
     {
+        ClockRelationship rel = clock.compare(o.clock());
+
         // tombstone always wins ties.
         if (isMarkedForDelete())
-            return timestamp < o.timestamp ? -1 : 1;
+        {
+            switch (rel)
+            {
+                case EQUAL:
+                    return ClockRelationship.GREATER_THAN;
+                default:
+                    return rel;
+            }
+        }
         if (o.isMarkedForDelete())
-            return timestamp > o.timestamp ? 1 : -1;
-        
-        // compare value as tie-breaker for equal timestamps
-        if (timestamp == o.timestamp)
-            return FBUtilities.compareByteArrays(value, o.value);
+        {
+            switch (rel)
+            {
+                case EQUAL:
+                    return ClockRelationship.LESS_THAN;
+                default:
+                    return rel;
+            }
+        }
 
-        // neither is tombstoned and timestamps are different
-        return timestamp - o.timestamp;
+        // compare value as tie-breaker for equal clocks
+        if (ClockRelationship.EQUAL == rel)
+        {
+            int valRel = FBUtilities.compareByteArrays(value, o.value);
+            if (1 == valRel)
+                return ClockRelationship.GREATER_THAN;
+            if (0 == valRel)
+                return ClockRelationship.EQUAL;
+            // -1 == valRel
+            return ClockRelationship.LESS_THAN;
+        }
+
+        // neither is tombstoned and clocks are different
+        return rel;
     }
 
