@@ -1,0 +1,36 @@
+    @Test
+    public void createEmptyKsAddNewCf() throws ConfigurationException, IOException, ExecutionException, InterruptedException
+    {
+        assert DatabaseDescriptor.getTableDefinition("EmptyKeyspace") == null;
+        
+        KSMetaData newKs = new KSMetaData("EmptyKeyspace", RackUnawareStrategy.class, 5, new CFMetaData[]{});
+
+        new AddKeyspace(newKs).apply();
+        assert DatabaseDescriptor.getTableDefinition("EmptyKeyspace") != null;
+
+        CFMetaData newCf = new CFMetaData("EmptyKeyspace", "AddedLater", ColumnFamilyType.Standard, ClockType.Timestamp, new UTF8Type(), null, "A new CF to add to an empty KS", 0, false, 0);
+
+        //should not exist until apply
+        assert !DatabaseDescriptor.getTableDefinition(newKs.name).cfMetaData().containsKey(newCf.cfName);
+
+        //add the new CF to the empty space
+        new AddColumnFamily(newCf).apply();
+
+        assert DatabaseDescriptor.getTableDefinition(newKs.name).cfMetaData().containsKey(newCf.cfName);
+        assert DatabaseDescriptor.getTableDefinition(newKs.name).cfMetaData().get(newCf.cfName).equals(newCf);
+
+        // now read and write to it.
+        DecoratedKey dk = Util.dk("key0");
+        RowMutation rm = new RowMutation(newKs.name, dk.key);
+        rm.add(new QueryPath(newCf.cfName, null, "col0".getBytes()), "value0".getBytes(), new TimestampClock(1L));
+        rm.apply();
+        ColumnFamilyStore store = Table.open(newKs.name).getColumnFamilyStore(newCf.cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+
+        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(newCf.cfName), "col0".getBytes()));
+        assert cfam.getColumn("col0".getBytes()) != null;
+        IColumn col = cfam.getColumn("col0".getBytes());
+        assert Arrays.equals("value0".getBytes(), col.value());
+    }
+
