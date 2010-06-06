@@ -1,37 +1,44 @@
-    /** like getPosition, but if key is not found will return the location of the first key _greater_ than the desired one, or -1 if no such key exists. */
-    public long getNearestPosition(DecoratedKey decoratedKey) throws IOException
+    /**
+     * @return The location of the first key _greater_ than the desired one, or -1 if no such key exists.
+     */
+    public long getNearestPosition(DecoratedKey decoratedKey)
     {
         IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
-        {
             return 0;
-        }
 
-        // can't use a MappedFileDataInput here, since we might cross a segment boundary while scanning
-        BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(), "r");
-        input.seek(sampledPosition.indexPosition);
-        try
+        // scan the on-disk index, starting at the nearest sampled position
+        Iterator<FileDataInput> segiter = ifile.iterator(sampledPosition.indexPosition, INDEX_FILE_BUFFER_BYTES);
+        while (segiter.hasNext())
         {
-            while (true)
+            FileDataInput input = segiter.next();
+            try
             {
-                DecoratedKey indexDecoratedKey;
+                while (!input.isEOF())
+                {
+                    DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                    long position = input.readLong();
+                    int v = indexDecoratedKey.compareTo(decoratedKey);
+                    if (v >= 0)
+                        return position;
+                }
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+            finally
+            {
                 try
                 {
-                    indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                    input.close();
                 }
-                catch (EOFException e)
+                catch (IOException e)
                 {
-                    return -1;
+                    logger.error("error closing file", e);
                 }
-                long position = input.readLong();
-                int v = indexDecoratedKey.compareTo(decoratedKey);
-                if (v >= 0)
-                    return position;
             }
         }
-        finally
-        {
-            input.close();
-        }
+        return -1;
     }
 

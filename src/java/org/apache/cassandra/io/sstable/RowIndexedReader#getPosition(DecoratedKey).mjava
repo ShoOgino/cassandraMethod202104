@@ -1,17 +1,17 @@
     /**
-     * returns the position in the data file to find the given key, or -1 if the key is not present
+     * @return The position in the data file to find the given key, or -1 if the key is not present
      */
-    public PositionSize getPosition(DecoratedKey decoratedKey)
+    public long getPosition(DecoratedKey decoratedKey)
     {
         // first, check bloom filter
         if (!bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
-            return null;
+            return -1;
 
         // next, the key cache
         Pair<Descriptor, DecoratedKey> unifiedKey = new Pair<Descriptor, DecoratedKey>(desc, decoratedKey);
         if (keyCache != null && keyCache.getCapacity() > 0)
         {
-            PositionSize cachedPosition = keyCache.get(unifiedKey);
+            Long cachedPosition = keyCache.get(unifiedKey);
             if (cachedPosition != null)
             {
                 return cachedPosition;
@@ -21,97 +21,49 @@
         // next, see if the sampled index says it's impossible for the key to be present
         IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
-            return null;
-
-        // get either a buffered or a mmap'd input for the on-disk index
-        long p = sampledPosition.indexPosition;
-        FileDataInput input;
-        try
-        {
-            if (indexBuffers == null)
-            {
-                input = new BufferedRandomAccessFile(indexFilename(), "r");
-                ((BufferedRandomAccessFile)input).seek(p);
-            }
-            else
-            {
-                input = indexInputAt(p);
-            }
-        }
-        catch (IOException e)
-        {
-            throw new IOError(e);
-        }
+            return -1;
 
         // scan the on-disk index, starting at the nearest sampled position
-        try
+        int i = 0;
+        Iterator<FileDataInput> segments = ifile.iterator(sampledPosition.indexPosition, INDEX_FILE_BUFFER_BYTES);
+        while (segments.hasNext())
         {
-            int i = 0;
-            do
-            {
-                // handle exact sampled index hit
-                IndexSummary.KeyPosition kp = indexSummary.getSpannedIndexPosition(input.getAbsolutePosition());
-                if (kp != null && kp.key.equals(decoratedKey))
-                    return indexSummary.getSpannedDataPosition(kp);
-
-                // if using mmapped i/o, skip to the next mmap buffer if necessary
-                if (input.isEOF() || kp != null)
-                {
-                    if (indexBuffers == null) // not mmap-ing, just one index input
-                        break;
-
-                    FileDataInput oldInput = input;
-                    if (kp == null)
-                    {
-                        input = indexInputAt(input.getAbsolutePosition());
-                    }
-                    else
-                    {
-                        int keylength = StorageService.getPartitioner().convertToDiskFormat(kp.key).length;
-                        long nextUnspannedPostion = input.getAbsolutePosition()
-                                                    + DBConstants.shortSize_ + keylength
-                                                    + DBConstants.longSize_;
-                        input = indexInputAt(nextUnspannedPostion);
-                    }
-                    oldInput.close();
-                    if (input == null)
-                        break;
-
-                    continue;
-                }
-
-                // read key & data position from index entry
-                DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
-                long dataPosition = input.readLong();
-
-                int v = indexDecoratedKey.compareTo(decoratedKey);
-                if (v == 0)
-                {
-                    PositionSize info = getDataPositionSize(input, dataPosition);
-                    if (keyCache != null && keyCache.getCapacity() > 0)
-                        keyCache.put(unifiedKey, info);
-                    return info;
-                }
-                if (v > 0)
-                    return null;
-            } while  (++i < IndexSummary.INDEX_INTERVAL);
-        }
-        catch (IOException e)
-        {
-            throw new IOError(e);
-        }
-        finally
-        {
+            FileDataInput input = segments.next();
             try
             {
-                if (input != null)
-                    input.close();
+                while (!input.isEOF() && i++ < IndexSummary.INDEX_INTERVAL)
+                {
+                    // read key & data position from index entry
+                    DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                    long dataPosition = input.readLong();
+
+                    int v = indexDecoratedKey.compareTo(decoratedKey);
+                    if (v == 0)
+                    {
+                        if (keyCache != null && keyCache.getCapacity() > 0)
+                            keyCache.put(unifiedKey, Long.valueOf(dataPosition));
+                        return dataPosition;
+                    }
+                    if (v > 0)
+                        return -1;
+                }
             }
             catch (IOException e)
             {
-                logger.error("error closing file", e);
+                throw new IOError(e);
+            }
+            finally
+            {
+                try
+                {
+                    input.close();
+                }
+                catch (IOException e)
+                {
+                    logger.error("error closing file", e);
+                }
             }
         }
-        return null;
+        return -1;
     }
 

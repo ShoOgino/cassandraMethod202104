@@ -1,0 +1,45 @@
+    /**
+     * Loads ifile, dfile and indexSummary, and optionally recreates the bloom filter.
+     */
+    private void load(boolean recreatebloom) throws IOException
+    {
+        SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder();
+        SegmentedFile.Builder dbuilder = SegmentedFile.getBuilder();
+
+        // we read the positions in a BRAF so we don't have to worry about an entry spanning a mmap boundary.
+        indexSummary = new IndexSummary();
+        BufferedRandomAccessFile input = new BufferedRandomAccessFile(indexFilename(), "r");
+        try
+        {
+            long indexSize = input.length();
+            if (recreatebloom)
+                // estimate key count based on index length
+                bf = BloomFilter.getFilter((int)(input.length() / 32), 15);
+            while (true)
+            {
+                long indexPosition = input.getFilePointer();
+                if (indexPosition == indexSize)
+                    break;
+
+                DecoratedKey decoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                if (recreatebloom)
+                    bf.add(decoratedKey.key);
+                long dataPosition = input.readLong();
+
+                indexSummary.maybeAddEntry(decoratedKey, indexPosition);
+                ibuilder.addPotentialBoundary(indexPosition);
+                dbuilder.addPotentialBoundary(dataPosition);
+            }
+            indexSummary.complete();
+        }
+        finally
+        {
+            input.close();
+        }
+
+        // finalize the state of the reader
+        indexSummary.complete();
+        ifile = ibuilder.complete(indexFilename());
+        dfile = dbuilder.complete(getFilename());
+    }
+
