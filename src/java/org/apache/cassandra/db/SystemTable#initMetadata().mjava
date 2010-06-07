@@ -20,6 +20,7 @@
         columns.add(CLUSTERNAME);
         QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCATION_KEY), new QueryPath(STATUS_CF), columns);
         ColumnFamily cf = table.getColumnFamilyStore(STATUS_CF).getColumnFamily(filter);
+        String partitioner = DatabaseDescriptor.getPartitioner().getClass().getName();
 
         if (cf == null)
         {
@@ -43,8 +44,21 @@
             cf.addColumn(new Column(TOKEN, p.getTokenFactory().toByteArray(token), TimestampClock.ZERO_VALUE));
             cf.addColumn(new Column(GENERATION, FBUtilities.toByteArray(generation), TimestampClock.ZERO_VALUE));
             cf.addColumn(new Column(CLUSTERNAME, DatabaseDescriptor.getClusterName().getBytes(), TimestampClock.ZERO_VALUE));
+            cf.addColumn(new Column(PARTITIONER, partitioner.getBytes(UTF8), TimestampClock.ZERO_VALUE));
             rm.add(cf);
             rm.apply();
+            try
+            {
+                table.getColumnFamilyStore(SystemTable.STATUS_CF).forceBlockingFlush();
+            }
+            catch (ExecutionException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (InterruptedException e)
+            {
+                throw new RuntimeException(e);
+            }
             metadata = new StorageMetadata(token, generation, DatabaseDescriptor.getClusterName().getBytes());
             return metadata;
         }
@@ -62,6 +76,7 @@
         int gen = Math.max(FBUtilities.byteArrayToInt(generation.value()) + 1, (int) (System.currentTimeMillis() / 1000));
 
         IColumn cluster = cf.getColumn(CLUSTERNAME);
+        IColumn partitionerColumn = cf.getColumn(PARTITIONER);
 
         RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCATION_KEY);
         cf = ColumnFamily.create(Table.SYSTEM_TABLE, SystemTable.STATUS_CF);
@@ -81,8 +96,29 @@
             cname = DatabaseDescriptor.getClusterName().getBytes();
             logger.info("Saved ClusterName not found. Using " + DatabaseDescriptor.getClusterName());
         }
+        
+        if (partitionerColumn == null)
+        {
+            Column c = new Column(PARTITIONER, partitioner.getBytes(UTF8), TimestampClock.ZERO_VALUE);
+            cf.addColumn(c);
+            logger.info("Saved partitioner not found. Using " + partitioner);
+        }
+        
         rm.add(cf);
         rm.apply();
+        try
+        {
+            table.getColumnFamilyStore(SystemTable.STATUS_CF).forceBlockingFlush();
+        }
+        catch (ExecutionException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+
         metadata = new StorageMetadata(token, gen, cname);
         return metadata;
     }
