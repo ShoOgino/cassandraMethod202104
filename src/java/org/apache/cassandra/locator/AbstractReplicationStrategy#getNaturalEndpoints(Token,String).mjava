@@ -1,5 +1,26 @@
-    public ArrayList<InetAddress> getNaturalEndpoints(Token token, String table)
+    /**
+     * get the (possibly cached) endpoints that should store the given Token, for the given table.
+     * Note that while the endpoints are conceptually a Set (no duplicates will be included),
+     * we return a List to avoid an extra allocation when sorting by proximity later
+     * @param searchToken the token the natural endpoints are requested for
+     * @param table the table the natural endpoints are requested for
+     * @return a copy of the natural endpoints for the given token and table
+     */
+    public ArrayList<InetAddress> getNaturalEndpoints(Token searchToken, String table)
     {
-        return getNaturalEndpoints(token, tokenMetadata_, table);
+        // TODO creating a iterator object just to get the closest token is wasteful -- we do in multiple places w/ ringIterator
+        Token keyToken = TokenMetadata.ringIterator(tokenMetadata.sortedTokens(), searchToken).next();
+        EndpointCacheKey cacheKey = new EndpointCacheKey(table, keyToken);
+        ArrayList<InetAddress> endpoints = cachedEndpoints.get(cacheKey);
+        if (endpoints == null)
+        {
+            TokenMetadata tokenMetadataClone = tokenMetadata.cloneOnlyTokenMap();
+            keyToken = TokenMetadata.ringIterator(tokenMetadataClone.sortedTokens(), searchToken).next();
+            cacheKey = new EndpointCacheKey(table, keyToken);
+            endpoints = new ArrayList<InetAddress>(calculateNaturalEndpoints(searchToken, tokenMetadataClone, table));
+            cachedEndpoints.put(cacheKey, endpoints);
+        }
+
+        return new ArrayList<InetAddress>(endpoints);
     }
 
