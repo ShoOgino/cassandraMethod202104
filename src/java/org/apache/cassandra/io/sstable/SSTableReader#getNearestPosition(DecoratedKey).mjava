@@ -4,5 +4,44 @@
      * FIXME: should not be public: use Scanner.
      */
     @Deprecated
-    public abstract long getNearestPosition(DecoratedKey decoratedKey) throws IOException;
+    public long getNearestPosition(DecoratedKey decoratedKey)
+    {
+        IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
+        if (sampledPosition == null)
+            return 0;
+
+        // scan the on-disk index, starting at the nearest sampled position
+        Iterator<FileDataInput> segiter = ifile.iterator(sampledPosition.indexPosition, INDEX_FILE_BUFFER_BYTES);
+        while (segiter.hasNext())
+        {
+            FileDataInput input = segiter.next();
+            try
+            {
+                while (!input.isEOF())
+                {
+                    DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
+                    long position = input.readLong();
+                    int v = indexDecoratedKey.compareTo(decoratedKey);
+                    if (v >= 0)
+                        return position;
+                }
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+            finally
+            {
+                try
+                {
+                    input.close();
+                }
+                catch (IOException e)
+                {
+                    logger.error("error closing file", e);
+                }
+            }
+        }
+        return -1;
+    }
 
