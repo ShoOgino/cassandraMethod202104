@@ -1,18 +1,21 @@
-    /**
-     * Given the collection of columns in the Column Family,
-     * the name index is generated and written into the provided
-     * stream
-     * @param columns for whom the name index needs to be generated
-     * @param dos stream into which the serialized name index needs
-     *            to be written.
-     * @throws IOException
-     */
-    private static void doIndexing(AbstractType comparator, Collection<IColumn> columns, DataOutput dos) throws IOException
+    public static void serializeInternal(ColumnFamily columnFamily, DataOutput dos) throws IOException
     {
+        Collection<IColumn> columns = columnFamily.getSortedColumns();
+        int columnCount = 0;
+        for (IColumn column : columns)
+        {
+            columnCount += column.getObjectCount();
+        }
+
+        BloomFilter bf = BloomFilter.getFilter(columnCount, 4);
+
         if (columns.isEmpty())
         {
+            // write empty bloom filter and index
+            writeBloomFilter(dos, bf);
             dos.writeInt(0);
-            return;            
+
+            return;
         }
 
         /*
@@ -22,14 +25,24 @@
          * We do this so that we don't read all the columns into memory.
         */
         List<IndexHelper.IndexInfo> indexList = new ArrayList<IndexHelper.IndexInfo>();
-        
+
         int endPosition = 0, startPosition = -1;
         int indexSizeInBytes = 0;
-        IColumn column = null, firstColumn = null;
+        IColumn lastColumn = null, firstColumn = null;
         /* column offsets at the right thresholds into the index map. */
-        for (Iterator<IColumn> it = columns.iterator(); it.hasNext();)
+        for (IColumn column : columns)
         {
-            column = it.next();
+            bf.add(column.name());
+            /* If this is SuperColumn type Column Family we need to get the subColumns too. */
+            if (column instanceof SuperColumn)
+            {
+                Collection<IColumn> subColumns = column.getSubColumns();
+                for (IColumn subColumn : subColumns)
+                {
+                    bf.add(subColumn.name());
+                }
+            }
+
             if (firstColumn == null)
             {
                 firstColumn = column;
@@ -44,20 +57,26 @@
                 indexSizeInBytes += cIndexInfo.serializedSize();
                 firstColumn = null;
             }
+
+            lastColumn = column;
         }
         // the last column may have fallen on an index boundary already.  if not, index it explicitly.
-        if (indexList.isEmpty() || comparator.compare(indexList.get(indexList.size() - 1).lastName, column.name()) != 0)
+        if (indexList.isEmpty() || columnFamily.getComparator().compare(indexList.get(indexList.size() - 1).lastName, lastColumn.name()) != 0)
         {
-            IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstColumn.name(), column.name(), startPosition, endPosition - startPosition);
+            IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstColumn.name(), lastColumn.name(), startPosition, endPosition - startPosition);
             indexList.add(cIndexInfo);
             indexSizeInBytes += cIndexInfo.serializedSize();
         }
 
+        /* Write out the bloom filter. */
+        writeBloomFilter(dos, bf);
+
+        // write the index
         assert indexSizeInBytes > 0;
         dos.writeInt(indexSizeInBytes);
         for (IndexHelper.IndexInfo cIndexInfo : indexList)
         {
             cIndexInfo.serialize(dos);
         }
-    }
+	}
 
