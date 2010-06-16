@@ -1,16 +1,12 @@
-    public static void serializeInternal(ColumnFamily columnFamily, DataOutput dos) throws IOException
+    public static void serializeInternal(IIterableColumns columns, DataOutput dos) throws IOException
     {
-        Collection<IColumn> columns = columnFamily.getSortedColumns();
-        int columnCount = columns.size();
+        int columnCount = columns.getEstimatedColumnCount();
 
         BloomFilter bf = BloomFilter.getFilter(columnCount, 4);
 
-        if (columns.isEmpty())
+        if (columnCount == 0)
         {
-            // write empty bloom filter and index
-            writeBloomFilter(dos, bf);
-            dos.writeInt(0);
-
+            writeEmptyHeader(dos, bf);
             return;
         }
 
@@ -41,8 +37,16 @@
 
             lastColumn = column;
         }
+
+        // all columns were GC'd after all
+        if (lastColumn == null)
+        {
+            writeEmptyHeader(dos, bf);
+            return;
+        }
+
         // the last column may have fallen on an index boundary already.  if not, index it explicitly.
-        if (indexList.isEmpty() || columnFamily.getComparator().compare(indexList.get(indexList.size() - 1).lastName, lastColumn.name()) != 0)
+        if (indexList.isEmpty() || columns.getComparator().compare(indexList.get(indexList.size() - 1).lastName, lastColumn.name()) != 0)
         {
             IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstColumn.name(), lastColumn.name(), startPosition, endPosition - startPosition);
             indexList.add(cIndexInfo);
