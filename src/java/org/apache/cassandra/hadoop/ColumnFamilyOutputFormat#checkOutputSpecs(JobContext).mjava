@@ -1,0 +1,49 @@
+    /**
+     * Check for validity of the output-specification for the job.
+     * 
+     * <p>
+     * This is to validate the output specification for the job when it is a job
+     * is submitted. By default, it will prevent writes to the given column
+     * family, if it already contains one or more rows in the given slice
+     * predicate. If you wish to relax that restriction, you may override this
+     * method is a sub-class of your choosing.
+     * </p>
+     * 
+     * @param context
+     *            information about the job
+     * @throws IOException
+     *             when output should not be attempted
+     */
+    @Override
+    public void checkOutputSpecs(JobContext context) throws IOException, InterruptedException
+    {
+        validateConfiguration(context.getConfiguration());
+        String keyspace = ConfigHelper.getKeyspace(context.getConfiguration());
+        String columnFamily = ConfigHelper.getColumnFamily(context.getConfiguration());
+        SlicePredicate slicePredicate = ConfigHelper.getSlicePredicate(context.getConfiguration());
+        assert slicePredicate != null;
+        if (slicePredicate.column_names == null && slicePredicate.slice_range == null)
+            slicePredicate = slicePredicate.setColumn_names(new ArrayList<byte[]>());
+
+        List<KeySlice> keySlices;
+        try
+        {
+            TSocket socket = new TSocket(DatabaseDescriptor.getListenAddress().getHostName(), DatabaseDescriptor.getRpcPort());
+            Cassandra.Client client = createAuthenticatedClient(socket, context);
+            ColumnParent parent = new ColumnParent().setColumn_family(columnFamily);
+            KeyRange range = new KeyRange().setStart_key("".getBytes()).setEnd_key("".getBytes());
+            keySlices = client.get_range_slices(parent, slicePredicate, range, ConsistencyLevel.ONE);
+        }
+        catch (Exception e)
+        {
+            throw new IOException(e);
+        }
+        if (keySlices.size() > 0)
+        {
+            throw new IOException("The column family " + columnFamily
+                                  + " in the keyspace " + keyspace + " already has "
+                                  + keySlices.size() + " keys in the slice predicate "
+                                  + slicePredicate);
+        }
+    }
+

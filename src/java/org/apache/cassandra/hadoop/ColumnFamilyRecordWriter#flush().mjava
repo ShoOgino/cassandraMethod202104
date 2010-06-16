@@ -1,0 +1,42 @@
+    /**
+     * Send the batched mutations over to Cassandra, and then clear the
+     * mutations cache.
+     *
+     * @throws IOException
+     */
+    protected synchronized void flush() throws IOException
+    {
+        ExecutorService executor = Executors.newCachedThreadPool();
+
+        try
+        {
+            List<Future<?>> mutationFutures = new ArrayList<Future<?>>();
+            for (Map.Entry<InetAddress, Map<byte[], Map<String, List<Mutation>>>> entry : mutationsByEndpoint.entrySet())
+            {
+                mutationFutures.add(executor.submit(new EndpointCallable(context, entry.getKey(), entry.getValue())));
+            }
+            // wait until we have all the results back
+            for (Future<?> mutationFuture : mutationFutures)
+            {
+                try
+                {
+                    mutationFuture.get();
+                }
+                catch (ExecutionException e)
+                {
+                    throw new IOException("Could not perform endpoint mutations", e.getCause());
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+        }
+        finally
+        {
+            executor.shutdownNow();
+            mutationsByEndpoint.clear();
+        }
+
+    }
+
