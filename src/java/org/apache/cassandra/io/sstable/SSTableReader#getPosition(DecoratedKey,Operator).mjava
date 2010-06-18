@@ -1,13 +1,12 @@
     /**
-     * Returns the position in the data file to find the given key, or -1 if the
-     * key is not present.
-     * FIXME: should not be public: use Scanner.
+     * @param decoratedKey The key to apply as the rhs to the given Operator.
+     * @param op The Operator defining matching keys: the nearest key to the target matching the operator wins.
+     * @return The position in the data file to find the key, or -1 if the key is not present
      */
-    @Deprecated
-    public long getPosition(DecoratedKey decoratedKey)
+    public long getPosition(DecoratedKey decoratedKey, Operator op)
     {
         // first, check bloom filter
-        if (!bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
+        if (op == Operator.EQ && !bf.isPresent(partitioner.convertToDiskFormat(decoratedKey)))
             return -1;
 
         // next, the key cache
@@ -24,30 +23,32 @@
         // next, see if the sampled index says it's impossible for the key to be present
         IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
-            return -1;
+            // we matched the -1th position: if the operator might match forward, return the 0th position
+            return op.apply(1) >= 0 ? 0 : -1;
 
         // scan the on-disk index, starting at the nearest sampled position
-        int i = 0;
         Iterator<FileDataInput> segments = ifile.iterator(sampledPosition.indexPosition, INDEX_FILE_BUFFER_BYTES);
         while (segments.hasNext())
         {
             FileDataInput input = segments.next();
             try
             {
-                while (!input.isEOF() && i++ < IndexSummary.INDEX_INTERVAL)
+                while (!input.isEOF())
                 {
                     // read key & data position from index entry
                     DecoratedKey indexDecoratedKey = partitioner.convertFromDiskFormat(FBUtilities.readShortByteArray(input));
                     long dataPosition = input.readLong();
 
-                    int v = indexDecoratedKey.compareTo(decoratedKey);
+                    int comparison = indexDecoratedKey.compareTo(decoratedKey);
+                    int v = op.apply(comparison);
                     if (v == 0)
                     {
-                        if (keyCache != null && keyCache.getCapacity() > 0)
+                        if (comparison == 0 && keyCache != null && keyCache.getCapacity() > 0)
+                            // store exact match for the key
                             keyCache.put(unifiedKey, Long.valueOf(dataPosition));
                         return dataPosition;
                     }
-                    if (v > 0)
+                    if (v < 0)
                         return -1;
                 }
             }

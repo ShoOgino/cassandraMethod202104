@@ -1,7 +1,6 @@
     private void stream(SocketChannel channel) throws IOException
     {
-        long start = startPosition;
-        RandomAccessFile raf = new RandomAccessFile(new File(file), "r");
+        RandomAccessFile raf = new RandomAccessFile(new File(file.getFilename()), "r");
         try
         {
             FileChannel fc = raf.getChannel();
@@ -9,14 +8,16 @@
             ByteBuffer buffer = MessagingService.constructStreamHeader(false);
             channel.write(buffer);
             assert buffer.remaining() == 0;
-
-            while (start < endPosition)
+            
+            // stream sections of the file as returned by PendingFile.currentSection
+            Pair<Long,Long> section;
+            while ((section = file.currentSection()) != null)
             {
-                long bytesTransferred = fc.transferTo(start, CHUNK_SIZE, channel);
+                long length = Math.min(CHUNK_SIZE, section.right - section.left);
+                long bytesTransferred = fc.transferTo(section.left, length, channel);
                 if (logger.isDebugEnabled())
                     logger.debug("Bytes transferred " + bytesTransferred);
-                start += bytesTransferred;
-                StreamOutManager.get(to).update(file, start);
+                file.update(section.left + bytesTransferred);
             }
         }
         finally
