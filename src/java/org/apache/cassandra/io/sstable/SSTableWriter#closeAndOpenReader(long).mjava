@@ -1,16 +1,7 @@
     public SSTableReader closeAndOpenReader(long maxDataAge) throws IOException
     {
-        // bloom filter
-        FileOutputStream fos = new FileOutputStream(filterFilename());
-        DataOutputStream stream = new DataOutputStream(fos);
-        BloomFilter.serializer().serialize(bf, stream);
-        stream.flush();
-        fos.getFD().sync();
-        stream.close();
-
-        // index
-        indexFile.getChannel().force(true);
-        indexFile.close();
+        // index and filter
+        iwriter.close();
 
         // main data
         dataFile.close(); // calls force
@@ -19,11 +10,11 @@
         Descriptor newdesc = rename(desc);
 
         // finalize in-memory state for the reader
-        indexSummary.complete();
-        SegmentedFile ifile = ibuilder.complete(newdesc.filenameFor(SSTable.COMPONENT_INDEX));
+        SegmentedFile ifile = iwriter.builder.complete(newdesc.filenameFor(SSTable.COMPONENT_INDEX));
         SegmentedFile dfile = dbuilder.complete(newdesc.filenameFor(SSTable.COMPONENT_DATA));
-        ibuilder = null;
+        SSTableReader sstable = SSTableReader.internalOpen(newdesc, partitioner, ifile, dfile, iwriter.summary, iwriter.bf, maxDataAge);
+        iwriter = null;
         dbuilder = null;
-        return SSTableReader.internalOpen(newdesc, partitioner, ifile, dfile, indexSummary, bf, maxDataAge);
+        return sstable;
     }
 

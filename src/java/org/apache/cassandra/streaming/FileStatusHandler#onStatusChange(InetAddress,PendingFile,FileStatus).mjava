@@ -10,26 +10,17 @@
         assert FileStatus.Action.DELETE == streamStatus.getAction() :
             "Unknown stream action: " + streamStatus.getAction();
 
-        // file was successfully streamed: if it was the last component of an sstable, assume that the rest
-        // have already arrived
-        if (pendingFile.getFilename().endsWith("-Data.db"))
+        // file was successfully streamed
+        Descriptor desc = pendingFile.getDescriptor();
+        try
         {
-            // last component triggers add: see TODO in SSTable.getAllComponents()
-            String tableName = pendingFile.getDescriptor().ksname;
-            File file = new File(pendingFile.getFilename());
-            String fileName = file.getName();
-            String [] temp = fileName.split("-");
-
-            try
-            {
-                SSTableReader sstable = SSTableWriter.renameAndOpen(pendingFile.getDescriptor());
-                Table.open(tableName).getColumnFamilyStore(temp[0]).addSSTable(sstable);
-                logger.info("Streaming added " + sstable.getFilename());
-            }
-            catch (IOException e)
-            {
-                throw new RuntimeException("Not able to add streamed file " + pendingFile.getFilename(), e);
-            }
+            SSTableReader sstable = SSTableWriter.recoverAndOpen(pendingFile.getDescriptor());
+            Table.open(desc.ksname).getColumnFamilyStore(desc.cfname).addSSTable(sstable);
+            logger.info("Streaming added " + sstable);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Not able to add streamed file " + pendingFile.getFilename(), e);
         }
 
         // send a StreamStatus message telling the source node it can delete this file
