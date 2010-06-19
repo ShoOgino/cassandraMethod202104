@@ -23,29 +23,30 @@
                     if (!header.isDirty(id))
                     {
                         header.turnOn(id, logWriter.getFilePointer());
-                        seekAndWriteCommitLogHeader(header.toByteArray());
+                        writeHeader();
                     }
                 }
             }
 
-            // write mutation, w/ checksum
-            Checksum checkum = new CRC32();
+            // write mutation, w/ checksum on the size and data
+            byte[] bytes;
+            Checksum checksum = new CRC32();
             if (serializedRow instanceof DataOutputBuffer)
             {
-                DataOutputBuffer buffer = (DataOutputBuffer) serializedRow;
-                logWriter.writeInt(buffer.getLength());
-                logWriter.write(buffer.getData(), 0, buffer.getLength());
-                checkum.update(buffer.getData(), 0, buffer.getLength());
+                bytes = ((DataOutputBuffer) serializedRow).getData();
             }
             else
             {
                 assert serializedRow instanceof byte[];
-                byte[] bytes = (byte[]) serializedRow;
-                logWriter.writeInt(bytes.length);
-                logWriter.write(bytes);
-                checkum.update(bytes, 0, bytes.length);
+                bytes = (byte[]) serializedRow;
             }
-            logWriter.writeLong(checkum.getValue());
+
+            checksum.update(bytes.length);
+            logWriter.writeInt(bytes.length);
+            logWriter.writeLong(checksum.getValue());
+            logWriter.write(bytes);
+            checksum.update(bytes, 0, bytes.length);
+            logWriter.writeLong(checksum.getValue());
 
             return cLogCtx;
         }
