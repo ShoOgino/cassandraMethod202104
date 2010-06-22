@@ -23,8 +23,12 @@
         // next, see if the sampled index says it's impossible for the key to be present
         IndexSummary.KeyPosition sampledPosition = getIndexScanPosition(decoratedKey);
         if (sampledPosition == null)
+        {
+            if (op == Operator.EQ)
+                bloomFilterTracker.addFalsePositive();
             // we matched the -1th position: if the operator might match forward, return the 0th position
             return op.apply(1) >= 0 ? 0 : -1;
+        }
 
         // scan the on-disk index, starting at the nearest sampled position
         Iterator<FileDataInput> segments = ifile.iterator(sampledPosition.indexPosition, INDEX_FILE_BUFFER_BYTES);
@@ -44,12 +48,20 @@
                     if (v == 0)
                     {
                         if (comparison == 0 && keyCache != null && keyCache.getCapacity() > 0)
+                        {
+                            if (op == Operator.EQ)
+                                bloomFilterTracker.addTruePositive();
                             // store exact match for the key
                             keyCache.put(unifiedKey, Long.valueOf(dataPosition));
+                        }
                         return dataPosition;
                     }
                     if (v < 0)
+                    {
+                        if (op == Operator.EQ)
+                            bloomFilterTracker.addFalsePositive();
                         return -1;
+                    }
                 }
             }
             catch (IOException e)
@@ -68,6 +80,9 @@
                 }
             }
         }
+
+        if (op == Operator.EQ)
+            bloomFilterTracker.addFalsePositive();
         return -1;
     }
 
