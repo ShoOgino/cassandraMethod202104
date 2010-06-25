@@ -1,0 +1,55 @@
+    /**
+     * Register a tree for the given request to be compared to the appropriate trees in AE_SERVICE_STAGE when they become available.
+     */
+    private void rendezvous(TreeRequest request, MerkleTree tree)
+    {
+        InetAddress LOCAL = FBUtilities.getLocalAddress();
+
+        // the rendezvous pairs for this session
+        Map<TreeRequest, TreePair> ctrees = rendezvousPairs(request.sessionid);
+
+        List<Differencer> differencers = new ArrayList<Differencer>();
+        if (LOCAL.equals(request.endpoint))
+        {
+            // we're registering a local tree: rendezvous with remote requests for the session
+            for (InetAddress neighbor : getNeighbors(request.cf.left))
+            {
+                TreeRequest remotereq = new TreeRequest(request.sessionid, neighbor, request.cf);
+                TreePair waiting = ctrees.remove(remotereq);
+                if (waiting != null && waiting.right != null)
+                {
+                    // the neighbor beat us to the rendezvous: queue differencing
+                    // FIXME: Differencer should take a TreeRequest
+                    differencers.add(new Differencer(remotereq, tree, waiting.right));
+                    continue;
+                }
+
+                // else, the local tree is first to the rendezvous: store and wait
+                ctrees.put(remotereq, new TreePair(tree, null));
+                logger.debug("Stored local tree for " + request + " to wait for " + remotereq);
+            }
+        }
+        else
+        {
+            // we're registering a remote tree: rendezvous with the local tree
+            TreePair waiting = ctrees.remove(request);
+            if (waiting != null && waiting.left != null)
+            {
+                // the local tree beat us to the rendezvous: queue differencing
+                differencers.add(new Differencer(request, waiting.left, tree));
+            }
+            else
+            {
+                // else, the remote tree is first to the rendezvous: store and wait
+                ctrees.put(request, new TreePair(null, tree));
+                logger.debug("Stored remote tree for " + request + " to wait for local tree.");
+            }
+        }
+
+        for (Differencer differencer : differencers)
+        {
+            logger.info("Queueing comparison " + differencer);
+            StageManager.getStage(StageManager.AE_SERVICE_STAGE).execute(differencer);
+        }
+    }
+
