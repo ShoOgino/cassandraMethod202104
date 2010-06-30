@@ -12,30 +12,38 @@
      *     D, but we don't want any other results from it until after the (D, T] range.  Unwrapping so that
      *     the ranges we consider are (D, T], (T, MIN], (MIN, D] fixes this.
      */
-    private static List<Pair<AbstractBounds, List<InetAddress>>> getRestrictedRanges(AbstractBounds queryRange, String keyspace)
-    throws UnavailableException
+    private static List<AbstractBounds> getRestrictedRanges(AbstractBounds queryRange)
     {
         TokenMetadata tokenMetadata = StorageService.instance.getTokenMetadata();
-        Iterator<Token> iter = TokenMetadata.ringIterator(tokenMetadata.sortedTokens(), queryRange.left);
-        List<Pair<AbstractBounds, List<InetAddress>>> ranges = new ArrayList<Pair<AbstractBounds, List<InetAddress>>>();
-        while (iter.hasNext())
-        {
-            Token nodeToken = iter.next();
-            Range nodeRange = new Range(tokenMetadata.getPredecessor(nodeToken), nodeToken);
-            List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(keyspace, nodeToken);
 
-            DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getLocalAddress(), endpoints);
-            Set<AbstractBounds> restrictedRanges = queryRange.restrictTo(nodeRange);
-            for (AbstractBounds range : restrictedRanges)
+        List<AbstractBounds> ranges = new ArrayList<AbstractBounds>();
+        // for each node, compute its intersection with the query range, and add its unwrapped components to our list
+        for (Token nodeToken : tokenMetadata.sortedTokens())
+        {
+            Range nodeRange = new Range(tokenMetadata.getPredecessor(nodeToken), nodeToken);
+            for (AbstractBounds range : queryRange.restrictTo(nodeRange))
             {
                 for (AbstractBounds unwrapped : range.unwrap())
                 {
                     if (logger.isDebugEnabled())
                         logger.debug("Adding to restricted ranges " + unwrapped + " for " + nodeRange);
-                    ranges.add(new Pair<AbstractBounds, List<InetAddress>>(unwrapped, endpoints));
+                    ranges.add(unwrapped);
                 }
             }
         }
+
+        // re-sort ranges in ring order, post-unwrapping
+        Comparator<AbstractBounds> comparator = new Comparator<AbstractBounds>()
+        {
+            public int compare(AbstractBounds o1, AbstractBounds o2)
+            {
+                // no restricted ranges will overlap so we don't need to worry about inclusive vs exclusive left,
+                // just sort by raw token position.
+                return o1.left.compareTo(o2.left);
+            }
+        };
+        Collections.sort(ranges, comparator);
+
         return ranges;
     }
 
