@@ -7,46 +7,6 @@
         String keyspace = keySpace.get();
         checkKeyspaceAndLoginAuthorized(AccessLevel.READONLY);
 
-        ThriftValidation.validateColumnParent(keyspace, column_parent);
-        ThriftValidation.validatePredicate(keyspace, column_parent, predicate);
-        ThriftValidation.validateKeyRange(range);
-
-        List<Row> rows;
-        try
-        {
-            IPartitioner p = StorageService.getPartitioner();
-            AbstractBounds bounds;
-            if (range.start_key == null)
-            {
-                Token.TokenFactory tokenFactory = p.getTokenFactory();
-                Token left = tokenFactory.fromString(range.start_token);
-                Token right = tokenFactory.fromString(range.end_token);
-                bounds = new Range(left, right);
-            }
-            else
-            {
-                bounds = new Bounds(p.getToken(range.start_key), p.getToken(range.end_key));
-            }
-            rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_parent, predicate, bounds, range.count), consistency_level);
-            assert rows != null;
-        }
-        catch (TimeoutException e)
-        {
-        	throw new TimedOutException();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        List<KeySlice> keySlices = new ArrayList<KeySlice>(rows.size());
-        boolean reversed = predicate.slice_range != null && predicate.slice_range.reversed;
-        for (Row row : rows)
-        {
-            List<ColumnOrSuperColumn> thriftifiedColumns = thriftifyColumnFamily(row.cf, column_parent.super_column != null, reversed);
-            keySlices.add(new KeySlice(row.key.key, thriftifiedColumns));
-        }
-
-        return keySlices;
+        return getRangeSlicesInternal(keyspace, column_parent, range, predicate, consistency_level);
     }
 

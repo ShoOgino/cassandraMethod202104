@@ -1,0 +1,38 @@
+    private List<KeySlice> getRangeSlicesInternal(String keyspace, ColumnParent column_parent, KeyRange range, SlicePredicate predicate, ConsistencyLevel consistency_level)
+    throws InvalidRequestException, UnavailableException, TimedOutException
+    {
+        ThriftValidation.validateColumnParent(keyspace, column_parent);
+        ThriftValidation.validatePredicate(keyspace, column_parent, predicate);
+        ThriftValidation.validateKeyRange(range);
+
+        List<Row> rows;
+        try
+        {
+            IPartitioner p = StorageService.getPartitioner();
+            AbstractBounds bounds;
+            if (range.start_key == null)
+            {
+                Token.TokenFactory tokenFactory = p.getTokenFactory();
+                Token left = tokenFactory.fromString(range.start_token);
+                Token right = tokenFactory.fromString(range.end_token);
+                bounds = new Range(left, right);
+            }
+            else
+            {
+                bounds = new Bounds(p.getToken(range.start_key), p.getToken(range.end_key));
+            }
+            rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_parent, predicate, bounds, range.count), consistency_level);
+            assert rows != null;
+        }
+        catch (TimeoutException e)
+        {
+        	throw new TimedOutException();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        return thriftifyKeySlices(rows, column_parent, predicate);
+    }
+

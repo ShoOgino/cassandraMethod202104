@@ -1,0 +1,117 @@
+    ColumnFamilyStore(String table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
+    {
+        assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
+        table_ = table;
+        columnFamily_ = columnFamilyName;
+        this.metadata = metadata;
+        this.partitioner_ = partitioner;
+        fileIndexGenerator_.set(generation);
+        memtable_ = new Memtable(this, partitioner_);
+        binaryMemtable_ = new AtomicReference<BinaryMemtable>(new BinaryMemtable(this));
+
+        if (logger_.isDebugEnabled())
+            logger_.debug("Starting CFS {}", columnFamily_);
+        // scan for data files corresponding to this CF
+        List<File> sstableFiles = new ArrayList<File>();
+        Pattern auxFilePattern = Pattern.compile("(.*)(-Filter\\.db$|-Index\\.db$)");
+        for (File file : files())
+        {
+            String filename = file.getName();
+
+            /* look for and remove orphans. An orphan is a -Filter.db or -Index.db with no corresponding -Data.db. */
+            Matcher matcher = auxFilePattern.matcher(file.getAbsolutePath());
+            if (matcher.matches())
+            {
+                String basePath = matcher.group(1);
+                if (!new File(basePath + "-Data.db").exists())
+                {
+                    logger_.info(String.format("Removing orphan %s", file.getAbsolutePath()));
+                    try
+                    {
+                        FileUtils.deleteWithConfirm(file);
+                    }
+                    catch (IOException e)
+                    {
+                        throw new IOError(e);
+                    }
+                    continue;
+                }
+            }
+
+            if (((file.length() == 0 && !filename.endsWith("-Compacted")) || (filename.contains("-" + SSTable.TEMPFILE_MARKER))))
+            {
+                try
+                {
+                    FileUtils.deleteWithConfirm(file);
+                }
+                catch (IOException e)
+                {
+                    throw new IOError(e);
+                }
+                continue;
+            }
+
+            if (filename.contains("-Data.db"))
+            {
+                sstableFiles.add(file.getAbsoluteFile());
+            }
+        }
+        Collections.sort(sstableFiles, new FileUtils.FileComparator());
+
+        /* Load the index files and the Bloom Filters associated with them. */
+        List<SSTableReader> sstables = new ArrayList<SSTableReader>();
+        for (File file : sstableFiles)
+        {
+            String filename = file.getAbsolutePath();
+            if (SSTable.deleteIfCompacted(filename))
+                continue;
+
+            SSTableReader sstable;
+            try
+            {
+                sstable = SSTableReader.open(filename, partitioner_);
+            }
+            catch (IOException ex)
+            {
+                logger_.error("Corrupt file " + filename + "; skipped", ex);
+                continue;
+            }
+            sstables.add(sstable);
+        }
+        ssTables_ = new SSTableTracker(table, columnFamilyName);
+        ssTables_.add(sstables);
+
+        indexedColumns_ = new TreeMap<byte[], ColumnFamilyStore>(BytesType.instance);
+        for (Map.Entry<byte[], ColumnDefinition> entry : metadata.column_metadata.entrySet())
+        {
+            byte[] column = entry.getKey();
+            ColumnDefinition info = entry.getValue();
+            if (info.index_type == null)
+                continue;
+
+            String indexedCfName = columnFamily_ + "." + (info.index_name == null ? FBUtilities.bytesToHex(column) : info.index_name);
+            IPartitioner rowPartitioner = StorageService.getPartitioner();
+            AbstractType columnComparator = (rowPartitioner instanceof OrderPreservingPartitioner || rowPartitioner instanceof ByteOrderedPartitioner)
+                                            ? BytesType.instance
+                                            : new LocalByPartionerType(StorageService.getPartitioner());
+            CFMetaData indexedCfMetadata = new CFMetaData(table,
+                                                          indexedCfName,
+                                                          ColumnFamilyType.Standard,
+                                                          ClockType.Timestamp,
+                                                          columnComparator,
+                                                          null,
+                                                          new TimestampReconciler(),
+                                                          "",
+                                                          0,
+                                                          false,
+                                                          0,
+                                                          0,
+                                                          Collections.<byte[], ColumnDefinition>emptyMap());
+            ColumnFamilyStore indexedCfs = ColumnFamilyStore.createColumnFamilyStore(table, 
+                                                                                     indexedCfName,
+                                                                                     new LocalPartitioner(metadata.column_metadata.get(column).validator),
+                                                                                     indexedCfMetadata);
+            indexedColumns_.put(column, indexedCfs);
+        }
+    }
+
