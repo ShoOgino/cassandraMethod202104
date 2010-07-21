@@ -20,12 +20,12 @@
             migration.add(new QueryPath(MIGRATIONS_CF, null, UUIDGen.decompose(newVersion)), buf, new TimestampClock(now));
             migration.apply();
             
-            // note that we storing this in the system table, which is not replicated, instead of the definitions table, which is.
+            // note that we're storing this in the system table, which is not replicated
             logger.debug("Applying migration " + newVersion.toString());
             migration = new RowMutation(Table.SYSTEM_TABLE, LAST_MIGRATION_KEY);
             migration.add(new QueryPath(SCHEMA_CF, null, LAST_MIGRATION_KEY), UUIDGen.decompose(newVersion), new TimestampClock(now));
             migration.apply();
-            
+
             // if we fail here, there will be schema changes in the CL that will get replayed *AFTER* the schema is loaded.
             // CassandraDaemon checks for this condition (the stored version will be greater than the loaded version)
             // and calls MigrationManager.applyMigrations(loaded version, stored version).
@@ -40,6 +40,9 @@
                 flushes.add(cfs.forceFlush());
             for (Future f : flushes)
             {
+                if (f == null)
+                    // applying the migration triggered a flush independently
+                    continue;
                 try
                 {
                     f.get();
