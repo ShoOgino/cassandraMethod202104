@@ -7,12 +7,21 @@
         dataFile.close(); // calls force
 
         // remove the 'tmp' marker from all components
-        Descriptor newdesc = rename(desc);
+        final Descriptor newdesc = rename(desc);
+
+        Runnable runnable = new WrappedRunnable()
+        {
+            protected void runMayThrow() throws IOException
+            {
+                StatisticsTable.persistSSTableStatistics(newdesc, estimatedRowSize, estimatedColumnCount);
+            }
+        };
+        ColumnFamilyStore.submitPostFlush(runnable);
 
         // finalize in-memory state for the reader
         SegmentedFile ifile = iwriter.builder.complete(newdesc.filenameFor(SSTable.COMPONENT_INDEX));
         SegmentedFile dfile = dbuilder.complete(newdesc.filenameFor(SSTable.COMPONENT_DATA));
-        SSTableReader sstable = SSTableReader.internalOpen(newdesc, partitioner, ifile, dfile, iwriter.summary, iwriter.bf, maxDataAge);
+        SSTableReader sstable = SSTableReader.internalOpen(newdesc, partitioner, ifile, dfile, iwriter.summary, iwriter.bf, maxDataAge, estimatedRowSize, estimatedColumnCount);
         iwriter = null;
         dbuilder = null;
         return sstable;
