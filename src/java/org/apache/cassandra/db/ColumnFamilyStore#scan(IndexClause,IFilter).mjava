@@ -1,8 +1,7 @@
     public List<Row> scan(IndexClause indexClause, IFilter dataFilter)
     {
-        // TODO: use statistics to pick clause w/ highest selectivity
-        // TODO even later: allow merge join instead of just one index + loop
-        IndexExpression first = indexClause.expressions.get(0);
+        // TODO: allow merge join instead of just one index + loop
+        IndexExpression first = highestSelectivityPredicate(indexClause);
         ColumnFamilyStore indexCFS = getIndexedColumnFamilyStore(first.column_name);
         assert indexCFS != null;
         DecoratedKey indexKey = indexCFS.partitioner_.decorateKey(first.value);
@@ -23,10 +22,19 @@
         {
             DecoratedKey dk = partitioner_.decorateKey(dataKey);
             ColumnFamily data = getColumnFamily(new QueryFilter(dk, new QueryPath(columnFamily_), dataFilter));
-            rows.add(new Row(dk, data));
+            boolean accepted = true;
+            for (IndexExpression expression : indexClause.expressions)
+            {
+                // (we can skip "first" since we already know it's satisfied)
+                if (expression != first && !satisfies(data, expression))
+                {
+                    accepted = false;
+                    break;
+                }
+            }
+            if (accepted)
+                rows.add(new Row(dk, data));
         }
-
-        // TODO apply remaining expressions
 
         return rows;
     }
