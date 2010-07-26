@@ -3,36 +3,16 @@
      * a specific set of column names from a given column family.
      */
     public static List<Row> readProtocol(List<ReadCommand> commands, ConsistencyLevel consistency_level)
-            throws IOException, UnavailableException, TimeoutException
+            throws IOException, UnavailableException, TimeoutException, InvalidRequestException
     {
+        if (StorageService.instance.isBootstrapMode())
+            throw new InvalidRequestException("This node cannot accept reads until it has bootstrapped");
         long startTime = System.nanoTime();
 
-        List<Row> rows = new ArrayList<Row>();
-
+        List<Row> rows;
         if (consistency_level == ConsistencyLevel.ONE)
         {
-            List<ReadCommand> localCommands = new ArrayList<ReadCommand>();
-            List<ReadCommand> remoteCommands = new ArrayList<ReadCommand>();
-
-            for (ReadCommand command: commands)
-            {
-                List<InetAddress> endpoints = StorageService.instance.getNaturalEndpoints(command.table, command.key);
-                boolean foundLocal = endpoints.contains(FBUtilities.getLocalAddress());
-                //TODO: Throw InvalidRequest if we're in bootstrap mode?
-                if (foundLocal && !StorageService.instance.isBootstrapMode())
-                {
-                    localCommands.add(command);
-                }
-                else
-                {
-                    remoteCommands.add(command);
-                }
-            }
-            if (localCommands.size() > 0)
-                rows.addAll(weakReadLocal(localCommands));
-
-            if (remoteCommands.size() > 0)
-                rows.addAll(weakReadRemote(remoteCommands));
+            rows = weakRead(commands);
         }
         else
         {
@@ -41,7 +21,6 @@
         }
 
         readStats.addNano(System.nanoTime() - startTime);
-
         return rows;
     }
 
