@@ -25,10 +25,24 @@
 
             /* Get serialized message to send to cluster */
             message = createMessage(keyspace, key.getBytes(), cfName, columnFamilies);
+            List<IAsyncResult> results = new ArrayList<IAsyncResult>();
             for (InetAddress endpoint: StorageService.instance.getNaturalEndpoints(keyspace, key.getBytes()))
             {
                 /* Send message to end point */
-                MessagingService.instance.sendOneWay(message, endpoint);
+                results.add(MessagingService.instance.sendRR(message, endpoint));
+            }
+            /* wait for acks */
+            for (IAsyncResult result : results)
+            {
+                try
+                {
+                    result.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+                }
+                catch (TimeoutException e)
+                {
+                    // you should probably add retry logic here
+                    throw new RuntimeException(e);
+                }
             }
             
             output.collect(key, new Text(" inserted into Cassandra node(s)"));
