@@ -1,16 +1,19 @@
     @Test
-    public void testCleanup() throws IOException, ExecutionException, InterruptedException
+    public void testCleanup() throws Exception
     {
-        assert CommitLog.instance().getSegmentCount() == 1;
-        CommitLog.setSegmentSize(1000);
+        int segmentCount = CommitLog.instance().getSegmentCount();
+        assert segmentCount == 1 : segmentCount + " != 1";
+
+        //must me large enough to hold persistent_stats
+        CommitLog.setSegmentSize(10000);
 
         Table table = Table.open("Keyspace1");
         ColumnFamilyStore store1 = table.getColumnFamilyStore("Standard1");
         ColumnFamilyStore store2 = table.getColumnFamilyStore("Standard2");
         RowMutation rm;
-        byte[] value = new byte[501];
+        byte[] value = new byte[5001];
 
-        // add data.  use relatively large values to force quick segment creation since we have a low flush threshold in the test config.
+        // add data, one each of Standard1/Standard2 per segment
         for (int i = 0; i < 10; i++)
         {
             rm = new RowMutation("Keyspace1", "key1".getBytes());
@@ -22,10 +25,12 @@
 
         // nothing should get removed after flushing just Standard1
         store1.forceBlockingFlush();
-        assert CommitLog.instance().getSegmentCount() > 1;
+        segmentCount = CommitLog.instance().getSegmentCount();
+        assert segmentCount > 1 : segmentCount + " !> 1";
 
         // after flushing Standard2 we should be able to clean out all segments
         store2.forceBlockingFlush();
-        assert CommitLog.instance().getSegmentCount() == 1;
+        segmentCount = CommitLog.instance().getSegmentCount();
+        assert segmentCount == 1 : segmentCount + " != 1";
     }
 
