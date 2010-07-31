@@ -1,0 +1,27 @@
+    /**
+     * get the (possibly cached) endpoints that should store the given Token
+     * Note that while the endpoints are conceptually a Set (no duplicates will be included),
+     * we return a List to avoid an extra allocation when sorting by proximity later
+     * @param searchToken the token the natural endpoints are requested for
+     * @return a copy of the natural endpoints for the given token
+     * @throws IllegalStateException if the number of requested replicas is greater than the number of known endpoints
+     */
+    public ArrayList<InetAddress> getNaturalEndpoints(Token searchToken) throws IllegalStateException
+    {
+        int replicas = getReplicationFactor();
+        Token keyToken = TokenMetadata.firstToken(tokenMetadata.sortedTokens(), searchToken);
+        ArrayList<InetAddress> endpoints = cachedEndpoints.get(keyToken);
+        if (endpoints == null)
+        {
+            TokenMetadata tokenMetadataClone = tokenMetadata.cloneOnlyTokenMap();
+            keyToken = TokenMetadata.firstToken(tokenMetadataClone.sortedTokens(), searchToken);
+            endpoints = new ArrayList<InetAddress>(calculateNaturalEndpoints(searchToken, tokenMetadataClone));
+            cachedEndpoints.put(keyToken, endpoints);
+        }
+
+        // calculateNaturalEndpoints should have checked this already, this is a safety
+        assert replicas <= endpoints.size();
+
+        return new ArrayList<InetAddress>(endpoints);
+    }
+
