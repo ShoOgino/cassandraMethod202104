@@ -1,0 +1,34 @@
+    @Test
+    public void testTransferTable() throws Exception
+    {
+        // write a temporary SSTable, but don't register it
+        Set<String> content = new HashSet<String>();
+        content.add("key");
+        content.add("key2");
+        content.add("key3");
+        SSTableReader sstable = SSTableUtils.writeSSTable(content);
+        String tablename = sstable.getTableName();
+        String cfname = sstable.getColumnFamilyName();
+
+        // transfer the first and last key
+        IPartitioner p = StorageService.getPartitioner();
+        List<Range> ranges = new ArrayList<Range>();
+        ranges.add(new Range(p.getMinimumToken(), p.getToken("key".getBytes())));
+        ranges.add(new Range(p.getToken("key2".getBytes()), p.getMinimumToken()));
+        StreamOut.transferSSTables(new StreamContext(LOCAL), tablename, Arrays.asList(sstable), ranges);
+
+        // confirm that the SSTable was transferred and registered
+        ColumnFamilyStore cfstore = Table.open(tablename).getColumnFamilyStore(cfname);
+        List<Row> rows = Util.getRangeSlice(cfstore);
+        assertEquals(2, rows.size());
+        assert Arrays.equals(rows.get(0).key.key, "key".getBytes());
+        assert Arrays.equals(rows.get(1).key.key, "key3".getBytes());
+        assert rows.get(0).cf.getColumnsMap().size() == 1;
+        assert rows.get(1).cf.getColumnsMap().size() == 1;
+        assert rows.get(1).cf.getColumn("key3".getBytes()) != null;
+
+        // and that the index and filter were properly recovered
+        assert null != cfstore.getColumnFamily(QueryFilter.getIdentityFilter(Util.dk("key"), new QueryPath("Standard1")));
+        assert null != cfstore.getColumnFamily(QueryFilter.getIdentityFilter(Util.dk("key3"), new QueryPath("Standard1")));
+    }
+

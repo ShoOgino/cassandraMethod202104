@@ -5,37 +5,17 @@
     {
         assert ranges.size() > 0;
         
+        StreamContext context = new StreamContext(target);
         // this is so that this target shows up as a destination while anticompaction is happening.
-        StreamOutManager.pendingDestinations.add(target);
+        StreamOutManager.get(context);
 
-        logger.info("Beginning transfer process to " + target + " for ranges " + StringUtils.join(ranges, ", "));
+        logger.info("Beginning transfer process to {} for ranges {}", context, StringUtils.join(ranges, ", "));
 
-        /*
-         * (1) dump all the memtables to disk.
-         * (2) determine the minimal file sections we need to send for the given ranges
-         * (3) transfer the data.
-        */
         try
         {
-            Table table = Table.open(tableName);
-            logger.info("Flushing memtables for " + tableName + "...");
-            for (Future f : table.flush())
-            {
-                try
-                {
-                    f.get();
-                }
-                catch (InterruptedException e)
-                {
-                    throw new RuntimeException(e);
-                }
-                catch (ExecutionException e)
-                {
-                    throw new RuntimeException(e);
-                }
-            }
+            Table table = flushSSTable(tableName);
             // send the matching portion of every sstable in the keyspace
-            transferSSTables(target, tableName, table.getAllSSTables(), ranges);
+            transferSSTables(context, tableName, table.getAllSSTables(), ranges);
         }
         catch (IOException e)
         {
@@ -43,7 +23,7 @@
         }
         finally
         {
-            StreamOutManager.remove(target);
+            StreamOutManager.remove(context);
         }
         if (callback != null)
             callback.run();
