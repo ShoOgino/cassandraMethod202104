@@ -22,38 +22,23 @@
             rowMutations.add(getRowMutationFromMutations(curKeyspace.get(), pair.key.array(), cfToMutations));
         }
         
-        if (consistencyLevel == ConsistencyLevel.ZERO)
+        try
         {
-            try
-            {
-                schedule();
-                StorageProxy.mutate(rowMutations);
-            }
-            finally
-            {
-                release();
-            }
+            schedule();
+            StorageProxy.mutate(rowMutations, thriftConsistencyLevel(consistencyLevel));
         }
-        else
+        catch (TimeoutException te)
         {
-            try
-            {
-                schedule();
-                StorageProxy.mutateBlocking(rowMutations, thriftConsistencyLevel(consistencyLevel));
-            }
-            catch (TimeoutException te)
-            {
-                throw newTimedOutException();
-            }
-            // FIXME: StorageProxy.mutateBlocking throws Thrift's UnavailableException
-            catch (org.apache.cassandra.thrift.UnavailableException ue)
-            {
-                throw newUnavailableException();
-            }
-            finally
-            {
-                release();
-            }
+            throw newTimedOutException();
+        }
+        // FIXME: StorageProxy.mutate throws Thrift's UnavailableException
+        catch (org.apache.cassandra.thrift.UnavailableException ue)
+        {
+            throw newUnavailableException();
+        }
+        finally
+        {
+            release();
         }
         
         return null;
