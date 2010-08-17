@@ -1,4 +1,4 @@
-    ColumnFamilyStore(String table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
+    private ColumnFamilyStore(String table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
     {
         assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
         table_ = table;
@@ -11,47 +11,13 @@
 
         if (logger_.isDebugEnabled())
             logger_.debug("Starting CFS {}", columnFamily_);
+        
         // scan for data files corresponding to this CF
         List<File> sstableFiles = new ArrayList<File>();
-        Pattern auxFilePattern = Pattern.compile("(.*)(-Filter\\.db$|-Index\\.db$)");
-        for (File file : files())
+        
+        for (File file : files(table, columnFamilyName))
         {
-            String filename = file.getName();
-
-            /* look for and remove orphans. An orphan is a -Filter.db or -Index.db with no corresponding -Data.db. */
-            Matcher matcher = auxFilePattern.matcher(file.getAbsolutePath());
-            if (matcher.matches())
-            {
-                String basePath = matcher.group(1);
-                if (!new File(basePath + "-Data.db").exists())
-                {
-                    logger_.info(String.format("Removing orphan %s", file.getAbsolutePath()));
-                    try
-                    {
-                        FileUtils.deleteWithConfirm(file);
-                    }
-                    catch (IOException e)
-                    {
-                        throw new IOError(e);
-                    }
-                    continue;
-                }
-            }
-
-            if (((file.length() == 0 && !filename.endsWith("-Compacted")) || (filename.contains("-" + SSTable.TEMPFILE_MARKER))))
-            {
-                try
-                {
-                    FileUtils.deleteWithConfirm(file);
-                }
-                catch (IOException e)
-                {
-                    throw new IOError(e);
-                }
-                continue;
-            }
-
-            if (filename.contains("-Data.db"))
+            if (file.getName().contains("-Data.db"))
             {
                 sstableFiles.add(file.getAbsoluteFile());
             }
