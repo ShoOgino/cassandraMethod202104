@@ -1,16 +1,16 @@
     private ColumnFamilyStore(String table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
     {
         assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
-        table_ = table;
-        columnFamily_ = columnFamilyName; 
+        this.table = table;
+        columnFamily = columnFamilyName; 
         this.metadata = metadata;
-        this.partitioner_ = partitioner;
-        fileIndexGenerator_.set(generation);
-        memtable_ = new Memtable(this, partitioner_);
-        binaryMemtable_ = new AtomicReference<BinaryMemtable>(new BinaryMemtable(this));
+        this.partitioner = partitioner;
+        fileIndexGenerator.set(generation);
+        memtable = new Memtable(this, this.partitioner);
+        binaryMemtable = new AtomicReference<BinaryMemtable>(new BinaryMemtable(this));
 
-        if (logger_.isDebugEnabled())
-            logger_.debug("Starting CFS {}", columnFamily_);
+        if (logger.isDebugEnabled())
+            logger.debug("Starting CFS {}", columnFamily);
         
         // scan for data files corresponding to this CF
         List<File> sstableFiles = new ArrayList<File>();
@@ -35,19 +35,19 @@
             SSTableReader sstable;
             try
             {
-                sstable = SSTableReader.open(Descriptor.fromFilename(filename), metadata, partitioner_);
+                sstable = SSTableReader.open(Descriptor.fromFilename(filename), metadata, this.partitioner);
             }
             catch (IOException ex)
             {
-                logger_.error("Corrupt file " + filename + "; skipped", ex);
+                logger.error("Corrupt file " + filename + "; skipped", ex);
                 continue;
             }
             sstables.add(sstable);
         }
-        ssTables_ = new SSTableTracker(table, columnFamilyName);
-        ssTables_.add(sstables);
+        ssTables = new SSTableTracker(table, columnFamilyName);
+        ssTables.add(sstables);
 
-        indexedColumns_ = new TreeMap<byte[], ColumnFamilyStore>(BytesType.instance);
+        indexedColumns = new TreeMap<byte[], ColumnFamilyStore>(BytesType.instance);
         for (Map.Entry<byte[], ColumnDefinition> entry : metadata.column_metadata.entrySet())
         {
             byte[] column = entry.getKey();
@@ -55,7 +55,7 @@
             if (info.index_type == null)
                 continue;
 
-            String indexedCfName = columnFamily_ + "." + (info.index_name == null ? FBUtilities.bytesToHex(column) : info.index_name);
+            String indexedCfName = columnFamily + "." + (info.index_name == null ? FBUtilities.bytesToHex(column) : info.index_name);
             IPartitioner rowPartitioner = StorageService.getPartitioner();
             AbstractType columnComparator = (rowPartitioner instanceof OrderPreservingPartitioner || rowPartitioner instanceof ByteOrderedPartitioner)
                                             ? BytesType.instance
@@ -78,11 +78,11 @@
                                                                                      indexedCfName,
                                                                                      new LocalPartitioner(metadata.column_metadata.get(column).validator),
                                                                                      indexedCfMetadata);
-            indexedColumns_.put(column, indexedCfs);
+            indexedColumns.put(column, indexedCfs);
         }
         
-        String type = this.partitioner_ instanceof LocalPartitioner ? "IndexColumnFamilies" : "ColumnFamilies";
-        mbeanName = "org.apache.cassandra.db:type=" + type + ",keyspace=" + table_ + ",columnfamily=" + columnFamily_;
+        String type = this.partitioner instanceof LocalPartitioner ? "IndexColumnFamilies" : "ColumnFamilies";
+        mbeanName = "org.apache.cassandra.db:type=" + type + ",keyspace=" + this.table + ",columnfamily=" + columnFamily;
         try
         {
             MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
