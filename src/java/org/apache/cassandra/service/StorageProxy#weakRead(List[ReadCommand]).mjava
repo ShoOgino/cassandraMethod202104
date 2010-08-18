@@ -4,7 +4,7 @@
 
         // send off all the commands asynchronously
         List<Future<Object>> localFutures = null;
-        List<IAsyncResult> remoteResults = null;
+        List<Pair<IAsyncResult,ReadCommand>> remoteResults = null;
         for (ReadCommand command: commands)
         {
             InetAddress endPoint = StorageService.instance.findSuitableEndpoint(command.table, command.key);
@@ -21,13 +21,13 @@
             else
             {
                 if (remoteResults == null)
-                    remoteResults = new ArrayList<IAsyncResult>();
+                    remoteResults = new ArrayList<Pair<IAsyncResult, ReadCommand>>();
                 Message message = command.makeReadMessage();
                 if (logger.isDebugEnabled())
                     logger.debug("weakread reading " + command + " from " + message.getMessageId() + "@" + endPoint);
                 if (randomlyReadRepair(command))
                     message.setHeader(ReadCommand.DO_REPAIR, ReadCommand.DO_REPAIR.getBytes());
-                remoteResults.add(MessagingService.instance.sendRR(message, endPoint));
+                remoteResults.add(new Pair<IAsyncResult,ReadCommand>(MessagingService.instance.sendRR(message, endPoint), command));
             }
         }
 
@@ -50,14 +50,17 @@
         }
         if (remoteResults != null)
         {
-            for (IAsyncResult iar: remoteResults)
+            for (Pair<IAsyncResult,ReadCommand> iar: remoteResults)
             {
                 byte[] body;
-                body = iar.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+                body = iar.left.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
                 ByteArrayInputStream bufIn = new ByteArrayInputStream(body);
                 ReadResponse response = ReadResponse.serializer().deserialize(new DataInputStream(bufIn));
-                if (response.row() != null)
-                    rows.add(response.row());
+                Row row = response.row();
+                if (sessionWrites.get() != null)
+                    row = iar.right.mergeRowWithMemtables(Table.open(iar.right.table), row, sessionWrites.get());
+                if (row != null)
+                    rows.add(row);
             }
         }
 
