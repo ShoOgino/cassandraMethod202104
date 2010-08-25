@@ -1,5 +1,24 @@
-    public SSTableSliceIterator(SSTableReader ssTable, DecoratedKey key, byte[] startColumn, byte[] finishColumn, boolean reversed)
+    public SSTableSliceIterator(SSTableReader sstable, DecoratedKey key, byte[] startColumn, byte[] finishColumn, boolean reversed)
     {
-        this(ssTable, null, key, startColumn, finishColumn, reversed);
+        this.key = key;
+        fileToClose = sstable.getFileDataInput(this.key, DatabaseDescriptor.getSlicedReadBufferSizeInKB() * 1024);
+        if (fileToClose == null)
+            return;
+
+        try
+        {
+            DecoratedKey keyInDisk = SSTableReader.decodeKey(sstable.getPartitioner(),
+                                                             sstable.getDescriptor(),
+                                                             FBUtilities.readShortByteArray(fileToClose));
+            assert keyInDisk.equals(key)
+                   : String.format("%s != %s in %s", keyInDisk, key, fileToClose.getPath());
+            SSTableReader.readRowSize(fileToClose, sstable.getDescriptor());
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+
+        reader = createReader(sstable, fileToClose, startColumn, finishColumn, reversed);
     }
 
