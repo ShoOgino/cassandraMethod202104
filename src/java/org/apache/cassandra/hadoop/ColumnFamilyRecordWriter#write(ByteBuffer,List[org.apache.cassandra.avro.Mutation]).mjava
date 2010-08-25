@@ -1,0 +1,41 @@
+    /**
+     * Writes a key/value pair, not to the Cassandra server, but into a
+     * in-memory cache (viz. {@link #mutationsByEndpoint}.
+     * 
+     * <p>
+     * If the key is to be associated with a valid value, a mutation is created
+     * for it with the given column family and columns. In the event the value
+     * in the column is missing (i.e., null), then it is marked for
+     * {@link Deletion}. Similarly, if the entire value for a key is missing
+     * (i.e., null), then the entire key is marked for {@link Deletion}.
+     * </p>
+     * 
+     * @param key
+     *            the key to write.
+     * @param value
+     *            the value to write.
+     * @throws IOException
+     */
+    @Override
+    public synchronized void write(ByteBuffer keybuff, List<org.apache.cassandra.avro.Mutation> value) throws IOException, InterruptedException
+    {
+        maybeFlush();
+        byte[] key = copy(keybuff);
+        InetAddress endpoint = getEndpoint(key);
+        Map<byte[], Map<String, List<Mutation>>> mutationsByKey = mutationsByEndpoint.get(endpoint);
+        if (mutationsByKey == null)
+        {
+            mutationsByKey = new TreeMap<byte[], Map<String, List<Mutation>>>(FBUtilities.byteArrayComparator);
+            mutationsByEndpoint.put(endpoint, mutationsByKey);
+        }
+
+        Map<String, List<Mutation>> cfMutation = new HashMap<String, List<Mutation>>();
+        mutationsByKey.put(key, cfMutation);
+
+        List<Mutation> mutationList = new ArrayList<Mutation>();
+        cfMutation.put(ConfigHelper.getOutputColumnFamily(context.getConfiguration()), mutationList);
+
+        for (org.apache.cassandra.avro.Mutation amut : value)
+            mutationList.add(avroToThrift(amut));
+    }
+
