@@ -1,33 +1,31 @@
-    // remove unnecessary files from the cf directory. these include temp files, orphans and zero-length files.
+    /**
+     * Removes unnecessary files from the cf directory at startup: these include temp files, orphans, zero-length files
+     * and compacted sstables. Files that cannot be recognized will be ignored.
+     * @return A list of Descriptors that were removed.
+     */
     static void scrubDataDirectories(String table, String columnFamily)
     {
-        /* look for and remove orphans. An orphan is a -Filter.db or -Index.db with no corresponding -Data.db. */
-        Pattern auxFilePattern = Pattern.compile("(.*)(-Filter\\.db$|-Index\\.db$)");
-        for (File file : files(table, columnFamily))
+        for (Map.Entry<Descriptor,Set<Component>> sstableFiles : files(table, columnFamily).entrySet())
         {
-            String filename = file.getName();
-            Matcher matcher = auxFilePattern.matcher(file.getAbsolutePath());
-            if (matcher.matches())
-            {
-                String basePath = matcher.group(1);
-                if (!new File(basePath + "-Data.db").exists())
-                {
-                    logger.info(String.format("Removing orphan %s", file.getAbsolutePath()));
-                    try
-                    {
-                        FileUtils.deleteWithConfirm(file);
-                    }
-                    catch (IOException e)
-                    {
-                        throw new IOError(e);
-                    }
-                }
-            }
-            else if (((file.length() == 0 && !filename.endsWith("-Compacted")) || (filename.contains("-" + SSTable.TEMPFILE_MARKER))))
+            Descriptor desc = sstableFiles.getKey();
+            Set<Component> components = sstableFiles.getValue();
+
+            if (SSTable.conditionalDelete(desc, components))
+                // was compacted or temporary: deleted.
+                continue;
+
+            File dataFile = new File(desc.filenameFor(Component.DATA));
+            if (components.contains(Component.DATA) && dataFile.length() > 0)
+                // everything appears to be in order... moving on.
+                continue;
+
+            // missing the DATA file! all components are orphaned
+            logger.warn("Removing orphans for {}: {}", desc, components);
+            for (Component component : components)
             {
                 try
                 {
-                    FileUtils.deleteWithConfirm(file);
+                    FileUtils.deleteWithConfirm(desc.filenameFor(component));
                 }
                 catch (IOException e)
                 {

@@ -12,34 +12,18 @@
         if (logger.isDebugEnabled())
             logger.debug("Starting CFS {}", columnFamily);
         
-        // scan for data files corresponding to this CF
-        List<File> sstableFiles = new ArrayList<File>();
-        
-        for (File file : files(table, columnFamilyName))
-        {
-            if (file.getName().contains("-Data.db"))
-            {
-                sstableFiles.add(file.getAbsoluteFile());
-            }
-        }
-        Collections.sort(sstableFiles, new FileUtils.FileComparator());
-
-        /* Load the index files and the Bloom Filters associated with them. */
+        // scan for sstables corresponding to this cf and load them
         List<SSTableReader> sstables = new ArrayList<SSTableReader>();
-        for (File file : sstableFiles)
+        for (Map.Entry<Descriptor,Set<Component>> sstableFiles : files(table, columnFamilyName).entrySet())
         {
-            String filename = file.getAbsolutePath();
-            if (SSTable.deleteIfCompacted(filename))
-                continue;
-
             SSTableReader sstable;
             try
             {
-                sstable = SSTableReader.open(Descriptor.fromFilename(filename), metadata, this.partitioner);
+                sstable = SSTableReader.open(sstableFiles.getKey(), sstableFiles.getValue(), metadata, this.partitioner);
             }
             catch (IOException ex)
             {
-                logger.error("Corrupt file " + filename + "; skipped", ex);
+                logger.error("Corrupt sstable " + sstableFiles + "; skipped", ex);
                 continue;
             }
             sstables.add(sstable);

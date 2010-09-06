@@ -1,0 +1,39 @@
+    /**
+     * We use a ReferenceQueue to manage deleting files that have been compacted
+     * and for which no more SSTable references exist.  But this is not guaranteed
+     * to run for each such file because of the semantics of the JVM gc.  So,
+     * we write a marker to `compactedFilename` when a file is compacted;
+     * if such a marker exists on startup, the file should be removed.
+     *
+     * This method will also remove SSTables that are marked as temporary.
+     *
+     * @return true if the file was deleted
+     */
+    public static boolean conditionalDelete(Descriptor desc, Set<Component> components)
+    {
+        if (!components.contains(Component.COMPACTED_MARKER) && !desc.temporary)
+            // not compacted or temporary
+            return false;
+        try
+        {
+            // remove the DATA component first if it exists
+            if (components.contains(Component.DATA))
+                FileUtils.deleteWithConfirm(desc.filenameFor(Component.DATA));
+            for (Component component : components)
+            {
+                if (component.equals(Component.DATA) || component.equals(Component.COMPACTED_MARKER))
+                    continue;
+                FileUtils.deleteWithConfirm(desc.filenameFor(component));
+            }
+            // remove the COMPACTED_MARKER component last if it exists
+            if (components.contains(Component.COMPACTED_MARKER))
+                FileUtils.deleteWithConfirm(desc.filenameFor(Component.COMPACTED_MARKER));
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+        logger.info("Deleted " + desc);
+        return true;
+    }
+
