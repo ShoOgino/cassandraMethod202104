@@ -1,0 +1,31 @@
+    /**
+     * Handle node leaving the ring. This can be either because of decommission or loadbalance
+     *
+     * @param endpoint If reason for leaving is decommission or loadbalance
+     * endpoint is the leaving node.
+     * @param pieces STATE_LEFT,token
+     */
+    private void handleStateLeft(InetAddress endpoint, String[] pieces)
+    {
+        assert pieces.length == 2;
+        Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
+
+        // endpoint itself is leaving
+        if (logger_.isDebugEnabled())
+            logger_.debug("Node " + endpoint + " state left, token " + token);
+
+        // If the node is member, remove all references to it. If not, call
+        // removeBootstrapToken just in case it is there (very unlikely chain of events)
+        if (tokenMetadata_.isMember(endpoint))
+        {
+            if (!tokenMetadata_.getToken(endpoint).equals(token))
+                logger_.warn("Node " + endpoint + " 'left' token mismatch. Long network partition?");
+            tokenMetadata_.removeEndpoint(endpoint);
+            HintedHandOffManager.deleteHintsForEndPoint(endpoint);
+        }
+
+        // remove token from bootstrap tokens just in case it is still there
+        tokenMetadata_.removeBootstrapToken(token);
+        calculatePendingRanges();
+    }
+
