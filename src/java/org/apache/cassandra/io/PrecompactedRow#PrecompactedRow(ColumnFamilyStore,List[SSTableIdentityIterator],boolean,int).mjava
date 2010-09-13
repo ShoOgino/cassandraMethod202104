@@ -1,9 +1,16 @@
-    public PrecompactedRow(List<SSTableIdentityIterator> rows, boolean major, int gcBefore)
+    public PrecompactedRow(ColumnFamilyStore cfStore, List<SSTableIdentityIterator> rows, boolean major, int gcBefore)
     {
         super(rows.get(0).getKey());
         buffer = new DataOutputBuffer();
 
-        if (rows.size() > 1 || major)
+        Set<SSTable> sstables = new HashSet<SSTable>();
+        for (SSTableIdentityIterator row : rows)
+        {
+            sstables.add(row.getSSTable());
+        }
+        boolean shouldPurge = major || !cfStore.isKeyInRemainingSSTables(key, sstables);
+
+        if (rows.size() > 1 || shouldPurge)
         {
             ColumnFamily cf = null;
             for (SSTableIdentityIterator row : rows)
@@ -27,7 +34,7 @@
                     cf.addAll(thisCF);
                 }
             }
-            ColumnFamily cfPurged = major ? ColumnFamilyStore.removeDeleted(cf, gcBefore) : cf;
+            ColumnFamily cfPurged = shouldPurge ? ColumnFamilyStore.removeDeleted(cf, gcBefore) : cf;
             if (cfPurged == null)
                 return;
             columnCount = ColumnFamily.serializer().serializeWithIndexes(cfPurged, buffer);
