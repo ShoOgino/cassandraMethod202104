@@ -1,6 +1,21 @@
     private void handleFileStatus(FileStatus.Action action) throws IOException
     {
         streamStatus.setAction(action);
-        FileStatusHandler.onStatusChange(session, pendingFile, streamStatus);
+        
+        if (FileStatus.Action.STREAM == streamStatus.getAction())
+        {
+            // file needs to be restreamed
+            logger.warn("Streaming of file {} from {} failed: requesting a retry.", pendingFile, session);
+            MessagingService.instance.sendOneWay(streamStatus.makeStreamStatusMessage(), session.getHost());
+            return;
+        }
+        assert FileStatus.Action.DELETE == streamStatus.getAction() : "Unknown stream action: " + streamStatus.getAction();
+
+        addSSTable(pendingFile);
+
+        // send a StreamStatus message telling the source node it can delete this file
+        if (logger.isDebugEnabled())
+            logger.debug("Sending a streaming finished message for {} to {}", pendingFile, session);
+        MessagingService.instance.sendOneWay(streamStatus.makeStreamStatusMessage(), session.getHost());
     }
 
