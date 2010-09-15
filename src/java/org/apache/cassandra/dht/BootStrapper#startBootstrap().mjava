@@ -2,17 +2,44 @@
     {
         if (logger.isDebugEnabled())
             logger.debug("Beginning bootstrap process");
+
+        final Multimap<InetAddress, String> bootstrapNodes = HashMultimap.create();
+        final Multimap<String, Map.Entry<InetAddress, Collection<Range>>> rangesToFetch = HashMultimap.create();
+
         for (String table : DatabaseDescriptor.getNonSystemTables())
         {
-            Multimap<Range, InetAddress> rangesWithSourceTarget = getRangesWithSources(table);
-            /* Send messages to respective folks to stream data over to me */
-            for (Map.Entry<InetAddress, Collection<Range>> entry : getWorkMap(rangesWithSourceTarget).asMap().entrySet())
+            Map<InetAddress, Collection<Range>> workMap = getWorkMap(getRangesWithSources(table)).asMap();
+            for (Map.Entry<InetAddress, Collection<Range>> entry : workMap.entrySet())
             {
-                InetAddress source = entry.getKey();
-                StorageService.instance.addBootstrapSource(source, table);
+                bootstrapNodes.put(entry.getKey(), table);
+                rangesToFetch.put(table, entry);
+            }
+        }
+
+        for (final String table : rangesToFetch.keySet())
+        {
+            /* Send messages to respective folks to stream data over to me */
+            for (Map.Entry<InetAddress, Collection<Range>> entry : rangesToFetch.get(table))
+            {
+                final InetAddress source = entry.getKey();
+                final Runnable callback = new Runnable()
+                {
+                    public void run()
+                    {
+                        synchronized (bootstrapNodes)
+                        {
+                            bootstrapNodes.remove(source, table);
+                            if (logger.isDebugEnabled())
+                                logger.debug(String.format("Removed %s/%s as a bootstrap source; remaining is [%s]",
+                                                           source, table, StringUtils.join(bootstrapNodes.keySet(), ", ")));
+                            if (bootstrapNodes.isEmpty())
+                                StorageService.instance.finishBootstrapping();
+                        }
+                    }
+                };
                 if (logger.isDebugEnabled())
-                    logger.debug("Requesting from " + source + " ranges " + StringUtils.join(entry.getValue(), ", "));
-                StreamIn.requestRanges(source, table, entry.getValue());
+                    logger.debug("Bootstrapping from " + source + " ranges " + StringUtils.join(entry.getValue(), ", "));
+                StreamIn.requestRanges(source, table, entry.getValue(), callback);
             }
         }
     }
