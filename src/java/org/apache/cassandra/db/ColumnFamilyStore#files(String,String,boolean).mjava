@@ -1,7 +1,7 @@
     /**
      * Collects a map of sstable components.
      */
-    private static Map<Descriptor,Set<Component>> files(String keyspace, final String columnFamily)
+    private static Map<Descriptor,Set<Component>> files(String keyspace, final String columnFamily, final boolean includeCompacted)
     {
         final Map<Descriptor,Set<Component>> sstables = new HashMap<Descriptor,Set<Component>>();
         for (String directory : DatabaseDescriptor.getAllDataFileLocationsForTable(keyspace))
@@ -15,13 +15,18 @@
                     Pair<Descriptor,Component> component = SSTable.tryComponentFromFilename(dir, name);
                     if (component != null && component.left.cfname.equals(columnFamily))
                     {
-                        Set<Component> components = sstables.get(component.left);
-                        if (components == null)
+                        if (includeCompacted || !new File(component.left.filenameFor(Component.COMPACTED_MARKER)).exists())
                         {
-                            components = new HashSet<Component>();
-                            sstables.put(component.left, components);
+                            Set<Component> components = sstables.get(component.left);
+                            if (components == null)
+                            {
+                                components = new HashSet<Component>();
+                                sstables.put(component.left, components);
+                            }
+                            components.add(component.right);
                         }
-                        components.add(component.right);
+                        else
+                            logger.debug("not including compacted sstable " + component.left.cfname + "-" + component.left.generation);
                     }
                     return false;
                 }
