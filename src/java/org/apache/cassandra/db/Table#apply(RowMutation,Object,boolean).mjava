@@ -5,7 +5,7 @@
     */
     public void apply(RowMutation mutation, Object serializedMutation, boolean writeCommitLog) throws IOException
     {
-        HashMap<ColumnFamilyStore,Memtable> memtablesToFlush = new HashMap<ColumnFamilyStore, Memtable>(2);
+        List<Memtable> memtablesToFlush = Collections.emptyList();
 
         // write the mutation to the commitlog and memtables
         flusherLock.readLock().lock();
@@ -38,7 +38,9 @@
                 if (mutatedIndexedColumns == null)
                 {
                     // just update the actual value, no extra synchronization
-                    applyCF(cfs, key, cf, memtablesToFlush);
+                    Memtable fullMemtable = cfs.apply(key, cf);
+                    if (fullMemtable != null)
+                        memtablesToFlush = addFullMemtable(memtablesToFlush, fullMemtable);
                 }
                 else
                 {
@@ -47,8 +49,11 @@
                         ColumnFamily oldIndexedColumns = readCurrentIndexedColumns(key, cfs, mutatedIndexedColumns);
                         ignoreObsoleteMutations(cf, cfs.metadata.reconciler, mutatedIndexedColumns, oldIndexedColumns);
 
-                        applyCF(cfs, key, cf, memtablesToFlush);
-                        applyIndexUpdates(mutation.key(), memtablesToFlush, cf, cfs, mutatedIndexedColumns, oldIndexedColumns);
+                        Memtable fullMemtable = cfs.apply(key, cf);
+                        if (fullMemtable != null)
+                            memtablesToFlush = addFullMemtable(memtablesToFlush, fullMemtable);
+                        // ignore full index memtables -- we flush those when the "master" one is full
+                        applyIndexUpdates(mutation.key(), cf, cfs, mutatedIndexedColumns, oldIndexedColumns);
                     }
                 }
 
@@ -62,8 +67,9 @@
             flusherLock.readLock().unlock();
         }
 
-        // flush memtables that got filled up.  usually mTF will be empty and this will be a no-op
-        for (Map.Entry<ColumnFamilyStore, Memtable> entry : memtablesToFlush.entrySet())
-            entry.getKey().maybeSwitchMemtable(entry.getValue(), writeCommitLog);
+        // flush memtables that got filled up outside the readlock (maybeSwitchMemtable acquires writeLock).
+        // usually mTF will be empty and this will be a no-op.
+        for (Memtable memtable : memtablesToFlush)
+            memtable.cfs.maybeSwitchMemtable(memtable, writeCommitLog);
     }
 

@@ -4,7 +4,7 @@
             {
                 DecoratedKey key = iter.next();
                 logger.debug("Indexing row {} ", key);
-                HashMap<ColumnFamilyStore,Memtable> memtablesToFlush = new HashMap<ColumnFamilyStore, Memtable>(2);
+                List<Memtable> memtablesToFlush = Collections.emptyList();
                 flusherLock.readLock().lock();
                 try
                 {
@@ -12,7 +12,7 @@
                     {
                         ColumnFamily cf = readCurrentIndexedColumns(key, cfs, columns);
                         if (cf != null)
-                            applyIndexUpdates(key.key, memtablesToFlush, cf, cfs, cf.getColumnNames(), null);
+                            memtablesToFlush = applyIndexUpdates(key.key, cf, cfs, cf.getColumnNames(), null);
                     }
                 }
                 finally
@@ -20,8 +20,9 @@
                     flusherLock.readLock().unlock();
                 }
 
-                for (Map.Entry<ColumnFamilyStore, Memtable> entry : memtablesToFlush.entrySet())
-                    entry.getKey().maybeSwitchMemtable(entry.getValue(), false);
+                // during index build, we do flush index memtables separately from master; otherwise we could OOM
+                for (Memtable memtable : memtablesToFlush)
+                    memtable.cfs.maybeSwitchMemtable(memtable, false);
             }
 
             try
