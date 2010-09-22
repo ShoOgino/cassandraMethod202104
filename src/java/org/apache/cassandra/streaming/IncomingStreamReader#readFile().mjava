@@ -22,9 +22,10 @@
         }
         catch (IOException ex)
         {
-            logger.debug("Receiving stream: recovering from IO error");
             /* Ask the source node to re-stream this file. */
-            handleFileStatus(FileStatus.Action.RETRY);
+            StreamReply reply = new StreamReply(remoteFile.getFilename(), session.getSessionId(), StreamReply.Status.FILE_RETRY);
+            logger.info("Streaming of file {} from {} failed: requesting a retry.", remoteFile, session);
+            MessagingService.instance.sendOneWay(reply.createMessage(), session.getHost());
 
             /* Delete the orphaned file. */
             FileUtils.deleteWithConfirm(new File(localFile.getFilename()));
@@ -37,6 +38,13 @@
 
         if (logger.isDebugEnabled())
             logger.debug("Removing stream context {}", remoteFile);
-        handleFileStatus(FileStatus.Action.FINISHED);
+
+        StreamReply reply = new StreamReply(remoteFile.getFilename(), session.getSessionId(), StreamReply.Status.FILE_FINISHED);
+        addSSTable(localFile);
+        session.remove(remoteFile);
+        // send a StreamStatus message telling the source node it can delete this file
+        if (logger.isDebugEnabled())
+            logger.debug("Sending a streaming finished message for {} to {}", remoteFile, session);
+        MessagingService.instance.sendOneWay(reply.createMessage(), session.getHost());
     }
 
