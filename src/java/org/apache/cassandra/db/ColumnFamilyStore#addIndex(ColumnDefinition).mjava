@@ -1,0 +1,32 @@
+    public void addIndex(final ColumnDefinition info)
+    {
+        assert info.index_type != null;
+        IPartitioner rowPartitioner = StorageService.getPartitioner();
+        AbstractType columnComparator = (rowPartitioner instanceof OrderPreservingPartitioner || rowPartitioner instanceof ByteOrderedPartitioner)
+                                        ? BytesType.instance
+                                        : new LocalByPartionerType(StorageService.getPartitioner());
+        final CFMetaData indexedCfMetadata = CFMetaData.newIndexMetadata(table, columnFamily, info, columnComparator);
+        ColumnFamilyStore indexedCfs = ColumnFamilyStore.createColumnFamilyStore(table,
+                                                                                 indexedCfMetadata.cfName,
+                                                                                 new LocalPartitioner(metadata.column_metadata.get(info.name).validator),
+                                                                                 indexedCfMetadata);
+        if (!SystemTable.isIndexBuilt(table, indexedCfMetadata.cfName))
+        {
+            logger.info("Creating index {}.{}", table, indexedCfMetadata.cfName);
+            Runnable runnable = new WrappedRunnable()
+            {
+                public void runMayThrow() throws IOException, ExecutionException, InterruptedException
+                {
+                    logger.debug("Submitting index build to compactionmanager");
+                    ReducingKeyIterator iter = new ReducingKeyIterator(getSSTables());
+                    Future future = CompactionManager.instance.submitIndexBuild(ColumnFamilyStore.this, FBUtilities.getSingleColumnSet(info.name), iter);
+                    future.get();
+                    logger.info("Index {} complete", indexedCfMetadata.cfName);
+                    SystemTable.setIndexBuilt(table, indexedCfMetadata.cfName);
+                }
+            };
+            forceFlush(runnable);
+        }
+        indexedColumns.put(info.name, indexedCfs);
+    }
+
