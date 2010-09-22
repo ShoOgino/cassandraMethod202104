@@ -1,0 +1,53 @@
+        public SSTableReader build() throws IOException
+        {
+            File ifile = new File(desc.filenameFor(SSTable.COMPONENT_INDEX));
+            File ffile = new File(desc.filenameFor(SSTable.COMPONENT_FILTER));
+            assert !ifile.exists();
+            assert !ffile.exists();
+
+            IndexWriter iwriter;
+            long estimatedRows;
+            try
+            {
+                estimatedRows = estimateRows(desc, dfile);
+                iwriter = new IndexWriter(desc, StorageService.getPartitioner(), estimatedRows);
+            }
+            catch(IOException e)
+            {
+                dfile.close();
+                throw e;
+            }
+
+            // build the index and filter
+            long rows = 0;
+            try
+            {
+                DecoratedKey key;
+                long dataPosition = 0;
+                while (dataPosition < dfile.length())
+                {
+                    key = SSTableReader.decodeKey(StorageService.getPartitioner(), desc, FBUtilities.readShortByteArray(dfile));
+                    long dataSize = SSTableReader.readRowSize(dfile, desc);
+                    iwriter.afterAppend(key, dataPosition);
+                    dataPosition = dfile.getFilePointer() + dataSize;
+                    dfile.seek(dataPosition);
+                    rows++;
+                }
+            }
+            finally
+            {
+                try
+                {
+                    dfile.close();
+                    iwriter.close();
+                }
+                catch (IOException e)
+                {
+                    throw new IOError(e);
+                }
+            }
+
+            logger.debug("estimated row count was %s of real count", ((double)estimatedRows) / rows);
+            return SSTableReader.open(rename(desc, SSTable.componentsFor(desc)));
+        }
+
