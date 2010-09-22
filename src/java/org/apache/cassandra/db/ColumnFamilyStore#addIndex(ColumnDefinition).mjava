@@ -5,25 +5,32 @@
         AbstractType columnComparator = (rowPartitioner instanceof OrderPreservingPartitioner || rowPartitioner instanceof ByteOrderedPartitioner)
                                         ? BytesType.instance
                                         : new LocalByPartionerType(StorageService.getPartitioner());
-        final CFMetaData indexedCfMetadata = CFMetaData.newIndexMetadata(table, columnFamily, info, columnComparator);
+        final CFMetaData indexedCfMetadata = CFMetaData.newIndexMetadata(table.name, columnFamily, info, columnComparator);
         ColumnFamilyStore indexedCfs = ColumnFamilyStore.createColumnFamilyStore(table,
                                                                                  indexedCfMetadata.cfName,
                                                                                  new LocalPartitioner(metadata.column_metadata.get(info.name).validator),
                                                                                  indexedCfMetadata);
-        if (!SystemTable.isIndexBuilt(table, indexedCfMetadata.cfName))
+        // record that the column is supposed to be indexed, before we start building it
+        // (so we don't omit indexing writes that happen during build process)
+        indexedColumns.put(info.name, indexedCfs);
+        if (!SystemTable.isIndexBuilt(table.name, indexedCfMetadata.cfName))
         {
             logger.info("Creating index {}.{}", table, indexedCfMetadata.cfName);
-            Runnable runnable = new WrappedRunnable()
+            try
             {
-                public void runMayThrow() throws IOException
-                {
-                    buildSecondaryIndexes(getSSTables(), FBUtilities.getSingleColumnSet(info.name));
-                    logger.info("Index {} complete", indexedCfMetadata.cfName);
-                    SystemTable.setIndexBuilt(table, indexedCfMetadata.cfName);
-                }
-            };
-            forceFlush(runnable);
+                forceBlockingFlush();
+            }
+            catch (ExecutionException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+            buildSecondaryIndexes(getSSTables(), FBUtilities.getSingleColumnSet(info.name));
+            logger.info("Index {} complete", indexedCfMetadata.cfName);
+            SystemTable.setIndexBuilt(table.name, indexedCfMetadata.cfName);
         }
-        indexedColumns.put(info.name, indexedCfs);
     }
 

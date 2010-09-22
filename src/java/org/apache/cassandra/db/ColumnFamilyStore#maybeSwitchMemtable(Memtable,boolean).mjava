@@ -1,5 +1,5 @@
     /** flush the given memtable and swap in a new one for its CFS, if it hasn't been frozen already.  threadsafe. */
-    Future<?> maybeSwitchMemtable(Memtable oldMemtable, final boolean writeCommitLog, final Runnable afterFlush)
+    Future<?> maybeSwitchMemtable(Memtable oldMemtable, final boolean writeCommitLog)
     {
         /**
          *  If we can get the writelock, that means no new updates can come in and 
@@ -17,9 +17,16 @@
             final CommitLogSegment.CommitLogContext ctx = writeCommitLog ? CommitLog.instance().getContext() : null;
             logger.info("switching in a fresh Memtable for " + columnFamily + " at " + ctx);
 
-            // submit the memtable for any indexed sub-cfses, and our own
-            final CountDownLatch latch = new CountDownLatch(1 + indexedColumns.size());
-            for (ColumnFamilyStore cfs : Iterables.concat(indexedColumns.values(), Collections.singleton(this)))
+            // submit the memtable for any indexed sub-cfses, and our own.
+            List<ColumnFamilyStore> icc = new ArrayList<ColumnFamilyStore>(indexedColumns.size());
+            icc.add(this);
+            for (ColumnFamilyStore indexCfs : indexedColumns.values())
+            {
+                if (!indexCfs.memtable.isClean())
+                    icc.add(indexCfs);
+            }
+            final CountDownLatch latch = new CountDownLatch(icc.size());
+            for (ColumnFamilyStore cfs : icc)
             {
                 submitFlush(cfs.memtable, latch);
                 cfs.memtable = new Memtable(cfs, cfs.partitioner);
@@ -38,8 +45,6 @@
                         // if we're not writing to the commit log, we are replaying the log, so marking
                         // the log header with "you can discard anything written before the context" is not valid
                         CommitLog.instance().discardCompletedSegments(metadata.cfId, ctx);
-                        if (afterFlush != null)
-                            afterFlush.run();
                     }
                 }
             });
