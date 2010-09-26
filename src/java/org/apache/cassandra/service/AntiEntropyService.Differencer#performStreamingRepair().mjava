@@ -1,6 +1,6 @@
         /**
-         * Sends our list of differences to the remote endpoint using the
-         * Streaming API.
+         * Starts sending/receiving our list of differences to/from the remote endpoint: creates a callback
+         * that will be called out of band once the streams complete.
          */
         void performStreamingRepair() throws IOException
         {
@@ -8,29 +8,18 @@
             ColumnFamilyStore cfstore = Table.open(request.cf.left).getColumnFamilyStore(request.cf.right);
             try
             {
-                final List<Range> ranges = new ArrayList<Range>(differences);
-                final Collection<SSTableReader> sstables = cfstore.getSSTables();
+                List<Range> ranges = new ArrayList<Range>(differences);
+                Collection<SSTableReader> sstables = cfstore.getSSTables();
+                Callback callback = new Callback();
                 // send ranges to the remote node
-                Future f = StageManager.getStage(Stage.STREAM).submit(new WrappedRunnable()
-                {
-                    protected void runMayThrow() throws Exception
-                    {
-                        StreamOutSession session = StreamOutSession.create(request.cf.left, request.endpoint, null);
-                        StreamOut.transferSSTables(session, sstables, ranges);
-                    }
-                });
+                StreamOutSession outsession = StreamOutSession.create(request.cf.left, request.endpoint, callback);
+                StreamOut.transferSSTables(outsession, sstables, ranges);
                 // request ranges from the remote node
-                // FIXME: no way to block for the 'requestRanges' call to complete, or to request a
-                // particular cf: see CASSANDRA-1189
-                StreamIn.requestRanges(request.endpoint, request.cf.left, ranges);
-                
-                // wait until streaming has completed
-                f.get();
+                StreamIn.requestRanges(request.endpoint, request.cf.left, ranges, callback);
             }
             catch(Exception e)
             {
                 throw new IOException("Streaming repair failed.", e);
             }
-            logger.info("Finished streaming repair for " + request);
         }
 

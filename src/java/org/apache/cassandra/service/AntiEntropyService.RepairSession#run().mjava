@@ -2,39 +2,30 @@
         public void run()
         {
             // begin a repair session
-            BlockingQueue<TreeRequest> completed = new LinkedBlockingQueue<TreeRequest>();
-            AntiEntropyService.this.sessions.put(getName(), completed);
+            Callback callback = new Callback();
+            AntiEntropyService.this.sessions.put(getName(), callback);
             try
             {
                 // request that all relevant endpoints generate trees
-                Set<TreeRequest> requests = new HashSet<TreeRequest>();
                 Set<InetAddress> endpoints = AntiEntropyService.getNeighbors(tablename);
                 for (String cfname : cfnames)
                 {
                     // send requests to remote nodes and record them
                     for (InetAddress endpoint : endpoints)
-                        requests.add(AntiEntropyService.this.request(getName(), endpoint, tablename, cfname));
+                        requests.put(AntiEntropyService.this.request(getName(), endpoint, tablename, cfname), this);
                     // send but don't record an outstanding request to the local node
                     AntiEntropyService.this.request(getName(), FBUtilities.getLocalAddress(), tablename, cfname);
                 }
+                logger.info("Waiting for repair requests: " + requests.keySet());
                 requestsMade.signalAll();
 
-                // block until all requests have been returned by completedRequest calls
-                logger.info("Waiting for repair requests to: " + requests);
-                while (!requests.isEmpty())
-                {
-                    TreeRequest request = completed.take();
-                    logger.info("Repair request to " + request + " completed successfully.");
-                    requests.remove(request);
-                }
+                // block whatever thread started this session until all requests have been returned:
+                // if this thread dies, the session will still complete in the background
+                callback.completed.await();
             }
             catch (InterruptedException e)
             {
                 throw new RuntimeException("Interrupted while waiting for repair: repair will continue in the background.");
-            }
-            finally
-            {
-                AntiEntropyService.this.sessions.remove(getName());
             }
         }
 
