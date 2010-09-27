@@ -1,0 +1,69 @@
+        /**
+         * Loops collecting mutations from the queue and sending to Cassandra
+         */
+        public void run()
+        {
+            outer:
+            while (run || !queue.isEmpty())
+            {
+                Pair<byte[], Mutation> mutation;
+                try
+                {
+                    mutation = queue.take();
+                }
+                catch (InterruptedException e)
+                {
+                    // re-check loop condition after interrupt
+                    continue;
+                }
+
+                Map<byte[], Map<String, List<Mutation>>> batch = new HashMap<byte[], Map<String, List<Mutation>>>();
+                while (batch.size() < batchThreshold)
+                {
+                    Map<String, List<Mutation>> subBatch = Collections.singletonMap(columnFamily, Arrays.asList(mutation.right));
+                    batch.put(mutation.left, subBatch);
+                    if ((mutation = queue.poll()) == null)
+                        break;
+                }
+
+                Iterator<InetAddress> iter = endpoints.iterator();
+                while (true)
+                {
+                    // send the mutation to the last-used endpoint.  first time through, this will NPE harmlessly.
+                    try
+                    {
+                        thriftClient.batch_mutate(batch, ConsistencyLevel.ONE);
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        close();
+                        if (!iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+
+                    // attempt to connect to a different endpoint
+                    try
+                    {
+                        InetAddress address = iter.next();
+                        thriftSocket = new TSocket(address.getHostName(), ConfigHelper.getRpcPort(conf));
+                        thriftClient = ColumnFamilyOutputFormat.createAuthenticatedClient(thriftSocket, conf);
+                    }
+                    catch (Exception e)
+                    {
+                        close();
+                        // TException means something unexpected went wrong to that endpoint, so
+                        // we should try again to another.  Other exceptions (auth or invalid request) are fatal.
+                        if ((!(e instanceof TException)) || !iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+                }
+            }
+        }
+
