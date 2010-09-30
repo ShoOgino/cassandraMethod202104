@@ -5,7 +5,7 @@
      * 3. files are present but you can't read them: bad (suspect that the partitioner was changed).
      * @throws ConfigurationException
      */
-    public static void checkHealth() throws ConfigurationException
+    public static void checkHealth() throws ConfigurationException, IOException
     {
         Table table = null;
         try
@@ -21,9 +21,8 @@
         }
         
         SortedSet<byte[]> cols = new TreeSet<byte[]>(BytesType.instance);
-        cols.add(TOKEN);
-        cols.add(GENERATION);
         cols.add(PARTITIONER);
+        cols.add(CLUSTERNAME);
         QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCATION_KEY), new QueryPath(STATUS_CF), cols);
         ColumnFamily cf = table.getColumnFamilyStore(STATUS_CF).getColumnFamily(filter);
         
@@ -41,20 +40,27 @@
                 }); 
                 if (dbContents.length > 0)
                     throw new ConfigurationException("Found system table files, but they couldn't be loaded. Did you change the partitioner?");
-            }   
-            // no system files. data is either in the commit log or this is a new node.
+            }
+
+            // no system files.  this is a new node.
+            RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCATION_KEY);
+            cf = ColumnFamily.create(Table.SYSTEM_TABLE, SystemTable.STATUS_CF);
+            cf.addColumn(new Column(PARTITIONER, DatabaseDescriptor.getPartitioner().getClass().getName().getBytes(UTF_8), new TimestampClock(FBUtilities.timestampMicros())));
+            cf.addColumn(new Column(CLUSTERNAME, DatabaseDescriptor.getClusterName().getBytes(), new TimestampClock(FBUtilities.timestampMicros())));
+            rm.add(cf);
+            rm.apply();
+
             return;
         }
         
         
-        // token and generation should *always* be there. If either are missing, we can assume that the partitioner has
-        // been switched.
-        if (cf.getColumnCount() > 0 && (cf.getColumn(GENERATION) == null || cf.getColumn(TOKEN) == null))
-            throw new ConfigurationException("Couldn't read system generation or token. Did you change the partitioner?");
         IColumn partitionerCol = cf.getColumn(PARTITIONER);
-        if (partitionerCol != null && !DatabaseDescriptor.getPartitioner().getClass().getName().equals(new String(partitionerCol.value(), UTF_8)))
+        IColumn clusterCol = cf.getColumn(CLUSTERNAME);
+        assert partitionerCol != null;
+        assert clusterCol != null;
+        if (!DatabaseDescriptor.getPartitioner().getClass().getName().equals(new String(partitionerCol.value(), UTF_8)))
             throw new ConfigurationException("Detected partitioner mismatch! Did you change the partitioner?");
-        if (partitionerCol == null)
-            logger.info("Did not see a partitioner in system storage.");
+        if (!DatabaseDescriptor.getClusterName().equals(new String(clusterCol.value())));
+            throw new ConfigurationException("Saved cluster name " + new String(clusterCol.value()) + " != configured name " + DatabaseDescriptor.getClusterName());
     }
 
