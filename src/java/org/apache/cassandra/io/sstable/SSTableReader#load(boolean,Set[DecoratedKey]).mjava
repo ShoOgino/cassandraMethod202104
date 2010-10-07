@@ -1,7 +1,7 @@
     /**
      * Loads ifile, dfile and indexSummary, and optionally recreates the bloom filter.
      */
-    private void load(boolean recreatebloom) throws IOException
+    private void load(boolean recreatebloom, Set<DecoratedKey> keysToLoadInCache) throws IOException
     {
         SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getIndexAccessMode());
         SegmentedFile.Builder dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode());
@@ -11,6 +11,9 @@
         BufferedRandomAccessFile input = new BufferedRandomAccessFile(descriptor.filenameFor(Component.PRIMARY_INDEX), "r");
         try
         {
+            if (keyCache != null && keyCache.getCapacity() - keyCache.getSize() < keysToLoadInCache.size())
+                keyCache.updateCapacity(keyCache.getSize() + keysToLoadInCache.size());
+
             long indexSize = input.length();
             if (recreatebloom)
                 // estimate key count based on index length
@@ -29,6 +32,8 @@
                 indexSummary.maybeAddEntry(decoratedKey, indexPosition);
                 ibuilder.addPotentialBoundary(indexPosition);
                 dbuilder.addPotentialBoundary(dataPosition);
+                if (keyCache != null && keysToLoadInCache.contains(decoratedKey))
+                    keyCache.put(new Pair<Descriptor, DecoratedKey>(descriptor, decoratedKey), dataPosition);
             }
             indexSummary.complete();
         }

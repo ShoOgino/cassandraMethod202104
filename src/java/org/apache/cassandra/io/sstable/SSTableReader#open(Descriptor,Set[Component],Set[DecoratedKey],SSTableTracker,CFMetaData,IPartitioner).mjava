@@ -1,0 +1,31 @@
+    public static SSTableReader open(Descriptor descriptor, Set<Component> components, Set<DecoratedKey> savedKeys, SSTableTracker tracker, CFMetaData metadata, IPartitioner partitioner) throws IOException
+    {
+        assert partitioner != null;
+
+        long start = System.currentTimeMillis();
+        logger.info("Sampling index for " + descriptor);
+
+        SSTableReader sstable = new SSTableReader(descriptor, components, metadata, partitioner, null, null, null, null, System.currentTimeMillis(), null, null);
+        sstable.setTrackedBy(tracker);
+
+        // versions before 'c' encoded keys as utf-16 before hashing to the filter
+        if (descriptor.hasStringsInBloomFilter)
+        {
+            sstable.load(true, savedKeys);
+        }
+        else
+        {
+            sstable.load(false, savedKeys);
+            sstable.loadBloomFilter();
+        }
+        sstable.loadStatistics(descriptor);
+
+        if (logger.isDebugEnabled())
+            logger.debug("INDEX LOAD TIME for " + descriptor + ": " + (System.currentTimeMillis() - start) + " ms.");
+
+        if (logger.isDebugEnabled() && sstable.getKeyCache() != null)
+            logger.debug(String.format("key cache contains %s/%s keys", sstable.getKeyCache().getSize(), sstable.getKeyCache().getCapacity()));
+
+        return sstable;
+    }
+

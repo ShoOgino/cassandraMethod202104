@@ -1,0 +1,32 @@
+    // must be called after all sstables are loaded since row cache merges all row versions
+    public void initRowCache()
+    {
+        String msgSuffix = String.format(" row cache for %s of %s", columnFamily, table.name);
+        int rowCacheSavePeriodInSeconds = DatabaseDescriptor.getTableMetaData(table.name).get(columnFamily).rowCacheSavePeriodInSeconds;
+        int keyCacheSavePeriodInSeconds = DatabaseDescriptor.getTableMetaData(table.name).get(columnFamily).keyCacheSavePeriodInSeconds;
+
+        long start = System.currentTimeMillis();
+        logger.info(String.format("loading%s", msgSuffix));
+        // sort the results on read because there are few reads and many writes and reads only happen at startup
+        Set<DecoratedKey> savedKeys = readSavedCache(DatabaseDescriptor.getSerializedRowCachePath(table.name, columnFamily));
+        for (DecoratedKey key : savedKeys)
+            cacheRow(key);
+        logger.info(String.format("completed loading (%d ms; %d keys) %s",
+                                  System.currentTimeMillis()-start, ssTables.getRowCache().getSize(), msgSuffix));
+        if (rowCacheSavePeriodInSeconds > 0)
+        {
+            cacheSavingExecutor.scheduleWithFixedDelay(rowCacheSaverTask,
+                                                       rowCacheSavePeriodInSeconds,
+                                                       rowCacheSavePeriodInSeconds,
+                                                       TimeUnit.SECONDS);
+        }
+
+        if (keyCacheSavePeriodInSeconds > 0)
+        {
+            cacheSavingExecutor.scheduleWithFixedDelay(keyCacheSaverTask,
+                                                       keyCacheSavePeriodInSeconds,
+                                                       keyCacheSavePeriodInSeconds,
+                                                       TimeUnit.SECONDS);
+        }
+    }
+
