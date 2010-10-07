@@ -13,20 +13,29 @@
         MessagingService.shutdown();
         setMode("Draining: emptying MessageService pools", false);
         MessagingService.waitFor();
-       
+
         setMode("Draining: clearing mutation stage", false);
         mutationStage.shutdown();
         mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
 
         // lets flush.
         setMode("Draining: flushing column families", false);
+        List<ColumnFamilyStore> cfses = new ArrayList<ColumnFamilyStore>();
         for (String tableName : DatabaseDescriptor.getNonSystemTables())
-            for (Future f : Table.open(tableName).flush())
-                f.get();
+        {
+            Table table = Table.open(tableName);
+            cfses.addAll(table.getColumnFamilyStores());
+        }
+        totalCFs = remainingCFs = cfses.size();
+        for (ColumnFamilyStore cfs : cfses)
+        {
+            cfs.forceBlockingFlush();
+            remainingCFs--;
+        }
 
         ColumnFamilyStore.postFlushExecutor.shutdown();
         ColumnFamilyStore.postFlushExecutor.awaitTermination(60, TimeUnit.SECONDS);
-       
+
         // want to make sure that any segments deleted as a result of flushing are gone.
         DeletionService.waitFor();
 
