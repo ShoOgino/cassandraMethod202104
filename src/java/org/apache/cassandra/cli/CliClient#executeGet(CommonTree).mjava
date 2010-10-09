@@ -10,24 +10,11 @@
         CommonTree columnFamilySpec = (CommonTree)ast.getChild(0);
         assert(columnFamilySpec.getType() == CliParser.NODE_COLUMN_ACCESS);
 
-        String key = CliCompiler.getKey(columnFamilySpec);
-        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
-        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
-
-        List<String> cfnames = new ArrayList<String>();
-        for (CfDef cfd : keyspacesMap.get(keySpace).cf_defs)
-        {
-            cfnames.add(cfd.name);
-        }
- 
-        int idx = cfnames.indexOf(columnFamily);
-        if (idx == -1)
-        {
-            css_.out.println("No such column family: " + columnFamily);
-            return;
-        }
-
-        boolean isSuper = keyspacesMap.get(keySpace).cf_defs.get(idx).column_type.equals("Super");
+        final String key = CliCompiler.getKey(columnFamilySpec);
+        final String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
+        final int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+        final CfDef columnFamilyDef = getCfDef(columnFamily); 
+        final boolean isSuper = columnFamilyDef.comparator_type.equals("Super");
         
         byte[] superColumnName = null;
         String columnName;
@@ -66,11 +53,18 @@
             return;
         }
 
+        final byte[] columnNameInBytes = columnNameAsByteArray(columnName, columnFamily);
+        final AbstractType validator = getValidatorForValue(columnFamilyDef, columnNameInBytes);
+        
         // Perform a get()
-        ColumnPath path = new ColumnPath(columnFamily).setSuper_column(superColumnName).setColumn(columnNameAsByteArray(columnName, columnFamily));
+        ColumnPath path = new ColumnPath(columnFamily).setSuper_column(superColumnName).setColumn(columnNameInBytes);
         Column column = thriftClient_.get(key.getBytes(), path, ConsistencyLevel.ONE).column;
+
+        final byte[] columnValue = column.getValue();
+        final String valueAsString = (validator == null) ? new String(columnValue, "UTF-8") : validator.getString(columnValue);
+
         // print results
         css_.out.printf("=> (column=%s, value=%s, timestamp=%d)\n",
-                        formatColumnName(keySpace, columnFamily, column), new String(column.value, "UTF-8"), column.timestamp);
+                        formatColumnName(keySpace, columnFamily, column), valueAsString, column.timestamp);
     }
 
