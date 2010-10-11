@@ -1,33 +1,18 @@
     /**
-     * Add a column family
-     * @throws TException
-     * @throws InvalidRequestException 
-     * @throws NotFoundException 
+     * Update column family definition attributes
+     * @param statement - ANTLR tree representing current statement
+     * @param cfDefToUpdate - column family definition to apply updates on
+     * @return cfDef - updated column family definition
      */
-    private void executeAddColumnFamily(CommonTree ast) throws TException, InvalidRequestException, NotFoundException
+    private CfDef updateCfDefAttributes(final Tree statement, final CfDef cfDefToUpdate)
     {
-        if (!CliMain.isConnected() || !hasKeySpace())
+        final CfDef cfDef = new CfDef(cfDefToUpdate);
+
+        for(int i = 1; i < statement.getChildCount(); i += 2)
         {
-            return;
-        }
-
-        CommonTree newCFTree = (CommonTree)ast.getChild(0);
-        //parser send the keyspace, plus a series of key value pairs, ie should always be an odd number...
-        assert(newCFTree.getChildCount() > 0);
-        assert(newCFTree.getChildCount() % 2 == 1);
-
-        /*
-         * first value is the keyspace name, after that it is all key=value
-         */
-        final String columnName = newCFTree.getChild(0).getText();
-        final int argumentLength = newCFTree.getChildCount();
-        final CfDef cfDef = new CfDef(keySpace, columnName);        
-
-        for(int i = 1; i < argumentLength; i = i + 2)
-        {
-            AddColumnFamilyArgument mArgument = AddColumnFamilyArgument.valueOf(newCFTree.getChild(i).getText().toUpperCase());
-            String mValue = newCFTree.getChild(i + 1).getText();
-
+            final String currentArgument = statement.getChild(i).getText().toUpperCase();
+            final AddColumnFamilyArgument mArgument = AddColumnFamilyArgument.valueOf(currentArgument);
+            final String mValue = statement.getChild(i + 1).getText();
 
             switch(mArgument)
             {
@@ -68,23 +53,23 @@
                 break;
 
             case COLUMN_METADATA:
-                final Tree arrayOfMetaAttributes = newCFTree.getChild(i + 1);
-                
+                final Tree arrayOfMetaAttributes = statement.getChild(i + 1);
+
                 if (!arrayOfMetaAttributes.getText().equals("ARRAY"))
                 {
                     throw new RuntimeException("'column_metadata' format - [{ k:v, k:v, ..}, { ... }, ...]");
                 }
-                
+
                 cfDef.setColumn_metadata(getCFColumnMetaFromTree(arrayOfMetaAttributes));
                 break;
-            
+
             default:
                 //must match one of the above or we'd throw an exception at the valueOf statement above.
                 assert(false);
 
             }
         }
-        css_.out.println(thriftClient_.system_add_column_family(cfDef));
-        keyspacesMap.put(keySpace, thriftClient_.describe_keyspace(keySpace));
+
+        return cfDef;
     }
 
