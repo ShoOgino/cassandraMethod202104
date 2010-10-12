@@ -23,7 +23,7 @@
         if (tokenMetadata_.isLeaving(endpoint)) 
             throw new UnsupportedOperationException("Node " + endpoint + " is already being removed.");
 
-        if (this.replicatingNodes != null || replicateLatch != null)
+        if (replicatingNodes != null)
             throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete.");
 
         // Find the endpoints that are going to become responsible for data
@@ -42,7 +42,6 @@
                     logger_.warn("Endpoint " + ep + " is down and will not receive data for re-replication of " + endpoint);
             }
         }
-        replicateLatch = new CountDownLatch(this.replicatingNodes.size());
         removingNode = endpoint;
 
         tokenMetadata_.addLeavingEndpoint(endpoint);
@@ -51,15 +50,20 @@
         // but indicate the leaving token so that it can be dealt with.
         Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.removingNonlocal(localToken, token));
 
+        // kick off streaming commands
         restoreReplicaCount(endpoint, myAddress);
 
-        try
+        // wait for ReplicationFinishedVerbHandler to signal we're done
+        while (!replicatingNodes.isEmpty())
         {
-            replicateLatch.await();
-        }
-        catch (InterruptedException e)
-        {
-            logger_.error("Interrupted while waiting for replication confirmation.");
+            try
+            {
+                Thread.sleep(100);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
         }
 
         Gossiper.instance.removeEndpoint(endpoint);
@@ -74,8 +78,7 @@
         if(!this.replicatingNodes.isEmpty())
             logger_.error("Failed to recieve removal confirmation for " + StringUtils.join(this.replicatingNodes, ","));
 
-        this.replicatingNodes = null;
+        replicatingNodes = null;
         removingNode = null;
-        replicateLatch = null;
     }
 
