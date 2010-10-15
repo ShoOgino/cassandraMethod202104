@@ -73,14 +73,31 @@
                 
                 if (cf.min_compaction_threshold < 0 || cf.max_compaction_threshold < 0)
                 {
-                    throw new ConfigurationException("min/max_compaction_thresholds must be non-negative integers.");
+                    throw new ConfigurationException("min/max_compaction_thresholds must be positive integers.");
                 }
                 if ((cf.min_compaction_threshold > cf.max_compaction_threshold) && cf.max_compaction_threshold != 0)
                 {
                     throw new ConfigurationException("min_compaction_threshold must be smaller than max_compaction_threshold, or either must be 0 (disabled)");
                 }
 
-                Map<byte[], ColumnDefinition> metadata = new TreeMap<byte[], ColumnDefinition>(FBUtilities.byteArrayComparator);
+                if (cf.memtable_throughput_in_mb == null)
+                {
+                    cf.memtable_throughput_in_mb = sizeMemtableThroughput();
+                    logger.info("memtable_throughput_in_mb not configured for " + cf.name + ", using " + cf.memtable_throughput_in_mb);
+                }
+                if (cf.memtable_operations_in_millions == null)
+                {
+                    cf.memtable_operations_in_millions = sizeMemtableOperations(cf.memtable_throughput_in_mb);
+                    logger.info("memtable_operations_in_millions not configured for " + cf.name + ", using " + cf.memtable_operations_in_millions);
+                }
+
+                if (cf.memtable_operations_in_millions != null && cf.memtable_operations_in_millions <= 0)
+                {
+                    throw new ConfigurationException("memtable_operations_in_millions must be a positive double");
+                }
+
+                 Map<byte[], ColumnDefinition> metadata = new TreeMap<byte[], ColumnDefinition>(FBUtilities.byteArrayComparator);
+
                 for (RawColumnDefinition rcd : cf.column_metadata)
                 {
                     try
@@ -108,6 +125,11 @@
                                              default_validator,
                                              cf.min_compaction_threshold,
                                              cf.max_compaction_threshold,
+                                             cf.row_cache_save_period_in_seconds,
+                                             cf.key_cache_save_period_in_seconds,
+                                             cf.memtable_flush_after_mins,
+                                             cf.memtable_throughput_in_mb,
+                                             cf.memtable_operations_in_millions,
                                              metadata);
             }
             defs.add(new KSMetaData(keyspace.name,
