@@ -4,17 +4,16 @@
     {
         if (!CliMain.isConnected() || !hasKeySpace())
             return;
-
-        assert (ast.getChildCount() == 2) : "serious parsing error (this is a bug).";
-
-        CommonTree columnFamilySpec = (CommonTree)ast.getChild(0);
-        assert(columnFamilySpec.getType() == CliParser.NODE_COLUMN_ACCESS);
-
+        
+        // ^(NODE_COLUMN_ACCESS <cf> <key> <column>)
+        CommonTree columnFamilySpec = (CommonTree) ast.getChild(0);
+        
         String key = CliCompiler.getKey(columnFamilySpec);
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
         String value = CliUtils.unescapeSQLString(ast.getChild(1).getText());
-
+        Tree valueTree = ast.getChild(1);
+        
         byte[] superColumnName = null;
         String columnName;
 
@@ -41,9 +40,18 @@
         }
 
 
-        byte[] columnNameInBytes  = columnNameAsByteArray(columnName, columnFamily);
-        byte[] columnValueInBytes = columnValueAsByteArray(columnNameInBytes, columnFamily, value);
-        
+        byte[] columnNameInBytes = columnNameAsByteArray(columnName, columnFamily);
+        byte[] columnValueInBytes;
+
+        switch (valueTree.getType())
+        {
+        case CliParser.FUNCTION_CALL:
+            columnValueInBytes = convertValueByFunction(valueTree, getCfDef(columnFamily), columnNameInBytes);
+            break;
+        default:
+            columnValueInBytes = columnValueAsByteArray(columnNameInBytes, columnFamily, value);
+        }
+
         // do the insert
         thriftClient_.insert(key.getBytes(), new ColumnParent(columnFamily).setSuper_column(superColumnName),
                              new Column(columnNameInBytes, columnValueInBytes, FBUtilities.timestampMicros()), ConsistencyLevel.ONE);

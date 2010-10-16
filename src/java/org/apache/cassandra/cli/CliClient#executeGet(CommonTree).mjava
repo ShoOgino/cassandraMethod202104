@@ -4,12 +4,8 @@
         if (!CliMain.isConnected() || !hasKeySpace())
             return;
 
-        // This will never happen unless the grammar is broken
-        assert ast.getChildCount() == 1 : "serious parsing error (this is a bug).";
-
-        CommonTree columnFamilySpec = (CommonTree)ast.getChild(0);
-        assert(columnFamilySpec.getType() == CliParser.NODE_COLUMN_ACCESS);
-
+        CommonTree columnFamilySpec = (CommonTree) ast.getChild(0);
+        
         String key = CliCompiler.getKey(columnFamilySpec);
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
@@ -18,7 +14,7 @@
         
         byte[] superColumnName = null;
         String columnName;
-        
+
         // table.cf['key'] -- row slice
         if (columnSpecCnt == 0)
         {
@@ -61,7 +57,30 @@
         Column column = thriftClient_.get(key.getBytes(), path, ConsistencyLevel.ONE).column;
 
         byte[] columnValue = column.getValue();
-        String valueAsString = (validator == null) ? new String(columnValue, "UTF-8") : validator.getString(columnValue);
+        
+        String valueAsString;
+        
+        // we have ^(CONVERT_TO_TYPE <type>) inside of GET statement
+        // which means that we should try to represent byte[] value according
+        // to specified type
+        if (ast.getChildCount() == 2)
+        {
+            // getting ^(CONVERT_TO_TYPE <type>) tree 
+            Tree typeTree = ast.getChild(1).getChild(0);
+            // .getText() will give us <type>
+            String typeName = CliUtils.unescapeSQLString(typeTree.getText());
+            // building AbstractType from <type>
+            AbstractType valueValidator = getFormatTypeForColumn(typeName);
+
+            // setting value for output
+            valueAsString = valueValidator.getString(columnValue);
+            // updating column value validator class
+            updateColumnMetaData(columnFamilyDef, columnNameInBytes, valueValidator.getClass().getName());
+        }
+        else
+        {
+            valueAsString = (validator == null) ? new String(columnValue, "UTF-8") : validator.getString(columnValue);
+        }
 
         // print results
         css_.out.printf("=> (column=%s, value=%s, timestamp=%d)\n",
