@@ -1,0 +1,44 @@
+    @Test
+    public void testCli() throws IOException, TTransportException, ConfigurationException
+    {
+        setup();
+
+        // new error/output streams for CliSessionState
+        ByteArrayOutputStream errStream = new ByteArrayOutputStream();
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+
+        // checking if we can connect to the running cassandra node on localhost
+        CliMain.connect("127.0.0.1", 9170);
+
+        // setting new output stream
+        CliMain.sessionState.setOut(new PrintStream(outStream));
+        CliMain.sessionState.setErr(new PrintStream(errStream));
+
+        // re-creating keyspace for tests
+        // dropping in case it exists e.g. could be left from previous run
+        CliMain.processStatement("drop keyspace TestKeySpace");
+        CliMain.processStatement("create keyspace TestKeySpace");
+
+        for (String statement : statements)
+        {
+            CliMain.processStatement(statement);
+            String result = outStream.toString();
+
+            if (statement.startsWith("drop ") || statement.startsWith("create ") || statement.startsWith("update "))
+            {
+                assertTrue(result.matches("(.{8})-(.{4})-(.{4})-(.{4})-(.{12})\n"));
+            }
+            else if (statement.startsWith("set "))
+            {
+                assertEquals(result, "Value inserted.\n");
+            }
+            else if (statement.startsWith("get "))
+            {
+                assertTrue(result.startsWith("=> (column="));
+            }
+
+            outStream.reset(); // reset stream so we have only output from next statement all the time
+            errStream.reset(); // no errors to the end user.
+        }
+    }
+
