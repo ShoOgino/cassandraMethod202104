@@ -4,7 +4,6 @@
         if (!CliMain.isConnected())
             return;
 
-        assert (ast.getChildCount() >= 1 || ast.getChildCount() <= 3) : "Incorrect AST Construct!";
         Iterator<CommonTree> iter = ast.getChildren().iterator();
 
         // extract column family
@@ -29,7 +28,6 @@
             }
             else
             {
-                assert child.getType() == CliParser.NODE_LIMIT;
                 if (child.getChildCount() != 1)
                 {
                     css_.out.println("Invalid limit clause");
@@ -50,18 +48,7 @@
             css_.out.println("Using default limit of 100");
         }
 
-        List<String> cfnames = new ArrayList<String>();
-        for (CfDef cfd : keyspacesMap.get(keySpace).cf_defs)
-        {
-            cfnames.add(cfd.name);
-        }
-
-        int idx = cfnames.indexOf(columnFamily);
-        if (idx == -1)
-        {
-            css_.out.println("No such column family: " + columnFamily);
-            return;
-        }
+        CfDef columnFamilyDef = getCfDef(columnFamily);
 
         // read all columns and superColumns
         SlicePredicate predicate = new SlicePredicate();
@@ -76,35 +63,14 @@
         ColumnParent columnParent = new ColumnParent(columnFamily);
         List<KeySlice> keySlices = thriftClient_.get_range_slices(columnParent, predicate, range, ConsistencyLevel.ONE);
         int toIndex = keySlices.size();
-        List<KeySlice> limitSlices = keySlices.subList(0, toIndex);
 
-        for (KeySlice ks : limitSlices)
+        if (limitCount < keySlices.size())
         {
-            css_.out.printf("-------------------\nRowKey: %s\n", new String(ks.key, "UTF-8"));
-            Iterator<ColumnOrSuperColumn> iterator = ks.getColumnsIterator();
-            while (iterator.hasNext())
-            {
-                ColumnOrSuperColumn columnOrSuperColumn = iterator.next();
-                if (columnOrSuperColumn.column != null)
-                {
-                    Column col = columnOrSuperColumn.column;
-                    css_.out.printf("=> (column=%s, value=%s, timestamp=%d)\n",
-                                    formatColumnName(keySpace, columnFamily, col), new String(col.value, "UTF-8"), col.timestamp);
-                }
-                else if (columnOrSuperColumn.super_column != null)
-                {
-                    SuperColumn superCol = columnOrSuperColumn.super_column;
-                    css_.out.printf("=> (super_column=%s,", formatSuperColumnName(keySpace, columnFamily, superCol));
-                    for (Column col : superCol.columns)
-                    {
-                        css_.out.printf("\n     (column=%s, value=%s, timestamp=%d)",
-                                        formatSubcolumnName(keySpace, columnFamily, col), new String(col.value, "UTF-8"), col.timestamp);
-                    }
-                    css_.out.println(")");
-                }
-            }
+            // limitCount could be Integer.MAX_VALUE
+            toIndex = limitCount;
         }
 
-        css_.out.printf("\n%d row%s returned\n", toIndex, (toIndex == 0 || toIndex > 1 ? "s" : ""));
+
+        printSliceList(columnFamilyDef, keySlices.subList(0, toIndex));
     }
 
