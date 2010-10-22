@@ -49,15 +49,16 @@
             return;
         }
 
-        byte[] columnNameInBytes = columnNameAsByteArray(columnName, columnFamily);
-        AbstractType validator = getValidatorForValue(columnFamilyDef, columnNameInBytes);
+        ByteBuffer columnNameInBytes = columnNameAsByteArray(columnName, columnFamily);
+        AbstractType validator = getValidatorForValue(columnFamilyDef, columnNameInBytes.array());
         
         // Perform a get()
-        ColumnPath path = new ColumnPath(columnFamily).setSuper_column(superColumnName).setColumn(columnNameInBytes);
-        Column column = thriftClient_.get(key.getBytes(), path, ConsistencyLevel.ONE).column;
+        ColumnPath path = new ColumnPath(columnFamily);
+        if(superColumnName != null) path.setSuper_column(superColumnName);
+        if(columnNameInBytes != null) path.setColumn(columnNameInBytes);
+        Column column = thriftClient_.get(ByteBuffer.wrap(key.getBytes("UTF-8")), path, ConsistencyLevel.ONE).column;
 
-        byte[] columnValue = column.getValue();
-        
+        byte[] columnValue = column.getValue();       
         String valueAsString;
         
         // we have ^(CONVERT_TO_TYPE <type>) inside of GET statement
@@ -73,13 +74,13 @@
             AbstractType valueValidator = getFormatTypeForColumn(typeName);
 
             // setting value for output
-            valueAsString = valueValidator.getString(columnValue);
+            valueAsString = valueValidator.getString(ByteBuffer.wrap(columnValue));
             // updating column value validator class
             updateColumnMetaData(columnFamilyDef, columnNameInBytes, valueValidator.getClass().getName());
         }
         else
         {
-            valueAsString = (validator == null) ? new String(columnValue, "UTF-8") : validator.getString(columnValue);
+            valueAsString = (validator == null) ? new String(columnValue, "UTF-8") : validator.getString(ByteBuffer.wrap(columnValue));
         }
 
         // print results

@@ -1,0 +1,44 @@
+    /**
+     * Used to convert value (function argument, string) into byte[]
+     * @param functionCall - tree representing function call ^(FUNCTION_CALL function_name value)
+     * @param columnFamily - column family definition (CfDef)
+     * @param columnName   - column name as byte[] (used to update CfDef)
+     * @param withUpdate   - also updates column family metadata for given column
+     * @return byte[] - string value as byte[]
+     */
+    private ByteBuffer convertValueByFunction(Tree functionCall, CfDef columnFamily, ByteBuffer columnName, boolean withUpdate)
+    {
+        String functionName = functionCall.getChild(0).getText();
+        String functionArg  = CliUtils.unescapeSQLString(functionCall.getChild(1).getText());
+        Function function;
+
+        try
+        {
+            function = Function.valueOf(functionName.toUpperCase());
+        }
+        catch (IllegalArgumentException e)
+        {
+            StringBuilder errorMessage = new StringBuilder("Function '" + functionName + "' not found. ");
+            errorMessage.append("Available functions: ");
+            throw new RuntimeException(errorMessage.append(Function.getFunctionNames()).toString());  
+        }
+
+        try
+        {
+            AbstractType validator = function.getValidator();
+            ByteBuffer value = getBytesAccordingToType(functionArg, validator);
+
+            // performing ColumnDef local validator update
+            if (withUpdate)
+            {
+                updateColumnMetaData(columnFamily, columnName, validator.getClass().getName());
+            }
+
+            return value;
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e.getMessage());
+        }
+    }
+

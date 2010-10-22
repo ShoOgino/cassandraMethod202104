@@ -1,0 +1,57 @@
+    /**
+     * removes obsolete index entries and creates new ones for the given row key and mutated columns.
+     * @return list of full (index CF) memtables
+     */
+    private static List<Memtable> applyIndexUpdates(ByteBuffer key,
+                                                    ColumnFamily cf,
+                                                    ColumnFamilyStore cfs,
+                                                    SortedSet<ByteBuffer> mutatedIndexedColumns,
+                                                    ColumnFamily oldIndexedColumns)
+    {
+        List<Memtable> fullMemtables = Collections.emptyList();
+
+        // add new index entries
+        for (ByteBuffer columnName : mutatedIndexedColumns)
+        {
+            IColumn column = cf.getColumn(columnName);
+            if (column == null || column.isMarkedForDelete())
+                continue; // null column == row deletion
+
+            DecoratedKey<LocalToken> valueKey = cfs.getIndexKeyFor(columnName, column.value());
+            ColumnFamily cfi = cfs.newIndexedColumnFamily(columnName);
+            if (column instanceof ExpiringColumn)
+            {
+                ExpiringColumn ec = (ExpiringColumn)column;
+                cfi.addColumn(new ExpiringColumn(key, FBUtilities.EMPTY_BYTE_BUFFER, ec.timestamp, ec.getTimeToLive(), ec.getLocalDeletionTime()));
+            }
+            else
+            {
+                cfi.addColumn(new Column(key, FBUtilities.EMPTY_BYTE_BUFFER, column.timestamp()));
+            }
+            Memtable fullMemtable = cfs.getIndexedColumnFamilyStore(columnName).apply(valueKey, cfi);
+            if (fullMemtable != null)
+                fullMemtables = addFullMemtable(fullMemtables, fullMemtable);
+        }
+
+        // remove the old index entries
+        if (oldIndexedColumns != null)
+        {
+            int localDeletionTime = (int) (System.currentTimeMillis() / 1000);
+            for (Map.Entry<ByteBuffer, IColumn> entry : oldIndexedColumns.getColumnsMap().entrySet())
+            {
+                ByteBuffer columnName = entry.getKey();
+                IColumn column = entry.getValue();
+                if (column.isMarkedForDelete())
+                    continue;
+                DecoratedKey<LocalToken> valueKey = cfs.getIndexKeyFor(columnName, column.value());
+                ColumnFamily cfi = cfs.newIndexedColumnFamily(columnName);
+                cfi.addTombstone(key, localDeletionTime, column.timestamp());
+                Memtable fullMemtable = cfs.getIndexedColumnFamilyStore(columnName).apply(valueKey, cfi);
+                if (fullMemtable != null)
+                    fullMemtables = addFullMemtable(fullMemtables, fullMemtable);
+            }
+        }
+
+        return fullMemtables;
+    }
+
