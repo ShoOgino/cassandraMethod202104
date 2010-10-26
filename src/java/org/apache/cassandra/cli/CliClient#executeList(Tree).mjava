@@ -1,22 +1,20 @@
-    private void executeList(CommonTree ast)
-    throws TException, InvalidRequestException, NotFoundException, IllegalAccessException, InstantiationException, NoSuchFieldException, UnavailableException, TimedOutException
+    private void executeList(Tree statement)
+        throws TException, InvalidRequestException, NotFoundException, IllegalAccessException, InstantiationException, NoSuchFieldException, UnavailableException, TimedOutException
     {
         if (!CliMain.isConnected())
             return;
-
-        Iterator<CommonTree> iter = ast.getChildren().iterator();
-
+        
         // extract column family
-        String columnFamily = iter.next().getText();
+        String columnFamily = statement.getChild(0).getText();
 
         String startKey = "";
         String endKey = "";
         int limitCount = Integer.MAX_VALUE; // will reset to default later if it's not specified
 
         // optional arguments: key range and limit
-        while (iter.hasNext())
+        for (int i = 1; i < statement.getChildCount(); i++)
         {
-            CommonTree child = iter.next();
+            Tree child = statement.getChild(i);
             if (child.getType() == CliParser.NODE_KEY_RANGE)
             {
                 if (child.getChildCount() > 0)
@@ -30,13 +28,13 @@
             {
                 if (child.getChildCount() != 1)
                 {
-                    css_.out.println("Invalid limit clause");
+                    sessionState.out.println("Invalid limit clause");
                     return;
                 }
                 limitCount = Integer.parseInt(child.getChild(0).getText());
                 if (limitCount <= 0)
                 {
-                    css_.out.println("Invalid limit " + limitCount);
+                    sessionState.out.println("Invalid limit " + limitCount);
                     return;
                 }
             }
@@ -45,7 +43,7 @@
         if (limitCount == Integer.MAX_VALUE)
         {
             limitCount = 100;
-            css_.out.println("Using default limit of 100");
+            sessionState.out.println("Using default limit of 100");
         }
 
         CfDef columnFamilyDef = getCfDef(columnFamily);
@@ -54,6 +52,7 @@
         SlicePredicate predicate = new SlicePredicate();
         SliceRange sliceRange = new SliceRange();
         sliceRange.setStart(new byte[0]).setFinish(new byte[0]);
+        sliceRange.setCount(limitCount);
         predicate.setSlice_range(sliceRange);
 
         // set the key range
@@ -61,17 +60,7 @@
         range.setStart_key(startKey.getBytes()).setEnd_key(endKey.getBytes());
 
         ColumnParent columnParent = new ColumnParent(columnFamily);
-        List<KeySlice> keySlices = thriftClient_.get_range_slices(columnParent, predicate, range, ConsistencyLevel.ONE);
-        int toIndex = keySlices.size();
-
-        if (limitCount < keySlices.size())
-        {
-
-            // limitCount could be Integer.MAX_VALUE
-            toIndex = limitCount;
-        }
-
-
-        printSliceList(columnFamilyDef, keySlices.subList(0, toIndex));
+        List<KeySlice> keySlices = thriftClient.get_range_slices(columnParent, predicate, range, ConsistencyLevel.ONE);
+        printSliceList(columnFamilyDef, keySlices);
     }
 

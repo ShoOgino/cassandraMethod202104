@@ -3,28 +3,28 @@
     {
         RowMutation rm;
 
-        rm = new RowMutation("Keyspace1", ByteBuffer.wrap("k1".getBytes()));
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("notbirthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(1L), 0);
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("birthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(1L), 0);
+        rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k1"));
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("notbirthdate")), FBUtilities.toByteBuffer(1L), 0);
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")), FBUtilities.toByteBuffer(1L), 0);
         rm.apply();
 
-        rm = new RowMutation("Keyspace1", ByteBuffer.wrap("k2".getBytes()));
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("notbirthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(2L), 0);
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("birthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(2L), 0);
+        rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k2"));
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("notbirthdate")), FBUtilities.toByteBuffer(2L), 0);
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")), FBUtilities.toByteBuffer(2L), 0);
         rm.apply();
 
-        rm = new RowMutation("Keyspace1", ByteBuffer.wrap("k3".getBytes()));
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("notbirthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(2L), 0);
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("birthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(1L), 0);
+        rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k3"));
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("notbirthdate")), FBUtilities.toByteBuffer(2L), 0);
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")), FBUtilities.toByteBuffer(1L), 0);
         rm.apply();
 
-        rm = new RowMutation("Keyspace1", ByteBuffer.wrap("k4aaaa".getBytes()));
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("notbirthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(2L), 0);
-        rm.add(new QueryPath("Indexed1", null, ByteBuffer.wrap("birthdate".getBytes("UTF8"))), FBUtilities.toByteBuffer(3L), 0);
+        rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k4aaaa"));
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("notbirthdate")), FBUtilities.toByteBuffer(2L), 0);
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")), FBUtilities.toByteBuffer(3L), 0);
         rm.apply();
 
         // basic single-expression query
-        IndexExpression expr = new IndexExpression(ByteBuffer.wrap("birthdate".getBytes("UTF8")), IndexOperator.EQ, FBUtilities.toByteBuffer(1L));
+        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"), IndexOperator.EQ, FBUtilities.toByteBuffer(1L));
         IndexClause clause = new IndexClause(Arrays.asList(expr),FBUtilities.EMPTY_BYTE_BUFFER, 100);
         IFilter filter = new IdentityQueryFilter();
         IPartitioner p = StorageService.getPartitioner();
@@ -33,24 +33,32 @@
 
         assert rows != null;
         assert rows.size() == 2 : StringUtils.join(rows, ",");
-        assert Arrays.equals("k1".getBytes(), rows.get(0).key.key.array());
-        assert Arrays.equals("k3".getBytes(), rows.get(1).key.key.array());
-        assert FBUtilities.toByteBuffer(1L).equals( rows.get(0).cf.getColumn(ByteBuffer.wrap("birthdate".getBytes("UTF8"))).value());
-        assert FBUtilities.toByteBuffer(1L).equals( rows.get(1).cf.getColumn(ByteBuffer.wrap("birthdate".getBytes("UTF8"))).value());
+        
+        String key = new String(rows.get(0).key.key.array(),rows.get(0).key.key.position(),rows.get(0).key.key.remaining()); 
+        assert "k1".equals( key );
+    
+        key = new String(rows.get(1).key.key.array(),rows.get(1).key.key.position(),rows.get(1).key.key.remaining()); 
+        assert "k3".equals(key);
+        
+        assert FBUtilities.toByteBuffer(1L).equals( rows.get(0).cf.getColumn(ByteBufferUtil.bytes("birthdate")).value());
+        assert FBUtilities.toByteBuffer(1L).equals( rows.get(1).cf.getColumn(ByteBufferUtil.bytes("birthdate")).value());
 
         // add a second expression
-        IndexExpression expr2 = new IndexExpression(ByteBuffer.wrap("notbirthdate".getBytes("UTF8")), IndexOperator.GTE, FBUtilities.toByteBuffer(2L));
+        IndexExpression expr2 = new IndexExpression(ByteBufferUtil.bytes("notbirthdate"), IndexOperator.GTE, FBUtilities.toByteBuffer(2L));
         clause = new IndexClause(Arrays.asList(expr, expr2), FBUtilities.EMPTY_BYTE_BUFFER, 100);
         rows = Table.open("Keyspace1").getColumnFamilyStore("Indexed1").scan(clause, range, filter);
 
         assert rows.size() == 1 : StringUtils.join(rows, ",");
-        assert Arrays.equals("k3".getBytes(), rows.get(0).key.key.array());
-
+        key = new String(rows.get(0).key.key.array(),rows.get(0).key.key.position(),rows.get(0).key.key.remaining()); 
+        assert "k3".equals( key );
+    
         // same query again, but with resultset not including the subordinate expression
-        rows = Table.open("Keyspace1").getColumnFamilyStore("Indexed1").scan(clause, range, new NamesQueryFilter(ByteBuffer.wrap("birthdate".getBytes("UTF8"))));
+        rows = Table.open("Keyspace1").getColumnFamilyStore("Indexed1").scan(clause, range, new NamesQueryFilter(ByteBufferUtil.bytes("birthdate")));
 
         assert rows.size() == 1 : StringUtils.join(rows, ",");
-        assert Arrays.equals("k3".getBytes(), rows.get(0).key.key.array());
+        key = new String(rows.get(0).key.key.array(),rows.get(0).key.key.position(),rows.get(0).key.key.remaining()); 
+        assert "k3".equals( key );
+    
         assert rows.get(0).cf.getColumnCount() == 1 : rows.get(0).cf;
 
         // once more, this time with a slice rowset that needs to be expanded
@@ -58,12 +66,14 @@
         rows = Table.open("Keyspace1").getColumnFamilyStore("Indexed1").scan(clause, range, emptyFilter);
       
         assert rows.size() == 1 : StringUtils.join(rows, ",");
-        assert Arrays.equals("k3".getBytes(), rows.get(0).key.key.array());
+        key = new String(rows.get(0).key.key.array(),rows.get(0).key.key.position(),rows.get(0).key.key.remaining()); 
+        assert "k3".equals( key );
+    
         assert rows.get(0).cf.getColumnCount() == 0;
 
         // query with index hit but rejected by secondary clause, with a small enough count that just checking count
         // doesn't tell the scan loop that it's done
-        IndexExpression expr3 = new IndexExpression(ByteBuffer.wrap("notbirthdate".getBytes("UTF8")), IndexOperator.EQ, FBUtilities.toByteBuffer(-1L));
+        IndexExpression expr3 = new IndexExpression(ByteBufferUtil.bytes("notbirthdate"), IndexOperator.EQ, FBUtilities.toByteBuffer(-1L));
         clause = new IndexClause(Arrays.asList(expr, expr3), FBUtilities.EMPTY_BYTE_BUFFER, 1);
         rows = Table.open("Keyspace1").getColumnFamilyStore("Indexed1").scan(clause, range, filter);
 
