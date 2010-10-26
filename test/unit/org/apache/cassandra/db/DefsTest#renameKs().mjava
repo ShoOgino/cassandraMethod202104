@@ -11,7 +11,7 @@
         // write some data that we hope to read back later.
         RowMutation rm = new RowMutation(oldKs.name, dk.key);
         for (int i = 0; i < 10; i++)
-            rm.add(new QueryPath(cfName, null, ByteBuffer.wrap(("col" + i).getBytes())), ByteBuffer.wrap("value".getBytes()), 1L);
+            rm.add(new QueryPath(cfName, null, ByteBuffer.wrap(("col" + i).getBytes())), ByteBufferUtil.bytes("value"), 1L);
         rm.apply();
         ColumnFamilyStore store = Table.open(oldKs.name).getColumnFamilyStore(cfName);
         assert store != null;
@@ -40,11 +40,11 @@
         }
         
         // write on old should fail.
-        rm = new RowMutation(oldKs.name, ByteBuffer.wrap("any key will do".getBytes()));
+        rm = new RowMutation(oldKs.name, ByteBufferUtil.bytes("any key will do"));
         boolean success = true;
         try
         {
-            rm.add(new QueryPath(cfName, null, ByteBuffer.wrap("col0".getBytes())), ByteBuffer.wrap("value0".getBytes()), 1L);
+            rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes("col0")), ByteBufferUtil.bytes("value0"), 1L);
             rm.apply();
         }
         catch (Throwable th)
@@ -55,7 +55,7 @@
         
         // write on new should work.
         rm = new RowMutation(newKsName, dk.key);
-        rm.add(new QueryPath(cfName, null, ByteBuffer.wrap("col0".getBytes())), ByteBuffer.wrap("newvalue".getBytes()), 2L);
+        rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes("col0")), ByteBufferUtil.bytes("newvalue"), 2L);
         rm.apply();
         store = Table.open(newKs.name).getColumnFamilyStore(cfName);
         assert store != null;
@@ -63,13 +63,16 @@
         
         // read on new should work.
         SortedSet<ByteBuffer> cols = new TreeSet<ByteBuffer>(BytesType.instance);
-        cols.add(ByteBuffer.wrap("col0".getBytes()));
-        cols.add(ByteBuffer.wrap("col1".getBytes()));
+        cols.add(ByteBufferUtil.bytes("col0"));
+        cols.add(ByteBufferUtil.bytes("col1"));
         ColumnFamily cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(cfName), cols));
         assert cfam.getColumnCount() == cols.size();
         // tests new write.
-        assert Arrays.equals(cfam.getColumn(ByteBuffer.wrap("col0".getBytes())).value().array(), "newvalue".getBytes());
+        
+        ByteBuffer val = cfam.getColumn(ByteBufferUtil.bytes("col0")).value();
+        assertEquals( new String(val.array(),val.position(),val.remaining()), "newvalue");
         // tests old write.
-        assert Arrays.equals(cfam.getColumn(ByteBuffer.wrap("col1".getBytes())).value().array(), "value".getBytes());
+         val = cfam.getColumn(ByteBufferUtil.bytes("col1")).value();
+        assertEquals( new String(val.array(),val.position(),val.remaining()), "value");
     }
 
