@@ -1,6 +1,8 @@
     public static CqlResult process(String queryString, String keyspace)
     throws RecognitionException, UnavailableException, InvalidRequestException, TimedOutException
     {
+        logger.debug("CQL QUERY: {}", queryString);
+        
         CqlParser parser = getParser(queryString);
         CQLStatement statement = parser.query();
         
@@ -31,7 +33,7 @@
                         {
                             Collection<byte[]> columnNames = new ArrayList<byte[]>();
                             for (Term column : select.getColumnPredicates().getTerms())
-                                columnNames.add(column.getBytes());    // FIXME: surely not good enough
+                                columnNames.add(column.getBytes());
                             
                             commands.add(new SliceByNamesReadCommand(keyspace, key, queryPath, columnNames));
                         }
@@ -73,7 +75,70 @@
                 }
                 else    // It is a range query (range of keys).
                 {
+                    // FIXME: ranges can be open-ended, but a start must exist.  Assert so here.
                     
+                    List<org.apache.cassandra.db.Row> rows = null;
+                    IPartitioner<?> p = StorageService.getPartitioner();
+                    AbstractBounds bounds = new Bounds(p.getToken(select.getKeyPredicates().getStart().getBytes()),
+                                                       p.getToken(select.getKeyPredicates().getFinish().getBytes()));
+                    
+                    // XXX: Our use of Thrift structs internally makes me Sad. :(
+                    SlicePredicate thriftSlicePredicate = new SlicePredicate();
+                    if (select.getColumnPredicates().isRange() || select.getColumnPredicates().getTerms().size() == 0)
+                    {
+                        SliceRange sliceRange = new SliceRange();
+                        sliceRange.start = select.getColumnPredicates().getStart().getBytes();
+                        sliceRange.finish = select.getColumnPredicates().getFinish().getBytes();
+                        sliceRange.reversed = false;    // FIXME: hard-coded
+                        sliceRange.count = select.getNumColumns();
+                        thriftSlicePredicate.slice_range = sliceRange;
+                    }
+                    else
+                    {
+                        List<byte[]> columnNames = new ArrayList<byte[]>();
+                        for (Term column : select.getColumnPredicates().getTerms())
+                            columnNames.add(column.getBytes());
+                        thriftSlicePredicate.column_names = columnNames;
+                    }
+
+                    try
+                    {
+                        rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace,
+                                                                                select.getColumnFamily(),
+                                                                                null,
+                                                                                thriftSlicePredicate,
+                                                                                bounds,
+                                                                                select.getNumRecords()),
+                                                          select.getConsistencyLevel());
+                    }
+                    catch (IOException e)
+                    {
+                        throw new RuntimeException(e);
+                    }
+                    catch (org.apache.cassandra.thrift.UnavailableException e)
+                    {
+                        throw new UnavailableException();
+                    }
+                    catch (TimeoutException e)
+                    {
+                        throw new TimedOutException();
+                    }
+                    
+                    for (org.apache.cassandra.db.Row row : rows)
+                    {
+                        CqlRow avroRow = new CqlRow();
+                        avroRow.key = ByteBuffer.wrap(row.key.key);
+                        avroRow.columns = new ArrayList<Column>();
+                        
+                        for (IColumn column : row.cf.getSortedColumns())
+                        {
+                            Column avroColumn = new Column();
+                            avroColumn.name = ByteBuffer.wrap(column.name());
+                            avroColumn.value = ByteBuffer.wrap(column.value());
+                            avroRow.columns.add(avroColumn);
+                        }
+                        avroRows.add(avroRow);
+                    }
                 }
                 
                 avroResult.rows = avroRows;
