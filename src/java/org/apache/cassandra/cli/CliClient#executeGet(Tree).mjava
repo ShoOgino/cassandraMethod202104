@@ -1,0 +1,90 @@
+    // Execute GET statement
+    private void executeGet(Tree statement)
+            throws TException, NotFoundException, InvalidRequestException, UnavailableException, TimedOutException, IllegalAccessException, InstantiationException, ClassNotFoundException, NoSuchFieldException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        Tree columnFamilySpec = statement.getChild(0);
+        
+        String key = CliCompiler.getKey(columnFamilySpec);
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+        CfDef columnFamilyDef = getCfDef(columnFamily);
+        boolean isSuper = columnFamilyDef.comparator_type.equals("Super");
+        
+        byte[] superColumnName = null;
+        String columnName;
+
+        // table.cf['key'] -- row slice
+        if (columnSpecCnt == 0)
+        {
+            doSlice(keySpace, key, columnFamily, superColumnName);
+            return;
+        }
+        // table.cf['key']['column'] -- slice of a super, or get of a standard
+        else if (columnSpecCnt == 1)
+        {
+            if (isSuper)
+            {
+                superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
+                doSlice(keySpace, key, columnFamily, superColumnName);
+                return;
+            }
+            else 
+            {
+                 columnName = CliCompiler.getColumn(columnFamilySpec, 0);
+            }
+        }
+        // table.cf['key']['column']['column'] -- get of a sub-column
+        else if (columnSpecCnt == 2)
+        {
+            superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
+            columnName = CliCompiler.getColumn(columnFamilySpec, 1);
+        }
+        // The parser groks an arbitrary number of these so it is possible to get here.
+        else
+        {
+            sessionState.out.println("Invalid row, super column, or column specification.");
+            return;
+        }
+
+        ByteBuffer columnNameInBytes = columnNameAsBytes(columnName, columnFamily);
+        AbstractType validator = getValidatorForValue(columnFamilyDef, columnNameInBytes.array());
+        
+        // Perform a get()
+        ColumnPath path = new ColumnPath(columnFamily);
+        if(superColumnName != null) path.setSuper_column(superColumnName);
+        path.setColumn(columnNameInBytes);
+        Column column = thriftClient.get(ByteBuffer.wrap(key.getBytes(Charsets.UTF_8)), path, ConsistencyLevel.ONE).column;
+
+        byte[] columnValue = column.getValue();       
+        String valueAsString;
+        
+        // we have ^(CONVERT_TO_TYPE <type>) inside of GET statement
+        // which means that we should try to represent byte[] value according
+        // to specified type
+        if (statement.getChildCount() == 2)
+        {
+            // getting ^(CONVERT_TO_TYPE <type>) tree 
+            Tree typeTree = statement.getChild(1).getChild(0);
+            // .getText() will give us <type>
+            String typeName = CliUtils.unescapeSQLString(typeTree.getText());
+            // building AbstractType from <type>
+            AbstractType valueValidator = getFormatTypeForColumn(typeName);
+
+            // setting value for output
+            valueAsString = valueValidator.getString(ByteBuffer.wrap(columnValue));
+            // updating column value validator class
+            updateColumnMetaData(columnFamilyDef, columnNameInBytes, valueValidator.getClass().getName());
+        }
+        else
+        {
+            valueAsString = (validator == null) ? new String(columnValue, Charsets.UTF_8) : validator.getString(ByteBuffer.wrap(columnValue));
+        }
+
+        // print results
+        sessionState.out.printf("=> (column=%s, value=%s, timestamp=%d)\n",
+                        formatColumnName(keySpace, columnFamily, column), valueAsString, column.timestamp);
+    }
+

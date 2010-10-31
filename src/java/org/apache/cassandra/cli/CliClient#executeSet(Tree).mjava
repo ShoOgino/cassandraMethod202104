@@ -1,0 +1,65 @@
+    // Execute SET statement
+    private void executeSet(Tree statement)
+        throws TException, InvalidRequestException, UnavailableException, TimedOutException, NoSuchFieldException, InstantiationException, IllegalAccessException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+        
+        // ^(NODE_COLUMN_ACCESS <cf> <key> <column>)
+        Tree columnFamilySpec = statement.getChild(0);
+        
+        String key = CliCompiler.getKey(columnFamilySpec);
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+        String value = CliUtils.unescapeSQLString(statement.getChild(1).getText());
+        Tree valueTree = statement.getChild(1);
+        
+        byte[] superColumnName = null;
+        String columnName;
+
+        // table.cf['key']
+        if (columnSpecCnt == 0)
+        {
+            sessionState.err.println("No column name specified, (type 'help' or '?' for help on syntax).");
+            return;
+        }
+        // table.cf['key']['column'] = 'value'
+        else if (columnSpecCnt == 1)
+        {
+            // get the column name
+            columnName = CliCompiler.getColumn(columnFamilySpec, 0);
+        }
+        // table.cf['key']['super_column']['column'] = 'value'
+        else
+        {
+            assert (columnSpecCnt == 2) : "serious parsing error (this is a bug).";
+            
+            // get the super column and column names
+            superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
+            columnName = CliCompiler.getColumn(columnFamilySpec, 1);
+        }
+
+
+        ByteBuffer columnNameInBytes = columnNameAsBytes(columnName, columnFamily);
+        ByteBuffer columnValueInBytes;
+
+        switch (valueTree.getType())
+        {
+        case CliParser.FUNCTION_CALL:
+            columnValueInBytes = convertValueByFunction(valueTree, getCfDef(columnFamily), columnNameInBytes, true);
+            break;
+        default:
+            columnValueInBytes = columnValueAsBytes(columnNameInBytes, columnFamily, value);
+        }
+
+        ColumnParent parent = new ColumnParent(columnFamily);
+        if(superColumnName != null)
+            parent.setSuper_column(superColumnName);
+        
+        // do the insert
+        thriftClient.insert(ByteBuffer.wrap(key.getBytes(Charsets.UTF_8)), parent,
+                             new Column(columnNameInBytes, columnValueInBytes, FBUtilities.timestampMicros()), ConsistencyLevel.ONE);
+        
+        sessionState.out.println("Value inserted.");
+    }
+
