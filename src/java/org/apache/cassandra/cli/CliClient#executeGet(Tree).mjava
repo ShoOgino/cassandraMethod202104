@@ -10,11 +10,11 @@
         String key = CliCompiler.getKey(columnFamilySpec);
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
-        CfDef columnFamilyDef = getCfDef(columnFamily);
-        boolean isSuper = columnFamilyDef.comparator_type.equals("Super");
+        CfDef cfDef = getCfDef(columnFamily);
+        boolean isSuper = cfDef.comparator_type.equals("Super");
         
         byte[] superColumnName = null;
-        String columnName;
+        ByteBuffer columnName;
 
         // table.cf['key'] -- row slice
         if (columnSpecCnt == 0)
@@ -27,20 +27,20 @@
         {
             if (isSuper)
             {
-                superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
+                superColumnName = columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), cfDef);
                 doSlice(keySpace, key, columnFamily, superColumnName);
                 return;
             }
             else 
             {
-                 columnName = CliCompiler.getColumn(columnFamilySpec, 0);
+                 columnName = columnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 0), cfDef);
             }
         }
         // table.cf['key']['column']['column'] -- get of a sub-column
         else if (columnSpecCnt == 2)
         {
-            superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
-            columnName = CliCompiler.getColumn(columnFamilySpec, 1);
+            superColumnName = columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), cfDef);
+            columnName = subColumnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 1), cfDef);
         }
         // The parser groks an arbitrary number of these so it is possible to get here.
         else
@@ -49,14 +49,22 @@
             return;
         }
 
-        ByteBuffer columnNameInBytes = columnNameAsBytes(columnName, columnFamily);
-        AbstractType validator = getValidatorForValue(columnFamilyDef, columnNameInBytes.array());
+        AbstractType validator = getValidatorForValue(cfDef, TBaseHelper.byteBufferToByteArray(columnName));
         
         // Perform a get()
         ColumnPath path = new ColumnPath(columnFamily);
         if(superColumnName != null) path.setSuper_column(superColumnName);
-        path.setColumn(columnNameInBytes);
-        Column column = thriftClient.get(ByteBuffer.wrap(key.getBytes(Charsets.UTF_8)), path, ConsistencyLevel.ONE).column;
+        path.setColumn(columnName);
+        Column column;
+        try
+        {
+            column = thriftClient.get(ByteBuffer.wrap(key.getBytes(Charsets.UTF_8)), path, ConsistencyLevel.ONE).column;
+        }
+        catch (NotFoundException e)
+        {
+            sessionState.out.println("Value was not found");
+            return;
+        }
 
         byte[] columnValue = column.getValue();       
         String valueAsString;
@@ -76,7 +84,7 @@
             // setting value for output
             valueAsString = valueValidator.getString(ByteBuffer.wrap(columnValue));
             // updating column value validator class
-            updateColumnMetaData(columnFamilyDef, columnNameInBytes, valueValidator.getClass().getName());
+            updateColumnMetaData(cfDef, columnName, valueValidator.getClass().getName());
         }
         else
         {

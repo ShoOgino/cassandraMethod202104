@@ -15,7 +15,7 @@
         Tree valueTree = statement.getChild(1);
         
         byte[] superColumnName = null;
-        String columnName;
+        ByteBuffer columnName;
 
         // table.cf['key']
         if (columnSpecCnt == 0)
@@ -27,7 +27,7 @@
         else if (columnSpecCnt == 1)
         {
             // get the column name
-            columnName = CliCompiler.getColumn(columnFamilySpec, 0);
+            columnName = columnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 0), columnFamily);
         }
         // table.cf['key']['super_column']['column'] = 'value'
         else
@@ -35,21 +35,20 @@
             assert (columnSpecCnt == 2) : "serious parsing error (this is a bug).";
             
             // get the super column and column names
-            superColumnName = CliCompiler.getColumn(columnFamilySpec, 0).getBytes(Charsets.UTF_8);
-            columnName = CliCompiler.getColumn(columnFamilySpec, 1);
+            superColumnName = columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), columnFamily);
+            columnName = subColumnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 1), columnFamily);
         }
 
 
-        ByteBuffer columnNameInBytes = columnNameAsBytes(columnName, columnFamily);
         ByteBuffer columnValueInBytes;
 
         switch (valueTree.getType())
         {
         case CliParser.FUNCTION_CALL:
-            columnValueInBytes = convertValueByFunction(valueTree, getCfDef(columnFamily), columnNameInBytes, true);
+            columnValueInBytes = convertValueByFunction(valueTree, getCfDef(columnFamily), columnName, true);
             break;
         default:
-            columnValueInBytes = columnValueAsBytes(columnNameInBytes, columnFamily, value);
+            columnValueInBytes = columnValueAsBytes(columnName, columnFamily, value);
         }
 
         ColumnParent parent = new ColumnParent(columnFamily);
@@ -58,7 +57,7 @@
         
         // do the insert
         thriftClient.insert(ByteBuffer.wrap(key.getBytes(Charsets.UTF_8)), parent,
-                             new Column(columnNameInBytes, columnValueInBytes, FBUtilities.timestampMicros()), ConsistencyLevel.ONE);
+                             new Column(columnName, columnValueInBytes, FBUtilities.timestampMicros()), ConsistencyLevel.ONE);
         
         sessionState.out.println("Value inserted.");
     }
