@@ -7,7 +7,6 @@
         
         // ^(NODE_COLUMN_ACCESS <cf> <key> <column>)
         Tree columnFamilySpec = statement.getChild(0);
-        
         String key = CliCompiler.getKey(columnFamilySpec);
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
@@ -27,18 +26,16 @@
         else if (columnSpecCnt == 1)
         {
             // get the column name
-            columnName = columnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 0), columnFamily);
+            columnName = getColumnName(columnFamily, columnFamilySpec.getChild(2));
         }
         // table.cf['key']['super_column']['column'] = 'value'
         else
         {
             assert (columnSpecCnt == 2) : "serious parsing error (this is a bug).";
-            
-            // get the super column and column names
-            superColumnName = columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), columnFamily);
-            columnName = subColumnNameAsBytes(CliCompiler.getColumn(columnFamilySpec, 1), columnFamily);
-        }
 
+            superColumnName = getColumnName(columnFamily, columnFamilySpec.getChild(2)).array();
+            columnName = getSubColumnName(columnFamily, columnFamilySpec.getChild(3));
+        }
 
         ByteBuffer columnValueInBytes;
 
@@ -54,12 +51,13 @@
         ColumnParent parent = new ColumnParent(columnFamily);
         if(superColumnName != null)
             parent.setSuper_column(superColumnName);
-        
+
         // do the insert
         AbstractType keyComparator = this.cfKeysComparators.get(columnFamily);
         ByteBuffer keyBytes = keyComparator == null
                             ? ByteBuffer.wrap(key.getBytes(Charsets.UTF_8))
                             : getBytesAccordingToType(key, keyComparator);
+
         thriftClient.insert(keyBytes, parent, new Column(columnName, columnValueInBytes, FBUtilities.timestampMicros()), ConsistencyLevel.ONE);
         
         sessionState.out.println("Value inserted.");
