@@ -1,0 +1,61 @@
+    private static List<org.apache.cassandra.db.Row> getSlice(String keyspace, SelectStatement select)
+    throws InvalidRequestException, TimedOutException, UnavailableException
+    {
+        List<org.apache.cassandra.db.Row> rows = null;
+        QueryPath queryPath = new QueryPath(select.getColumnFamily());
+        List<ReadCommand> commands = new ArrayList<ReadCommand>();
+        
+        assert select.getKeys().size() == 1;
+        
+        ByteBuffer key = select.getKeys().get(0).getByteBuffer();
+        validateKey(key);
+        
+        // ...of a list of column names
+        if (!select.isColumnRange())
+        {
+            Collection<ByteBuffer> columnNames = new ArrayList<ByteBuffer>();
+            for (Term column : select.getColumnNames())
+                columnNames.add(column.getByteBuffer());
+            
+            commands.add(new SliceByNamesReadCommand(keyspace, key, queryPath, columnNames));
+        }
+        // ...a range (slice) of column names
+        else
+        {
+            commands.add(new SliceFromReadCommand(keyspace,
+                                                  key,
+                                                  queryPath,
+                                                  select.getColumnStart().getByteBuffer(),
+                                                  select.getColumnFinish().getByteBuffer(),
+                                                  select.isColumnsReversed(),
+                                                  select.getColumnsLimit()));
+        }
+
+        try
+        {
+            rows = StorageProxy.readProtocol(commands, select.getConsistencyLevel());
+        }
+        catch (TimeoutException e)
+        {
+            throw new TimedOutException();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (org.apache.cassandra.thrift.UnavailableException e)
+        {
+            UnavailableException error = new UnavailableException();
+            error.initCause(e);
+            throw error;
+        }
+        catch (org.apache.cassandra.thrift.InvalidRequestException e)
+        {
+            InvalidRequestException error = new InvalidRequestException();
+            error.initCause(e);
+            throw error;
+        }
+        
+        return rows;
+    }
+
