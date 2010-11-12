@@ -17,14 +17,23 @@
                 validateColumnFamily(keyspace, select.getColumnFamily());
                 validateSelect(keyspace, select);
                 
-                List<CqlRow> avroRows = new ArrayList<CqlRow>();
-                avroResult.type = CqlResultType.ROWS;
                 List<org.apache.cassandra.db.Row> rows = null;
                 
                 // By-key
                 if (!select.isKeyRange() && (select.getKeys().size() > 0))
                 {
                     rows = getSlice(keyspace, select);
+                    
+                    // Only return the column count, (of the at-most 1 row).
+                    if (select.isCountOperation())
+                    {
+                        avroResult.type = CqlResultType.INT;
+                        if (rows.size() > 0)
+                            avroResult.num = rows.get(0).cf != null ? rows.get(0).cf.getSortedColumns().size() : 0;
+                        else
+                            avroResult.num = 0;
+                        return avroResult;
+                    }
                 }
                 else
                 {
@@ -39,6 +48,9 @@
                         rows = getIndexedSlices(keyspace, select);
                     }
                 }
+                
+                List<CqlRow> avroRows = new ArrayList<CqlRow>();
+                avroResult.type = CqlResultType.ROWS;
                 
                 // Create the result set
                 for (org.apache.cassandra.db.Row row : rows)
