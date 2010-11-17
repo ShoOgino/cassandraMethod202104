@@ -16,31 +16,22 @@
             Set<Range> interesting = new HashSet(ss.getRangesForEndpoint(request.cf.left, local));
             interesting.retainAll(ss.getRangesForEndpoint(request.cf.left, request.endpoint));
 
-            // compare trees, and filter out uninteresting differences
+            // compare trees, and collect interesting differences
             for (MerkleTree.TreeRange diff : MerkleTree.difference(ltree, rtree))
-            {
                 for (Range localrange: interesting)
-                {
-                    if (diff.intersects(localrange))
-                    {
-                        differences.add(diff);
-                        break; // the inner loop
-                    }
-                }
-            }
+                    differences.addAll(diff.intersectionWith(localrange));
             
             // choose a repair method based on the significance of the difference
-            float difference = differenceFraction();
-            String format = "Endpoints " + local + " and " + request.endpoint + " are %s for " + request.cf;
-            if (difference == 0.0)
+            String format = "Endpoints " + local + " and " + request.endpoint + " %s for " + request.cf;
+            if (differences.isEmpty())
             {
-                logger.info(String.format(format, "consistent"));
+                logger.info(String.format(format, "are consistent"));
                 AntiEntropyService.instance.completedRequest(request);
                 return;
             }
 
             // non-0 difference: perform streaming repair
-            logger.info(String.format(format, (difference * 100) + "% out of sync"));
+            logger.info(String.format(format, "have " + differences.size() + " range(s) out of sync"));
             try
             {
                 performStreamingRepair();
