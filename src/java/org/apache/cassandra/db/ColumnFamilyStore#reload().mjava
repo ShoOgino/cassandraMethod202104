@@ -19,36 +19,24 @@
         ssTables.updateCacheSizes();
         
         // figure out what needs to be added and dropped.
-        final Set<ByteBuffer> indexesToDrop = new HashSet<ByteBuffer>();
-        final Set<ColumnDefinition> indexesToAdd = new HashSet<ColumnDefinition>();
-        
-        for (ColumnDefinition cdef : metadata.getColumn_metadata().values())
-            if (!indexedColumns.containsKey(cdef.name))
-                indexesToAdd.add(cdef);
-        for (ByteBuffer indexName : indexedColumns.keySet())
-            if (!metadata.getColumn_metadata().containsKey(indexName))
-                indexesToDrop.add(indexName);
         // future: if/when we have modifiable settings for secondary indexes, they'll need to be handled here.
-        
-        final Runnable indexMaintenance = new Runnable() 
+        for (ByteBuffer indexName : indexedColumns.keySet())
         {
-            public void run() 
+            if (!metadata.getColumn_metadata().containsKey(indexName))
             {
-                // drop indexes no longer needed.
-                for (ByteBuffer indexName : indexesToDrop)
+                ColumnFamilyStore indexCfs = indexedColumns.remove(indexName);
+                if (indexCfs == null)
                 {
-                    ColumnFamilyStore indexCfs = indexedColumns.remove(indexName);
-                    assert indexCfs != null;
-                    SystemTable.setIndexRemoved(metadata.tableName, metadata.cfName);
-                    indexCfs.removeAllSSTables();
+                    logger.debug("index {} already removed; ignoring", FBUtilities.bytesToHex(indexName));
+                    continue;
                 }
-                // add new indexes.
-                for (ColumnDefinition info : indexesToAdd)
-                    if (info.getIndexType() != null)
-                        addIndex(info);        
+                SystemTable.setIndexRemoved(metadata.tableName, metadata.cfName);
+                indexCfs.removeAllSSTables();
             }
-        };
-        // reset the memtable with new settings.
-        maybeSwitchMemtable(memtable, true, indexMaintenance);
+        }
+
+        for (ColumnDefinition cdef : metadata.getColumn_metadata().values())
+            if (!indexedColumns.containsKey(cdef.name) && cdef.getIndexType() != null)
+                addIndex(cdef);
     }
 
