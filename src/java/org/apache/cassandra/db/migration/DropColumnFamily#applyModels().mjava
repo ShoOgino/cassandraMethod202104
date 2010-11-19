@@ -1,33 +1,24 @@
     @Override
     public void applyModels() throws IOException
     {
-        // reinitialize the table.
-        KSMetaData existing = DatabaseDescriptor.getTableDefinition(tableName);
-        CFMetaData cfm = existing.cfMetaData().get(cfName);
-        ColumnFamilyStore cfs = Table.open(cfm.tableName).getColumnFamilyStore(cfName);
-        KSMetaData ksm = makeNewKeyspaceDefinition(existing);
-        CFMetaData.purge(cfm);
-        DatabaseDescriptor.setTableDefinition(ksm, newVersion);
-        
-        if (!clientMode)
+        acquireLocks();
+        try
         {
-            try
+            // reinitialize the table.
+            KSMetaData existing = DatabaseDescriptor.getTableDefinition(tableName);
+            CFMetaData cfm = existing.cfMetaData().get(cfName);
+            KSMetaData ksm = makeNewKeyspaceDefinition(existing);
+            CFMetaData.purge(cfm);
+            DatabaseDescriptor.setTableDefinition(ksm, newVersion);
+            
+            if (!clientMode)
             {
-                CompactionManager.instance.submitDrop(cfs).get();
+                Table.open(ksm.name).dropCf(cfm.cfId);
             }
-            catch (InterruptedException ex)
-            {
-                throw new IOException(ex);
-            }
-            catch (ExecutionException ex)
-            {
-                // if the compaction manager catches IOException, it wraps it in an IOError and rethrows, which should
-                // get caught be the executor and rethrown as an ExecutionException.
-                if (ex.getCause() instanceof IOException)
-                    throw (IOException)ex.getCause();
-                else
-                    throw new IOException(ex);
-            }
+        }
+        finally
+        {
+            releaseLocks();
         }
     }
 

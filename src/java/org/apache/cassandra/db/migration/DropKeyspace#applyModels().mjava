@@ -1,44 +1,37 @@
     @Override
     public void applyModels() throws IOException
     {
-        KSMetaData ksm = DatabaseDescriptor.getTableDefinition(name);
-        // remove the table from the static instances.
-        Table table = Table.clear(ksm.name);
-        if (table == null)
-            throw new IOException("Table is not active. " + ksm.name);
-        
-        // remove all cfs from the table instance.
-        for (CFMetaData cfm : ksm.cfMetaData().values())
-            CFMetaData.purge(cfm);
-        
-        if (!clientMode)
+        acquireLocks();
+        try
         {
-            try
+            KSMetaData ksm = DatabaseDescriptor.getTableDefinition(name);
+            // remove the table from the static instances.
+            Table table = Table.clear(ksm.name);
+            if (table == null)
+                throw new IOException("Table is not active. " + ksm.name);
+            
+            // remove all cfs from the table instance.
+            for (CFMetaData cfm : ksm.cfMetaData().values())
             {
-                CompactionManager.instance.submitDrop(table.getColumnFamilyStores().toArray(new ColumnFamilyStore[0])).get();
+                CFMetaData.purge(cfm);
+                if (!clientMode)
+                {
+                    table.dropCf(cfm.cfId);
+                }
             }
-            catch (InterruptedException ex)
+                            
+            // reset defs.
+            DatabaseDescriptor.clearTableDefinition(ksm, newVersion);
+            
+            if (!clientMode)
             {
-                throw new IOException(ex);
-            }
-            catch (ExecutionException ex)
-            {
-                // if the compaction manager catches IOException, it wraps it in an IOError and rethrows, which should
-                // get caught be the executor and rethrown as an ExecutionException.
-                if (ex.getCause() instanceof IOException)
-                    throw (IOException)ex.getCause();
-                else
-                    throw new IOException(ex);
+                // clear up any local hinted data for this keyspace.
+                HintedHandOffManager.renameHints(name, null);
             }
         }
-                        
-        // reset defs.
-        DatabaseDescriptor.clearTableDefinition(ksm, newVersion);
-        
-        if (!clientMode)
+        finally
         {
-            // clear up any local hinted data for this keyspace.
-            HintedHandOffManager.renameHints(name, null);
+            releaseLocks();
         }
     }
 
