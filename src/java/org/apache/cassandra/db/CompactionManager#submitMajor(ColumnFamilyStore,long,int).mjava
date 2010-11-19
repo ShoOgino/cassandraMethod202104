@@ -4,25 +4,33 @@
         {
             public Object call() throws IOException
             {
-                Collection<SSTableReader> sstables;
-                if (skip > 0)
+                compactionLock.lock();
+                try
                 {
-                    sstables = new ArrayList<SSTableReader>();
-                    for (SSTableReader sstable : cfStore.getSSTables())
+                    Collection<SSTableReader> sstables;
+                    if (skip > 0)
                     {
-                        if (sstable.length() < skip * 1024L * 1024L * 1024L)
+                        sstables = new ArrayList<SSTableReader>();
+                        for (SSTableReader sstable : cfStore.getSSTables())
                         {
-                            sstables.add(sstable);
+                            if (sstable.length() < skip * 1024L * 1024L * 1024L)
+                            {
+                                sstables.add(sstable);
+                            }
                         }
                     }
+                    else
+                    {
+                        sstables = cfStore.getSSTables();
+                    }
+    
+                    doCompaction(cfStore, sstables, gcBefore);
+                    return this;
                 }
-                else
+                finally 
                 {
-                    sstables = cfStore.getSSTables();
+                    compactionLock.unlock();
                 }
-
-                doCompaction(cfStore, sstables, gcBefore);
-                return this;
             }
         };
         return executor.submit(callable);

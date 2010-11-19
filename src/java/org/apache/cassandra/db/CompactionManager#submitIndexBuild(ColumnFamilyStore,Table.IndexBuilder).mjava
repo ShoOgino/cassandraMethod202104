@@ -4,10 +4,26 @@
         {
             public void run()
             {
-                executor.beginCompaction(cfs, builder);
-                builder.build();
+                compactionLock.lock();
+                try
+                {
+                    executor.beginCompaction(cfs, builder);
+                    builder.build();
+                }
+                finally
+                {
+                    compactionLock.unlock();
+                }
             }
         };
-        return executor.submit(runnable);
+        
+        // don't submit to the executor if the compaction lock is held by the current thread. Instead return a simple
+        // future that will be immediately immediately get()ed and executed. Happens during a migration, which locks
+        // the compaction thread and then reinitializes a ColumnFamilyStore. Under normal circumstances, CFS spawns
+        // index jobs to the compaction manager (this) and blocks on them.
+        if (compactionLock.isHeldByCurrentThread())
+            return new SimpleFuture(runnable);
+        else
+            return executor.submit(runnable);
     }
 
