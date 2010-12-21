@@ -20,12 +20,23 @@
 
         QueryFilter filter = new QueryFilter(null, new QueryPath(columnFamily, superColumn, null), columnFilter);
         Collection<Memtable> memtables = new ArrayList<Memtable>();
-        memtables.add(getMemtableThreadSafe());
-        memtables.addAll(memtablesPendingFlush);
-
         Collection<SSTableReader> sstables = new ArrayList<SSTableReader>();
-        Iterables.addAll(sstables, ssTables);
 
+        if (!reverseReadWriteOrder())
+        {
+            //XXX: race condition: may allow double reconcile; but never misses an MT
+            memtables.add(getMemtableThreadSafe());
+            memtables.addAll(memtablesPendingFlush);
+            Iterables.addAll(sstables, ssTables);
+        }
+        else
+        {
+            //XXX: race condition: may miss an MT, but no double counts
+            Iterables.addAll(sstables, ssTables);
+            memtables.addAll(memtablesPendingFlush);
+            memtables.add(getMemtableThreadSafe());
+        }
+        
         RowIterator iterator = RowIteratorFactory.getIterator(memtables, sstables, startWith, stopAt, filter, getComparator(), this);
         int gcBefore = (int)(System.currentTimeMillis() / 1000) - metadata.getGcGraceSeconds();
 

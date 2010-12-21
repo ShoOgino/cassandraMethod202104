@@ -36,8 +36,19 @@
             final CountDownLatch latch = new CountDownLatch(icc.size());
             for (ColumnFamilyStore cfs : icc)
             {
-                submitFlush(cfs.memtable, latch);
-                cfs.memtable = new Memtable(cfs);
+                if (!reverseReadWriteOrder())
+                {
+                    //XXX: race condition: may allow double reconcile; but never misses an MT
+                    submitFlush(cfs.memtable, latch);
+                    cfs.memtable = new Memtable(cfs);
+                }
+                else
+                {
+                    //XXX: race condition: may miss an MT, but no double counts
+                    Memtable pendingFlush = cfs.memtable;
+                    cfs.memtable = new Memtable(cfs);
+                    submitFlush(pendingFlush, latch);
+                }
             }
 
             // when all the memtables have been written, including for indexes, mark the flush in the commitlog header.

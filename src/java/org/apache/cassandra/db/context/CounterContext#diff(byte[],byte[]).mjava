@@ -1,0 +1,146 @@
+    /**
+     * Determine the count relationship between two contexts.
+     *
+     * EQUAL:        Equal set of nodes and every count is equal.
+     * GREATER_THAN: Superset of nodes and every count is equal or greater than its corollary.
+     * LESS_THAN:    Subset of nodes and every count is equal or less than its corollary.
+     * DISJOINT:     Node sets are not equal and/or counts are not all greater or less than.
+     *
+     * Strategy:
+     *   compare node logical clocks (like a version vector).
+     *
+     * @param left
+     *            counter context.
+     * @param right
+     *            counter context.
+     * @return the ContextRelationship between the contexts.
+     */
+    public ContextRelationship diff(byte[] left, byte[] right)
+    {
+        left  = sortElementsById(left);
+        right = sortElementsById(right);
+
+        ContextRelationship relationship = ContextRelationship.EQUAL;
+
+        int leftIndex  = 0;
+        int rightIndex = 0;
+        while (leftIndex < left.length && rightIndex < right.length)
+        {
+            // compare id bytes
+            int compareId = FBUtilities.compareByteSubArrays(left, leftIndex, right, rightIndex, idLength);
+            if (compareId == 0)
+            {
+                long leftClock  = FBUtilities.byteArrayToLong(left,  leftIndex + idLength);
+                long rightClock = FBUtilities.byteArrayToLong(right, rightIndex + idLength);
+
+                // advance indexes
+                leftIndex  += stepLength;
+                rightIndex += stepLength;
+
+                // process clock comparisons
+                if (leftClock == rightClock)
+                {
+                    continue;
+                }
+                else if (leftClock > rightClock)
+                {
+                    if (relationship == ContextRelationship.EQUAL)
+                    {
+                        relationship = ContextRelationship.GREATER_THAN;
+                    }
+                    else if (relationship == ContextRelationship.GREATER_THAN)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        // relationship == ContextRelationship.LESS_THAN
+                        return ContextRelationship.DISJOINT;
+                    }
+                }
+                else
+                // leftClock < rightClock
+                {
+                    if (relationship == ContextRelationship.EQUAL)
+                    {
+                        relationship = ContextRelationship.LESS_THAN;
+                    }
+                    else if (relationship == ContextRelationship.GREATER_THAN)
+                    {
+                        return ContextRelationship.DISJOINT;
+                    }
+                    else
+                    {
+                        // relationship == ContextRelationship.LESS_THAN
+                        continue;
+                    }
+                }
+            }
+            else if (compareId > 0)
+            {
+                // only advance the right context
+                rightIndex += stepLength;
+
+                if (relationship == ContextRelationship.EQUAL)
+                {
+                    relationship = ContextRelationship.LESS_THAN;
+                }
+                else if (relationship == ContextRelationship.GREATER_THAN)
+                {
+                    return ContextRelationship.DISJOINT;
+                }
+                else
+                {
+                    // relationship == ContextRelationship.LESS_THAN
+                    continue;
+                }
+            }
+            else
+            {
+                // compareId < 0
+                // only advance the left context
+                leftIndex += stepLength;
+
+                if (relationship == ContextRelationship.EQUAL)
+                {
+                    relationship = ContextRelationship.GREATER_THAN;
+                }
+                else if (relationship == ContextRelationship.GREATER_THAN)
+                {
+                    continue;
+                }
+                else
+                // relationship == ContextRelationship.LESS_THAN
+                {
+                    return ContextRelationship.DISJOINT;
+                }
+            }
+        }
+
+        // check final lengths
+        if (leftIndex < left.length)
+        {
+            if (relationship == ContextRelationship.EQUAL)
+            {
+                return ContextRelationship.GREATER_THAN;
+            }
+            else if (relationship == ContextRelationship.LESS_THAN)
+            {
+                return ContextRelationship.DISJOINT;
+            }
+        }
+        else if (rightIndex < right.length)
+        {
+            if (relationship == ContextRelationship.EQUAL)
+            {
+                return ContextRelationship.LESS_THAN;
+            }
+            else if (relationship == ContextRelationship.GREATER_THAN)
+            {
+                return ContextRelationship.DISJOINT;
+            }
+        }
+
+        return relationship;
+    }
+

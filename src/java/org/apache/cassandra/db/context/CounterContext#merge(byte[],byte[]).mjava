@@ -1,0 +1,94 @@
+    /**
+     * Return a context w/ an aggregated count for each node id.
+     *
+     * @param left
+     *            counter context.
+     * @param right
+     *            counter context.
+     */
+    public byte[] merge(byte[] left, byte[] right)
+    {
+        // strategy:
+        //   1) map id -> (clock, count)
+        //      a) local id:  sum clocks, counts
+        //      b) remote id: keep highest clock, count (reconcile)
+        //   2) create a context from sorted array
+        Map<FBUtilities.ByteArrayWrapper, CounterNode> contextsMap =
+            new HashMap<FBUtilities.ByteArrayWrapper, CounterNode>();
+
+        // map left context: id -> (clock, count)
+        for (int offset = 0; offset < left.length; offset += stepLength)
+        {
+            FBUtilities.ByteArrayWrapper id = new FBUtilities.ByteArrayWrapper(
+                ArrayUtils.subarray(left, offset, offset + idLength));
+            long clock = FBUtilities.byteArrayToLong(left, offset + idLength);
+            long count = FBUtilities.byteArrayToLong(left, offset + idLength + clockLength);
+
+            contextsMap.put(id, new CounterNode(clock, count));
+        }
+
+        // map right context: id -> (clock, count)
+        for (int offset = 0; offset < right.length; offset += stepLength)
+        {
+            FBUtilities.ByteArrayWrapper id = new FBUtilities.ByteArrayWrapper(
+                ArrayUtils.subarray(right, offset, offset + idLength));
+            long clock = FBUtilities.byteArrayToLong(right, offset + idLength);
+            long count = FBUtilities.byteArrayToLong(right, offset + idLength + clockLength);
+
+            if (!contextsMap.containsKey(id))
+            {
+                contextsMap.put(id, new CounterNode(clock, count));
+                continue;
+            }
+
+            CounterNode node = contextsMap.get(id);
+
+            // local id: sum clocks, counts
+            if (this.idWrapper.equals(id))
+            {
+                contextsMap.put(id, new CounterNode(
+                    clock + node.clock,
+                    count + node.count));
+                continue;
+            }
+
+            // remote id: keep highest clock and its count
+            if (node.clock < clock)
+            {
+                contextsMap.put(id, new CounterNode(clock, count));
+            }
+        }
+
+        // sort merged tuples
+        List<Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode>> contextsList =
+            new ArrayList<Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode>>(
+                    contextsMap.entrySet());
+        Collections.sort(
+            contextsList,
+            new Comparator<Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode>>()
+            {
+                public int compare(
+                    Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode> e1,
+                    Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode> e2)
+                {
+                    // reversed
+                    return e2.getValue().compareClockTo(e1.getValue());
+                }
+            });
+
+        // create merged context
+        int length = contextsList.size();
+        byte[] merged = new byte[length * stepLength];
+        for (int i = 0; i < length; i++)
+        {
+            Map.Entry<FBUtilities.ByteArrayWrapper, CounterNode> entry = contextsList.get(i);
+            writeElementAtStepOffset(
+                merged,
+                i,
+                entry.getKey().data,
+                entry.getValue().clock,
+                entry.getValue().count);
+        }
+        return merged;
+    }
+

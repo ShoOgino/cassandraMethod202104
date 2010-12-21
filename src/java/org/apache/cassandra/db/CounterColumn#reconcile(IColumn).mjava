@@ -1,0 +1,70 @@
+    @Override
+    public IColumn reconcile(IColumn column)
+    {
+        assert (column instanceof CounterColumn) || (column instanceof DeletedColumn) : "Wrong class type.";
+
+        if (isMarkedForDelete())
+        {
+            if (column.isMarkedForDelete()) // tombstone + tombstone: keep later tombstone
+            {
+                return timestamp() > column.timestamp() ? this : column;
+            }
+            else // tombstone + live: track last tombstone
+            {
+                if (timestamp() > column.timestamp()) // tombstone > live
+                {
+                    return this;
+                }
+                // tombstone <= live last delete
+                if (timestamp() <= ((CounterColumn)column).timestampOfLastDelete())
+                {
+                    return column;
+                }
+                // tombstone > live last delete
+                return new CounterColumn(
+                    column.name(),
+                    column.value(),
+                    column.timestamp(),
+                    ((CounterColumn)column).partitionedCounter(),
+                    timestamp());
+            }
+        }
+        else if (column.isMarkedForDelete()) // live + tombstone: track last tombstone
+        {
+            if (timestamp() < column.timestamp()) // live < tombstone
+            {
+                return column;
+            }
+            // live last delete >= tombstone
+            if (timestampOfLastDelete() >= column.timestamp())
+            {
+                return this;
+            }
+            // live last delete < tombstone
+            return new CounterColumn(
+                name(),
+                value(),
+                timestamp(),
+                partitionedCounter(),
+                column.timestamp());
+        }
+        // live + live: merge clocks; update value
+        byte[] mergedPartitionedCounter = contextManager.merge(
+            partitionedCounter(),
+            ((CounterColumn)column).partitionedCounter());
+		ByteBuffer byteBufferValue;
+		if (0 == mergedPartitionedCounter.length)
+		{
+			long mergedValue = value().getLong(value().arrayOffset()) +
+                               column.value().getLong(column.value().arrayOffset());
+			byteBufferValue = FBUtilities.toByteBuffer(mergedValue);
+		} else
+			byteBufferValue = ByteBuffer.wrap(contextManager.total(mergedPartitionedCounter));
+        return new CounterColumn(
+            name(),
+			byteBufferValue,
+            Math.max(timestamp(), column.timestamp()),
+            mergedPartitionedCounter,
+            Math.max(timestampOfLastDelete(), ((CounterColumn)column).timestampOfLastDelete()));
+    }
+
