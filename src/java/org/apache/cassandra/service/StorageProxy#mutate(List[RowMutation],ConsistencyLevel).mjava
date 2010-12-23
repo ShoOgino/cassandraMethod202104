@@ -10,10 +10,11 @@
     public static void mutate(List<RowMutation> mutations, ConsistencyLevel consistency_level) throws UnavailableException, TimeoutException
     {
         long startTime = System.nanoTime();
-        ArrayList<IWriteResponseHandler> responseHandlers = new ArrayList<IWriteResponseHandler>();
+        List<IWriteResponseHandler> responseHandlers = new ArrayList<IWriteResponseHandler>();
 
         RowMutation mostRecentRowMutation = null;
         StorageService ss = StorageService.instance;
+        String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getLocalAddress());
         
         try
         {
@@ -27,16 +28,23 @@
                 Collection<InetAddress> writeEndpoints = ss.getTokenMetadata().getWriteEndpoints(StorageService.getPartitioner().getToken(rm.key()), table, naturalEndpoints);
                 Multimap<InetAddress, InetAddress> hintedEndpoints = rs.getHintedEndpoints(writeEndpoints);
                 
-                // send out the writes, as in mutate() above, but this time with a callback that tracks responses
                 final IWriteResponseHandler responseHandler = rs.getWriteResponseHandler(writeEndpoints, hintedEndpoints, consistency_level);
+                
+                // exit early if we can't fulfill the CL at this time
                 responseHandler.assureSufficientLiveNodes();
-
+                
                 responseHandlers.add(responseHandler);
+                
+                // Multimap that holds onto all the messages and addresses meant for a specific datacenter
+                Multimap<String, Pair<Message, InetAddress>> dcMessages = HashMultimap.create(hintedEndpoints.size(), 10);
                 Message unhintedMessage = null;
+
                 for (Map.Entry<InetAddress, Collection<InetAddress>> entry : hintedEndpoints.asMap().entrySet())
                 {
                     InetAddress destination = entry.getKey();
                     Collection<InetAddress> targets = entry.getValue();
+
+                    String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
 
                     if (targets.size() == 1 && targets.iterator().next().equals(destination))
                     {
@@ -47,7 +55,7 @@
                         }
                         else
                         {
-                            // belongs on a different server.  send it there.
+                            // belongs on a different server
                             if (unhintedMessage == null)
                             {
                                 unhintedMessage = rm.makeRowMutationMessage();
@@ -55,7 +63,7 @@
                             }
                             if (logger.isDebugEnabled())
                                 logger.debug("insert writing key " + FBUtilities.bytesToHex(rm.key()) + " to " + unhintedMessage.getMessageId() + "@" + destination);
-                            MessagingService.instance.sendOneWay(unhintedMessage, destination);
+                            dcMessages.put(dc, new Pair<Message, InetAddress>(unhintedMessage, destination));
                         }
                     }
                     else
@@ -72,15 +80,16 @@
                             }
                         }
                         responseHandler.addHintCallback(hintedMessage, destination);
-                        MessagingService.instance.sendOneWay(hintedMessage, destination);
+                        dcMessages.put(dc, new Pair<Message, InetAddress>(hintedMessage, destination));
                     }
                 }
+
+                sendMessages(localDataCenter, dcMessages);
             }
+                        
             // wait for writes.  throws timeoutexception if necessary
             for (IWriteResponseHandler responseHandler : responseHandlers)
-            {
                 responseHandler.get();
-            }
         }
         catch (IOException e)
         {
