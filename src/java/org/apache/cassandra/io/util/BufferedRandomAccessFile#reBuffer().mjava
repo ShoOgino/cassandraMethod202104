@@ -1,19 +1,39 @@
-    /*
-     * On exit from this routine <code>this.curr == this.hi</code> iff <code>pos</code>
-     * is at or past the end-of-file, which can only happen if the file was
-     * opened in read-only mode.
-     */
-    private void reBuffer() throws IOException
+    private long reBuffer() throws IOException
     {
-        this.flush();
-        this.lo_ = this.curr_;
-        this.maxHi_ = this.lo_ + (long) this.buff_.length;
-        if (this.diskPos_ != this.lo_)
+        flush(); // synchronizing buffer and file on disk
+        buffer.clear();
+        bufferOffset = current;
+
+        if (bufferOffset > channel.size())
         {
-            super.seek(this.lo_);
-            this.diskPos_ = this.lo_;
+            buffer.rewind();
+            bufferEnd = bufferOffset;
+            hitEOF = true;
+
+            return 0;
         }
-        int n = this.fillBuffer();
-        this.hi_ = this.lo_ + (long) n;
+
+        if (bufferOffset < minBufferOffset)
+            minBufferOffset = bufferOffset;
+
+        channel.position(bufferOffset); // setting channel position
+        long bytesRead = channel.read(buffer); // reading from that position
+
+        hitEOF = (bytesRead < maxBufferSize); // buffer is not fully loaded with
+                                              // data
+        bufferEnd = bufferOffset + bytesRead;
+
+        buffer.rewind();
+
+        bytesSinceCacheFlush += bytesRead;
+
+        if (skipCache && bytesSinceCacheFlush >= MAX_BYTES_IN_PAGE_CACHE)
+        {
+            CLibrary.trySkipCache(this.fd, (int) minBufferOffset, 0);
+            bytesSinceCacheFlush = 0;
+            minBufferOffset = Long.MAX_VALUE;
+        }
+
+        return bytesRead;
     }
 
