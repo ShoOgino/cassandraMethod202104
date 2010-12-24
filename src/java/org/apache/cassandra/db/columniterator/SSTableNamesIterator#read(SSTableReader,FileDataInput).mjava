@@ -1,0 +1,34 @@
+    private void read(SSTableReader sstable, FileDataInput file)
+    throws IOException
+    {
+
+        // read the requested columns into `cf`
+        /* Read the bloom filter summarizing the columns */
+
+        Filter bf = IndexHelper.defreezeBloomFilter(file, sstable.descriptor.usesOldBloomFilter);
+        List<IndexHelper.IndexInfo> indexList = IndexHelper.deserializeIndex(file);
+
+        // we can stop early if bloom filter says none of the columns actually exist -- but,
+        // we can't stop before initializing the cf above, in case there's a relevant tombstone
+        cf = ColumnFamily.serializer().deserializeFromSSTableNoColumns(ColumnFamily.create(sstable.metadata), file);
+
+        List<ByteBuffer> filteredColumnNames = new ArrayList<ByteBuffer>(columns.size());
+        for (ByteBuffer name : columns)
+        {
+            if (bf.isPresent(name))
+            {
+                filteredColumnNames.add(name);
+            }
+        }
+        if (filteredColumnNames.isEmpty())
+            return;
+
+        if (indexList == null)
+            readSimpleColumns(file, columns, filteredColumnNames);
+        else
+            readIndexedColumns(sstable.metadata, file, columns, filteredColumnNames, indexList);
+
+        // create an iterator view of the columns we read
+        iter = cf.getSortedColumns().iterator();
+    }
+
