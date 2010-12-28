@@ -2,15 +2,6 @@
     {
         listenGate = new SimpleCondition();
         verbHandlers_ = new EnumMap<StorageService.Verb, IVerbHandler>(StorageService.Verb.class);
-        /*
-         * Leave callbacks in the cachetable long enough that any related messages will arrive
-         * before the callback is evicted from the table. The concurrency level is set at 128
-         * which is the sum of the threads in the pool that adds shit into the table and the 
-         * pool that retrives the callback from here.
-        */
-        callbackMap_ = new ExpiringMap<String, IAsyncCallback>((long) (1.1 * DatabaseDescriptor.getRpcTimeout()));
-        taskCompletionMap_ = new ExpiringMap<String, IAsyncResult>((long) (1.1 * DatabaseDescriptor.getRpcTimeout()));
-
         streamExecutor_ = new DebuggableThreadPoolExecutor("Streaming", DatabaseDescriptor.getCompactionThreadPriority());
         Runnable logDropped = new Runnable()
         {
@@ -20,6 +11,26 @@
             }
         };
         StorageService.scheduledTasks.scheduleWithFixedDelay(logDropped, LOG_DROPPED_INTERVAL_IN_MS, LOG_DROPPED_INTERVAL_IN_MS, TimeUnit.MILLISECONDS);
+
+        Function<String, ?> timeoutReporter = new Function<String, Object>()
+        {
+            public Object apply(String messageId)
+            {
+                Collection<InetAddress> addresses = targets.removeAll(messageId);
+                if (addresses == null)
+                    return null;
+
+                for (InetAddress address : addresses)
+                {
+                    for (ILatencySubscriber subscriber : subscribers)
+                        subscriber.receiveTiming(address, (double) DatabaseDescriptor.getRpcTimeout());
+                }
+
+                return null;
+            }
+        };
+        targets = ArrayListMultimap.create();
+        callbacks = new ExpiringMap<String, IMessageCallback>((long) (1.1 * DatabaseDescriptor.getRpcTimeout()), timeoutReporter);
 
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
         try
