@@ -1,0 +1,45 @@
+    @Test
+    public void testCleanupWithIndexes() throws IOException, ExecutionException, InterruptedException
+    {
+        Table table = Table.open(TABLE1);
+        ColumnFamilyStore cfs = table.getColumnFamilyStore(CF1);
+        assertEquals(cfs.getIndexedColumns().iterator().next(), COLUMN);
+
+        List<Row> rows;
+
+        // insert data and verify we get it back w/ range query
+        fillCF(cfs, LOOPS);
+        rows = cfs.getRangeSlice(null, Util.range("", ""), 1000, new IdentityQueryFilter());
+        assertEquals(LOOPS, rows.size());
+
+        ColumnFamilyStore cfi = cfs.getIndexedColumnFamilyStore(COLUMN);
+        assertTrue(cfi.isIndexBuilt());
+
+        // verify we get it back w/ index query too
+        IndexExpression expr = new IndexExpression(COLUMN, IndexOperator.EQ, VALUE);
+        IndexClause clause = new IndexClause(Arrays.asList(expr), FBUtilities.EMPTY_BYTE_BUFFER, Integer.MAX_VALUE);
+        IFilter filter = new IdentityQueryFilter();
+        IPartitioner p = StorageService.getPartitioner();
+        Range range = new Range(p.getMinimumToken(), p.getMinimumToken());
+        rows = table.getColumnFamilyStore(CF1).scan(clause, range, filter);
+        assertEquals(LOOPS, rows.size());
+
+        // nuke our token so cleanup will remove everything
+        TokenMetadata tmd = StorageService.instance.getTokenMetadata();
+        tmd.clearUnsafe();
+        assert StorageService.instance.getLocalRanges(TABLE1).isEmpty();
+
+        CompactionManager.instance.performCleanup(cfs);
+
+        // row data should be gone
+        rows = cfs.getRangeSlice(null, Util.range("", ""), 1000, new IdentityQueryFilter());
+        assertEquals(0, rows.size());
+
+        // not only should it be gone but there should be no data on disk, not even tombstones
+        assert cfs.getSSTables().isEmpty();
+
+        // 2ary indexes should result in no results, too (although tombstones won't be gone until compacted)
+        rows = cfs.scan(clause, range, filter);
+        assertEquals(0, rows.size());
+    }
+
