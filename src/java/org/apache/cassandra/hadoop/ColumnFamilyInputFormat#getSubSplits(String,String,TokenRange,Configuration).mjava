@@ -1,22 +1,27 @@
     private List<String> getSubSplits(String keyspace, String cfName, TokenRange range, Configuration conf) throws IOException
     {
-        // TODO handle failure of range replicas & retry
-        List<String> splits;
         int splitsize = ConfigHelper.getInputSplitSize(conf);
-        try
+        for (String host : range.endpoints)
         {
-            Cassandra.Client client = createConnection(range.endpoints.get(0), ConfigHelper.getRpcPort(conf), true);
-            client.set_keyspace(keyspace);
-            splits = client.describe_splits(cfName, range.start_token, range.end_token, splitsize);
+            try
+            {
+                Cassandra.Client client = createConnection(host, ConfigHelper.getRpcPort(conf), true);
+                client.set_keyspace(keyspace);
+                return client.describe_splits(cfName, range.start_token, range.end_token, splitsize);
+            }
+            catch (IOException e)
+            {
+                logger.debug("failed connect to endpoint " + host, e);
+            }
+            catch (TException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (InvalidRequestException e)
+            {
+                throw new RuntimeException(e);
+            }
         }
-        catch (TException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (InvalidRequestException e)
-        {
-            throw new RuntimeException(e);
-        }
-        return splits;
+        throw new IOException("failed connecting to all endpoints " + StringUtils.join(range.endpoints, ","));
     }
 
