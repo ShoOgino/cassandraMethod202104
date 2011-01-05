@@ -1,0 +1,43 @@
+    @Test
+    public void testWriteQuorumReadQuorum() throws Exception
+    {
+        List<InetAddress> hosts = controller.getHosts();
+        Cassandra.Client client = controller.createClient(hosts.get(0));
+
+        final String keyspace = "TestWriteQuorumReadQuorum";
+        addKeyspace(keyspace, 3);
+        client.set_keyspace(keyspace);
+
+        ByteBuffer key = newKey();
+
+        // with quorum-1 nodes up
+        List<InetAddress> endpoints = endpointsForKey(hosts.get(0), key, keyspace);
+        InetAddress coordinator = nonEndpointForKey(hosts.get(0), key, keyspace);
+        Failure failure = controller.failHosts(endpoints.subList(1, endpoints.size())); //kill all but one nodes
+
+        Thread.sleep(10000);
+        client = controller.createClient(coordinator);
+        client.set_keyspace(keyspace);
+        try {
+            insert(client, key, "Standard1", "c1", "v1", 0, ConsistencyLevel.QUORUM);
+            assert false;
+        } catch (UnavailableException e) {
+            // [this is good]
+        } finally {
+            failure.resolve();
+            Thread.sleep(10000);
+        }
+
+        // with all nodes up
+        insert(client, key, "Standard1", "c2", "v2", 0, ConsistencyLevel.QUORUM);
+
+        failure = controller.failHosts(endpoints.get(0));
+        Thread.sleep(10000);
+        try {
+            getColumn(client, key, "Standard1", "c2", ConsistencyLevel.QUORUM);
+        } finally {
+            failure.resolve();
+            Thread.sleep(10000);
+        }
+    }
+
