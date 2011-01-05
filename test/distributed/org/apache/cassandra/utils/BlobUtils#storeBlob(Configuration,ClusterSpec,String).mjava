@@ -1,0 +1,37 @@
+    /**
+     * Stores the given local file as a public blob, and returns metadata for the blob.
+     */
+    public static Pair<BlobMetadata,URI> storeBlob(Configuration config, ClusterSpec spec, String filename)
+    {
+        File file = new File(filename);
+        String container = getContainer(config);
+        String provider = getProvider(config);
+        String blobName = System.nanoTime() + "/" + file.getName();
+        BlobStoreContext context = getContext(config, spec);
+        try
+        {
+            InputStreamMap map = context.createInputStreamMap(container);
+            map.putFile(blobName, file);
+            // TODO: magic! in order to expose the blob as public, we need to dive into provider specific APIs
+            // the hope is that permissions are encapsulated in jclouds in the future
+            if (provider.equals("s3"))
+            {
+                S3Client sss = context.<S3Client,S3AsyncClient>getProviderSpecificContext().getApi();
+                String ownerId = sss.getObjectACL(container, blobName).getOwner().getId();
+                sss.putObjectACL(container,
+                                 blobName,
+                                 AccessControlList.fromCannedAccessPolicy(CannedAccessPolicy.PUBLIC_READ, ownerId));
+            }
+            else
+                LOG.warn(provider + " may not be properly supported for tarball transfer.");
+            // resolve the full URI of the blob (see http://code.google.com/p/jclouds/issues/detail?id=431)
+            BlobMetadata blob = context.getBlobStore().blobMetadata(container, blobName);
+            URI uri = context.getProviderSpecificContext().getEndpoint().resolve("/" + container + "/" + blob.getName());
+            return new Pair<BlobMetadata, URI>(blob, uri);
+        }
+        finally
+        {
+            context.close();
+        }
+    }
+
