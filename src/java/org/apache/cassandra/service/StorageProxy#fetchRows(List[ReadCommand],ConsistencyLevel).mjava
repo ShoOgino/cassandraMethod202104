@@ -1,20 +1,20 @@
-    /*
-     * This function executes the read protocol.
-        // 1. Get the N nodes from storage service where the data needs to be
-        // replicated
-        // 2. Construct a message for read\write
-         * 3. Set one of the messages to get the data and the rest to get the digest
-        // 4. SendRR ( to all the nodes above )
-        // 5. Wait for a response from at least X nodes where X <= N and the data node
-         * 6. If the digest matches return the data.
-         * 7. else carry out read repair by getting data from all the nodes.
-        // 5. return success
+    /**
+     * This function executes local and remote reads, and blocks for the results:
+     *
+     * 1. Get the replica locations, sorted by response time according to the snitch
+     * 2. Send a data request to the closest replica, and digest requests to either
+     *    a) all the replicas, if read repair is enabled
+     *    b) the closest R-1 replicas, where R is the number required to satisfy the ConsistencyLevel
+     * 3. Wait for a response from R replicas
+     * 4. If the digests (if any) match the data return the data
+     * 5. else carry out read repair by getting data from all the nodes.
      */
-    private static List<Row> strongRead(List<ReadCommand> commands, ConsistencyLevel consistency_level) throws IOException, UnavailableException, TimeoutException
+    private static List<Row> fetchRows(List<ReadCommand> commands, ConsistencyLevel consistency_level) throws IOException, UnavailableException, TimeoutException
     {
-        List<QuorumResponseHandler<Row>> quorumResponseHandlers = new ArrayList<QuorumResponseHandler<Row>>();
+        List<ReadCallback<Row>> readCallbacks = new ArrayList<ReadCallback<Row>>();
         List<List<InetAddress>> commandEndpoints = new ArrayList<List<InetAddress>>();
         List<Row> rows = new ArrayList<Row>();
+        Set<ReadCommand> repairs = new HashSet<ReadCommand>();
 
         // send out read requests
         for (ReadCommand command: commands)
@@ -30,53 +30,65 @@
 
             AbstractReplicationStrategy rs = Table.open(command.table).getReplicationStrategy();
             ReadResponseResolver resolver = new ReadResponseResolver(command.table, command.key);
-            QuorumResponseHandler<Row> handler = rs.getQuorumResponseHandler(resolver, consistency_level);
+            ReadCallback<Row> handler = getReadCallback(resolver, command.table, consistency_level);
             handler.assureSufficientLiveNodes(endpoints);
 
-            Message messages[] = new Message[endpoints.size()];
+            int targets;
+            if (randomlyReadRepair(command))
+            {
+                targets = endpoints.size();
+                if (targets > handler.blockfor)
+                    repairs.add(command);
+            }
+            else
+            {
+                targets = handler.blockfor;
+            }
+            Message[] messages = new Message[targets];
+
             // data-request message is sent to dataPoint, the node that will actually get
             // the data for us. The other replicas are only sent a digest query.
-            int n = 0;
-            for (InetAddress endpoint : endpoints)
+            for (int i = 0; i < messages.length; i++)
             {
+                InetAddress endpoint = endpoints.get(i);
                 Message m = endpoint.equals(dataPoint) ? message : messageDigestOnly;
-                messages[n++] = m;
+                messages[i] = m;
                 if (logger.isDebugEnabled())
-                    logger.debug("strongread reading " + (m == message ? "data" : "digest") + " for " + command + " from " + m.getMessageId() + "@" + endpoint);
+                    logger.debug("reading " + (m == message ? "data" : "digest") + " for " + command + " from " + m.getMessageId() + "@" + endpoint);
             }
             MessagingService.instance().sendRR(messages, endpoints, handler);
-            quorumResponseHandlers.add(handler);
+            readCallbacks.add(handler);
             commandEndpoints.add(endpoints);
         }
 
         // read results and make a second pass for any digest mismatches
-        List<QuorumResponseHandler<Row>> repairResponseHandlers = null;
+        List<RepairCallback<Row>> repairResponseHandlers = null;
         for (int i = 0; i < commands.size(); i++)
         {
-            QuorumResponseHandler<Row> quorumResponseHandler = quorumResponseHandlers.get(i);
+            ReadCallback<Row> readCallback = readCallbacks.get(i);
             Row row;
             ReadCommand command = commands.get(i);
+            List<InetAddress> endpoints = commandEndpoints.get(i);
             try
             {
                 long startTime2 = System.currentTimeMillis();
-                row = quorumResponseHandler.get();
+                row = readCallback.get();
                 if (row != null)
                     rows.add(row);
 
                 if (logger.isDebugEnabled())
-                    logger.debug("quorumResponseHandler: " + (System.currentTimeMillis() - startTime2) + " ms.");
+                    logger.debug("Read: " + (System.currentTimeMillis() - startTime2) + " ms.");
+
+                if (repairs.contains(command))
+                    repairExecutor.schedule(new RepairRunner(readCallback.resolver, command, endpoints), DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
             }
             catch (DigestMismatchException ex)
             {
-                AbstractReplicationStrategy rs = Table.open(command.table).getReplicationStrategy();
-                ReadResponseResolver resolver = new ReadResponseResolver(command.table, command.key);
-                QuorumResponseHandler<Row> handler = rs.getQuorumResponseHandler(resolver, consistency_level);
                 if (logger.isDebugEnabled())
                     logger.debug("Digest mismatch:", ex);
-                Message messageRepair = command.makeReadMessage();
-                MessagingService.instance().sendRR(messageRepair, commandEndpoints.get(i), handler);
+                RepairCallback<Row> handler = repair(command, endpoints);
                 if (repairResponseHandlers == null)
-                    repairResponseHandlers = new ArrayList<QuorumResponseHandler<Row>>();
+                    repairResponseHandlers = new ArrayList<RepairCallback<Row>>();
                 repairResponseHandlers.add(handler);
             }
         }
@@ -84,7 +96,7 @@
         // read the results for the digest mismatch retries
         if (repairResponseHandlers != null)
         {
-            for (QuorumResponseHandler<Row> handler : repairResponseHandlers)
+            for (RepairCallback<Row> handler : repairResponseHandlers)
             {
                 try
                 {
