@@ -1,0 +1,49 @@
+    private Future<Object> submitUserDefined(final ColumnFamilyStore cfs, final Collection<Descriptor> dataFiles, final int gcBefore)
+    {
+        Callable<Object> callable = new Callable<Object>()
+        {
+            public Object call() throws IOException
+            {
+                compactionLock.lock();
+                try
+                {
+                    if (cfs.isInvalid())
+                        return this;
+
+                    // look up the sstables now that we're on the compaction executor, so we don't try to re-compact
+                    // something that was already being compacted earlier.
+                    Collection<SSTableReader> sstables = new ArrayList<SSTableReader>();
+                    for (Descriptor desc : dataFiles)
+                    {
+                        // inefficient but not in a performance sensitive path
+                        SSTableReader sstable = lookupSSTable(cfs, desc);
+                        if (sstable == null)
+                        {
+                            logger.info("Will not compact {}: it is not an active sstable", desc);
+                        }
+                        else
+                        {
+                            sstables.add(sstable);
+                        }
+                    }
+
+                    if (sstables.isEmpty())
+                    {
+                        logger.error("No file to compact for user defined compaction");
+                    }
+                    else
+                    {
+                        doCompaction(cfs, sstables, gcBefore);
+                    }
+
+                    return this;
+                }
+                finally
+                {
+                    compactionLock.unlock();
+                }
+            }
+        };
+        return executor.submit(callable);
+    }
+
