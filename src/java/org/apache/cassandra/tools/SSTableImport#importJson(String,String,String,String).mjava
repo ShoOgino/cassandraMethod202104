@@ -5,43 +5,18 @@
      * @param keyspace keyspace the data belongs to
      * @param cf column family the data belongs to
      * @param ssTablePath file to write the SSTable to
+     *
      * @throws IOException for errors reading/writing input/output
-     * @throws ParseException for errors encountered parsing JSON input
      */
-    public static void importJson(String jsonFile, String keyspace, String cf, String ssTablePath)
-    throws IOException, ParseException
+    public static void importJson(String jsonFile, String keyspace, String cf, String ssTablePath) throws IOException
     {
-        ColumnFamily cfamily = ColumnFamily.create(keyspace, cf);
-        ColumnFamilyType cfType = cfamily.getColumnFamilyType();    // Super or Standard
+        ColumnFamily columnFamily = ColumnFamily.create(keyspace, cf);
         IPartitioner<?> partitioner = DatabaseDescriptor.getPartitioner();
 
-        try
-        {
-            JSONObject json = (JSONObject)JSONValue.parseWithException(new FileReader(jsonFile));
-            
-            SSTableWriter writer = new SSTableWriter(ssTablePath, json.size());
-            SortedMap<DecoratedKey,String> decoratedKeys = new TreeMap<DecoratedKey,String>();
-            
-            // sort by dk representation, but hold onto the hex version
-            for (String key : (Set<String>)json.keySet())
-                decoratedKeys.put(partitioner.decorateKey(ByteBuffer.wrap(hexToBytes(key))), key);
+        int importedKeys = (isSorted) ? importSorted(jsonFile, columnFamily, ssTablePath, partitioner)
+                                      : importUnsorted(getParser(jsonFile), columnFamily, ssTablePath, partitioner);
 
-            for (Map.Entry<DecoratedKey, String> rowKey : decoratedKeys.entrySet())
-            {
-                if (cfType == ColumnFamilyType.Super)
-                    addToSuperCF((JSONObject)json.get(rowKey.getValue()), cfamily);
-                else
-                    addToStandardCF((JSONArray)json.get(rowKey.getValue()), cfamily);
-                           
-                writer.append(rowKey.getKey(), cfamily);
-                cfamily.clear();
-            }
-            
-            writer.closeAndOpenReader();
-        }
-        catch (ClassCastException cce)
-        {
-            throw new RuntimeException("Invalid JSON input, or incorrect column family.", cce);
-        }
+        if (importedKeys != -1)
+            System.out.printf("%d keys imported successfully.%n", importedKeys);
     }
 
