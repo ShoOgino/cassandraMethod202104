@@ -1,0 +1,33 @@
+    public void doVerb(Message message)
+    {
+        byte[] bytes = message.getMessageBody();
+        ByteArrayInputStream buffer = new ByteArrayInputStream(bytes);
+
+        try
+        {
+            DataInputStream is = new DataInputStream(buffer);
+            CounterMutation cm = CounterMutation.serializer().deserialize(is);
+            if (logger.isDebugEnabled())
+              logger.debug("Applying forwarded " + cm);
+
+            StorageProxy.applyCounterMutationOnLeader(cm);
+            WriteResponse response = new WriteResponse(cm.getTable(), cm.key(), true);
+            Message responseMessage = WriteResponse.makeWriteResponseMessage(message, response);
+            MessagingService.instance().sendOneWay(responseMessage, message.getFrom());
+        }
+        catch (UnavailableException e)
+        {
+            // We check for UnavailableException in the coordinator not. It is
+            // hence reasonable to let the coordinator timeout in the very
+            // unlikely case we arrive here
+        }
+        catch (TimeoutException e)
+        {
+            // The coordinator node will have timeout itself so we let that goes
+        }
+        catch (IOException e)
+        {
+            logger.error("Error in counter mutation", e);
+        }
+    }
+
