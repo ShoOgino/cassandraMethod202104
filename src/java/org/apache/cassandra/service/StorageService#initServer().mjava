@@ -31,75 +31,13 @@
             }
         }
 
-        logger_.info("Starting up server gossip");
-
-        // have to start the gossip service before we can see any info on other nodes.  this is necessary
-        // for bootstrap to get the load info it needs.
-        // (we won't be part of the storage ring though until we add a nodeId to our state, below.)
-        Gossiper.instance.register(this);
-        Gossiper.instance.register(migrationManager);
-        Gossiper.instance.start(FBUtilities.getLocalAddress(), SystemTable.incrementAndGetGeneration()); // needed for node-ring gathering.
-
-        MessagingService.instance().listen(FBUtilities.getLocalAddress());
-        StorageLoadBalancer.instance.startBroadcasting();
-        MigrationManager.announce(DatabaseDescriptor.getDefsVersion(), DatabaseDescriptor.getSeeds());
-
-        if (DatabaseDescriptor.isAutoBootstrap()
-                && DatabaseDescriptor.getSeeds().contains(FBUtilities.getLocalAddress())
-                && !SystemTable.isBootstrapped())
-            logger_.info("This node will not auto bootstrap because it is configured to be a seed node.");
-
-        Token token;
-        boolean bootstrapped = false;
-        if (DatabaseDescriptor.isAutoBootstrap()
-            && !(DatabaseDescriptor.getSeeds().contains(FBUtilities.getLocalAddress()) || SystemTable.isBootstrapped()))
+        if (Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
         {
-            setMode("Joining: getting load information", true);
-            StorageLoadBalancer.instance.waitForLoadInfo();
-            if (logger_.isDebugEnabled())
-                logger_.debug("... got load info");
-            if (tokenMetadata_.isMember(FBUtilities.getLocalAddress()))
-            {
-                String s = "This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)";
-                throw new UnsupportedOperationException(s);
-            }
-            setMode("Joining: getting bootstrap token", true);
-            token = BootStrapper.getBootstrapToken(tokenMetadata_, StorageLoadBalancer.instance.getLoadInfo());
-            // don't bootstrap if there are no tables defined.
-            if (DatabaseDescriptor.getNonSystemTables().size() > 0)
-            {
-                bootstrap(token);
-                assert !isBootstrapMode; // bootstrap will block until finished
-                bootstrapped = true;
-                SystemTable.setBootstrapped(true); // first startup is only chance to bootstrap
-            }
-            // else nothing to do, go directly to participating in ring
+            joinTokenRing();
         }
         else
         {
-            token = SystemTable.getSavedToken();
-            if (token == null)
-            {
-                String initialToken = DatabaseDescriptor.getInitialToken();
-                if (initialToken == null)
-                {
-                    token = partitioner_.getRandomToken();
-                    logger_.warn("Generated random token " + token + ". Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations");
-                }
-                else
-                {
-                    token = partitioner_.getTokenFactory().fromString(initialToken);
-                    logger_.info("Saved token not found. Using " + token + " from configuration");
-                }
-            }
-            else
-            {
-                logger_.info("Using saved token " + token);
-            }
-        } 
-
-        SystemTable.setBootstrapped(true); // first startup is only chance to bootstrap
-        setToken(token);
-        assert tokenMetadata_.sortedTokens().size() > 0;
+            logger_.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
+        }
     }
 
