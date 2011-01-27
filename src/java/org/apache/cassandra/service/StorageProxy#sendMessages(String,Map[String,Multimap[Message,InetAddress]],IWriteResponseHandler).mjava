@@ -1,7 +1,7 @@
     /**
      * for each datacenter, send a message to one node to relay the write to other replicas
      */
-    private static void sendMessages(String localDataCenter, Map<String, Multimap<Message, InetAddress>> dcMessages)
+    private static void sendMessages(String localDataCenter, Map<String, Multimap<Message, InetAddress>> dcMessages, IWriteResponseHandler handler)
     throws IOException
     {
         for (Map.Entry<String, Multimap<Message, InetAddress>> entry: dcMessages.entrySet())
@@ -12,15 +12,12 @@
             for (Map.Entry<Message, Collection<InetAddress>> messages: entry.getValue().asMap().entrySet())
             {
                 Message message = messages.getKey();
-                // a single message object is used for unhinted writes, so clean out any forwards
-                // from previous loop iterations
-                message.removeHeader(RowMutation.FORWARD_HEADER);
 
                 if (dataCenter.equals(localDataCenter))
                 {
                     // direct writes to local DC
                     for (InetAddress destination : messages.getValue())
-                        MessagingService.instance().sendOneWay(message, destination);
+                        MessagingService.instance().sendRR(message, destination, handler);
                 }
                 else
                 {
@@ -44,7 +41,7 @@
                         message.setHeader(RowMutation.FORWARD_HEADER, bos.toByteArray());
                     }
                     // send the combined message + forward headers
-                    MessagingService.instance().sendOneWay(message, target);
+                    MessagingService.instance().sendRR(message, target, handler);
                 }
             }
         }
