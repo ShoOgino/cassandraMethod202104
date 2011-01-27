@@ -21,12 +21,7 @@
                     return column;
                 }
                 // tombstone > live last delete
-                return new CounterColumn(
-                    column.name(),
-                    column.value(),
-                    column.timestamp(),
-                    ((CounterColumn)column).partitionedCounter(),
-                    timestamp());
+                return new CounterColumn(column.name(), column.value(), column.timestamp(), timestamp());
             }
         }
         else if (column.isMarkedForDelete()) // live + tombstone: track last tombstone
@@ -41,30 +36,13 @@
                 return this;
             }
             // live last delete < tombstone
-            return new CounterColumn(
-                name(),
-                value(),
-                timestamp(),
-                partitionedCounter(),
-                column.timestamp());
+            return new CounterColumn(name(), value(), timestamp(), column.timestamp());
         }
         // live + live: merge clocks; update value
-        byte[] mergedPartitionedCounter = contextManager.merge(
-            partitionedCounter(),
-            ((CounterColumn)column).partitionedCounter());
-		ByteBuffer byteBufferValue;
-		if (0 == mergedPartitionedCounter.length)
-		{
-			long mergedValue = value().getLong(value().arrayOffset()) +
-                               column.value().getLong(column.value().arrayOffset());
-			byteBufferValue = ByteBufferUtil.bytes(mergedValue);
-		} else
-			byteBufferValue = ByteBuffer.wrap(contextManager.total(mergedPartitionedCounter));
         return new CounterColumn(
             name(),
-			byteBufferValue,
+            contextManager.merge(value(), column.value()),
             Math.max(timestamp(), column.timestamp()),
-            mergedPartitionedCounter,
             Math.max(timestampOfLastDelete(), ((CounterColumn)column).timestampOfLastDelete()));
     }
 
