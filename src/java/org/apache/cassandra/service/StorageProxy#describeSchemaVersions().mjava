@@ -1,5 +1,5 @@
     /**
-     * initiate a request/response session with each live node to check whether or not everybody is using the same 
+     * initiate a request/response session with each live node to check whether or not everybody is using the same
      * migration id. This is useful for determining if a schema change has propagated through the cluster. Disagreement
      * is assumed if any node fails to respond.
      */
@@ -8,33 +8,38 @@
         final String myVersion = DatabaseDescriptor.getDefsVersion().toString();
         final Map<InetAddress, UUID> versions = new ConcurrentHashMap<InetAddress, UUID>();
         final Set<InetAddress> liveHosts = Gossiper.instance.getLiveMembers();
-        final Message msg = new Message(FBUtilities.getLocalAddress(), StorageService.Verb.SCHEMA_CHECK, ArrayUtils.EMPTY_BYTE_ARRAY);
         final CountDownLatch latch = new CountDownLatch(liveHosts.size());
-        // an empty message acts as a request to the SchemaCheckVerbHandler.
-        MessagingService.instance().sendRR(msg, liveHosts, new IAsyncCallback()
+
+        IAsyncCallback cb = new IAsyncCallback()
         {
-            public void response(Message msg)
+            public void response(Message message)
             {
                 // record the response from the remote node.
-                logger.debug("Received schema check response from " + msg.getFrom().getHostAddress());
-                UUID theirVersion = UUID.fromString(new String(msg.getMessageBody()));
-                versions.put(msg.getFrom(), theirVersion);
+                logger.debug("Received schema check response from " + message.getFrom().getHostAddress());
+                UUID theirVersion = UUID.fromString(new String(message.getMessageBody()));
+                versions.put(message.getFrom(), theirVersion);
                 latch.countDown();
             }
-        });
-        
+        };
+        // an empty message acts as a request to the SchemaCheckVerbHandler.
+        for (InetAddress endpoint : liveHosts)
+        {
+            Message message = new Message(FBUtilities.getLocalAddress(), StorageService.Verb.SCHEMA_CHECK, ArrayUtils.EMPTY_BYTE_ARRAY);
+            MessagingService.instance().sendRR(message, endpoint, cb);
+        }
+
         try
         {
             // wait for as long as possible. timeout-1s if possible.
             latch.await(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
-        } 
-        catch (InterruptedException ex) 
+        }
+        catch (InterruptedException ex)
         {
             throw new AssertionError("This latch shouldn't have been interrupted.");
         }
-        
+
         logger.debug("My version is " + myVersion);
-        
+
         // maps versions to hosts that are on that version.
         Map<String, List<String>> results = new HashMap<String, List<String>>();
         Iterable<InetAddress> allHosts = Iterables.concat(Gossiper.instance.getLiveMembers(), Gossiper.instance.getUnreachableMembers());
@@ -60,10 +65,10 @@
             for (String host : entry.getValue())
                 logger.debug("%s disagrees (%s)", host, entry.getKey());
         }
-        
+
         if (results.size() == 1)
             logger.debug("Schemas are in agreement.");
-        
+
         return results;
     }
 

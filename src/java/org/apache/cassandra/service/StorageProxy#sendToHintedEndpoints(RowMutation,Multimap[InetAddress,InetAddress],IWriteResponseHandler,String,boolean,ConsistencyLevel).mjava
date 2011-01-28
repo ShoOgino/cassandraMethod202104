@@ -1,9 +1,8 @@
-    private static void sendToHintedEndpoints(RowMutation rm, Multimap<InetAddress, InetAddress> hintedEndpoints, IWriteResponseHandler responseHandler, String localDataCenter, boolean insertLocalMessages)
+    private static void sendToHintedEndpoints(RowMutation rm, Multimap<InetAddress, InetAddress> hintedEndpoints, IWriteResponseHandler responseHandler, String localDataCenter, boolean insertLocalMessages, ConsistencyLevel consistency_level)
     throws IOException
     {
         // Multimap that holds onto all the messages and addresses meant for a specific datacenter
         Map<String, Multimap<Message, InetAddress>> dcMessages = new HashMap<String, Multimap<Message, InetAddress>>(hintedEndpoints.size());
-        Message unhintedMessage = null;
 
         for (Map.Entry<InetAddress, Collection<InetAddress>> entry : hintedEndpoints.asMap().entrySet())
         {
@@ -23,19 +22,15 @@
                 else
                 {
                     // belongs on a different server
-                    if (unhintedMessage == null)
-                    {
-                        unhintedMessage = rm.makeRowMutationMessage();
-                        MessagingService.instance().addCallback(responseHandler, unhintedMessage.getMessageId());
-                    }
+                    Message unhintedMessage = rm.makeRowMutationMessage();
                     if (logger.isDebugEnabled())
                         logger.debug("insert writing key " + ByteBufferUtil.bytesToHex(rm.key()) + " to " + unhintedMessage.getMessageId() + "@" + destination);
 
                     Multimap<Message, InetAddress> messages = dcMessages.get(dc);
                     if (messages == null)
                     {
-                        messages = HashMultimap.create();
-                        dcMessages.put(dc, messages);
+                       messages = HashMultimap.create();
+                       dcMessages.put(dc, messages);
                     }
 
                     messages.put(unhintedMessage, destination);
@@ -54,20 +49,25 @@
                             logger.debug("insert writing key " + ByteBufferUtil.bytesToHex(rm.key()) + " to " + hintedMessage.getMessageId() + "@" + destination + " for " + target);
                     }
                 }
-                responseHandler.addHintCallback(hintedMessage, destination);
+                // (non-destination hints are part of the callback and count towards consistency only under CL.ANY)
+                // (non-destination hints are part of the callback and count towards consistency only under CL.ANY)
+                if (targets.contains(destination) || consistency_level == ConsistencyLevel.ANY)
+                    MessagingService.instance().sendRR(hintedMessage, destination, responseHandler);
+                else
+                    MessagingService.instance().sendOneWay(hintedMessage, destination);
 
                 Multimap<Message, InetAddress> messages = dcMessages.get(dc);
 
                 if (messages == null)
                 {
-                    messages = HashMultimap.create();
-                    dcMessages.put(dc, messages);
+                   messages = HashMultimap.create();
+                   dcMessages.put(dc, messages);
                 }
 
                 messages.put(hintedMessage, destination);
             }
-        }
 
-        sendMessages(localDataCenter, dcMessages);
+            sendMessages(localDataCenter, dcMessages, responseHandler);
+        }
     }
 
