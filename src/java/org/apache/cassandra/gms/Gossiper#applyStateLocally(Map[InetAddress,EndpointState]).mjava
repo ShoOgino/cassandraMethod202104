@@ -3,41 +3,53 @@
         for (Entry<InetAddress, EndpointState> entry : epStateMap.entrySet())
         {
             InetAddress ep = entry.getKey();
-            if ( ep.equals( localEndpoint_ ) )
+            if ( ep.equals(FBUtilities.getLocalAddress()))
                 continue;
+            if (justRemovedEndpoints.containsKey(ep))
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("Ignoring gossip for " + ep + " because it is quarantined");
+                continue;
+            }
 
-            EndpointState localEpStatePtr = endpointStateMap_.get(ep);
+            EndpointState localEpStatePtr = endpointStateMap.get(ep);
             EndpointState remoteState = entry.getValue();
             /*
-                If state does not exist just add it. If it does then add it only if the version
-                of the remote copy is greater than the local copy.
+                If state does not exist just add it. If it does then add it if the remote generation is greater.
+                If there is a generation tie, attempt to break it by heartbeat version.
             */
             if ( localEpStatePtr != null )
             {
             	int localGeneration = localEpStatePtr.getHeartBeatState().getGeneration();
             	int remoteGeneration = remoteState.getHeartBeatState().getGeneration();
+                if (logger.isTraceEnabled())
+                    logger.trace(ep + "local generation " + localGeneration + ", remote generation " + remoteGeneration);
 
             	if (remoteGeneration > localGeneration)
             	{
-                    handleGenerationChange(ep, remoteState);
+                    if (logger.isTraceEnabled())
+                        logger.trace("Updating heartbeat state generation to " + remoteGeneration + " from " + localGeneration + " for " + ep);
+                    // major state change will handle the update by inserting the remote state directly
+                    handleMajorStateChange(ep, remoteState);
             	}
-            	else if ( remoteGeneration == localGeneration )
+            	else if ( remoteGeneration == localGeneration ) // generation has not changed, apply new states
             	{
-	                /* manage the membership state */
+	                /* find maximum state */
 	                int localMaxVersion = getMaxEndpointStateVersion(localEpStatePtr);
 	                int remoteMaxVersion = getMaxEndpointStateVersion(remoteState);
 	                if ( remoteMaxVersion > localMaxVersion )
 	                {
-	                    markAlive(ep, localEpStatePtr);
-	                    applyHeartBeatStateLocally(ep, localEpStatePtr, remoteState);
-	                    /* apply ApplicationState */
-	                    applyApplicationStateLocally(ep, localEpStatePtr, remoteState);
+                        // apply states, but do not notify since there is no major change
+	                    applyNewStates(ep, localEpStatePtr, remoteState);
 	                }
+                    else if (logger.isTraceEnabled())
+                            logger.trace("Ignoring remote version " + remoteMaxVersion + " <= " + localMaxVersion + " for " + ep);
             	}
             }
             else
             {
-            	handleNewJoin(ep, remoteState);
+                // this is a new node
+            	handleMajorStateChange(ep, remoteState);
             }
         }
     }
