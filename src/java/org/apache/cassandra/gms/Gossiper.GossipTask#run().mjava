@@ -9,17 +9,23 @@
                 endpointStateMap.get(FBUtilities.getLocalAddress()).getHeartBeatState().updateHeartBeat();
                 if (logger.isTraceEnabled())
                     logger.trace("My heartbeat is now " + endpointStateMap.get(FBUtilities.getLocalAddress()).getHeartBeatState().getHeartBeatVersion());
-                List<GossipDigest> gDigests = new ArrayList<GossipDigest>();
+                final List<GossipDigest> gDigests = new ArrayList<GossipDigest>();
                 Gossiper.instance.makeRandomGossipDigest(gDigests);
 
                 if ( gDigests.size() > 0 )
                 {
-                    Message message = makeGossipDigestSynMessage(gDigests);
+                    MessageProducer prod = new MessageProducer()
+                    {
+                        public Message getMessage(int version) throws IOException
+                        {
+                            return makeGossipDigestSynMessage(gDigests, version);
+                        }
+                    };
                     /* Gossip to some random live member */
-                    boolean gossipedToSeed = doGossipToLiveMember(message);
+                    boolean gossipedToSeed = doGossipToLiveMember(prod);
 
                     /* Gossip to some unreachable member with some probability to check if he is back up */
-                    doGossipToUnreachableMember(message);
+                    doGossipToUnreachableMember(prod);
 
                     /* Gossip to a seed if we did not do so above, or we have seen less nodes
                        than there are seeds.  This prevents partitions where each group of nodes
@@ -38,7 +44,7 @@
 
                        See CASSANDRA-150 for more exposition. */
                     if (!gossipedToSeed || liveEndpoints.size() < seeds.size())
-                        doGossipToSeed(message);
+                        doGossipToSeed(prod);
 
                     if (logger.isTraceEnabled())
                         logger.trace("Performing status check ...");
