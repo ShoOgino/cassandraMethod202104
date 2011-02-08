@@ -1,0 +1,53 @@
+    /**
+     * Get portion of the columns and serialize in loop while not more columns left in the row
+     * @param reader SSTableReader for given SSTable
+     * @param row SSTableIdentityIterator row representation with Column Family
+     * @param key Decorated Key for the required row
+     * @param out output stream
+     */
+    private static void serializeRow(SSTableReader reader, SSTableIdentityIterator row, DecoratedKey key, PrintStream out)
+    {
+        ColumnFamily columnFamily = row.getColumnFamily();
+        boolean isSuperCF = columnFamily.isSuper();
+        ByteBuffer startColumn = ByteBufferUtil.EMPTY_BYTE_BUFFER; // initial column name, "blank" for first
+
+        out.print(asKey(bytesToHex(key.key)));
+
+        out.print(isSuperCF ? "{" : "[");
+
+        while (true)
+        {
+            QueryFilter filter = QueryFilter.getSliceFilter(key,
+                                                            new QueryPath(columnFamily.metadata().tableName),
+                                                            startColumn,
+                                                            ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                            false,
+                                                            PAGE_SIZE);
+
+            IColumnIterator columns = filter.getSSTableColumnIterator(reader);
+
+            int columnCount = 0;
+            while (columns.hasNext())
+            {
+                // setting new start column to the last of the current columns
+                startColumn = columns.next().name();
+                columnCount++;
+            }
+
+            try
+            {
+                columns = filter.getSSTableColumnIterator(reader); // iterator reset
+                serializeRow(columns, isSuperCF, out);
+            }
+            catch (IOException e)
+            {
+                System.err.println("WARNING: Corrupt row " + key + " (skipping).");
+            }
+
+            if (columnCount < PAGE_SIZE)
+                break;
+        }
+
+        out.print(isSuperCF ? "}" : "]");
+    }
+
