@@ -1,0 +1,48 @@
+    // This is necessary to accommodate the test suite since you cannot open a Reader more
+    // than once from within the same process.
+    static void export(SSTableReader reader, PrintStream outs, String[] excludes) throws IOException
+    {
+        SSTableScanner scanner = reader.getDirectScanner(INPUT_FILE_BUFFER_SIZE);
+        Set<String> excludeSet = new HashSet<String>();
+
+        if (excludes != null)
+            excludeSet = new HashSet<String>(Arrays.asList(excludes));
+
+        outs.println("{");
+
+        SSTableIdentityIterator row;
+
+        boolean elementWritten = false;
+        while (scanner.hasNext())
+        {
+            row = (SSTableIdentityIterator) scanner.next();
+
+            if (excludeSet.contains(bytesToHex(row.getKey().key)))
+                continue;
+            else if (elementWritten)
+                outs.println(",");
+
+            try
+            {
+                serializeRow(outs, row);
+
+                // used to decide should we put ',' after previous row or not
+                if (!elementWritten)
+                    elementWritten = true;
+            }
+            catch (IOException ioexcep)
+            {
+                System.err.println("WARNING: Corrupt row " + bytesToHex(row.getKey().key) + " (skipping).");
+                elementWritten = false;
+            }
+            catch (OutOfMemoryError oom)
+            {
+                System.err.println("ERROR: Out of memory deserializing row " + bytesToHex(row.getKey().key));
+                elementWritten = false;
+            }
+        }
+        
+        outs.printf("%n}%n");
+        outs.flush();
+    }
+
