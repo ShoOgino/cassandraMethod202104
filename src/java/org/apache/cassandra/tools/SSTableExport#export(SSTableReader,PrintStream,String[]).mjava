@@ -2,47 +2,39 @@
     // than once from within the same process.
     static void export(SSTableReader reader, PrintStream outs, String[] excludes) throws IOException
     {
-        SSTableScanner scanner = reader.getDirectScanner(INPUT_FILE_BUFFER_SIZE);
         Set<String> excludeSet = new HashSet<String>();
 
         if (excludes != null)
             excludeSet = new HashSet<String>(Arrays.asList(excludes));
 
-        outs.println("{");
 
         SSTableIdentityIterator row;
+        SSTableScanner scanner = reader.getDirectScanner(BufferedRandomAccessFile.DEFAULT_BUFFER_SIZE);
 
-        boolean elementWritten = false;
+        outs.println("{");
+
+        int i = 0;
+
+        // collecting keys to export
         while (scanner.hasNext())
         {
             row = (SSTableIdentityIterator) scanner.next();
 
-            if (excludeSet.contains(bytesToHex(row.getKey().key)))
+            String currentKey = bytesToHex(row.getKey().key);
+
+            if (excludeSet.contains(currentKey))
                 continue;
-            else if (elementWritten)
+            else if (i != 0)
                 outs.println(",");
 
-            try
-            {
-                serializeRow(outs, row);
+            serializeRow(reader, row, row.getKey(), outs);
 
-                // used to decide should we put ',' after previous row or not
-                if (!elementWritten)
-                    elementWritten = true;
-            }
-            catch (IOException ioexcep)
-            {
-                System.err.println("WARNING: Corrupt row " + bytesToHex(row.getKey().key) + " (skipping).");
-                elementWritten = false;
-            }
-            catch (OutOfMemoryError oom)
-            {
-                System.err.println("ERROR: Out of memory deserializing row " + bytesToHex(row.getKey().key));
-                elementWritten = false;
-            }
+            i++;
         }
-        
-        outs.printf("%n}%n");
+
+        outs.println("\n}");
         outs.flush();
+
+        scanner.close();
     }
 
