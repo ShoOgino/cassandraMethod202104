@@ -12,66 +12,55 @@
     private static List<Row> fetchRows(List<ReadCommand> commands, ConsistencyLevel consistency_level) throws IOException, UnavailableException, TimeoutException
     {
         List<ReadCallback<Row>> readCallbacks = new ArrayList<ReadCallback<Row>>();
-        List<List<InetAddress>> commandEndpoints = new ArrayList<List<InetAddress>>();
         List<Row> rows = new ArrayList<Row>();
-        Set<ReadCommand> repairs = new HashSet<ReadCommand>();
 
         // send out read requests
         for (ReadCommand command: commands)
         {
             assert !command.isDigestQuery();
+            logger.debug("Command/ConsistencyLevel is {}/{}", command, consistency_level);
 
             List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(command.table, command.key);
             DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getLocalAddress(), endpoints);
 
-            ReadResponseResolver resolver = new ReadResponseResolver(command.table, command.key);
-            ReadCallback<Row> handler = getReadCallback(resolver, command.table, consistency_level);
-            handler.assureSufficientLiveNodes(endpoints);
+            RowDigestResolver resolver = new RowDigestResolver(command.table, command.key);
+            ReadCallback<Row> handler = getReadCallback(resolver, command, consistency_level, endpoints);
+            handler.assureSufficientLiveNodes();
+            assert !handler.endpoints.isEmpty();
 
-            // if we're not going to read repair, cut the endpoints list down to the ones required to satisfy ConsistencyLevel
-            if (randomlyReadRepair(command))
-            {
-                if (endpoints.size() > handler.blockfor)
-                    repairs.add(command);
-            }
-            else
-            {
-                endpoints = endpoints.subList(0, handler.blockfor);
-            }
-            
             // The data-request message is sent to dataPoint, the node that will actually get
             // the data for us. The other replicas are only sent a digest query.
             ReadCommand digestCommand = null;
-            if (endpoints.size() > 1)
+            if (handler.endpoints.size() > 1)
             {
                 digestCommand = command.copy();
                 digestCommand.setDigestQuery(true);
             }
 
-            InetAddress dataPoint = endpoints.get(0);
+            InetAddress dataPoint = handler.endpoints.get(0);
             if (dataPoint.equals(FBUtilities.getLocalAddress()))
             {
                 if (logger.isDebugEnabled())
-                    logger.debug("reading data for " + command + " locally");
+                    logger.debug("reading data locally");
                 StageManager.getStage(Stage.READ).execute(new LocalReadRunnable(command, handler));
             }
             else
             {
                 Message message = command.makeReadMessage();
                 if (logger.isDebugEnabled())
-                    logger.debug("reading data for " + command + " from " + dataPoint);
+                    logger.debug("reading data from " + dataPoint);
                 MessagingService.instance().sendRR(message, dataPoint, handler);
             }
 
             // We lazy-construct the digest Message object since it may not be necessary if we
             // are doing a local digest read, or no digest reads at all.
             Message digestMessage = null;
-            for (InetAddress digestPoint : endpoints.subList(1, endpoints.size()))
+            for (InetAddress digestPoint : handler.endpoints.subList(1, handler.endpoints.size()))
             {
                 if (digestPoint.equals(FBUtilities.getLocalAddress()))
                 {
                     if (logger.isDebugEnabled())
-                        logger.debug("reading digest for " + command + " locally");
+                        logger.debug("reading digest locally");
                     StageManager.getStage(Stage.READ).execute(new LocalReadRunnable(digestCommand, handler));
                 }
                 else
@@ -79,44 +68,45 @@
                     if (digestMessage == null)
                         digestMessage = digestCommand.makeReadMessage();
                     if (logger.isDebugEnabled())
-                        logger.debug("reading digest for " + command + " from " + digestPoint);
+                        logger.debug("reading digest for from " + digestPoint);
                     MessagingService.instance().sendRR(digestMessage, digestPoint, handler);
                 }
             }
 
             readCallbacks.add(handler);
-            commandEndpoints.add(endpoints);
         }
 
         // read results and make a second pass for any digest mismatches
         List<RepairCallback<Row>> repairResponseHandlers = null;
         for (int i = 0; i < commands.size(); i++)
         {
-            ReadCallback<Row> readCallback = readCallbacks.get(i);
+            ReadCallback<Row> handler = readCallbacks.get(i);
             Row row;
             ReadCommand command = commands.get(i);
-            List<InetAddress> endpoints = commandEndpoints.get(i);
             try
             {
                 long startTime2 = System.currentTimeMillis();
-                row = readCallback.get(); // CL.ONE is special cased here to ignore digests even if some have arrived
+                row = handler.get(); // CL.ONE is special cased here to ignore digests even if some have arrived
                 if (row != null)
                     rows.add(row);
 
                 if (logger.isDebugEnabled())
                     logger.debug("Read: " + (System.currentTimeMillis() - startTime2) + " ms.");
-
-                if (repairs.contains(command))
-                    repairExecutor.schedule(new RepairRunner(readCallback.resolver, command, endpoints), DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
             }
             catch (DigestMismatchException ex)
             {
                 if (logger.isDebugEnabled())
                     logger.debug("Digest mismatch:", ex);
-                RepairCallback<Row> handler = repair(command, endpoints);
+
+                RowRepairResolver resolver = new RowRepairResolver(command.table, command.key);
+                RepairCallback<Row> repairHandler = new RepairCallback<Row>(resolver, handler.endpoints);
+                Message messageRepair = command.makeReadMessage();
+                for (InetAddress endpoint : handler.endpoints)
+                    MessagingService.instance().sendRR(messageRepair, endpoint, repairHandler);
+
                 if (repairResponseHandlers == null)
                     repairResponseHandlers = new ArrayList<RepairCallback<Row>>();
-                repairResponseHandlers.add(handler);
+                repairResponseHandlers.add(repairHandler);
             }
         }
 

@@ -1,0 +1,49 @@
+    /*
+    * This method handles the following scenario:
+    *
+    * there was a mismatch on the initial read (1a or 1b), so we redid the digest requests
+    * as full data reads.  In this case we need to compute the most recent version
+    * of each column, and send diffs to out-of-date replicas.
+    */
+    public Row resolve() throws DigestMismatchException, IOException
+    {
+        if (logger.isDebugEnabled())
+            logger.debug("resolving " + replies.size() + " responses");
+
+        long startTime = System.currentTimeMillis();
+		List<ColumnFamily> versions = new ArrayList<ColumnFamily>();
+		List<InetAddress> endpoints = new ArrayList<InetAddress>();
+
+        // case 1: validate digests against each other; throw immediately on mismatch.
+        // also, collects data results into versions/endpoints lists.
+        //
+        // results are cleared as we process them, to avoid unnecessary duplication of work
+        // when resolve() is called a second time for read repair on responses that were not
+        // necessary to satisfy ConsistencyLevel.
+        for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+        {
+            Message message = entry.getKey();
+            ReadResponse response = entry.getValue();
+            assert !response.isDigestQuery();
+            versions.add(response.row().cf);
+            endpoints.add(message.getFrom());
+        }
+
+        ColumnFamily resolved;
+        if (versions.size() > 1)
+        {
+            resolved = resolveSuperset(versions);
+            if (logger.isDebugEnabled())
+                logger.debug("versions merged");
+            maybeScheduleRepairs(resolved, table, key, versions, endpoints);
+        }
+        else
+        {
+            resolved = versions.get(0);
+        }
+
+        if (logger.isDebugEnabled())
+            logger.debug("resolve: " + (System.currentTimeMillis() - startTime) + " ms.");
+		return new Row(key, resolved);
+	}
+
