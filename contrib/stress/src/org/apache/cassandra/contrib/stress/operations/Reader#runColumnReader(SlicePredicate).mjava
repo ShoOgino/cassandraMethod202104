@@ -9,25 +9,36 @@
 
             long start = System.currentTimeMillis();
 
-            try
+            boolean success = false;
+            String exceptionMessage = null;
+
+            for (int t = 0; t < session.getRetryTimes(); t++)
             {
-                List<ColumnOrSuperColumn> columns;
-                columns = client.get_slice(keyBuffer, parent, predicate, session.getConsistencyLevel());
+                if (success)
+                    break;
 
-                if (columns.size() == 0)
+                try
                 {
-                    System.err.println(String.format("Key %s not found.", new String(key)));
-
-                    if (!session.ignoreErrors())
-                        break;
+                    List<ColumnOrSuperColumn> columns;
+                    columns = client.get_slice(keyBuffer, parent, predicate, session.getConsistencyLevel());
+                    success = (columns.size() != 0);
+                }
+                catch (Exception e)
+                {
+                    exceptionMessage = getExceptionMessage(e);
+                    success = false;
                 }
             }
-            catch (Exception e)
+
+            if (!success)
             {
-                System.err.printf("Error while reading key %s - %s%n", new String(key), getExceptionMessage(e));
+                System.err.printf("Thread [%d] retried %d times - error reading key %s %s%n", index,
+                                                                                              session.getRetryTimes(),
+                                                                                              new String(key),
+                                                                                              (exceptionMessage == null) ? "" : "(" + exceptionMessage + ")");
 
                 if (!session.ignoreErrors())
-                    break;
+                    return;
             }
 
             session.operationCount.getAndIncrement(index);
