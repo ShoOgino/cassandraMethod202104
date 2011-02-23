@@ -1,0 +1,95 @@
+    /**
+     * Deserialize everything in the CFS and re-serialize w/ the newest version.  Also attempts to recover
+     * from bogus row keys / sizes using data from the index, and skips rows with garbage columns that resulted
+     * from early ByteBuffer bugs.
+     *
+     * @throws IOException
+     */
+    private void doScrub(ColumnFamilyStore cfs) throws IOException
+    {
+        assert !cfs.isIndex();
+        Table table = cfs.table;
+        Collection<Range> ranges = StorageService.instance.getLocalRanges(table.name);
+
+        for (final SSTableReader sstable : cfs.getSSTables())
+        {
+            logger.info("Scrubbing " + sstable);
+
+            // Calculate the expected compacted filesize
+            String compactionFileLocation = table.getDataFileLocation(sstable.length());
+            if (compactionFileLocation == null)
+                throw new IOException("disk full");
+
+            int expectedBloomFilterSize = Math.max(DatabaseDescriptor.getIndexInterval(),
+                                                   (int)(SSTableReader.getApproximateKeyCount(Arrays.asList(sstable))));
+            if (logger.isDebugEnabled())
+              logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+
+            // loop through each row, deserializing to check for damage.
+            // we'll also loop through the index at the same time, using the position from the index to recover if the
+            // row header (key or data size) is corrupt. (This means our position in the index file will be one row
+            // "ahead" of the data file.)
+            final BufferedRandomAccessFile dataFile = BufferedRandomAccessFile.getUncachingReader(sstable.getFilename());
+            String indexFilename = sstable.descriptor.filenameFor(Component.PRIMARY_INDEX);
+            BufferedRandomAccessFile indexFile = BufferedRandomAccessFile.getUncachingReader(indexFilename);
+            ByteBuffer nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
+            assert indexFile.readLong() == 0;
+
+            SSTableWriter writer = maybeCreateWriter(cfs, compactionFileLocation, expectedBloomFilterSize, null);
+            executor.beginCompaction(cfs.columnFamily, new ScrubInfo(dataFile, sstable));
+
+            while (!dataFile.isEOF())
+            {
+                long rowStart = dataFile.getFilePointer();
+                DecoratedKey key = SSTableReader.decodeKey(sstable.partitioner, sstable.descriptor, ByteBufferUtil.readWithShortLength(dataFile));
+                ByteBuffer currentIndexKey = nextIndexKey;
+                nextIndexKey = indexFile.isEOF() ? null : ByteBufferUtil.readWithShortLength(indexFile);
+                long nextRowPositionFromIndex = indexFile.isEOF() ? dataFile.length() : indexFile.readLong();
+
+                long dataSize = sstable.descriptor.hasIntRowSize ? dataFile.readInt() : dataFile.readLong();
+                long dataStart = dataFile.getFilePointer();
+
+                SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStart, dataSize, true);
+                writer.mark();
+                try
+                {
+                    writer.append(getCompactedRow(row, cfs, sstable.descriptor, true));
+                }
+                catch (Exception e)
+                {
+                    logger.warn("Error reading row " + ByteBufferUtil.bytesToHex(key.key) + "(stacktrace follows)", e);
+                    writer.reset();
+                    
+                    long dataStartFromIndex = rowStart + 2 + currentIndexKey.remaining();
+                    if (!key.key.equals(currentIndexKey) || dataStart != dataStartFromIndex)
+                    {
+                        logger.info(String.format("Retrying %s as key %s from row index",
+                                                  ByteBufferUtil.bytesToHex(key.key), ByteBufferUtil.bytesToHex(currentIndexKey)));
+                        key = SSTableReader.decodeKey(sstable.partitioner, sstable.descriptor, currentIndexKey);
+                        long dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+                        row = new SSTableIdentityIterator(sstable, dataFile, key, dataStartFromIndex, dataSizeFromIndex, true);
+                        try
+                        {
+                            writer.append(getCompactedRow(row, cfs, sstable.descriptor, true));
+                        }
+                        catch (Exception e2)
+                        {
+                            logger.info("Retry failed too.  Skipping to next row (retry's stacktrace follows)", e2);
+                            writer.reset();
+                            dataFile.seek(nextRowPositionFromIndex);
+                        }
+                    }
+                    else
+                    {
+                        logger.info("Skipping to next row");
+                        dataFile.seek(nextRowPositionFromIndex);
+                    }
+                }
+            }
+
+            SSTableReader newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
+            cfs.replaceCompactedSSTables(Arrays.asList(sstable), Arrays.asList(newSstable));
+            logger.info("Scrub of " + sstable + " complete");
+        }
+    }
+
