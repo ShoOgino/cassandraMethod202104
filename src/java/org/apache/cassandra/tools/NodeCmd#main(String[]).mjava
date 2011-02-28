@@ -1,21 +1,21 @@
     public static void main(String[] args) throws IOException, InterruptedException, ParseException
     {
         CommandLineParser parser = new PosixParser();
-        CommandLine cmd = null;
-        
+        ToolCommandLine cmd = null;
+
         try
         {
-            cmd = parser.parse(options, args);
+            cmd = new ToolCommandLine(parser.parse(options, args));
         }
-        catch (ParseException parseExcep)
+        catch (ParseException p)
         {
-            badUse(parseExcep.toString());
+            badUse(p.getMessage());
         }
 
-        String host = cmd.getOptionValue(HOST_OPT_LONG);
-        int port = defaultPort;
+        String host = cmd.getOptionValue(HOST_OPT.left);
+        int port = DEFAULT_PORT;
         
-        String portNum = cmd.getOptionValue(PORT_OPT_LONG);
+        String portNum = cmd.getOptionValue(PORT_OPT.left);
         if (portNum != null)
         {
             try
@@ -27,8 +27,9 @@
                 throw new ParseException("Port must be a number");
             }
         }
-        String username = cmd.getOptionValue(USERNAME_OPT_LONG);
-        String password = cmd.getOptionValue(PASSWORD_OPT_LONG);
+
+        String username = cmd.getOptionValue(USERNAME_OPT.left);
+        String password = cmd.getOptionValue(PASSWORD_OPT.left);
         
         NodeProbe probe = null;
         try
@@ -39,28 +40,25 @@
         {
             err(ioe, "Error connection to remote JMX agent!");
         }
-        
-        if (cmd.getArgs().length < 1)
-            badUse("Missing argument for command.");
 
-        NodeCmd nodeCmd = new NodeCmd(probe);
-        
-        // Execute the requested command.
-        String[] arguments = cmd.getArgs();
-        String cmdName = arguments[0];
+        NodeCommand command = null;
 
-        boolean validCommand = false;
-        for (NodeCommand n : NodeCommand.values())
+        try
         {
-            if (cmdName.toUpperCase().equals(n.name()))
-                validCommand = true;
+            command = cmd.getCommand();
+        }
+        catch (IllegalArgumentException e)
+        {
+            badUse(e.getMessage());
         }
 
-        if (!validCommand)
-            badUse("Unrecognized command: " + cmdName);
 
-        NodeCommand nc = NodeCommand.valueOf(cmdName.toUpperCase());
-        switch (nc)
+        NodeCmd nodeCmd = new NodeCmd(probe);
+
+        // Execute the requested command.
+        String[] arguments = cmd.getCommandArguments();
+
+        switch (command)
         {
             case RING            : nodeCmd.printRing(System.out); break;
             case INFO            : nodeCmd.printInfo(System.out); break;
@@ -82,25 +80,25 @@
                 break;
 
             case NETSTATS :
-                if (arguments.length > 1) { nodeCmd.printNetworkStats(InetAddress.getByName(arguments[1]), System.out); }
+                if (arguments.length > 0) { nodeCmd.printNetworkStats(InetAddress.getByName(arguments[0]), System.out); }
                 else                      { nodeCmd.printNetworkStats(null, System.out); }
                 break;
 
             case SNAPSHOT :
-                if (arguments.length > 1) { probe.takeSnapshot(arguments[1]); }
+                if (arguments.length > 0) { probe.takeSnapshot(arguments[0]); }
                 else                      { probe.takeSnapshot(""); }
                 break;
 
             case MOVE :
-                if (arguments.length != 2) { badUse("Missing token argument for move."); }
-                probe.move(arguments[1]);
+                if (arguments.length != 1) { badUse("Missing token argument for move."); }
+                probe.move(arguments[0]);
                 break;
 
             case REMOVETOKEN :
-                if (arguments.length != 2) { badUse("Missing an argument for removetoken (either status, force, or a token)"); }
-                else if (arguments[1].equals("status")) { nodeCmd.printRemovalStatus(System.out); }
-                else if (arguments[1].equals("force"))  { nodeCmd.printRemovalStatus(System.out); probe.forceRemoveCompletion(); }
-                else                                    { probe.removeToken(arguments[1]); }
+                if (arguments.length != 1) { badUse("Missing an argument for removetoken (either status, force, or a token)"); }
+                else if (arguments[0].equals("status")) { nodeCmd.printRemovalStatus(System.out); }
+                else if (arguments[0].equals("force"))  { nodeCmd.printRemovalStatus(System.out); probe.forceRemoveCompletion(); }
+                else                                    { probe.removeToken(arguments[0]); }
                 break;
 
             case CLEANUP :
@@ -110,32 +108,32 @@
             case SCRUB   :
             case INVALIDATEKEYCACHE :
             case INVALIDATEROWCACHE :
-                optionalKSandCFs(nc, arguments, probe);
+                optionalKSandCFs(command, arguments, probe);
                 break;
 
             case GETCOMPACTIONTHRESHOLD :
-                if (arguments.length != 3) { badUse("getcompactionthreshold requires ks and cf args."); }
-                probe.getCompactionThreshold(System.out, arguments[1], arguments[2]);
+                if (arguments.length != 2) { badUse("getcompactionthreshold requires ks and cf args."); }
+                probe.getCompactionThreshold(System.out, arguments[0], arguments[1]);
                 break;
 
             case CFHISTOGRAMS :
-                if (arguments.length != 3) { badUse("cfhistograms requires ks and cf args"); }
-                nodeCmd.printCfHistograms(arguments[1], arguments[2], System.out);
+                if (arguments.length != 2) { badUse("cfhistograms requires ks and cf args"); }
+                nodeCmd.printCfHistograms(arguments[0], arguments[1], System.out);
                 break;
 
             case SETCACHECAPACITY :
-                if (arguments.length != 5) { badUse("setcachecapacity requires ks, cf, keycachecap, and rowcachecap args."); }
-                probe.setCacheCapacities(arguments[1], arguments[2], Integer.parseInt(arguments[3]), Integer.parseInt(arguments[4]));
+                if (arguments.length != 4) { badUse("setcachecapacity requires ks, cf, keycachecap, and rowcachecap args."); }
+                probe.setCacheCapacities(arguments[0], arguments[1], Integer.parseInt(arguments[2]), Integer.parseInt(arguments[3]));
                 break;
 
             case SETCOMPACTIONTHRESHOLD :
-                if (arguments.length != 5) { badUse("setcompactionthreshold requires ks, cf, min, and max threshold args."); }
-                int minthreshold = Integer.parseInt(arguments[3]);
-                int maxthreshold = Integer.parseInt(arguments[4]);
+                if (arguments.length != 4) { badUse("setcompactionthreshold requires ks, cf, min, and max threshold args."); }
+                int minthreshold = Integer.parseInt(arguments[2]);
+                int maxthreshold = Integer.parseInt(arguments[3]);
                 if ((minthreshold < 0) || (maxthreshold < 0)) { badUse("Thresholds must be positive integers"); }
                 if (minthreshold > maxthreshold)              { badUse("Min threshold cannot be greater than max."); }
                 if (minthreshold < 2 && maxthreshold != 0)    { badUse("Min threshold must be at least 2"); }
-                probe.setCompactionThreshold(arguments[1], arguments[2], minthreshold, maxthreshold);
+                probe.setCompactionThreshold(arguments[0], arguments[1], minthreshold, maxthreshold);
                 break;
 
             default :
