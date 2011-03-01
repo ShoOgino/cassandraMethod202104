@@ -1,0 +1,82 @@
+    @Test
+    public void testReadAndWrite() throws Exception
+    {
+        BufferedRandomAccessFile file = createTempFile("braf");
+
+        // writting string of data to the file
+        byte[] data = "Hello".getBytes();
+        file.write(data);
+        assertEquals(file.length(), data.length);
+        assertEquals(file.getFilePointer(), data.length);
+
+        // reading small amount of data from file, this is handled by initial buffer
+        file.seek(0);
+        byte[] buffer = new byte[data.length];
+        assertEquals(file.read(buffer), data.length);
+        assertTrue(Arrays.equals(buffer, data)); // we read exactly what we wrote
+        assertEquals(file.read(), -1); // nothing more to read EOF
+        assert file.bytesRemaining() == 0 && file.isEOF();
+
+        // writing buffer bigger than page size, which will trigger reBuffer()
+        byte[] bigData = new byte[BufferedRandomAccessFile.DEFAULT_BUFFER_SIZE + 10];
+
+        for (int i = 0; i < bigData.length; i++)
+            bigData[i] = 'd';
+
+        long initialPosition = file.getFilePointer();
+        file.write(bigData); // writing data
+        assertEquals(file.getFilePointer(), initialPosition + bigData.length);
+        assertEquals(file.length(), initialPosition + bigData.length); // file size should equals to last position
+
+        // reading written buffer
+        file.seek(initialPosition); // back to initial (before write) position
+        data = new byte[bigData.length];
+        long sizeRead = 0;
+        for (int i = 0; i < data.length; i++)
+        {
+            data[i] = (byte) file.read(); // this will trigger reBuffer()
+            sizeRead++;
+        }
+
+        assertEquals(sizeRead, data.length); // read exactly data.length bytes
+        assertEquals(file.getFilePointer(), initialPosition + data.length);
+        assertEquals(file.length(), initialPosition + bigData.length);
+        assertTrue(Arrays.equals(bigData, data));
+        assert file.bytesRemaining() == 0 && file.isEOF(); // we are at the of the file
+
+        // test readBytes(int) method
+        file.seek(0);
+        ByteBuffer fileContent = file.readBytes((int) file.length());
+        assertEquals(fileContent.limit(), file.length());
+        assert ByteBufferUtil.string(fileContent).equals("Hello" + new String(bigData));
+
+        // read the same buffer but using readFully(int)
+        data = new byte[bigData.length];
+        file.seek(initialPosition);
+        file.readFully(data);
+        assert file.bytesRemaining() == 0 && file.isEOF(); // we should be at EOF
+        assertTrue(Arrays.equals(bigData, data));
+
+        // try to read past mark (all methods should return -1)
+        data = new byte[10];
+        assertEquals(file.read(), -1);
+        assertEquals(file.read(data), -1);
+        assertEquals(file.read(data, 0, data.length), -1);
+
+        // test read(byte[], int, int)
+        file.seek(0);
+        data = new byte[20];
+        assertEquals(file.read(data, 0, 15), 15);
+        assertTrue(new String(data).contains("Hellodddddddddd"));
+        for (int i = 16; i < data.length; i++)
+        {
+            assert data[i] == 0;
+        }
+
+        // try to seek past EOF
+        file.seek(file.length() + 10); // should not throw an exception
+        assert file.bytesRemaining() == 0 && file.isEOF();
+
+        file.close();
+    }
+
