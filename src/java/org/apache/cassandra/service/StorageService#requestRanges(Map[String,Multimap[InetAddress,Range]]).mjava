@@ -1,0 +1,46 @@
+    /**
+     * Used to request ranges from endpoints in the ring (will block until all data is fetched and ready)
+     * @param ranges ranges to fetch as map of the preferred address and range collection
+     * @return latch to count down
+     */
+    private CountDownLatch requestRanges(final Map<String, Multimap<InetAddress, Range>> ranges)
+    {
+        final CountDownLatch latch = new CountDownLatch(ranges.keySet().size());
+        for (final String table : ranges.keySet())
+        {
+            Multimap<InetAddress, Range> endpointWithRanges = ranges.get(table);
+
+            if (endpointWithRanges.isEmpty())
+            {
+                latch.countDown();
+                continue;
+            }
+
+            final Set<InetAddress> pending = new HashSet<InetAddress>(endpointWithRanges.keySet());
+
+            // Send messages to respective folks to stream data over to me
+            for (final InetAddress source: endpointWithRanges.keySet())
+            {
+                Collection<Range> toFetch = endpointWithRanges.get(source);
+
+                final Runnable callback = new Runnable()
+                {
+                    public void run()
+                    {
+                        pending.remove(source);
+
+                        if (pending.isEmpty())
+                            latch.countDown();
+                    }
+                };
+
+                if (logger_.isDebugEnabled())
+                    logger_.debug("Requesting from " + source + " ranges " + StringUtils.join(toFetch, ", "));
+
+                // sending actual request
+                StreamIn.requestRanges(source, table, toFetch, callback, OperationType.BOOTSTRAP);
+            }
+        }
+        return latch;
+    }
+

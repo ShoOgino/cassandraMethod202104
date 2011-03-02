@@ -1,0 +1,53 @@
+    /**
+     * Seed data to the endpoints that will be responsible for it at the future
+     *
+     * @param rangesToStreamByTable tables and data ranges with endpoints included for each
+     * @return latch to count down
+     */
+    private CountDownLatch streamRanges(final Map<String, Multimap<Range, InetAddress>> rangesToStreamByTable)
+    {
+        final CountDownLatch latch = new CountDownLatch(rangesToStreamByTable.keySet().size());
+        for (final String table : rangesToStreamByTable.keySet())
+        {
+            Multimap<Range, InetAddress> rangesWithEndpoints = rangesToStreamByTable.get(table);
+
+            if (rangesWithEndpoints.isEmpty())
+            {
+                latch.countDown();
+                continue;
+            }
+
+            final Set<Map.Entry<Range, InetAddress>> pending = new HashSet<Map.Entry<Range, InetAddress>>(rangesWithEndpoints.entries());
+
+            for (final Map.Entry<Range, InetAddress> entry : rangesWithEndpoints.entries())
+            {
+                final Range range = entry.getKey();
+                final InetAddress newEndpoint = entry.getValue();
+
+                final Runnable callback = new Runnable()
+                {
+                    public void run()
+                    {
+                        synchronized (pending)
+                        {
+                            pending.remove(entry);
+
+                            if (pending.isEmpty())
+                                latch.countDown();
+                        }
+                    }
+                };
+
+                StageManager.getStage(Stage.STREAM).execute(new Runnable()
+                {
+                    public void run()
+                    {
+                        // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
+                        StreamOut.transferRanges(newEndpoint, table, Arrays.asList(range), callback, OperationType.UNBOOTSTRAP);
+                    }
+                });
+            }
+        }
+        return latch;
+    }
+
