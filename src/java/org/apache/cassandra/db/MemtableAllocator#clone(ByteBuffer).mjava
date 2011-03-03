@@ -1,0 +1,34 @@
+    /**
+     * Allocate a slice of the given length.
+     * <p/>
+     * If the size is larger than the maximum size specified for this
+     * allocator, returns null.
+     */
+    public ByteBuffer clone(ByteBuffer buffer)
+    {
+        assert buffer != null;
+
+        // satisfy large allocations directly from JVM since they don't cause fragmentation
+        // as badly, and fill up our regions quickly
+        if (buffer.remaining() > MAX_CLONED_SIZE)
+            return ByteBufferUtil.clone(buffer);
+
+        while (true)
+        {
+            Region region = getRegion();
+
+            // Try to allocate from this region
+            ByteBuffer cloned = region.allocate(buffer.remaining());
+            if (cloned != null)
+            {
+                cloned.mark();
+                cloned.put(buffer.duplicate());
+                cloned.reset();
+                return cloned;
+            }
+
+            // not enough space!
+            tryRetireRegion(region);
+        }
+    }
+
