@@ -13,10 +13,24 @@
         stopped_ = false;
         while (!stopped_)
         {
+            // block until we are under max clients
+            while (activeClients.get() >= options_.maxWorkerThreads)
+            {
+                try
+                {
+                    Thread.sleep(100);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+
             int failureCount = 0;
             try
             {
                 TTransport client = serverTransport_.accept();
+                activeClients.incrementAndGet();
                 WorkerProcess wp = new WorkerProcess(client);
                 executorService_.execute(wp);
             }
@@ -28,6 +42,9 @@
                     LOGGER.warn("Transport error occurred during acceptance of message.", ttx);
                 }
             }
+
+            if (activeClients.get() >= options_.maxWorkerThreads)
+                LOGGER.warn("Maximum number of clients " + options_.maxWorkerThreads + " reached");
         }
 
         executorService_.shutdown();
