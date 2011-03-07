@@ -9,6 +9,7 @@
         assert sstables != null;
 
         Table table = cfs.table;
+
         if (DatabaseDescriptor.isSnapshotBeforeCompaction())
             table.snapshot("compact-" + cfs.columnFamily);
 
@@ -18,9 +19,11 @@
             assert sstable.descriptor.cfname.equals(cfs.columnFamily);
 
         String compactionFileLocation = table.getDataFileLocation(cfs.getExpectedCompactedFileSize(sstables));
+
         // If the compaction file path is null that means we have no space left for this compaction.
         // try again w/o the largest one.
         List<SSTableReader> smallerSSTables = new ArrayList<SSTableReader>(sstables);
+
         while (compactionFileLocation == null && smallerSSTables.size() > 1)
         {
             logger.warn("insufficient space to compact all requested files " + StringUtils.join(smallerSSTables, ", "));
@@ -32,6 +35,7 @@
             logger.error("insufficient space to compact even the two smallest files, aborting");
             return 0;
         }
+
         sstables = smallerSSTables;
 
         // new sstables from flush can be added during a compaction, but only the compaction can remove them,
@@ -43,9 +47,9 @@
         long totalkeysWritten = 0;
 
         // TODO the int cast here is potentially buggy
-        int expectedBloomFilterSize = Math.max(DatabaseDescriptor.getIndexInterval(), (int)SSTableReader.getApproximateKeyCount(sstables));
+        int expectedBloomFilterSize = Math.max(DatabaseDescriptor.getIndexInterval(), (int) SSTableReader.getApproximateKeyCount(sstables));
         if (logger.isDebugEnabled())
-          logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+            logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
 
         SSTableWriter writer;
         CompactionIterator ci = new CompactionIterator(cfs, sstables, gcBefore, major); // retain a handle so we can call close()
@@ -65,11 +69,13 @@
                 return 0;
             }
 
-            writer = cfs.createCompactionWriter(expectedBloomFilterSize, compactionFileLocation);
+            writer = cfs.createCompactionWriter(expectedBloomFilterSize, compactionFileLocation, ci.hasRowsInPageCache());
             while (nni.hasNext())
             {
                 AbstractCompactedRow row = nni.next();
+
                 long position = writer.append(row);
+
                 totalkeysWritten++;
 
                 if (DatabaseDescriptor.getPreheatKeyCache())
@@ -99,7 +105,7 @@
         long dTime = System.currentTimeMillis() - startTime;
         long startsize = SSTable.getTotalBytes(sstables);
         long endsize = ssTable.length();
-        double ratio = (double)endsize / (double)startsize;
+        double ratio = (double) endsize / (double) startsize;
         logger.info(String.format("Compacted to %s.  %,d to %,d (~%d%% of original) bytes for %,d keys.  Time: %,dms.",
                                   writer.getFilename(), startsize, endsize, (int) (ratio * 100), totalkeysWritten, dTime));
         return sstables.size();
