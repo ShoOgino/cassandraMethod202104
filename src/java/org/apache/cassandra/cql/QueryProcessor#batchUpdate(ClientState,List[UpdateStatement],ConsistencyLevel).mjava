@@ -14,20 +14,20 @@
                 cfamsSeen.add(update.getColumnFamily());
             }
             
-            ByteBuffer key = update.getKey().getByteBuffer();
+            // FIXME: keys as ascii is not a Real Solution
+            ByteBuffer key = update.getKey().getByteBuffer(AsciiType.instance);
             validateKey(key);
             validateColumnFamily(keyspace, update.getColumnFamily());
+            AbstractType<?> comparator = update.getComparator(keyspace);
             
             RowMutation rm = new RowMutation(keyspace, key);
             for (Map.Entry<Term, Term> column : update.getColumns().entrySet())
             {
-                validateColumn(keyspace,
-                               update.getColumnFamily(),
-                               column.getKey().getByteBuffer(),
-                               column.getValue().getByteBuffer());
-                rm.add(new QueryPath(update.getColumnFamily(), null, column.getKey().getByteBuffer()),
-                       column.getValue().getByteBuffer(),
-                       System.currentTimeMillis());
+                ByteBuffer colName = column.getKey().getByteBuffer(comparator);
+                ByteBuffer colValue = column.getValue().getByteBuffer(update.getValueValidator(keyspace, colName));
+                
+                validateColumn(keyspace, update.getColumnFamily(), colName, colValue);
+                rm.add(new QueryPath(update.getColumnFamily(), null, colName), colValue, System.currentTimeMillis());
             }
             
             rowMutations.add(rm);

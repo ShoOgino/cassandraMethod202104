@@ -1,19 +1,25 @@
     private static List<org.apache.cassandra.db.Row> getIndexedSlices(String keyspace, SelectStatement select)
     throws TimedOutException, UnavailableException, InvalidRequestException
     {
+        AbstractType<?> comparator = select.getComparator(keyspace);
         // XXX: Our use of Thrift structs internally (still) makes me Sad. :~(
-        SlicePredicate thriftSlicePredicate = slicePredicateFromSelect(select);
+        SlicePredicate thriftSlicePredicate = slicePredicateFromSelect(select, comparator);
         validateSlicePredicate(keyspace, select.getColumnFamily(), thriftSlicePredicate);
         
         List<IndexExpression> expressions = new ArrayList<IndexExpression>();
         for (Relation columnRelation : select.getColumnRelations())
         {
-            expressions.add(new IndexExpression(columnRelation.getEntity().getByteBuffer(),
+            // Left and right side of relational expression encoded according to comparator/validator.
+            ByteBuffer entity = columnRelation.getEntity().getByteBuffer(comparator);
+            ByteBuffer value = columnRelation.getValue().getByteBuffer(select.getValueValidator(keyspace, entity));
+            
+            expressions.add(new IndexExpression(entity,
                                                 IndexOperator.valueOf(columnRelation.operator().toString()),
-                                                columnRelation.getValue().getByteBuffer()));
+                                                value));
         }
         
-        ByteBuffer startKey = (!select.isKeyRange()) ? (new Term()).getByteBuffer() : select.getKeyStart().getByteBuffer();
+        // FIXME: keys as ascii is not a Real Solution
+        ByteBuffer startKey = (!select.isKeyRange()) ? (new Term()).getByteBuffer() : select.getKeyStart().getByteBuffer(AsciiType.instance);
         IndexClause thriftIndexClause = new IndexClause(expressions, startKey, select.getNumRecords());
         
         List<org.apache.cassandra.db.Row> rows;
