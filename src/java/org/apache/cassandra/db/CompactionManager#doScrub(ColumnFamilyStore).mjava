@@ -34,9 +34,9 @@
                 assert firstRowPositionFromIndex == 0 : firstRowPositionFromIndex;
             }
 
-            SSTableWriter writer = maybeCreateWriter(cfs, compactionFileLocation, expectedBloomFilterSize, null, false);
+            SSTableWriter writer = maybeCreateWriter(cfs, compactionFileLocation, expectedBloomFilterSize, null);
             executor.beginCompaction(cfs.columnFamily, new ScrubInfo(dataFile, sstable));
-            int goodRows = 0, badRows = 0;
+            int goodRows = 0, badRows = 0, emptyRows = 0;
 
             while (!dataFile.isEOF())
             {
@@ -89,9 +89,17 @@
                         throw new IOError(new IOException("Unable to read row key from data file"));
                     if (dataSize > dataFile.length())
                         throw new IOError(new IOException("Impossible row size " + dataSize));
-                    SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStart, dataSize, null, true);
-                    writer.append(getCompactedRow(row, cfs, sstable.descriptor, true));
-                    goodRows++;
+                    SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStart, dataSize, true);
+                    AbstractCompactedRow compactedRow = getCompactedRow(row, cfs, sstable.descriptor, true);
+                    if (compactedRow.isEmpty())
+                    {
+                        emptyRows++;
+                    }
+                    else
+                    {
+                        writer.append(compactedRow);
+                        goodRows++;
+                    }
                     if (!key.key.equals(currentIndexKey) || dataStart != dataStartFromIndex)
                         logger.warn("Row scrubbed successfully but index file contains a different key or row size; consider rebuilding the index as described in http://www.mail-archive.com/user@cassandra.apache.org/msg03325.html");
                 }
@@ -109,9 +117,17 @@
                         key = SSTableReader.decodeKey(sstable.partitioner, sstable.descriptor, currentIndexKey);
                         try
                         {
-                            SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStartFromIndex, dataSizeFromIndex, null, true);
-                            writer.append(getCompactedRow(row, cfs, sstable.descriptor, true));
-                            goodRows++;
+                            SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStartFromIndex, dataSizeFromIndex, true);
+                            AbstractCompactedRow compactedRow = getCompactedRow(row, cfs, sstable.descriptor, true);
+                            if (compactedRow.isEmpty())
+                            {
+                                emptyRows++;
+                            }
+                            else
+                            {
+                                writer.append(compactedRow);
+                                goodRows++;
+                            }
                         }
                         catch (Throwable th2)
                         {
@@ -124,7 +140,7 @@
                     }
                     else
                     {
-                        logger.warn("Row is unreadable; skipping to next");
+                        logger.warn("Row at " + dataStart + " is unreadable; skipping to next");
                         if (currentIndexKey != null)
                             dataFile.seek(nextRowPositionFromIndex);
                         badRows++;
@@ -136,14 +152,17 @@
             {
                 SSTableReader newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
                 cfs.replaceCompactedSSTables(Arrays.asList(sstable), Arrays.asList(newSstable));
-                logger.info("Scrub of " + sstable + " complete: " + goodRows + " rows in new sstable");
+                logger.info("Scrub of " + sstable + " complete: " + goodRows + " rows in new sstable and " + emptyRows + " empty (tombstoned) rows dropped");
                 if (badRows > 0)
                     logger.warn("Unable to recover " + badRows + " rows that were skipped.  You can attempt manual recovery from the pre-scrub snapshot.  You can also run nodetool repair to transfer the data from a healthy replica, if any");
             }
             else
             {
                 cfs.markCompacted(Arrays.asList(sstable));
-                logger.warn("No valid rows found while scrubbing " + sstable + "; it is marked for deletion now. If you want to attempt manual recovery, you can find a copy in the pre-scrub snapshot");
+                if (badRows > 0)
+                    logger.warn("No valid rows found while scrubbing " + sstable + "; it is marked for deletion now. If you want to attempt manual recovery, you can find a copy in the pre-scrub snapshot");
+                else
+                    logger.info("Scrub of " + sstable + " complete; looks like all " + emptyRows + " rows were tombstoned");
             }
         }
     }
