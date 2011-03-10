@@ -1,8 +1,6 @@
     public PrecompactedRow(ColumnFamilyStore cfStore, List<SSTableIdentityIterator> rows, boolean major, int gcBefore, boolean forceDeserialize)
     {
         super(rows.get(0).getKey());
-        buffer = new DataOutputBuffer();
-        headerBuffer = new DataOutputBuffer();
 
         Set<SSTable> sstables = new HashSet<SSTable>();
         for (SSTableIdentityIterator row : rows)
@@ -11,49 +9,32 @@
         }
         boolean shouldPurge = major || !cfStore.isKeyInRemainingSSTables(key, sstables);
 
-        if (rows.size() > 1 || shouldPurge || !rows.get(0).sstable.descriptor.isLatestVersion || forceDeserialize)
+        ColumnFamily cf = null;
+        for (SSTableIdentityIterator row : rows)
         {
-            ColumnFamily cf = null;
-            for (SSTableIdentityIterator row : rows)
-            {
-                ColumnFamily thisCF;
-                try
-                {
-                    thisCF = row.getColumnFamilyWithColumns();
-                }
-                catch (IOException e)
-                {
-                    logger.error("Skipping row " + key + " in " + row.getPath(), e);
-                    continue;
-                }
-                if (cf == null)
-                {
-                    cf = thisCF;
-                }
-                else
-                {
-                    cf.addAll(thisCF);
-                }
-            }
-            ColumnFamily cfPurged = shouldPurge ? ColumnFamilyStore.removeDeleted(cf, gcBefore) : cf;
-            if (cfPurged == null)
-                return;
-            
-            ColumnIndexer.serialize(cfPurged, headerBuffer);
-            columnCount = ColumnFamily.serializer().serializeForSSTable(cfPurged, buffer);
-        }
-        else
-        {
-            assert rows.size() == 1;
+            ColumnFamily thisCF;
             try
             {
-                rows.get(0).echoData(buffer);
-                columnCount = rows.get(0).columnCount;
+                thisCF = row.getColumnFamilyWithColumns();
             }
             catch (IOException e)
             {
-                throw new IOError(e);
+                logger.error("Skipping row " + key + " in " + row.getPath(), e);
+                continue;
             }
+            if (cf == null)
+            {
+                cf = thisCF;
+            }
+            else
+            {
+                cf.addAll(thisCF);
+            }
+        }
+        compactedCf = shouldPurge ? ColumnFamilyStore.removeDeleted(cf, gcBefore) : cf;
+        if (compactedCf != null && compactedCf.metadata().getDefaultValidator().isCommutative())
+        {
+            CounterColumn.removeOldShards(compactedCf, gcBefore);
         }
     }
 

@@ -5,37 +5,8 @@
         {
             if (!columnFamily.metadata().getReplicateOnWrite())
                 continue;
-
-            // CF type: regular
-            if (!columnFamily.isSuper())
-            {
-                QueryPath queryPath = new QueryPath(columnFamily.metadata().cfName);
-                ReadCommand readCommand = new SliceByNamesReadCommand(rowMutation.getTable(), rowMutation.key(), queryPath, columnFamily.getColumnNames());
-                readCommands.add(readCommand);
-                continue;
-            }
-
-            // CF type: super
-            for (IColumn superColumn : columnFamily.getSortedColumns())
-            {
-                QueryPath queryPath = new QueryPath(columnFamily.metadata().cfName, superColumn.name());
-
-                // construct set of sub-column names
-                Collection<IColumn> subColumns = superColumn.getSubColumns();
-                Collection<ByteBuffer> subColNames = new HashSet<ByteBuffer>(subColumns.size());
-                for (IColumn subCol : subColumns)
-                {
-                    subColNames.add(subCol.name());
-                }
-
-                ReadCommand readCommand = new SliceByNamesReadCommand(rowMutation.getTable(), rowMutation.key(), queryPath, subColNames);
-                readCommands.add(readCommand);
-            }
+            addReadCommandFromColumnFamily(rowMutation.getTable(), rowMutation.key(), columnFamily, readCommands);
         }
-
-        // replicate to non-local replicas
-        List<InetAddress> foreignReplicas = StorageService.instance.getLiveNaturalEndpoints(rowMutation.getTable(), rowMutation.key());
-        foreignReplicas.remove(FBUtilities.getLocalAddress()); // remove local replica
 
         // create a replication RowMutation
         RowMutation replicationMutation = new RowMutation(rowMutation.getTable(), rowMutation.key());
@@ -45,21 +16,8 @@
             Row row = readCommand.getRow(table);
             if (row == null || row.cf == null)
                 continue;
-            AbstractType defaultValidator = row.cf.metadata().getDefaultValidator();
-            if (defaultValidator.isCommutative())
-            {
-                /**
-                 * Clean out contexts for all nodes we're sending the repair to, otherwise,
-                 * we could send a context which is local to one of the foreign replicas,
-                 * which would then incorrectly add that to its own count, because
-                 * local resolution aggregates.
-                 */
-                // note: the following logic could be optimized
-                for (InetAddress foreignNode : foreignReplicas)
-                {
-                    ((AbstractCommutativeType)defaultValidator).cleanContext(row.cf, foreignNode);
-                }
-            }
+
+            row = mergeOldShards(readCommand.table, row);
             replicationMutation.add(row.cf);
         }
         return replicationMutation;

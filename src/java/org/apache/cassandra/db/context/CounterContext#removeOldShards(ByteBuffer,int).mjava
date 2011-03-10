@@ -1,0 +1,46 @@
+    /**
+     * Remove shards that have been canceled through computeOldShardMerger
+     * since a time older than gcBefore.
+     * Used by compaction to strip context of unecessary information,
+     * shrinking them.
+     */
+    public ByteBuffer removeOldShards(ByteBuffer context, int gcBefore)
+    {
+        int hlength = headerLength(context);
+        ContextState state = new ContextState(context, hlength);
+        int removedBodySize = 0, removedHeaderSize = 0;
+        while (state.hasRemaining())
+        {
+            long clock = state.getClock();
+            if (clock < 0 && -((int)(clock / 1000)) < gcBefore)
+            {
+                assert state.getCount() == 0;
+                removedBodySize += STEP_LENGTH;
+                if (state.isDelta())
+                    removedHeaderSize += HEADER_ELT_LENGTH;
+            }
+            state.moveToNext();
+        }
+
+        if (removedBodySize == 0)
+            return context;
+
+        int newSize = context.remaining() - removedHeaderSize - removedBodySize;
+        int newHlength = hlength - removedHeaderSize;
+        ByteBuffer cleanedContext = ByteBuffer.allocate(newSize);
+        cleanedContext.putShort(cleanedContext.position(), (short) ((newHlength - HEADER_SIZE_LENGTH) / HEADER_ELT_LENGTH));
+        ContextState cleaned = new ContextState(cleanedContext, newHlength);
+
+        state.reset();
+        while (state.hasRemaining())
+        {
+            long clock = state.getClock();
+            if (clock > 0 || -((int)(clock / 1000)) >= gcBefore)
+            {
+                state.copyTo(cleaned);
+            }
+            state.moveToNext();
+        }
+        return cleanedContext;
+    }
+

@@ -1,0 +1,100 @@
+    /**
+     * This function goes over each file and removes the keys that the node is not responsible for
+     * and only keeps keys that this node is responsible for.
+     *
+     * @throws IOException
+     */
+    private void doCleanupCompaction(ColumnFamilyStore cfs, NodeId.OneShotRenewer renewer) throws IOException
+    {
+        assert !cfs.isIndex();
+        Table table = cfs.table;
+        Collection<Range> ranges = StorageService.instance.getLocalRanges(table.name);
+        boolean isCommutative = cfs.metadata.getDefaultValidator().isCommutative();
+
+        for (SSTableReader sstable : cfs.getSSTables())
+        {
+            logger.info("Cleaning up " + sstable);
+            // Calculate the expected compacted filesize
+            long expectedRangeFileSize = cfs.getExpectedCompactedFileSize(Arrays.asList(sstable)) / 2;
+            String compactionFileLocation = table.getDataFileLocation(expectedRangeFileSize);
+            if (compactionFileLocation == null)
+                throw new IOException("disk full");
+
+            long startTime = System.currentTimeMillis();
+            long totalkeysWritten = 0;
+
+            int expectedBloomFilterSize = Math.max(DatabaseDescriptor.getIndexInterval(),
+                                                   (int)(SSTableReader.getApproximateKeyCount(Arrays.asList(sstable))));
+            if (logger.isDebugEnabled())
+              logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+
+            SSTableWriter writer = null;
+            SSTableScanner scanner = sstable.getDirectScanner(CompactionIterator.FILE_BUFFER_SIZE);
+            SortedSet<ByteBuffer> indexedColumns = cfs.getIndexedColumns();
+            executor.beginCompaction(cfs.columnFamily, new CleanupInfo(sstable, scanner));
+            try
+            {
+                while (scanner.hasNext())
+                {
+                    SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
+                    if (Range.isTokenInRanges(row.getKey().token, ranges))
+                    {
+                        writer = maybeCreateWriter(cfs, compactionFileLocation, expectedBloomFilterSize, writer);
+                        writer.append(getCompactedRow(row, cfs, sstable.descriptor, false));
+                        totalkeysWritten++;
+                    }
+                    else
+                    {
+                        if (!indexedColumns.isEmpty() || isCommutative)
+                        {
+                            while (row.hasNext())
+                            {
+                                IColumn column = row.next();
+                                if (column instanceof CounterColumn)
+                                    renewer.maybeRenew((CounterColumn)column);
+                                if (indexedColumns.contains(column.name()))
+                                    Table.cleanupIndexEntry(cfs, row.getKey().key, column);
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                scanner.close();
+            }
+
+            List<SSTableReader> results = new ArrayList<SSTableReader>();
+            if (writer != null)
+            {
+                SSTableReader newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
+                results.add(newSstable);
+
+                String format = "Cleaned up to %s.  %,d to %,d (~%d%% of original) bytes for %,d keys.  Time: %,dms.";
+                long dTime = System.currentTimeMillis() - startTime;
+                long startsize = sstable.length();
+                long endsize = newSstable.length();
+                double ratio = (double)endsize / (double)startsize;
+                logger.info(String.format(format, writer.getFilename(), startsize, endsize, (int)(ratio*100), totalkeysWritten, dTime));
+            }
+
+            // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd
+            for (ByteBuffer columnName : cfs.getIndexedColumns())
+            {
+                try
+                {
+                    cfs.getIndexedColumnFamilyStore(columnName).forceBlockingFlush();
+                }
+                catch (ExecutionException e)
+                {
+                    throw new RuntimeException(e);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+            cfs.replaceCompactedSSTables(Arrays.asList(sstable), results);
+        }
+    }
+
