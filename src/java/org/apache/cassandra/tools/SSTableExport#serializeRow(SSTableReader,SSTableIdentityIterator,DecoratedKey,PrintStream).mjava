@@ -26,25 +26,29 @@
 
             IColumnIterator columns = filter.getSSTableColumnIterator(reader);
 
-            int columnCount = 0;
-            while (columns.hasNext())
-            {
-                // setting new start column to the last of the current columns
-                startColumn = columns.next().name();
-                columnCount++;
-            }
-
+            Pair<Integer, ByteBuffer> serialized;
             try
             {
-                columns = filter.getSSTableColumnIterator(reader); // iterator reset
-                serializeRow(columns, isSuperCF, out);
+                serialized = serializeRow(columns, isSuperCF, out);
             }
             catch (IOException e)
             {
                 System.err.println("WARNING: Corrupt row " + key + " (skipping).");
+                continue;
+            }
+            finally
+            {
+                try
+                {
+                    columns.close();
+                }
+                catch (IOException e)
+                {
+                    throw new IOError(e);
+                }
             }
 
-            if (columnCount < PAGE_SIZE)
+            if (serialized.left < PAGE_SIZE)
                 break;
 
             out.print(",");
