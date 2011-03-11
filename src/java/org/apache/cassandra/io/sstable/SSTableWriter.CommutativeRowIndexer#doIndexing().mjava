@@ -9,10 +9,14 @@
 
             long readRowPosition  = 0L;
             long writeRowPosition = 0L;
-            while (readRowPosition < dfile.length())
+
+            writerDfile.seek(writeRowPosition);
+            dfile.seek(readRowPosition);
+
+            long dfileLength = dfile.length();
+            while (readRowPosition < dfileLength)
             {
                 // read key
-                dfile.seek(readRowPosition);
                 diskKey = ByteBufferUtil.readWithShortLength(dfile);
 
                 // skip data size, bloom filter, column index
@@ -35,31 +39,29 @@
                 iwriter.afterAppend(key, writeRowPosition);
 
                 // write key
-                dfile.seek(writeRowPosition);
-                ByteBufferUtil.writeWithShortLength(diskKey, dfile);
+                ByteBufferUtil.writeWithShortLength(diskKey, writerDfile);
 
                 // write data size; serialize CF w/ bloom filter, column index
-                long writeSizePosition = dfile.getFilePointer();
-                dfile.writeLong(-1L);
-                ColumnFamily.serializer().serializeWithIndexes(cf, dfile);
-                long writeEndPosition = dfile.getFilePointer();
-                dfile.seek(writeSizePosition);
-                dfile.writeLong(writeEndPosition - (writeSizePosition + 8L));
+                long writeSizePosition = writerDfile.getFilePointer();
+                writerDfile.writeLong(-1L);
+                ColumnFamily.serializer().serializeWithIndexes(cf, writerDfile);
+                long writeEndPosition = writerDfile.getFilePointer();
+                writerDfile.seek(writeSizePosition);
+                writerDfile.writeLong(writeEndPosition - (writeSizePosition + 8L));
 
                 writeRowPosition = writeEndPosition;
+                writerDfile.seek(writeRowPosition);
 
                 rows++;
-
-                dfile.sync();
             }
             writeStatistics(desc, rowSizes, columnCounts);
 
             if (writeRowPosition != readRowPosition)
             {
                 // truncate file to new, reduced length
-                dfile.setLength(writeRowPosition);
-                dfile.sync();
+                writerDfile.setLength(writeRowPosition);
             }
+            writerDfile.sync();
 
             return rows;
         }
