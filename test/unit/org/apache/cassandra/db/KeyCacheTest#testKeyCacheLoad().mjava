@@ -1,0 +1,45 @@
+    @Test
+    public void testKeyCacheLoad() throws Exception
+    {
+        CompactionManager.instance.disableAutoCompaction();
+
+        ColumnFamilyStore store = Table.open(TABLE1).getColumnFamilyStore(COLUMN_FAMILY2);
+
+        // empty the cache
+        store.invalidateKeyCache();
+        assert store.getKeyCacheSize() == 0;
+
+        // insert data and force to disk
+        insertData(TABLE1, COLUMN_FAMILY2, 0, 100);
+        store.forceBlockingFlush();
+
+        // populate the cache
+        readData(TABLE1, COLUMN_FAMILY2, 0, 100);
+        assert store.getKeyCacheSize() == 100;
+
+        // really? our caches don't implement the map interface? (hence no .addAll)
+        Map<Pair<Descriptor, DecoratedKey>, Long> savedMap = new HashMap<Pair<Descriptor, DecoratedKey>, Long>();
+        for (Map.Entry<Pair<Descriptor, DecoratedKey>, Long> entry : store.getKeyCache().getEntrySet())
+        {
+            savedMap.put(entry.getKey(), entry.getValue());
+        }
+
+        // force the cache to disk
+        store.keyCache.submitWrite().get();
+
+        // empty the cache again to make sure values came from disk
+        store.invalidateKeyCache();
+        assert store.getKeyCacheSize() == 0;
+
+        // load the cache from disk
+        store.unregisterMBean(); // unregistering old MBean to test how key cache will be loaded
+        ColumnFamilyStore newStore = ColumnFamilyStore.createColumnFamilyStore(Table.open(TABLE1), COLUMN_FAMILY2);
+        assert newStore.getKeyCacheSize() == 100;
+
+        assert savedMap.size() == 100;
+        for (Map.Entry<Pair<Descriptor, DecoratedKey>, Long> entry : savedMap.entrySet())
+        {
+            assert newStore.getKeyCache().get(entry.getKey()).equals(entry.getValue());
+        }
+    }
+

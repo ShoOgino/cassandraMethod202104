@@ -1,0 +1,34 @@
+    @Test
+    public void testRowCacheLoad() throws Exception
+    {
+        CompactionManager.instance.disableAutoCompaction();
+
+        ColumnFamilyStore store = Table.open(KEYSPACE).getColumnFamilyStore(COLUMN_FAMILY_WITH_CACHE);
+
+        // empty the cache
+        store.invalidateRowCache();
+        assert store.getRowCacheSize() == 0;
+
+        // insert data and fill the cache
+        insertData(KEYSPACE, COLUMN_FAMILY_WITH_CACHE, 0, 100);
+        readData(KEYSPACE, COLUMN_FAMILY_WITH_CACHE, 0, 100);
+        assert store.getRowCacheSize() == 100;
+
+        // force the cache to disk
+        store.rowCache.submitWrite().get();
+
+        // empty the cache again to make sure values came from disk
+        store.invalidateRowCache();
+        assert store.getRowCacheSize() == 0;
+
+        // load the cache from disk
+        store.rowCache.readSaved();
+        assert store.getRowCacheSize() == 100;
+
+        for (int i = 0; i < 100; i++)
+        {
+            // verify the correct data was found
+            assert store.getRawCachedRow(Util.dk("key" + i)).getColumn(ByteBufferUtil.bytes("col" + i)).value().equals(ByteBufferUtil.bytes("val" + i));
+        }
+    }
+
