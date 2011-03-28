@@ -6,88 +6,48 @@
         try
         {
             IColumnIterator iter;
-
             int sstablesToIterate = 0;
-            if (reverseReadWriteOrder())
+            DataTracker.View currentView = data.getView();
+
+            /* add the current memtable */
+            iter = filter.getMemtableColumnIterator(currentView.memtable, getComparator());
+            if (iter != null)
             {
-                // XXX: race condition: may miss an MT, but no double counts
+                returnCF.delete(iter.getColumnFamily());
+                iterators.add(iter);
+            }
 
-                /* add the SSTables on disk */
-                for (SSTableReader sstable : ssTables)
-                {
-                    iter = filter.getSSTableColumnIterator(sstable);
-                    if (iter.getColumnFamily() != null)
-                    {
-                        returnCF.delete(iter.getColumnFamily());
-                        iterators.add(iter);
-                        sstablesToIterate++;
-                    }
-                }
-
-                /* add the memtables being flushed */
-                for (Memtable memtable : memtablesPendingFlush)
-                {
-                    iter = filter.getMemtableColumnIterator(memtable, getComparator());
-                    if (iter != null)
-                    {
-                        returnCF.delete(iter.getColumnFamily());
-                        iterators.add(iter);
-                    }
-                }
-
-                /* add the current memtable */
-                iter = filter.getMemtableColumnIterator(getMemtableThreadSafe(), getComparator());
+            /* add the memtables being flushed */
+            for (Memtable memtable : currentView.memtablesPendingFlush)
+            {
+                iter = filter.getMemtableColumnIterator(memtable, getComparator());
                 if (iter != null)
                 {
                     returnCF.delete(iter.getColumnFamily());
                     iterators.add(iter);
                 }
             }
-            else
-            {
-                // XXX: race condition: may allow double reconcile; but never misses an MT
 
-                /* add the current memtable */
-                iter = filter.getMemtableColumnIterator(getMemtableThreadSafe(), getComparator());
-                if (iter != null)
+            /* add the SSTables on disk */
+            for (SSTableReader sstable : currentView.sstables)
+            {
+                iter = filter.getSSTableColumnIterator(sstable);
+                if (iter.getColumnFamily() != null)
                 {
                     returnCF.delete(iter.getColumnFamily());
                     iterators.add(iter);
                 }
-
-                /* add the memtables being flushed */
-                for (Memtable memtable : memtablesPendingFlush)
-                {
-                    iter = filter.getMemtableColumnIterator(memtable, getComparator());
-                    if (iter != null)
-                    {
-                        returnCF.delete(iter.getColumnFamily());
-                        iterators.add(iter);
-                    }
-                }
-
-                /* add the SSTables on disk */
-                for (SSTableReader sstable : ssTables)
-                {
-                    iter = filter.getSSTableColumnIterator(sstable);
-                    if (iter.getColumnFamily() != null)
-                    {
-                        returnCF.delete(iter.getColumnFamily());
-                        iterators.add(iter);
-                        sstablesToIterate++;
-                    }
-                }
+                sstablesToIterate++;
             }
+
             recentSSTablesPerRead.add(sstablesToIterate);
             sstablesPerRead.add(sstablesToIterate);
 
             Comparator<IColumn> comparator = filter.filter.getColumnComparator(getComparator());
             Iterator collated = IteratorUtils.collatedIterator(comparator, iterators);
-          
-                     
+
             filter.collectCollatedColumns(returnCF, collated, gcBefore);
-          
-            
+
             // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
             // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
             // and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)
