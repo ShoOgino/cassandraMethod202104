@@ -9,19 +9,9 @@
         }
         assert getMemtableThreadSafe() == oldMemtable;
 
-        boolean isDropped = isIndex()
-                          ? DatabaseDescriptor.getCFMetaData(table.name, getParentColumnfamily()) == null
-                          : DatabaseDescriptor.getCFMetaData(metadata.cfId) == null;
-        if (isDropped)
-        {
-            logger.debug("column family was dropped; no point in flushing");
-            return null;
-        }
-
-        // Table.flusherLock ensures that we schedule discardCompletedSegments calls in the same order as their
+        // global synchronization ensures that we schedule discardCompletedSegments calls in the same order as their
         // contexts (commitlog position) were read, even though the flush executor is multithreaded.
-        Table.flusherLock.lock();
-        try
+        synchronized (ColumnFamilyStore.class)
         {
             final CommitLogSegment.CommitLogContext ctx = writeCommitLog ? CommitLog.instance.getContext() : null;
 
@@ -63,10 +53,6 @@
                     }
                 }
             });
-        }
-        finally
-        {
-            Table.flusherLock.unlock();
         }
     }
 

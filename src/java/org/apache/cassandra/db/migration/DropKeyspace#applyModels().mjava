@@ -1,24 +1,34 @@
     public void applyModels() throws IOException
     {
-        acquireLocks();
+        String snapshotName = Table.getTimestampedSnapshotName(null);
+        CompactionManager.instance.getCompactionLock().lock();
         try
         {
             KSMetaData ksm = DatabaseDescriptor.getTableDefinition(name);
-            // remove the table from the static instances.
-            Table table = Table.clear(ksm.name);
-            if (table == null)
-                throw new IOException("Table is not active. " + ksm.name);
-            
+
             // remove all cfs from the table instance.
             for (CFMetaData cfm : ksm.cfMetaData().values())
             {
+                ColumnFamilyStore cfs = Table.open(ksm.name).getColumnFamilyStore(cfm.cfName);
                 CFMetaData.purge(cfm);
                 if (!clientMode)
                 {
-                    table.dropCf(cfm.cfId);
+                    cfs.flushLock.lock();
+                    try
+                    {
+                        cfs.snapshot(snapshotName);
+                        Table.open(ksm.name).dropCf(cfm.cfId);
+                    }
+                    finally
+                    {
+                        cfs.flushLock.unlock();
+                    }
                 }
             }
                             
+            // remove the table from the static instances.
+            Table table = Table.clear(ksm.name);
+            assert table != null;
             // reset defs.
             DatabaseDescriptor.clearTableDefinition(ksm, newVersion);
             
@@ -30,7 +40,7 @@
         }
         finally
         {
-            releaseLocks();
+            CompactionManager.instance.getCompactionLock().unlock();
         }
     }
 
