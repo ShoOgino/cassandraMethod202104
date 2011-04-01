@@ -5,12 +5,19 @@
                 DecoratedKey<?> key = iter.next();
                 logger.debug("Indexing row {} ", key);
                 List<Memtable> memtablesToFlush = Collections.emptyList();
-
-                synchronized (indexLockFor(key.key))
+                switchLock.readLock().lock();
+                try
                 {
-                    ColumnFamily cf = readCurrentIndexedColumns(key, cfs, columns);
-                    if (cf != null)
-                        memtablesToFlush = applyIndexUpdates(key.key, cf, cfs, cf.getColumnNames(), null);
+                    synchronized (indexLockFor(key.key))
+                    {
+                        ColumnFamily cf = readCurrentIndexedColumns(key, cfs, columns);
+                        if (cf != null)
+                            memtablesToFlush = applyIndexUpdates(key.key, cf, cfs, cf.getColumnNames(), null);
+                    }
+                }
+                finally
+                {
+                    switchLock.readLock().unlock();
                 }
 
                 // during index build, we do flush index memtables separately from master; otherwise we could OOM
