@@ -1,0 +1,30 @@
+    private Tuple columnToTuple(ByteBuffer name, IColumn col, CfDef cfDef) throws IOException
+    {
+        Tuple pair = TupleFactory.getInstance().newTuple(2);
+        List<AbstractType> marshallers = getDefaultMarshallers(cfDef);
+        Map<ByteBuffer,AbstractType> validators = getValidatorMap(cfDef);
+
+        if (col instanceof Column)
+        {
+            // standard
+            pair.set(0, marshallers.get(0).compose(name));
+            if (validators.get(name) == null)
+                // Have to special case BytesType because compose returns a ByteBuffer
+                if (marshallers.get(1) instanceof BytesType)
+                    pair.set(1, new DataByteArray(ByteBufferUtil.getArray(col.value())));
+                else
+                    pair.set(1, marshallers.get(1).compose(col.value()));
+            else
+                pair.set(1, validators.get(name).compose(col.value()));
+            return pair;
+        }
+
+        // super
+        ArrayList<Tuple> subcols = new ArrayList<Tuple>();
+        for (IColumn subcol : ((SuperColumn)col).getSubColumns())
+            subcols.add(columnToTuple(subcol.name(), subcol, cfDef));
+        
+        pair.set(1, new DefaultDataBag(subcols));
+        return pair;
+    }
+
