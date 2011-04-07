@@ -43,7 +43,7 @@
 
                     // collect replies and resolve according to consistency level
                     RangeSliceResponseResolver resolver = new RangeSliceResponseResolver(command.keyspace, liveEndpoints);
-                    ReadCallback<List<Row>> handler = getReadCallback(resolver, command, consistency_level, liveEndpoints);
+                    ReadCallback<Iterable<Row>> handler = getReadCallback(resolver, command, consistency_level, liveEndpoints);
                     handler.assureSufficientLiveNodes();
                     for (InetAddress endpoint : handler.endpoints)
                     {
@@ -52,24 +52,21 @@
                             logger.debug("reading " + c2 + " from " + endpoint);
                     }
 
-                    // if we're done, great, otherwise, move to the next range
-                    try 
+                    try
                     {
-                        if (logger.isDebugEnabled()) 
+                        for (Row row : handler.get())
                         {
-                            for (Row row : handler.get()) 
-                            {
-                                logger.debug("range slices read " + row.key);
-                            }
+                            rows.add(row);
+                            logger.debug("range slices read {}", row.key);
                         }
-                        rows.addAll(handler.get());
-                    } 
+                    }
                     catch (DigestMismatchException e) 
                     {
                         throw new AssertionError(e); // no digests in range slices yet
                     }
                 }
             
+                // if we're done, great, otherwise, move to the next range
                 if (rows.size() >= command.max_keys)
                     break;
             }
