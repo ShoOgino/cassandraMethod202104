@@ -4,7 +4,6 @@
         public void run()
         {
             InetAddress local = FBUtilities.getLocalAddress();
-            StorageService ss = StorageService.instance;
 
             // restore partitioners (in case we were serialized)
             if (ltree.partitioner() == null)
@@ -12,17 +11,11 @@
             if (rtree.partitioner() == null)
                 rtree.partitioner(StorageService.getPartitioner());
 
-            // determine the ranges where responsibility overlaps
-            Set<Range> interesting = new HashSet(ss.getRangesForEndpoint(request.cf.left, local));
-            interesting.retainAll(ss.getRangesForEndpoint(request.cf.left, request.endpoint));
+            // compare trees, and collect differences
+            differences.addAll(MerkleTree.difference(ltree, rtree));
 
-            // compare trees, and collect interesting differences
-            for (MerkleTree.TreeRange diff : MerkleTree.difference(ltree, rtree))
-                for (Range localrange: interesting)
-                    differences.addAll(diff.intersectionWith(localrange));
-            
             // choose a repair method based on the significance of the difference
-            String format = "Endpoints " + local + " and " + request.endpoint + " %s for " + request.cf;
+            String format = "Endpoints " + local + " and " + request.endpoint + " %s for " + request.cf + " on " + request.range;
             if (differences.isEmpty())
             {
                 logger.info(String.format(format, "are consistent"));
