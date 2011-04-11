@@ -1,3 +1,6 @@
+    /**
+     * Submits an sstable to be rebuilt: is not scheduled, since the sstable must not exist.
+     */
     public Future<SSTableReader> submitSSTableBuild(final Descriptor desc, OperationType type)
     {
         // invalid descriptions due to missing or dropped CFS are handled by SSTW and StreamInSession.
@@ -6,15 +9,22 @@
         {
             public SSTableReader call() throws IOException
             {
-                compactionLock.lock();
+                compactionLock.readLock().lock();
                 try
                 {
-                    executor.beginCompaction(desc.cfname, builder);
-                    return builder.build();
+                    executor.beginCompaction(builder);
+                    try
+                    {
+                        return builder.build();
+                    }
+                    finally
+                    {
+                        executor.finishCompaction(builder);
+                    }
                 }
                 finally
                 {
-                    compactionLock.unlock();
+                    compactionLock.readLock().unlock();
                 }
             }
         };

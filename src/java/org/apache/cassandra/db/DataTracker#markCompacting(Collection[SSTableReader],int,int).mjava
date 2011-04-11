@@ -1,0 +1,36 @@
+    /**
+     * @return A subset of the given active sstables that have been marked compacting,
+     * or null if the thresholds cannot be met: files that are marked compacting must
+     * later be unmarked using unmarkCompacting.
+     */
+    public Set<SSTableReader> markCompacting(Collection<SSTableReader> tomark, int min, int max)
+    {
+        if (max < min || max < 1)
+            return null;
+        View currentView, newView;
+        Set<SSTableReader> subset = null;
+        // order preserving set copy of the input
+        Set<SSTableReader> remaining = new LinkedHashSet<SSTableReader>(tomark);
+        do
+        {
+            currentView = view.get();
+
+            // find the subset that is active and not already compacting
+            remaining.removeAll(currentView.compacting);
+            remaining.retainAll(currentView.sstables);
+            if (remaining.size() < min)
+                // cannot meet the min threshold
+                return null;
+
+            // cap the newly compacting items into a subset set
+            subset = new HashSet<SSTableReader>();
+            Iterator<SSTableReader> iter = remaining.iterator();
+            for (int added = 0; added < max && iter.hasNext(); added++)
+                subset.add(iter.next());
+
+            newView = currentView.markCompacting(subset);
+        }
+        while (!view.compareAndSet(currentView, newView));
+        return subset;
+    }
+
