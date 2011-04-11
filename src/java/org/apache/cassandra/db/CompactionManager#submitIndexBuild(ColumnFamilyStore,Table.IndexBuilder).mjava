@@ -1,20 +1,30 @@
+    /**
+     * Is not scheduled, because it is performing disjoint work from sstable compaction.
+     */
     public Future submitIndexBuild(final ColumnFamilyStore cfs, final Table.IndexBuilder builder)
     {
         Runnable runnable = new Runnable()
         {
             public void run()
             {
-                compactionLock.lock();
+                compactionLock.readLock().lock();
                 try
                 {
                     if (cfs.isInvalid())
                         return;
-                    executor.beginCompaction(cfs.columnFamily, builder);
-                    builder.build();
+                    executor.beginCompaction(builder);
+                    try
+                    {
+                        builder.build();
+                    }
+                    finally
+                    {
+                        executor.finishCompaction(builder);
+                    }
                 }
                 finally
                 {
-                    compactionLock.unlock();
+                    compactionLock.readLock().unlock();
                 }
             }
         };
@@ -23,7 +33,7 @@
         // future that will be immediately immediately get()ed and executed. Happens during a migration, which locks
         // the compaction thread and then reinitializes a ColumnFamilyStore. Under normal circumstances, CFS spawns
         // index jobs to the compaction manager (this) and blocks on them.
-        if (compactionLock.isHeldByCurrentThread())
+        if (compactionLock.isWriteLockedByCurrentThread())
             return new SimpleFuture(runnable);
         else
             return executor.submit(runnable);

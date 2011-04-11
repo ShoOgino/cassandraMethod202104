@@ -4,8 +4,27 @@
         {
             public void runMayThrow() throws IOException
             {
-                executor.beginCompaction(writer.getColumnFamily(), writer);
-                writer.saveCache();
+                if (!AutoSavingCache.flushInProgress.compareAndSet(false, true))
+                {
+                    logger.debug("Cache flushing was already in progress: skipping {}", writer.getCompactionInfo());
+                    return;
+                }
+                try
+                {
+                    executor.beginCompaction(writer);
+                    try
+                    {
+                        writer.saveCache();
+                    }
+                    finally
+                    {
+                        executor.finishCompaction(writer);
+                    }
+                }
+                finally
+                {
+                    AutoSavingCache.flushInProgress.set(false);
+                }
             }
         };
         return executor.submit(runnable);

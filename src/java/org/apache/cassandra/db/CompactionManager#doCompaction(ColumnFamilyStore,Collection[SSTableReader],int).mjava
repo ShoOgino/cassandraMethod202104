@@ -13,7 +13,6 @@
             table.snapshot("compact-" + cfs.columnFamily);
 
         // sanity check: all sstables must belong to the same cfs
-        logger.info("Compacting [" + StringUtils.join(sstables, ",") + "]");
         for (SSTableReader sstable : sstables)
             assert sstable.descriptor.cfname.equals(cfs.columnFamily);
 
@@ -38,6 +37,8 @@
         // so in our single-threaded compaction world this is a valid way of determining if we're compacting
         // all the sstables (that existed when we started)
         boolean major = cfs.isCompleteSSTables(sstables);
+        String type = major ? "Major" : "Minor";
+        logger.info("Compacting {}: {}", type, sstables);
 
         long startTime = System.currentTimeMillis();
         long totalkeysWritten = 0;
@@ -49,12 +50,11 @@
 
         SSTableWriter writer;
         CompactionController controller = new CompactionController(cfs, sstables, major, gcBefore, false);
-        CompactionIterator ci = new CompactionIterator(sstables, controller); // retain a handle so we can call close()
+        CompactionIterator ci = new CompactionIterator(type, sstables, controller); // retain a handle so we can call close()
         Iterator<AbstractCompactedRow> nni = new FilterIterator(ci, PredicateUtils.notNullPredicate());
-        executor.beginCompaction(cfs.columnFamily, ci);
-
         Map<DecoratedKey, Long> cachedKeys = new HashMap<DecoratedKey, Long>();
 
+        executor.beginCompaction(ci);
         try
         {
             if (!nni.hasNext())
@@ -89,6 +89,7 @@
         finally
         {
             ci.close();
+            executor.finishCompaction(ci);
         }
 
         SSTableReader ssTable = writer.closeAndOpenReader(getMaxDataAge(sstables));
