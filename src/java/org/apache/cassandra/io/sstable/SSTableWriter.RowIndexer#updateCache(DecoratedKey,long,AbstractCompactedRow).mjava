@@ -1,0 +1,47 @@
+        /*
+         * If the key is cached, we should:
+         *   - For AES: run the newly received row by the cache
+         *   - For other: invalidate the cache (even if very unlikely, a key could be in cache in theory if a neighbor was boostrapped and
+         *     then removed quickly afterward (a key that we had lost but become responsible again could have stayed in cache). That key
+         *     would be obsolete and so we must invalidate the cache).
+         */
+        protected void updateCache(DecoratedKey key, long dataSize, AbstractCompactedRow row) throws IOException
+        {
+            ColumnFamily cached = cfs.getRawCachedRow(key);
+            if (cached != null)
+            {
+                switch (type)
+                {
+                    case AES:
+                        if (dataSize > DatabaseDescriptor.getInMemoryCompactionLimit())
+                        {
+                            // We have a key in cache for a very big row, that is fishy. We don't fail here however because that would prevent the sstable
+                            // from being build (and there is no real point anyway), so we just invalidate the row for correction and log a warning.
+                            logger.warn("Found a cached row over the in memory compaction limit during post-streaming rebuilt; it is highly recommended to avoid huge row on column family with row cache enabled.");
+                            cfs.invalidateCachedRow(key);
+                        }
+                        else
+                        {
+                            ColumnFamily cf;
+                            if (row == null)
+                            {
+                                // If not provided, read from disk.
+                                cf = ColumnFamily.create(cfs.metadata);
+                                ColumnFamily.serializer().deserializeColumns(dfile, cf, true, true);
+                            }
+                            else
+                            {
+                                assert row instanceof PrecompactedRow;
+                                // we do not purge so we should not get a null here
+                                cf = ((PrecompactedRow)row).getFullColumnFamily();
+                            }
+                            cfs.updateRowCache(key, cf);
+                        }
+                        break;
+                    default:
+                        cfs.invalidateCachedRow(key);
+                        break;
+                }
+            }
+        }
+
