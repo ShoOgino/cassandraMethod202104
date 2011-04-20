@@ -1,0 +1,48 @@
+    /**
+     * Use this method to have these Mutations applied
+     * across all replicas. This method will take care
+     * of the possibility of a replica being down and hint
+     * the data across to some other replica.
+     *
+     * @param mutations the mutations to be applied across the replicas
+     * @param consistency_level the consistency level for the operation
+    */
+    public static void mutate(List<? extends IMutation> mutations, ConsistencyLevel consistency_level) throws UnavailableException, TimeoutException
+    {
+        final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getLocalAddress());
+
+        long startTime = System.nanoTime();
+        List<IWriteResponseHandler> responseHandlers = new ArrayList<IWriteResponseHandler>();
+
+        IMutation mostRecentMutation = null;
+        try
+        {
+            for (IMutation mutation : mutations)
+            {
+                mostRecentMutation = mutation;
+                if (mutation instanceof CounterMutation)
+                {
+                    responseHandlers.add(mutateCounter((CounterMutation)mutation, localDataCenter));
+                }
+                else
+                {
+                    responseHandlers.add(performWrite(mutation, consistency_level, localDataCenter, standardWritePerformer));
+                }
+            }
+            // wait for writes.  throws timeoutexception if necessary
+            for (IWriteResponseHandler responseHandler : responseHandlers)
+            {
+                responseHandler.get();
+            }
+        }
+        catch (IOException e)
+        {
+            assert mostRecentMutation != null;
+            throw new RuntimeException("error writing key " + ByteBufferUtil.bytesToHex(mostRecentMutation.key()), e);
+        }
+        finally
+        {
+            writeStats.addNano(System.nanoTime() - startTime);
+        }
+    }
+
