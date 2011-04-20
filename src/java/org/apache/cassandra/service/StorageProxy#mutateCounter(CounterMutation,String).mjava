@@ -1,0 +1,42 @@
+    /**
+     * Handle counter mutation on the coordinator host.
+     *
+     * A counter mutation needs to first be applied to a replica (that we'll call the leader for the mutation) before being
+     * replicated to the other endpoint. To achieve so, there is two case:
+     *   1) the coordinator host is a replica: we proceed to applying the update locally and replicate throug
+     *   applyCounterMutationOnCoordinator
+     *   2) the coordinator is not a replica: we forward the (counter)mutation to a chosen replica (that will proceed through
+     *   applyCounterMutationOnLeader upon receive) and wait for its acknowledgment.
+     *
+     * Implementation note: We check if we can fulfill the CL on the coordinator host even if he is not a replica to allow
+     * quicker response and because the WriteResponseHandlers don't make it easy to send back an error. We also always gather
+     * the write latencies at the coordinator node to make gathering point similar to the case of standard writes.
+     */
+    public static IWriteResponseHandler mutateCounter(CounterMutation cm, String localDataCenter) throws UnavailableException, TimeoutException, IOException
+    {
+        InetAddress endpoint = findSuitableEndpoint(cm.getTable(), cm.key());
+
+        if (endpoint.equals(FBUtilities.getLocalAddress()))
+        {
+            return applyCounterMutationOnCoordinator(cm, localDataCenter);
+        }
+        else
+        {
+            // Exit now if we can't fulfill the CL here instead of forwarding to the leader replica
+            String table = cm.getTable();
+            AbstractReplicationStrategy rs = Table.open(table).getReplicationStrategy();
+            Collection<InetAddress> writeEndpoints = getWriteEndpoints(table, cm.key());
+            Multimap<InetAddress, InetAddress> hintedEndpoints = rs.getHintedEndpoints(writeEndpoints);
+            rs.getWriteResponseHandler(writeEndpoints, hintedEndpoints, cm.consistency()).assureSufficientLiveNodes();
+
+            // Forward the actual update to the chosen leader replica
+            IWriteResponseHandler responseHandler = WriteResponseHandler.create(endpoint);
+
+            Message message = cm.makeMutationMessage(Gossiper.instance.getVersion(endpoint));
+            if (logger.isDebugEnabled())
+                logger.debug("forwarding counter update of key " + ByteBufferUtil.bytesToHex(cm.key()) + " to " + endpoint);
+            MessagingService.instance().sendRR(message, endpoint, responseHandler);
+            return responseHandler;
+        }
+    }
+
