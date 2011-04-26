@@ -1,16 +1,11 @@
     private static List<org.apache.cassandra.db.Row> getSlice(String keyspace, SelectStatement select)
     throws InvalidRequestException, TimedOutException, UnavailableException
     {
-        List<org.apache.cassandra.db.Row> rows = null;
         QueryPath queryPath = new QueryPath(select.getColumnFamily());
         AbstractType<?> comparator = select.getComparator(keyspace);
         List<ReadCommand> commands = new ArrayList<ReadCommand>();
-        
-        assert select.getKeys().size() == 1;
-        
+
         CFMetaData metadata = validateColumnFamily(keyspace, select.getColumnFamily(), false);
-        ByteBuffer key = select.getKeys().get(0).getByteBuffer(metadata.getKeyValidator());
-        validateKey(key);
 
         // ...of a list of column names
         if (!select.isColumnRange())
@@ -18,29 +13,42 @@
             Collection<ByteBuffer> columnNames = new ArrayList<ByteBuffer>();
             for (Term column : select.getColumnNames())
                 columnNames.add(column.getByteBuffer(comparator));
-            
+
             validateColumnNames(columnNames);
-            commands.add(new SliceByNamesReadCommand(keyspace, key, queryPath, columnNames));
+
+            for (Term rawKey: select.getKeys())
+            {
+                ByteBuffer key = rawKey.getByteBuffer(metadata.getKeyValidator());
+
+                validateKey(key);
+                commands.add(new SliceByNamesReadCommand(keyspace, key, queryPath, columnNames));
+            }
         }
         // ...a range (slice) of column names
         else
         {
             ByteBuffer start = select.getColumnStart().getByteBuffer(comparator);
             ByteBuffer finish = select.getColumnFinish().getByteBuffer(comparator);
-            
-            validateSliceRange(metadata, start, finish, select.isColumnsReversed());
-            commands.add(new SliceFromReadCommand(keyspace,
-                                                  key,
-                                                  queryPath,
-                                                  start,
-                                                  finish,
-                                                  select.isColumnsReversed(),
-                                                  select.getColumnsLimit()));
+
+            for (Term rawKey : select.getKeys())
+            {
+                ByteBuffer key = rawKey.getByteBuffer(metadata.getKeyValidator());
+
+                validateKey(key);
+                validateSliceRange(metadata, start, finish, select.isColumnsReversed());
+                commands.add(new SliceFromReadCommand(keyspace,
+                                                      key,
+                                                      queryPath,
+                                                      start,
+                                                      finish,
+                                                      select.isColumnsReversed(),
+                                                      select.getColumnsLimit()));
+            }
         }
 
         try
         {
-            rows = StorageProxy.read(commands, select.getConsistencyLevel());
+            return StorageProxy.read(commands, select.getConsistencyLevel());
         }
         catch (TimeoutException e)
         {
@@ -50,7 +58,5 @@
         {
             throw new RuntimeException(e);
         }
-        
-        return rows;
     }
 
