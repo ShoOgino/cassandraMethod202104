@@ -1,0 +1,27 @@
+    @Test
+    public void testDropIndex() throws IOException, ExecutionException, InterruptedException, ConfigurationException
+    {
+        // insert some data.  save the sstable descriptor so we can make sure it's marked for delete after the drop
+        RowMutation rm = new RowMutation("Keyspace6", ByteBufferUtil.bytes("k1"));
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("notbirthdate")), ByteBufferUtil.bytes(1L), 0);
+        rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")), ByteBufferUtil.bytes(1L), 0);
+        rm.apply();
+        ColumnFamilyStore cfs = Table.open("Keyspace6").getColumnFamilyStore("Indexed1");
+        cfs.forceBlockingFlush();
+        ColumnFamilyStore indexedCfs = cfs.getIndexedColumnFamilyStore(cfs.getIndexedColumns().iterator().next());
+        Descriptor desc = indexedCfs.getSSTables().iterator().next().descriptor;
+
+        // drop the index
+        CFMetaData meta = CFMetaData.rename(cfs.metadata, cfs.metadata.cfName); // abusing rename to clone
+        ColumnDefinition cdOld = meta.getColumn_metadata().values().iterator().next();
+        ColumnDefinition cdNew = new ColumnDefinition(cdOld.name, cdOld.getValidator(), null, null);
+        meta.columnMetadata(Collections.singletonMap(cdOld.name, cdNew));
+        UpdateColumnFamily update = new UpdateColumnFamily(CFMetaData.convertToAvro(meta));
+        update.apply();
+
+        // check
+        assert cfs.getIndexedColumns().isEmpty();
+        ColumnFamilyStore.scrubDataDirectories("Keyspace6", "Indexed1");
+        assert !new File(desc.filenameFor(Component.DATA)).exists();
+    }
+
