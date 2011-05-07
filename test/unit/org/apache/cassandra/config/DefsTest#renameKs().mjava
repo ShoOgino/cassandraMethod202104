@@ -1,0 +1,78 @@
+    @Test
+    public void renameKs() throws ConfigurationException, IOException, ExecutionException, InterruptedException
+    {
+        DecoratedKey dk = Util.dk("renameKs");
+        final KSMetaData oldKs = DatabaseDescriptor.getTableDefinition("Keyspace2");
+        assert oldKs != null;
+        final String cfName = "Standard3";
+        assert oldKs.cfMetaData().containsKey(cfName);
+        assert oldKs.cfMetaData().get(cfName).tableName.equals(oldKs.name);
+        
+        // write some data that we hope to read back later.
+        RowMutation rm = new RowMutation(oldKs.name, dk.key);
+        for (int i = 0; i < 10; i++)
+            rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes(("col" + i))), ByteBufferUtil.bytes("value"), 1L);
+        rm.apply();
+        ColumnFamilyStore store = Table.open(oldKs.name).getColumnFamilyStore(cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        assert DefsTable.getFiles(oldKs.name, cfName).size() > 0;
+        
+        final String newKsName = "RenamedKeyspace2";
+        new RenameKeyspace(oldKs.name, newKsName).apply();
+        KSMetaData newKs = DatabaseDescriptor.getTableDefinition(newKsName);
+        
+        assert DatabaseDescriptor.getTableDefinition(oldKs.name) == null;
+        assert newKs != null;
+        assert newKs.name.equals(newKsName);
+        assert newKs.cfMetaData().containsKey(cfName);
+        assert newKs.cfMetaData().get(cfName).tableName.equals(newKsName);
+        assert DefsTable.getFiles(newKs.name, cfName).size() > 0;
+        
+        // read on old should fail.
+        try
+        {
+            Table.open(oldKs.name);
+        }
+        catch (Throwable th)
+        {
+            assert th instanceof NullPointerException;
+        }
+        
+        // write on old should fail.
+        rm = new RowMutation(oldKs.name, ByteBufferUtil.bytes("any key will do"));
+        boolean success = true;
+        try
+        {
+            rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes("col0")), ByteBufferUtil.bytes("value0"), 1L);
+            rm.apply();
+        }
+        catch (Throwable th)
+        {
+            success = false;
+        }
+        assert !success : "This mutation should have failed since the CF/Table no longer exists.";
+        
+        // write on new should work.
+        rm = new RowMutation(newKsName, dk.key);
+        rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes("col0")), ByteBufferUtil.bytes("newvalue"), 2L);
+        rm.apply();
+        store = Table.open(newKs.name).getColumnFamilyStore(cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        
+        // read on new should work.
+        SortedSet<ByteBuffer> cols = new TreeSet<ByteBuffer>(BytesType.instance);
+        cols.add(ByteBufferUtil.bytes("col0"));
+        cols.add(ByteBufferUtil.bytes("col1"));
+        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(cfName), cols));
+        assert cfam.getColumnsMap().size() == cols.size();
+        // tests new write.
+        
+        ByteBuffer val = cfam.getColumn(ByteBufferUtil.bytes("col0")).value();
+        assertEquals(ByteBufferUtil.string(val), "newvalue");
+        // tests old write.
+         val = cfam.getColumn(ByteBufferUtil.bytes("col1")).value();
+        assertEquals(ByteBufferUtil.string(val), "value");
+    }
+

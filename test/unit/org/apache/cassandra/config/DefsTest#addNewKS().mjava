@@ -1,0 +1,27 @@
+    @Test
+    public void addNewKS() throws ConfigurationException, IOException, ExecutionException, InterruptedException
+    {
+        DecoratedKey dk = Util.dk("key0");
+        CFMetaData newCf = addTestCF("NewKeyspace1", "AddedStandard1", "A new cf for a new ks");
+
+        KSMetaData newKs = new KSMetaData(newCf.tableName, SimpleStrategy.class, null, 5, newCf);
+        
+        new AddKeyspace(newKs).apply();
+        
+        assert DatabaseDescriptor.getTableDefinition(newCf.tableName) != null;
+        assert DatabaseDescriptor.getTableDefinition(newCf.tableName) == newKs;
+
+        // test reads and writes.
+        RowMutation rm = new RowMutation(newCf.tableName, dk.key);
+        rm.add(new QueryPath(newCf.cfName, null, ByteBufferUtil.bytes("col0")), ByteBufferUtil.bytes("value0"), 1L);
+        rm.apply();
+        ColumnFamilyStore store = Table.open(newCf.tableName).getColumnFamilyStore(newCf.cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        
+        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(newCf.cfName), ByteBufferUtil.bytes("col0")));
+        assert cfam.getColumn(ByteBufferUtil.bytes("col0")) != null;
+        IColumn col = cfam.getColumn(ByteBufferUtil.bytes("col0"));
+        assert ByteBufferUtil.bytes("value0").equals(col.value());
+    }
+

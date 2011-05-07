@@ -1,0 +1,139 @@
+    @Test
+    public void testUpdateColumnFamilyNoIndexes() throws ConfigurationException, IOException, ExecutionException, InterruptedException
+    {
+        // create a keyspace with a cf to update.
+        CFMetaData cf = addTestCF("UpdatedCfKs", "Standard1added", "A new cf that will be updated");
+        KSMetaData ksm = new KSMetaData(cf.tableName, SimpleStrategy.class, null, 1, cf);
+        new AddKeyspace(ksm).apply();
+        
+        assert DatabaseDescriptor.getTableDefinition(cf.tableName) != null;
+        assert DatabaseDescriptor.getTableDefinition(cf.tableName) == ksm;
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName) != null;
+        
+        // updating certain fields should fail.
+        org.apache.cassandra.avro.CfDef cf_def = CFMetaData.convertToAvro(cf);
+        cf_def.row_cache_size = 43.3;
+        cf_def.column_metadata = new ArrayList<org.apache.cassandra.avro.ColumnDef>();
+        cf_def.default_validation_class ="BytesType";
+        cf_def.min_compaction_threshold = 5;
+        cf_def.max_compaction_threshold = 31;
+        
+        // test valid operations.
+        cf_def.comment = "Modified comment";
+        new UpdateColumnFamily(cf_def).apply(); // doesn't get set back here.
+        
+        cf_def.row_cache_size = 2d;
+        new UpdateColumnFamily(cf_def).apply();
+        
+        cf_def.key_cache_size = 3d;
+        new UpdateColumnFamily(cf_def).apply();
+        
+        cf_def.read_repair_chance = 0.23;
+        new UpdateColumnFamily(cf_def).apply();
+        
+        cf_def.gc_grace_seconds = 12;
+        new UpdateColumnFamily(cf_def).apply();
+        
+        cf_def.default_validation_class = "UTF8Type";
+        new UpdateColumnFamily(cf_def).apply();
+
+        cf_def.min_compaction_threshold = 3;
+        new UpdateColumnFamily(cf_def).apply();
+
+        cf_def.max_compaction_threshold = 33;
+        new UpdateColumnFamily(cf_def).apply();
+
+        // can't test changing the reconciler because there is only one impl.
+        
+        // check the cumulative affect.
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getComment().equals(cf_def.comment);
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getRowCacheSize() == cf_def.row_cache_size;
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getKeyCacheSize() == cf_def.key_cache_size;
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getReadRepairChance() == cf_def.read_repair_chance;
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getGcGraceSeconds() == cf_def.gc_grace_seconds;
+        assert DatabaseDescriptor.getCFMetaData(cf.tableName, cf.cfName).getDefaultValidator() == UTF8Type.instance;
+        
+        // todo: we probably don't need to reset old values in the catches anymore.
+        // make sure some invalid operations fail.
+        int oldId = cf_def.id;
+        try
+        {
+            cf_def.id++;
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when you used a different id.");
+        }
+        catch (ConfigurationException expected) 
+        {
+            cf_def.id = oldId;    
+        }
+        
+        CharSequence oldStr = cf_def.name;
+        try
+        {
+            cf_def.name = cf_def.name + "_renamed";
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when you used a different name.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.name = oldStr;
+        }
+        
+        oldStr = cf_def.keyspace;
+        try
+        {
+            cf_def.keyspace = oldStr + "_renamed";
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when you used a different keyspace.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.keyspace = oldStr;
+        }
+        
+        try
+        {
+            cf_def.column_type = ColumnFamilyType.Super.name();
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blwon up when you used a different cf type.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.column_type = ColumnFamilyType.Standard.name();
+        }
+        
+        oldStr = cf_def.comparator_type;
+        try 
+        {
+            cf_def.comparator_type = BytesType.class.getSimpleName();
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when you used a different comparator.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.comparator_type = UTF8Type.class.getSimpleName();
+        }
+
+        try
+        {
+            cf_def.min_compaction_threshold = 34;
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when min > max.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.min_compaction_threshold = 3;
+        }
+
+        try
+        {
+            cf_def.max_compaction_threshold = 2;
+            cf.apply(cf_def);
+            throw new AssertionError("Should have blown up when max > min.");
+        }
+        catch (ConfigurationException expected)
+        {
+            cf_def.max_compaction_threshold = 33;
+        }
+    }
+

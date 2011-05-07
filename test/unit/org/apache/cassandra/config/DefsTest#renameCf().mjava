@@ -1,0 +1,46 @@
+    @Test
+    public void renameCf() throws ConfigurationException, IOException, ExecutionException, InterruptedException
+    {
+        DecoratedKey dk = Util.dk("key0");
+        final KSMetaData ks = DatabaseDescriptor.getTableDefinition("Keyspace2");
+        assert ks != null;
+        final CFMetaData oldCfm = ks.cfMetaData().get("Standard1");
+        assert oldCfm != null;
+        
+        // write some data, force a flush, then verify that files exist on disk.
+        RowMutation rm = new RowMutation(ks.name, dk.key);
+        for (int i = 0; i < 100; i++)
+            rm.add(new QueryPath(oldCfm.cfName, null, ByteBufferUtil.bytes(("col" + i))), ByteBufferUtil.bytes("anyvalue"), 1L);
+        rm.apply();
+        ColumnFamilyStore store = Table.open(oldCfm.tableName).getColumnFamilyStore(oldCfm.cfName);
+        assert store != null;
+        store.forceBlockingFlush();
+        int fileCount = DefsTable.getFiles(oldCfm.tableName, oldCfm.cfName).size();
+        assert fileCount > 0;
+        
+        final String cfName = "St4ndard1Replacement";
+        new RenameColumnFamily(oldCfm.tableName, oldCfm.cfName, cfName).apply();
+        
+        assert !DatabaseDescriptor.getTableDefinition(ks.name).cfMetaData().containsKey(oldCfm.cfName);
+        assert DatabaseDescriptor.getTableDefinition(ks.name).cfMetaData().containsKey(cfName);
+        
+        // verify that new files are there.
+        assert DefsTable.getFiles(oldCfm.tableName, cfName).size() == fileCount;
+        
+        // do some reads.
+        store = Table.open(oldCfm.tableName).getColumnFamilyStore(cfName);
+        assert store != null;
+        ColumnFamily cfam = store.getColumnFamily(QueryFilter.getSliceFilter(dk, new QueryPath(cfName), ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, 1000));
+        assert cfam.getSortedColumns().size() == 100; // should be good enough?
+        
+        // do some writes
+        rm = new RowMutation(ks.name, dk.key);
+        rm.add(new QueryPath(cfName, null, ByteBufferUtil.bytes("col5")), ByteBufferUtil.bytes("updated"), 2L);
+        rm.apply();
+        store.forceBlockingFlush();
+        
+        cfam = store.getColumnFamily(QueryFilter.getNamesFilter(dk, new QueryPath(cfName), ByteBufferUtil.bytes("col5")));
+        assert cfam.getColumnsMap().size() == 1;
+        assert cfam.getColumn(ByteBufferUtil.bytes("col5")).value().equals( ByteBufferUtil.bytes("updated"));
+    }
+
