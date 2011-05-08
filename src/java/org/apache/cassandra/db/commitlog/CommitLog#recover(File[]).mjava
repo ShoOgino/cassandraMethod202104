@@ -1,31 +1,45 @@
-    public static void recover(File[] clogs) throws IOException
+    // returns the number of replayed mutation (useful for tests in particular)
+    public static int recover(File[] clogs) throws IOException
     {
         Set<Table> tablesRecovered = new HashSet<Table>();
         List<Future<?>> futures = new ArrayList<Future<?>>();
         byte[] bytes = new byte[4096];
         Map<Integer, AtomicInteger> invalidMutations = new HashMap<Integer, AtomicInteger>();
 
-        for (File file : clogs)
+        // count the number of replayed mutation. We don't really care about atomicity, but we need it to be a reference.
+        final AtomicInteger replayedCount = new AtomicInteger();
+
+        // compute per-CF and global replay positions
+        final Map<Integer, ReplayPosition> cfPositions = new HashMap<Integer, ReplayPosition>();
+        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
         {
+            // it's important to call RP.gRP per-cf, before aggregating all the positions w/ the Ordering.min call
+            // below: gRP will return NONE if there are no flushed sstables, which is important to have in the
+            // list (otherwise we'll just start replay from the first flush position that we do have, which is not correct).
+            ReplayPosition rp = ReplayPosition.getReplayPosition(cfs.getSSTables());
+            cfPositions.put(cfs.metadata.cfId, rp);
+        }
+        final ReplayPosition globalPosition = Ordering.from(ReplayPosition.comparator).min(cfPositions.values());
+
+        for (final File file : clogs)
+        {
+            final long segment = CommitLogSegment.idFromFilename(file.getName());
+
             int bufferSize = (int) Math.min(Math.max(file.length(), 1), 32 * 1024 * 1024);
             BufferedRandomAccessFile reader = new BufferedRandomAccessFile(new File(file.getAbsolutePath()), "r", bufferSize, true);
+            assert reader.length() <= Integer.MAX_VALUE;
 
             try
             {
-                CommitLogHeader clHeader = null;
-                int replayPosition = 0;
-                String headerPath = CommitLogHeader.getHeaderPathFromSegmentPath(file.getAbsolutePath());
-                try
-                {
-                    clHeader = CommitLogHeader.readCommitLogHeader(headerPath);
-                    replayPosition = clHeader.getReplayPosition();
-                }
-                catch (IOException ioe)
-                {
-                    logger.info(headerPath + " incomplete, missing or corrupt.  Everything is ok, don't panic.  CommitLog will be replayed from the beginning");
-                    logger.debug("exception was", ioe);
-                }
-                if (replayPosition < 0 || replayPosition > reader.length())
+                int replayPosition;
+                if (globalPosition.segment < segment)
+                    replayPosition = 0;
+                else if (globalPosition.segment == segment)
+                    replayPosition = globalPosition.position;
+                else
+                    replayPosition = (int) reader.length();
+
+                if (replayPosition < 0 || replayPosition >= reader.length())
                 {
                     // replayPosition > reader.length() can happen if some data gets flushed before it is written to the commitlog
                     // (see https://issues.apache.org/jira/browse/CASSANDRA-2285)
@@ -111,7 +125,6 @@
                     tablesRecovered.add(table);
                     final Collection<ColumnFamily> columnFamilies = new ArrayList<ColumnFamily>(rm.getColumnFamilies());
                     final long entryLocation = reader.getFilePointer();
-                    final CommitLogHeader finalHeader = clHeader;
                     final RowMutation frm = rm;
                     Runnable runnable = new WrappedRunnable()
                     {
@@ -128,8 +141,15 @@
                                     // null means the cf has been dropped
                                     continue;
 
-                                if (finalHeader == null || (finalHeader.isDirty(columnFamily.id()) && entryLocation > finalHeader.getPosition(columnFamily.id())))
+                                ReplayPosition rp = cfPositions.get(columnFamily.id());
+
+                                // replay if current segment is newer than last flushed one or, if it is the last known
+                                // segment, if we are after the replay position
+                                if (segment > rp.segment || (segment == rp.segment && entryLocation > rp.position))
+                                {
                                     newRm.add(columnFamily);
+                                    replayedCount.incrementAndGet();
+                                }
                             }
                             if (!newRm.isEmpty())
                             {
@@ -164,5 +184,7 @@
         for (Table table : tablesRecovered)
             futures.addAll(table.flush());
         FBUtilities.waitOnFutures(futures);
+
+        return replayedCount.get();
     }
 
