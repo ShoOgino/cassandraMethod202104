@@ -9,19 +9,17 @@
         // Some statements won't have (or don't need) a keyspace (think USE, or CREATE).
         if (StatementType.requiresKeyspace.contains(statement.type))
             keyspace = clientState.getKeyspace();
-        
+
         CqlResult result = new CqlResult();
         
         logger.debug("CQL statement type: {}", statement.type.toString());
         CFMetaData metadata;
-        AbstractType<?> comparator;
         switch (statement.type)
         {
             case SELECT:
                 SelectStatement select = (SelectStatement)statement.statement;
                 clientState.hasColumnFamilyAccess(select.getColumnFamily(), Permission.READ);
                 metadata = validateColumnFamily(keyspace, select.getColumnFamily(), false);
-                comparator = metadata.getComparatorFor(null);
                 validateSelect(keyspace, select);
                 
                 List<org.apache.cassandra.db.Row> rows = null;
@@ -58,7 +56,7 @@
                 
                 List<CqlRow> cqlRows = new ArrayList<CqlRow>();
                 result.type = CqlResultType.ROWS;
-                
+
                 // Create the result set
                 for (org.apache.cassandra.db.Row row : rows)
                 {
@@ -66,7 +64,7 @@
                     if (row.cf == null)
                         continue;
 
-                    List<Column> thriftColumns = extractThriftColumns(select, comparator, row);
+                    List<Column> thriftColumns = extractThriftColumns(select, metadata, row);
                     // Create a new row, add the columns to it, and then add it to the list of rows
                     CqlRow cqlRow = new CqlRow();
                     cqlRow.key = row.key.key;
@@ -129,7 +127,7 @@
                 DeleteStatement delete = (DeleteStatement)statement.statement;
                 clientState.hasColumnFamilyAccess(delete.getColumnFamily(), Permission.WRITE);
                 metadata = validateColumnFamily(keyspace, delete.getColumnFamily(), false);
-                comparator = metadata.getComparatorFor(null);
+                AbstractType comparator = metadata.getComparatorFor(null);
                 AbstractType<?> keyType = DatabaseDescriptor.getCFMetaData(keyspace,
                                                                            delete.getColumnFamily()).getKeyValidator();
                 
