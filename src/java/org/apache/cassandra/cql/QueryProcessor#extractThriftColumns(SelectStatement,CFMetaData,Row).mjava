@@ -1,0 +1,53 @@
+    private static List<Column> extractThriftColumns(SelectStatement select, CFMetaData metadata, Row row)
+    {
+        List<Column> thriftColumns = new ArrayList<Column>();
+        if (select.isColumnRange())
+        {
+            if (select.isWildcard())
+            {
+                // prepend key
+                thriftColumns.add(new Column(metadata.getKeyName()).setValue(row.key.key).setTimestamp(-1));
+            }
+
+            // preserve comparator order
+            for (IColumn c : row.cf.getSortedColumns())
+            {
+                if (c.isMarkedForDelete())
+                    continue;
+                thriftColumns.add(new Column(c.name()).setValue(c.value()).setTimestamp(c.timestamp()));
+            }
+        }
+        else
+        {
+            String keyString = getKeyString(metadata);
+
+            // order columns in the order they were asked for
+            for (Term term : select.getColumnNames())
+            {
+                if (term.getText().equalsIgnoreCase(keyString))
+                {
+                    // preserve case of key as it was requested
+                    ByteBuffer requestedKey = ByteBufferUtil.bytes(term.getText());
+                    thriftColumns.add(new Column(requestedKey).setValue(row.key.key).setTimestamp(-1));
+                    continue;
+                }
+
+                ByteBuffer name;
+                try
+                {
+                    name = term.getByteBuffer(metadata.comparator);
+                }
+                catch (InvalidRequestException e)
+                {
+                    throw new AssertionError(e);
+                }
+                IColumn c = row.cf.getColumn(name);
+                if (c == null || c.isMarkedForDelete())
+                    thriftColumns.add(new Column().setName(name));
+                else
+                    thriftColumns.add(new Column(c.name()).setValue(c.value()).setTimestamp(c.timestamp()));
+            }
+        }
+        return thriftColumns;
+    }
+
