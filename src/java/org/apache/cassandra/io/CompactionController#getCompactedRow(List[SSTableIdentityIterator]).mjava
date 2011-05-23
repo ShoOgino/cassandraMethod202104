@@ -1,0 +1,26 @@
+    /**
+     * @return an AbstractCompactedRow implementation to write the merged rows in question.
+     *
+     * If there is a single source row, the data is from a current-version sstable,
+     * and we aren't forcing deserialization for scrub,
+     * write it unchanged.  Otherwise, we deserialize, purge tombstones, and
+     * reserialize in the latest version.
+     */
+    public AbstractCompactedRow getCompactedRow(List<SSTableIdentityIterator> rows)
+    {
+        if (rows.size() == 1 && !needDeserialize())
+            return new EchoedRow(rows.get(0));
+
+        long rowSize = 0;
+        for (SSTableIdentityIterator row : rows)
+            rowSize += row.dataSize;
+
+        if (rowSize > DatabaseDescriptor.getInMemoryCompactionLimit())
+        {
+            logger.info(String.format("Compacting large row %s (%d bytes) incrementally",
+                                      ByteBufferUtil.bytesToHex(rows.get(0).getKey().key), rowSize));
+            return new LazilyCompactedRow(this, rows);
+        }
+        return new PrecompactedRow(this, rows);
+    }
+
