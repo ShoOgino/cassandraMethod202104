@@ -1,0 +1,44 @@
+    public static void main(String args[]) throws IOException
+    {
+        LoaderOptions options = LoaderOptions.parseArgs(args);
+        try
+        {
+            SSTableLoader loader = new SSTableLoader(options.directory, new ExternalClient(options.directory.getName(), options), options);
+            SSTableLoader.LoaderFuture future = loader.stream(options.ignores);
+
+            if (options.noProgress)
+            {
+                future.get();
+            }
+            else
+            {
+                ProgressIndicator indicator = new ProgressIndicator(future.getPendingFiles());
+                indicator.start();
+                System.out.println("");
+                while (!future.isDone())
+                {
+                    if (indicator.printProgress())
+                    {
+                        // We're done with streaming
+                        System.out.println("\nWaiting for targets to rebuild indexes ...");
+                        future.get();
+                        assert future.isDone();
+                    }
+                    else
+                    {
+                        try { Thread.sleep(1000L); } catch (Exception e) {}
+                    }
+                }
+            }
+
+            System.exit(0); // We need that to stop non daemonized threads
+        }
+        catch (Exception e)
+        {
+            System.err.println(e.getMessage());
+            if (options.debug)
+                e.printStackTrace(System.err);
+            System.exit(1);
+        }
+    }
+
