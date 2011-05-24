@@ -1,0 +1,54 @@
+        public void reduce(Text key, Iterator<Text> values, OutputCollector<Text, Text> output, Reporter reporter) throws IOException
+        {
+            ColumnFamily columnFamily;
+            String keyspace = "Keyspace1";
+            String cfName = "Super1";
+            Message message;
+            List<ColumnFamily> columnFamilies;
+            columnFamilies = new LinkedList<ColumnFamily>();
+            String line;
+
+            /* Create a column family */
+            columnFamily = ColumnFamily.create(keyspace, cfName);
+            while (values.hasNext()) {
+                // Split the value (line based on your own delimiter)
+                line = values.next().toString();
+                String[] fields = line.split("\1");
+                String SuperColumnName = fields[1];
+                String ColumnName = fields[2];
+                String ColumnValue = fields[3];
+                int timestamp = 0;
+                columnFamily.addColumn(new QueryPath(cfName,
+                                                     ByteBufferUtil.bytes(SuperColumnName),
+                                                     ByteBufferUtil.bytes(ColumnName)),
+                                       ByteBufferUtil.bytes(ColumnValue),
+                                       timestamp);
+            }
+
+            columnFamilies.add(columnFamily);
+
+            /* Get serialized message to send to cluster */
+            message = createMessage(keyspace, key.getBytes(), cfName, columnFamilies);
+            List<IAsyncResult> results = new ArrayList<IAsyncResult>();
+            for (InetAddress endpoint: StorageService.instance.getNaturalEndpoints(keyspace, ByteBufferUtil.bytes(key)))
+            {
+                /* Send message to end point */
+                results.add(MessagingService.instance().sendRR(message, endpoint));
+            }
+            /* wait for acks */
+            for (IAsyncResult result : results)
+            {
+                try
+                {
+                    result.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+                }
+                catch (TimeoutException e)
+                {
+                    // you should probably add retry logic here
+                    throw new RuntimeException(e);
+                }
+            }
+            
+            output.collect(key, new Text(" inserted into Cassandra node(s)"));
+        }
+

@@ -1,0 +1,34 @@
+    /*
+     * This version is used by the external clients to put data into
+     * the memtable. This version will respect the threshold and flush
+     * the memtable to disk when the size exceeds the threshold.
+    */
+    void put(DecoratedKey key, ByteBuffer buffer)
+    {
+        if (isThresholdViolated())
+        {
+            lock.lock();
+            try
+            {
+                if (!isFrozen)
+                {
+                    isFrozen = true;
+                    cfs.submitFlush(this, new CountDownLatch(1), null);
+                    cfs.switchBinaryMemtable(key, buffer);
+                }
+                else
+                {
+                    cfs.applyBinary(key, buffer);
+                }
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }
+        else
+        {
+            resolve(key, buffer);
+        }
+    }
+
