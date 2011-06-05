@@ -1,9 +1,20 @@
     /** {@inheritDoc} */
-    public List<RowMutation> prepareRowMutations(String keyspace, ClientState clientState, Long timestamp) throws InvalidRequestException
+    public List<IMutation> prepareRowMutations(String keyspace, ClientState clientState, Long timestamp) throws InvalidRequestException
     {
         List<String> cfamsSeen = new ArrayList<String>();
 
-        CFMetaData metadata = validateColumnFamily(keyspace, columnFamily, false);
+        boolean hasCommutativeOperation = false;
+
+        for (Map.Entry<Term, Operation> column : getColumns().entrySet())
+        {
+            if (!column.getValue().isUnary())
+                hasCommutativeOperation = true;
+
+            if (hasCommutativeOperation && column.getValue().isUnary())
+                throw new InvalidRequestException("Mix of commutative and non-commutative operations is not allowed.");
+        }
+
+        CFMetaData metadata = validateColumnFamily(keyspace, columnFamily, hasCommutativeOperation);
 
         // Avoid unnecessary authorizations.
         if (!(cfamsSeen.contains(columnFamily)))
@@ -12,7 +23,7 @@
             cfamsSeen.add(columnFamily);
         }
 
-        List<RowMutation> rowMutations = new LinkedList<RowMutation>();
+        List<IMutation> rowMutations = new LinkedList<IMutation>();
 
         for (Term key: keys)
         {
