@@ -14,37 +14,20 @@
                 {
                     if (cfs.isInvalid())
                         return 0;
-                    Integer minThreshold = cfs.getMinimumCompactionThreshold();
-                    Integer maxThreshold = cfs.getMaximumCompactionThreshold();
-    
-                    if (minThreshold == 0 || maxThreshold == 0)
+
+                    AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+                    for (AbstractCompactionTask task : strategy.getBackgroundTasks(getDefaultGcBefore(cfs)))
                     {
-                        logger.debug("Compaction is currently disabled.");
-                        return 0;
-                    }
-                    logger.debug("Checking to see if compaction of " + cfs.columnFamily + " would be useful");
-                    Set<List<SSTableReader>> buckets = getBuckets(convertSSTablesToPairs(cfs.getSSTables()), 50L * 1024L * 1024L);
-                    updateEstimateFor(cfs, buckets);
-                    int gcBefore = getDefaultGcBefore(cfs);
-                    
-                    for (List<SSTableReader> sstables : buckets)
-                    {
-                        if (sstables.size() < minThreshold)
+                        if (!cfs.getDataTracker().markCompacting(task))
                             continue;
-                        // if we have too many to compact all at once, compact older ones first -- this avoids
-                        // re-compacting files we just created.
-                        Collections.sort(sstables);
-                        Collection<SSTableReader> tocompact = cfs.getDataTracker().markCompacting(sstables, minThreshold, maxThreshold);
-                        if (tocompact == null)
-                            // enough threads are busy in this bucket
-                            continue;
+
                         try
                         {
-                            return doCompaction(cfs, tocompact, gcBefore);
+                            task.execute(executor);
                         }
                         finally
                         {
-                            cfs.getDataTracker().unmarkCompacting(tocompact);
+                            cfs.getDataTracker().unmarkCompacting(task);
                         }
                     }
                 }

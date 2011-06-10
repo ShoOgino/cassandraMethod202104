@@ -1,0 +1,49 @@
+    public Future<Object> submitMajor(final ColumnFamilyStore cfStore, final int gcBefore)
+    {
+        Callable<Object> callable = new Callable<Object>()
+        {
+            public Object call() throws IOException
+            {
+                // acquire the write lock long enough to schedule all sstables
+                compactionLock.writeLock().lock();
+                try
+                {
+                    if (cfStore.isInvalid())
+                        return this;
+                    AbstractCompactionStrategy strategy = cfStore.getCompactionStrategy();
+                    for (AbstractCompactionTask task : strategy.getMaximalTasks(gcBefore))
+                    {
+                        if (!cfStore.getDataTracker().markCompacting(task, 0, Integer.MAX_VALUE))
+                            return this;
+                        try
+                        {
+                            // downgrade the lock acquisition
+                            compactionLock.readLock().lock();
+                            compactionLock.writeLock().unlock();
+                            try
+                            {
+                                return task.execute(executor);
+                            }
+                            finally
+                            {
+                                compactionLock.readLock().unlock();
+                            }
+                        }
+                        finally
+                        {
+                            cfStore.getDataTracker().unmarkCompacting(task);
+                        }
+                    }
+                }
+                finally
+                {
+                    // we probably already downgraded
+                    if (compactionLock.writeLock().isHeldByCurrentThread())
+                        compactionLock.writeLock().unlock();
+                }
+                return this;
+            }
+        };
+        return executor.submit(callable);
+    }
+
