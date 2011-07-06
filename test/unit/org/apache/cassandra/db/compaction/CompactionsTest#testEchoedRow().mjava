@@ -21,11 +21,30 @@
             if (i % 2 == 0)
                 store.forceBlockingFlush();
         }
+        Collection<SSTableReader> toCompact = store.getSSTables();
 
-        // Force compaction. Since each row is in only one sstable, we will be using EchoedRow.
-        CompactionManager.instance.performMaximal(store);
+        // Reinserting the same keys. We will compact only the previous sstable, but we need those new ones
+        // to make sure we use EchoedRow, otherwise it won't be used because purge can be done.
+        for (int i=1; i < 5; i++)
+        {
+            DecoratedKey key = Util.dk(String.valueOf(i));
+            RowMutation rm = new RowMutation(TABLE1, key.key);
+            rm.add(new QueryPath("Standard2", null, ByteBufferUtil.bytes(String.valueOf(i))), ByteBufferUtil.EMPTY_BYTE_BUFFER, i);
+            rm.apply();
+        }
+        store.forceBlockingFlush();
+        SSTableReader tmpSSTable = null;
+        for (SSTableReader sstable : store.getSSTables())
+            if (!toCompact.contains(sstable))
+                tmpSSTable = sstable;
 
-        // Now assert we do have the two keys
+        // Force compaction on first sstables. Since each row is in only one sstable, we will be using EchoedRow.
+        Util.compact(store, toCompact, false);
+
+        // Now, we remove the sstable that was just created to force the use of EchoedRow (so that it doesn't hide the problem)
+        store.markCompacted(Collections.singleton(tmpSSTable));
+
+        // Now assert we do have the 4 keys
         assertEquals(4, Util.getRangeSlice(store).size());
     }
 
