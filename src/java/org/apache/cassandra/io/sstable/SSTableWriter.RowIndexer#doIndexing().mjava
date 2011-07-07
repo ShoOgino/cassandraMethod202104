@@ -1,10 +1,9 @@
         protected long doIndexing() throws IOException
         {
-            EstimatedHistogram rowSizes = SSTable.defaultRowHistogram();
-            EstimatedHistogram columnCounts = SSTable.defaultColumnHistogram();
             long rows = 0;
             DecoratedKey key;
             long rowPosition = 0;
+            ColumnFamily cf = ColumnFamily.create(cfs.metadata);
             while (rowPosition < dfile.length())
             {
                 // read key
@@ -17,19 +16,23 @@
 
                 IndexHelper.skipBloomFilter(dfile);
                 IndexHelper.skipIndex(dfile);
-                ColumnFamily.serializer().deserializeFromSSTableNoColumns(ColumnFamily.create(cfs.metadata), dfile);
+                ColumnFamily.serializer().deserializeFromSSTableNoColumns(cf, dfile);
+
+                // We can't simply get the max column timestamp here by calling cf.maxTimestamp() because
+                // the columns have not been deserialized yet. observeColumnsInSSTable() will deserialize
+                // and get the max timestamp instead.
+                ColumnFamily.serializer().observeColumnsInSSTable(cfs.metadata, dfile, sstableMetadataCollector);
 
                 // don't move that statement around, it expects the dfile to be before the columns
                 updateCache(key, dataSize, null);
 
-                rowSizes.add(dataSize);
-                columnCounts.add(dfile.readInt());
+                sstableMetadataCollector.addRowSize(dataSize);
                 
                 dfile.seek(rowPosition);
 
                 rows++;
             }
-            writeMetadata(desc, rowSizes, columnCounts, ReplayPosition.NONE);
+            writeMetadata(desc, sstableMetadataCollector.finalizeMetadata());
             return rows;
         }
 

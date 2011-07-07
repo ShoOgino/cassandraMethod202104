@@ -1,0 +1,27 @@
+    private void forceCompactions(ColumnFamilyStore store) throws ExecutionException, InterruptedException
+    {
+        // re-enable compaction with thresholds low enough to force a few rounds
+        store.setMinimumCompactionThreshold(2);
+        store.setMaximumCompactionThreshold(4);
+
+        // loop submitting parallel compactions until they all return 0
+        while (true)
+        {
+            ArrayList<Future<Integer>> compactions = new ArrayList<Future<Integer>>();
+            for (int i = 0; i < 10; i++)
+                compactions.add(CompactionManager.instance.submitBackground(store));
+            // another compaction attempt will be launched in the background by
+            // each completing compaction: not much we can do to control them here
+            boolean progress = false;
+            for (Future<Integer> compaction : compactions)
+               if (compaction.get() > 0)
+                   progress = true;
+            if (!progress)
+                break;
+        }
+        if (store.getSSTables().size() > 1)
+        {
+            CompactionManager.instance.performMaximal(store);
+        }
+    }
+

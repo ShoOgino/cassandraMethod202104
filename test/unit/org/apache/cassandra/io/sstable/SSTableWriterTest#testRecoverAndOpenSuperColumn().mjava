@@ -1,0 +1,36 @@
+    @Test
+    public void testRecoverAndOpenSuperColumn() throws IOException, ExecutionException, InterruptedException
+    {
+        // add data via the usual write path
+        RowMutation rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k1"));
+        ByteBuffer superColumnName = ByteBufferUtil.bytes("TestSuperColumn1");
+        rm.add(new QueryPath("Super1", superColumnName, ByteBufferUtil.bytes("birthdate")), ByteBufferUtil.bytes(1L), 0);
+        rm.apply();
+
+        // and add an sstable outside the right path (as if via streaming)
+        Map<String, ColumnFamily> entries = new HashMap<String, ColumnFamily>();
+        ColumnFamily cf = ColumnFamily.create("Keyspace1", "Super1");
+        SuperColumn superColumn = new SuperColumn(superColumnName, LongType.instance);
+        superColumn.addColumn(new Column(ByteBufferUtil.bytes("city"), ByteBufferUtil.bytes(1L), 4321L));
+        cf.addColumn(superColumn);
+        entries.put("k2", cf);
+
+        cf = ColumnFamily.create("Keyspace1", "Super1");
+        superColumn = new SuperColumn(ByteBufferUtil.bytes("TestSuperColumn2"), LongType.instance);
+        superColumn.addColumn(new Column(ByteBufferUtil.bytes("country"), ByteBufferUtil.bytes(1L), 1234L));
+        superColumn.addColumn(new Column(ByteBufferUtil.bytes("address"), ByteBufferUtil.bytes(1L), 0L));
+        cf.addColumn(superColumn);
+        entries.put("k3", cf);
+
+        SSTableReader orig = SSTableUtils.prepare().cf("Super1").write(entries);
+
+        // whack the index to trigger the recover
+        FileUtils.deleteWithConfirm(orig.descriptor.filenameFor(Component.PRIMARY_INDEX));
+        FileUtils.deleteWithConfirm(orig.descriptor.filenameFor(Component.FILTER));
+
+        SSTableReader sstr = CompactionManager.instance.submitSSTableBuild(orig.descriptor, OperationType.AES).get();
+
+        // ensure max timestamp is captured during rebuild
+        assert sstr.getMaxTimestamp() == 4321L;
+    }
+
