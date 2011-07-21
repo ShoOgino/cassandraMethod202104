@@ -1,10 +1,9 @@
         @Override
         public void run()
         {
-            Set<InetAddress> endpoints = AntiEntropyService.getNeighbors(tablename, range);
             if (endpoints.isEmpty())
             {
-                requestsMade.signalAll();
+                differencingDone.signalAll();
                 logger.info("No neighbors to repair with for " + tablename + " on " + range + ": " + getName() + " completed.");
                 return;
             }
@@ -14,35 +13,35 @@
             {
                 if (!FailureDetector.instance.isAlive(endpoint))
                 {
+                    differencingDone.signalAll();
                     logger.info("Could not proceed on repair because a neighbor (" + endpoint + ") is dead: " + getName() + " failed.");
                     return;
                 }
             }
 
-            // begin a repair session
-            Callback callback = new Callback();
-            AntiEntropyService.instance.sessions.put(getName(), callback);
+            AntiEntropyService.instance.sessions.put(getName(), this);
             try
             {
-                // request that all relevant endpoints generate trees
+                // Create and queue a RepairJob for each column family
                 for (String cfname : cfnames)
-                {
-                    // send requests to remote nodes and record them
-                    for (InetAddress endpoint : endpoints)
-                        requests.put(AntiEntropyService.instance.request(getName(), endpoint, range, tablename, cfname), this);
-                    // send but don't record an outstanding request to the local node
-                    AntiEntropyService.instance.request(getName(), FBUtilities.getLocalAddress(), range, tablename, cfname);
-                }
-                logger.info("Waiting for repair requests: " + requests.keySet());
-                requestsMade.signalAll();
+                    jobs.offer(new RepairJob(cfname));
+
+                // We'll repair once by endpoints and column family
+                completedLatch = new CountDownLatch(endpoints.size() * cfnames.length);
+
+                jobs.peek().sendTreeRequests();
 
                 // block whatever thread started this session until all requests have been returned:
                 // if this thread dies, the session will still complete in the background
-                callback.completed.await();
+                completedLatch.await();
             }
             catch (InterruptedException e)
             {
                 throw new RuntimeException("Interrupted while waiting for repair: repair will continue in the background.");
+            }
+            finally
+            {
+                AntiEntropyService.instance.sessions.remove(getName());
             }
         }
 
