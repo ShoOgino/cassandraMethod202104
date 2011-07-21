@@ -11,7 +11,8 @@
                 logger_.debug("Sleeping {}ms to stagger hint delivery", sleep);
                 Thread.sleep(sleep);
             }
-            if (!Gossiper.instance.getEndpointStateForEndpoint(endpoint).isAlive())
+
+            if (!FailureDetector.instance.isAlive(endpoint))
             {
                 logger_.info("Endpoint {} died before hint delivery, aborting", endpoint);
                 return;
@@ -25,7 +26,7 @@
         logger_.info("Started hinted handoff for endpoint " + endpoint);
 
         // 1. Get the key of the endpoint we need to handoff
-        // 2. For each column read the list of rows: subcolumns are KS + SEPARATOR + CF
+        // 2. For each column, deserialize the mutation and send it to the endpoint
         // 3. Delete the subcolumn if the write was successful
         // 4. Force a flush
         // 5. Do major compaction to clean up all deletes etc.
@@ -42,25 +43,31 @@
             ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), Integer.MAX_VALUE);
             if (pagingFinished(hintColumnFamily, startColumn))
                 break;
-            for (IColumn keyColumn : hintColumnFamily.getSortedColumns())
-            {
-                startColumn = keyColumn.name();
-                Collection<IColumn> tableCFs = keyColumn.getSubColumns();
-                for (IColumn tableCF : tableCFs)
-                {
-                    String[] parts = getTableAndCFNames(tableCF.name());
-                    if (sendRow(endpoint, parts[0], parts[1], keyColumn.name()))
-                    {
-                        deleteHintKey(endpointAsUTF8, keyColumn.name(), tableCF.name(), tableCF.timestamp());
-                        rowsReplayed++;
-                    }
-                    else
-                    {
-                        logger_.info("Could not complete hinted handoff to " + endpoint);
-                        break delivery;
-                    }
 
-                    startColumn = keyColumn.name();
+            for (IColumn hint : hintColumnFamily.getSortedColumns())
+            {
+                startColumn = hint.name();
+
+                IColumn versionColumn = hint.getSubColumn(ByteBufferUtil.bytes("version"));
+                IColumn tableColumn = hint.getSubColumn(ByteBufferUtil.bytes("table"));
+                IColumn keyColumn = hint.getSubColumn(ByteBufferUtil.bytes("key"));
+                IColumn mutationColumn = hint.getSubColumn(ByteBufferUtil.bytes("mutation"));
+                assert versionColumn != null;
+                assert tableColumn != null;
+                assert keyColumn != null;
+                assert mutationColumn != null;
+                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(mutationColumn.value()));
+                RowMutation rm = RowMutation.serializer().deserialize(in, ByteBufferUtil.toInt(versionColumn.value()));
+
+                if (sendMutation(endpoint, rm))
+                {
+                    deleteHint(endpointAsUTF8, hint.name(), versionColumn.timestamp());
+                    rowsReplayed++;
+                }
+                else
+                {
+                    logger_.info("Could not complete hinted handoff to " + endpoint);
+                    break delivery;
                 }
             }
         }
