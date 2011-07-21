@@ -2,25 +2,33 @@
     {
         for (ColumnFamilyStore cfs : concatWithIndexes())
         {
-            for (SSTableReader ssTable : cfs.data.getSSTables())
+            DataTracker.View currentView = cfs.markCurrentViewReferenced();
+            try
             {
-                try
+                for (SSTableReader ssTable : currentView.sstables)
                 {
-                    // mkdir
-                    File dataDirectory = ssTable.descriptor.directory.getParentFile();
-                    String snapshotDirectoryPath = Table.getSnapshotPath(dataDirectory.getAbsolutePath(), table.name, snapshotName);
-                    FileUtils.createDirectory(snapshotDirectoryPath);
+                    try
+                    {
+                        // mkdir
+                        File dataDirectory = ssTable.descriptor.directory.getParentFile();
+                        String snapshotDirectoryPath = Table.getSnapshotPath(dataDirectory.getAbsolutePath(), table.name, snapshotName);
+                        FileUtils.createDirectory(snapshotDirectoryPath);
 
-                    // hard links
-                    ssTable.createLinks(snapshotDirectoryPath);
-                    if (logger.isDebugEnabled())
-                        logger.debug("Snapshot for " + table + " keyspace data file " + ssTable.getFilename() +
-                            " created in " + snapshotDirectoryPath);
+                        // hard links
+                        ssTable.createLinks(snapshotDirectoryPath);
+                        if (logger.isDebugEnabled())
+                            logger.debug("Snapshot for " + table + " keyspace data file " + ssTable.getFilename() +
+                                    " created in " + snapshotDirectoryPath);
+                    }
+                    catch (IOException e)
+                    {
+                        throw new IOError(e);
+                    }
                 }
-                catch (IOException e)
-                {
-                    throw new IOError(e);
-                }
+            }
+            finally
+            {
+                SSTableReader.releaseReferences(currentView.sstables);
             }
         }
     }

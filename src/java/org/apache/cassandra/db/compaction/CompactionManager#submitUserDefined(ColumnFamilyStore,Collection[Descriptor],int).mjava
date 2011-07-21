@@ -27,28 +27,36 @@
                         }
                     }
 
-                    if (sstables.isEmpty())
+                    Collection<SSTableReader> toCompact;
+                    try
                     {
-                        logger.error("No file to compact for user defined compaction");
-                    }
-                    // attempt to schedule the set
-                    else if ((sstables = cfs.getDataTracker().markCompacting(sstables, 1, Integer.MAX_VALUE)) != null)
-                    {
-                        // success: perform the compaction
-                        try
+                        if (sstables.isEmpty())
                         {
-                            AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
-                            AbstractCompactionTask task = strategy.getUserDefinedTask(sstables, gcBefore);
-                            task.execute(executor);
+                            logger.error("No file to compact for user defined compaction");
                         }
-                        finally
+                        // attempt to schedule the set
+                        else if ((toCompact = cfs.getDataTracker().markCompacting(sstables, 1, Integer.MAX_VALUE)) != null)
                         {
-                            cfs.getDataTracker().unmarkCompacting(sstables);
+                            // success: perform the compaction
+                            try
+                            {
+                                AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+                                AbstractCompactionTask task = strategy.getUserDefinedTask(toCompact, gcBefore);
+                                task.execute(executor);
+                            }
+                            finally
+                            {
+                                cfs.getDataTracker().unmarkCompacting(toCompact);
+                            }
+                        }
+                        else
+                        {
+                            logger.error("SSTables for user defined compaction are already being compacted.");
                         }
                     }
-                    else
+                    finally
                     {
-                        logger.error("SSTables for user defined compaction are already being compacted.");
+                        SSTableReader.releaseReferences(sstables);
                     }
 
                     return this;
