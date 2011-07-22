@@ -1,0 +1,38 @@
+    /**
+     * If buffer is dirty, flush it's contents to the operating system. Does not imply fsync().
+     *
+     * Currently, for implementation reasons, this also invalidates the buffer.
+     *
+     * @throws java.io.IOException on any I/O error.
+     */
+    @Override
+    public void flush() throws IOException
+    {
+        if (isDirty)
+        {
+            out.write(buffer, 0, validBufferBytes);
+
+            if (skipIOCache)
+            {
+                // we don't know when the data reaches disk since we aren't
+                // calling flush
+                // so we continue to clear pages we don't need from the first
+                // offset we see
+                // periodically we update this starting offset
+                bytesSinceCacheFlush += validBufferBytes;
+
+                if (bytesSinceCacheFlush >= RandomAccessReader.MAX_BYTES_IN_PAGE_CACHE)
+                {
+                    CLibrary.trySkipCache(this.fd, ioCacheStartOffset, 0);
+                    ioCacheStartOffset = bufferOffset;
+                    bytesSinceCacheFlush = 0;
+                }
+            }
+
+            // Remember that we wrote, so we don't write it again on next flush().
+            resetBuffer();
+
+            isDirty = false;
+        }
+    }
+

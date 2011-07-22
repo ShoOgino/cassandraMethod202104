@@ -1,38 +1,41 @@
     @Test
     public void testReadBytes() throws IOException
     {
-        final BufferedRandomAccessFile file = createTempFile("brafReadBytes");
+        final SequentialWriter w = createTempFile("brafReadBytes");
 
-        byte[] data = new byte[BufferedRandomAccessFile.DEFAULT_BUFFER_SIZE + 10];
+        byte[] data = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE + 10];
 
         for (int i = 0; i < data.length; i++)
         {
             data[i] = 'c';
         }
 
-        file.write(data);
+        w.write(data);
+        w.sync();
 
-        file.seek(0);
-        ByteBuffer content = file.readBytes((int) file.length());
+        final RandomAccessReader r = RandomAccessReader.open(w);
+
+        ByteBuffer content = r.readBytes((int) r.length());
 
         // after reading whole file we should be at EOF
-        assertEquals(ByteBufferUtil.compare(content, data), 0);
-        assert file.bytesRemaining() == 0 && file.isEOF();
+        assertEquals(0, ByteBufferUtil.compare(content, data));
+        assert r.bytesRemaining() == 0 && r.isEOF();
 
-        file.seek(0);
-        content = file.readBytes(10); // reading first 10 bytes
+        r.seek(0);
+        content = r.readBytes(10); // reading first 10 bytes
         assertEquals(ByteBufferUtil.compare(content, "cccccccccc".getBytes()), 0);
-        assertEquals(file.bytesRemaining(), file.length() - content.limit());
+        assertEquals(r.bytesRemaining(), r.length() - content.limit());
 
         // trying to read more than file has right now
         expectEOF(new Callable<Object>()
         {
             public Object call() throws IOException
             {
-                return file.readBytes((int) file.length() + 10);
+                return r.readBytes((int) r.length() + 10);
             }
         });
 
-        file.close();
+        w.close();
+        r.close();
     }
 
