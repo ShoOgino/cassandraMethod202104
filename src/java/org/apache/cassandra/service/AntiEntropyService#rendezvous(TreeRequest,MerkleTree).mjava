@@ -3,53 +3,27 @@
      */
     private void rendezvous(TreeRequest request, MerkleTree tree)
     {
-        InetAddress LOCAL = FBUtilities.getBroadcastAddress();
+        RepairSession session = sessions.get(request.sessionid);
+        assert session != null;
 
-        // the rendezvous pairs for this session
-        Map<TreeRequest, TreePair> ctrees = rendezvousPairs(request.sessionid);
+        RepairSession.RepairJob job = session.jobs.peek();
+        assert job != null : "A repair should have at least some jobs scheduled";
 
-        List<Differencer> differencers = new ArrayList<Differencer>();
-        if (LOCAL.equals(request.endpoint))
+        if (job.addTree(request, tree) == 0)
         {
-            // we're registering a local tree: rendezvous with remote requests for the session
-            for (InetAddress neighbor : getNeighbors(request.cf.left, request.range))
-            {
-                TreeRequest remotereq = new TreeRequest(request.sessionid, neighbor, request.range, request.cf);
-                TreePair waiting = ctrees.remove(remotereq);
-                if (waiting != null && waiting.right != null)
-                {
-                    // the neighbor beat us to the rendezvous: queue differencing
-                    // FIXME: Differencer should take a TreeRequest
-                    differencers.add(new Differencer(remotereq, tree, waiting.right));
-                    continue;
-                }
+            logger.debug("All trees received for " + session.getName() + "/" + request.cf.right);
+            job.submitDifferencers();
 
-                // else, the local tree is first to the rendezvous: store and wait
-                ctrees.put(remotereq, new TreePair(tree, null));
-                logger.debug("Stored local tree for " + request + " to wait for " + remotereq);
-            }
-        }
-        else
-        {
-            // we're registering a remote tree: rendezvous with the local tree
-            TreePair waiting = ctrees.remove(request);
-            if (waiting != null && waiting.left != null)
-            {
-                // the local tree beat us to the rendezvous: queue differencing
-                differencers.add(new Differencer(request, waiting.left, tree));
-            }
+            // This job is complete, switching to next in line (note that only
+            // one thread will can ever do this)
+            session.jobs.poll();
+            RepairSession.RepairJob nextJob = session.jobs.peek();
+            if (nextJob == null)
+                // We are done with this repair session as far as differencing
+                // is considern. Just inform the session
+                session.differencingDone.signalAll();
             else
-            {
-                // else, the remote tree is first to the rendezvous: store and wait
-                ctrees.put(request, new TreePair(null, tree));
-                logger.debug("Stored remote tree for " + request + " to wait for local tree.");
-            }
-        }
-
-        for (Differencer differencer : differencers)
-        {
-            logger.info("Queueing comparison " + differencer);
-            StageManager.getStage(Stage.ANTI_ENTROPY).execute(differencer);
+                nextJob.sendTreeRequests();
         }
     }
 
