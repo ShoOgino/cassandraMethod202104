@@ -1,0 +1,48 @@
+    /**
+     * Send a message to a given endpoint. This method adheres to the fire and forget
+     * style messaging.
+     * @param message messages to be sent.
+     * @param to endpoint to which the message needs to be sent
+     */
+    private void sendOneWay(Message message, String id, InetAddress to)
+    {
+        if (logger_.isTraceEnabled())
+            logger_.trace(FBUtilities.getBroadcastAddress() + " sending " + message.getVerb() + " to " + id + "@" + to);
+
+        // do local deliveries
+        if ( message.getFrom().equals(to) )
+        {
+            receive(message, id);
+            return;
+        }
+
+        // message sinks are a testing hook
+        Message processedMessage = SinkManager.processClientMessage(message, id, to);
+        if (processedMessage == null)
+        {
+            return;
+        }
+
+        // get pooled connection (really, connection queue)
+        OutboundTcpConnection connection = getConnection(to, message);
+
+        // pack message with header in a bytebuffer
+        byte[] data;
+        try
+        {
+            DataOutputBuffer buffer = new DataOutputBuffer();
+            buffer.writeUTF(id);
+            Message.serializer().serialize(message, buffer, message.getVersion());
+            data = buffer.getData();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        assert data.length > 0;
+        ByteBuffer buffer = packIt(data , false, message.getVersion());
+
+        // write it
+        connection.write(buffer);
+    }
+

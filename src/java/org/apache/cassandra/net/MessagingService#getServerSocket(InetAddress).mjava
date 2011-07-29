@@ -1,0 +1,33 @@
+    private ServerSocket getServerSocket(InetAddress localEp) throws IOException, ConfigurationException
+    {
+        final ServerSocket ss;
+        if (DatabaseDescriptor.getEncryptionOptions() != null && DatabaseDescriptor.getEncryptionOptions().internode_encryption == EncryptionOptions.InternodeEncryption.all)
+        {
+            ss = SSLFactory.getServerSocket(DatabaseDescriptor.getEncryptionOptions(), localEp, DatabaseDescriptor.getStoragePort());
+            // setReuseAddress happens in the factory.
+            logger_.info("Starting Encrypted Messaging Service on port {}", DatabaseDescriptor.getStoragePort());
+        }
+        else
+        {
+            ServerSocketChannel serverChannel = ServerSocketChannel.open();
+            ss = serverChannel.socket();
+            ss.setReuseAddress(true);
+            InetSocketAddress address = new InetSocketAddress(localEp, DatabaseDescriptor.getStoragePort());
+            try
+            {
+                ss.bind(address);
+            }
+            catch (BindException e)
+            {
+                if (e.getMessage().contains("in use"))
+                    throw new ConfigurationException(address + " is in use by another process.  Change listen_address:storage_port in cassandra.yaml to values that do not conflict with other services");
+                else if (e.getMessage().contains("Cannot assign requested address"))
+                    throw new ConfigurationException("Unable to bind to address " + address + ". Set listen_address in cassandra.yaml to an interface you can bind to, e.g., your private IP address on EC2");
+                else
+                    throw e;
+            }
+            logger_.info("Starting Messaging Service on port {}", DatabaseDescriptor.getStoragePort());
+        }
+        return ss;
+    }
+
