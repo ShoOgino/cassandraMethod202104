@@ -1,0 +1,42 @@
+    @Override
+    public synchronized void resetAndTruncate(FileMark mark) throws IOException
+    {
+        assert mark instanceof CompressedFileWriterMark;
+
+        CompressedFileWriterMark realMark = ((CompressedFileWriterMark) mark);
+
+        // reset position
+        current = realMark.uncDataOffset;
+
+        if (realMark.chunkOffset == chunkOffset) // current buffer
+        {
+            // just reset a buffer offset and return
+            validBufferBytes = realMark.bufferOffset;
+            return;
+        }
+
+        // synchronize current buffer with disk
+        // because we don't want any data loss
+        syncInternal();
+
+        // setting marker as a current offset
+        chunkOffset = realMark.chunkOffset;
+
+        // compressed chunk size
+        int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset);
+
+        out.seek(chunkOffset);
+        out.read(compressed, 0, chunkSize);
+
+        Snappy.rawUncompress(compressed, 0, chunkSize, buffer, 0);
+
+        // reset buffer
+        validBufferBytes = realMark.bufferOffset;
+        bufferOffset = current - validBufferBytes;
+        chunkCount = realMark.nextChunkIndex - 1;
+
+        // truncate data and index file
+        truncate(chunkOffset);
+        metadataWriter.resetAndTruncate(realMark.nextChunkIndex);
+    }
+
