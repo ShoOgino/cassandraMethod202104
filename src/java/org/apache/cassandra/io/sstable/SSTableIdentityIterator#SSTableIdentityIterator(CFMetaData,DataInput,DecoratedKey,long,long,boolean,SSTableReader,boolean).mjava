@@ -10,7 +10,6 @@
         this.expireBefore = (int)(System.currentTimeMillis() / 1000);
         this.fromRemote = fromRemote;
         this.validateColumns = checkData;
-        finishedAt = dataStart + dataSize;
 
         try
         {
@@ -18,6 +17,9 @@
             {
                 RandomAccessReader file = (RandomAccessReader) input;
                 file.seek(this.dataStart);
+                if (dataStart + dataSize > file.length())
+                    throw new IOException(String.format("dataSize of %s starting at %s would be larger than file %s length %s",
+                                          dataSize, dataStart, file.getPath(), file.length()));
                 if (checkData)
                 {
                     try
@@ -41,6 +43,7 @@
                         logger.debug("Invalid row summary in {}; will rebuild it", sstable);
                     }
                     file.seek(this.dataStart);
+                    inputWithTracker.reset(0);
                 }
             }
 
@@ -50,11 +53,7 @@
             ColumnFamily.serializer().deserializeFromSSTableNoColumns(columnFamily, inputWithTracker);
             columnCount = inputWithTracker.readInt();
 
-            if (input instanceof RandomAccessReader)
-            {
-                RandomAccessReader file = (RandomAccessReader) input;
-                columnPosition = file.getFilePointer();
-            }
+            columnPosition = dataStart + inputWithTracker.getBytesRead();
         }
         catch (IOException e)
         {
