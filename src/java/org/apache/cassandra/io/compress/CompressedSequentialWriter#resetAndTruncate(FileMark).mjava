@@ -22,13 +22,21 @@
         // setting marker as a current offset
         chunkOffset = realMark.chunkOffset;
 
-        // compressed chunk size
-        int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset);
+        // compressed chunk size (- 4 bytes reserved for checksum)
+        int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset - 4);
 
         out.seek(chunkOffset);
         out.read(compressed, 0, chunkSize);
 
-        Snappy.rawUncompress(compressed, 0, chunkSize, buffer, 0);
+        // decompress data chunk and store its length
+        int validBytes = Snappy.rawUncompress(compressed, 0, chunkSize, buffer, 0);
+
+        checksum.update(buffer, 0, validBytes);
+
+        if (out.readInt() != (int) checksum.getValue())
+            throw new CorruptedBlockException(getPath(), chunkOffset, chunkSize);
+
+        checksum.reset();
 
         // reset buffer
         validBufferBytes = realMark.bufferOffset;
