@@ -1,10 +1,6 @@
-    private static void applyCounterMutation(final IMutation mutation, final Multimap<InetAddress, InetAddress> hintedEndpoints, final IWriteResponseHandler responseHandler, final String localDataCenter, final ConsistencyLevel consistency_level, boolean executeOnMutationStage)
+    private static Runnable counterWriteTask(final IMutation mutation, final Multimap<InetAddress, InetAddress> hintedEndpoints, final IWriteResponseHandler responseHandler, final String localDataCenter, final ConsistencyLevel consistency_level)
     {
-        // we apply locally first, then send it to other replica
-        if (logger.isDebugEnabled())
-            logger.debug("insert writing local & replicate " + mutation.toString(true));
-
-        Runnable runnable = new DroppableRunnable(StorageService.Verb.MUTATION)
+        return new DroppableRunnable(StorageService.Verb.MUTATION)
         {
             public void runMayThrow() throws IOException
             {
@@ -13,10 +9,11 @@
 
                 // apply mutation
                 cm.apply();
-
                 responseHandler.response(null);
 
-                if (cm.shouldReplicateOnWrite())
+                // then send to replicas, if any
+                hintedEndpoints.removeAll(FBUtilities.getLocalAddress());
+                if (cm.shouldReplicateOnWrite() && !hintedEndpoints.isEmpty())
                 {
                     // We do the replication on another stage because it involves a read (see CM.makeReplicationMutation)
                     // and we want to avoid blocking too much the MUTATION stage
@@ -25,15 +22,11 @@
                         public void runMayThrow() throws IOException
                         {
                             // send mutation to other replica
-                            sendToHintedEndpoints(cm.makeReplicationMutation(), hintedEndpoints, responseHandler, localDataCenter, false, consistency_level);
+                            sendToHintedEndpoints(cm.makeReplicationMutation(), hintedEndpoints, responseHandler, localDataCenter, consistency_level);
                         }
                     });
                 }
             }
         };
-        if (executeOnMutationStage)
-            StageManager.getStage(Stage.MUTATION).execute(runnable);
-        else
-            runnable.run();
     }
 
