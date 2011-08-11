@@ -1,0 +1,41 @@
+    /**
+     * Adds and builds a index for a column
+     * @param cdef the column definition holding the index data
+     * @return a future which the caller can optionally block on signaling the index is built
+     */
+    public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef)
+    {
+        
+        if (indexesByColumn.containsKey(cdef.name))
+            return null;
+        
+        assert cdef.getIndexType() != null;
+        logger.info("Creating new index : {}",cdef);
+        
+        SecondaryIndex index = null;
+        switch (cdef.getIndexType())
+        {
+        case KEYS:
+            index = new KeysIndex(baseCfs, cdef);
+            break;
+        default:
+            throw new RuntimeException("Unknown index type: " + cdef.getIndexName());
+        }
+
+        // link in indexedColumns. this means that writes will add new data to
+        // the index immediately,
+        // so we don't have to lock everything while we do the build. it's up to
+        // the operator to wait
+        // until the index is actually built before using in queries.
+        if (indexesByColumn.putIfAbsent(cdef.name, index) != null)
+            return null;       
+        
+        
+        // if we're just linking in the index to indexedColumns on an
+        // already-built index post-restart, we're done
+        if (index.isIndexBuilt())
+            return null;
+
+        return index.buildIndexAsync();
+    }
+

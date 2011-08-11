@@ -12,20 +12,20 @@
         ColumnFamilyStore cfs = table.getColumnFamilyStore("Indexed2");
         ColumnDefinition old = cfs.metadata.getColumn_metadata().get(ByteBufferUtil.bytes("birthdate"));
         ColumnDefinition cd = new ColumnDefinition(old.name, old.getValidator(), IndexType.KEYS, "birthdate_index");
-        Future<?> future = cfs.addIndex(cd);
+        Future<?> future = cfs.indexManager.addIndexedColumn(cd);
         future.get();
         // we had a bug (CASSANDRA-2244) where index would get created but not flushed -- check for that
-        assert cfs.getIndexedColumnFamilyStore(cd.name).getSSTables().size() > 0;
+        assert cfs.indexManager.getIndexForColumn(cd.name).getUnderlyingCfs().getSSTables().size() > 0;
 
         queryBirthdate(table);
 
         // validate that drop clears it out & rebuild works (CASSANDRA-2320)
-        ColumnFamilyStore indexedCfs = cfs.getIndexedColumnFamilyStore(ByteBufferUtil.bytes("birthdate"));
-        cfs.removeIndex(ByteBufferUtil.bytes("birthdate"));
+        SecondaryIndex indexedCfs = cfs.indexManager.getIndexForColumn(ByteBufferUtil.bytes("birthdate"));
+        cfs.indexManager.removeIndexedColumn(ByteBufferUtil.bytes("birthdate"));
         assert !indexedCfs.isIndexBuilt();
 
         // rebuild & re-query
-        future = cfs.addIndex(cd);
+        future = cfs.indexManager.addIndexedColumn(cd);
         future.get();
         queryBirthdate(table);
     }

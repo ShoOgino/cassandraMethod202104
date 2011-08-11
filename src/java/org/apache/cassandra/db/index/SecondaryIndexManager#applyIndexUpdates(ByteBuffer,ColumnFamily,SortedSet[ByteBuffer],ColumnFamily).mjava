@@ -1,0 +1,67 @@
+    /**
+     * removes obsolete index entries and creates new ones for the given row key
+     * and mutated columns.
+     * 
+     * @return list of full (index CF) memtables
+     */
+    public Set<SecondaryIndex> applyIndexUpdates(ByteBuffer rowKey,
+                                                 ColumnFamily cf,
+                                                 SortedSet<ByteBuffer> mutatedIndexedColumns,
+                                                 ColumnFamily oldIndexedColumns)
+    {
+        
+        //Track the indexes we touch so we can commit the row across them
+        Set<SecondaryIndex> indexesTouched = new HashSet<SecondaryIndex>(indexesByColumn.size());
+        
+        // remove the old index entries
+        if (oldIndexedColumns != null)
+        {
+            for (ByteBuffer columnName : oldIndexedColumns.getColumnNames())
+            {
+                
+                IColumn column = oldIndexedColumns.getColumn(columnName);
+                
+                if (column == null)
+                    continue;
+                
+                //this was previously deleted so should not be in index
+                if (column.isMarkedForDelete())
+                    continue;
+           
+                SecondaryIndex index = getIndexForColumn(columnName);
+                assert index != null;
+                
+                indexesTouched.add(index);
+
+                DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
+
+                index.deleteColumn(valueKey, rowKey, column);
+            }           
+        }
+        
+        //insert new columns
+        for (ByteBuffer columnName : mutatedIndexedColumns)
+        {
+            IColumn column = cf.getColumn(columnName);
+            if (column == null || column.isMarkedForDelete())
+                continue; // null column == row deletion
+
+            SecondaryIndex index = getIndexForColumn(columnName);
+            assert index != null;
+
+            indexesTouched.add(index);
+            
+            DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
+                        
+            index.insertColumn(valueKey, rowKey, column);         
+        }
+        
+        //Commit the row across all indexes
+        for (SecondaryIndex index : indexesTouched)
+        {
+            index.commitRow(rowKey);
+        }
+        
+        return indexesTouched;
+    }
+
