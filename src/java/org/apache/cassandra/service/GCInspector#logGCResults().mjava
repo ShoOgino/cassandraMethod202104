@@ -1,42 +1,41 @@
     private void logGCResults()
     {
-        for (Object gc : beans)
+        for (GarbageCollectorMXBean gc : beans)
         {
-            SunGcWrapper gcw = new SunGcWrapper(gc);
-            if (gcw.isLastGcInfoNull())
+            Long previousTotal = gctimes.get(gc.getName());
+            Long total = gc.getCollectionTime();
+            if (previousTotal == null)
+                previousTotal = 0L;
+            if (previousTotal.equals(total))
                 continue;
+            gctimes.put(gc.getName(), total);
+            Long duration = total - previousTotal;
+            assert duration > 0;
 
-            Long previous = gctimes.get(gcw.getName());
-            if (previous != null && previous.longValue() == gcw.getCollectionTime().longValue())
-                continue;
-            gctimes.put(gcw.getName(), gcw.getCollectionTime());
+            Long previousCount = gccounts.get(gc.getName());
+            Long count = gc.getCollectionCount();
+            if (previousCount == null)
+                previousCount = 0L;
+            gccounts.put(gc.getName(), count);
+            assert count > previousCount;
 
-            long previousMemoryUsed = 0;
-            long memoryUsed = 0;
-            long memoryMax = 0;
-            for (Map.Entry<String, MemoryUsage> entry : gcw.getMemoryUsageBeforeGc().entrySet())
-            {
-                previousMemoryUsed += entry.getValue().getUsed();
-            }
-            for (Map.Entry<String, MemoryUsage> entry : gcw.getMemoryUsageAfterGc().entrySet())
-            {
-                MemoryUsage mu = entry.getValue();
-                memoryUsed += mu.getUsed();
-                memoryMax += mu.getMax();
-            }
+            MemoryUsage mu = membean.getHeapMemoryUsage();
+            long memoryUsed = mu.getUsed();
+            long memoryMax = mu.getMax();
 
-            String st = String.format("GC for %s: %s ms, %s reclaimed leaving %s used; max is %s",
-                                      gcw.getName(), gcw.getDuration(), previousMemoryUsed - memoryUsed, memoryUsed, memoryMax);
-            if (gcw.getDuration() > MIN_DURATION)
+            String st = String.format("GC for %s: %s ms for %s collections, %s used; max is %s",
+                                      gc.getName(), duration, count - previousCount, memoryUsed, memoryMax);
+            long durationPerCollection = duration / (count - previousCount);
+            if (durationPerCollection > MIN_DURATION)
                 logger.info(st);
             else if (logger.isDebugEnabled())
                 logger.debug(st);
 
-            if (gcw.getDuration() > MIN_DURATION_TPSTATS)
+            if (durationPerCollection > MIN_DURATION_TPSTATS)
                 StatusLogger.log();
 
             // if we just finished a full collection and we're still using a lot of memory, try to reduce the pressure
-            if (gcw.getName().equals("ConcurrentMarkSweep"))
+            if (gc.getName().equals("ConcurrentMarkSweep"))
             {
                 double usage = (double) memoryUsed / memoryMax;
 
