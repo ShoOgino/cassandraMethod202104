@@ -1,0 +1,51 @@
+    /**
+     * Collects data the brute-force way: gets an iterator for the filter in question
+     * from every memtable and sstable, then merges them together.
+     */
+    private ColumnFamily collectAllData()
+    {
+        logger.debug("collectAllData");
+        List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
+        ColumnFamily returnCF = ColumnFamily.create(metadata, factory, filter.filter.isReversed());
+
+        try
+        {
+            for (Memtable memtable : Iterables.concat(dataview.memtablesPendingFlush, Collections.singleton(dataview.memtable)))
+            {
+                IColumnIterator iter = filter.getMemtableColumnIterator(memtable, metadata.comparator);
+                if (iter != null)
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                    iterators.add(iter);
+                }
+            }
+
+            /* add the SSTables on disk */
+            for (SSTableReader sstable : dataview.sstables)
+            {
+                IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
+                iterators.add(iter);
+                if (iter.getColumnFamily() != null)
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                    sstablesIterated++;
+                }
+            }
+        }
+        finally
+        {
+            for (IColumnIterator iter : iterators)
+                FileUtils.closeQuietly(iter);
+        }
+
+        // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
+        // and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)
+        if (iterators.isEmpty())
+            return null;
+
+        filter.collateColumns(returnCF, iterators, metadata.comparator, gcBefore);
+
+        // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
+        return returnCF;
+    }
+
