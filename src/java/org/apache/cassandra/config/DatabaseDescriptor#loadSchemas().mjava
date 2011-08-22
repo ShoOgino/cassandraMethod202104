@@ -10,7 +10,7 @@
             logger.info("Couldn't detect any schema definitions in local storage.");
             // peek around the data directories to see if anything is there.
             boolean hasExistingTables = false;
-            for (String dataDir : DatabaseDescriptor.getAllDataFileLocations())
+            for (String dataDir : getAllDataFileLocations())
             {
                 File dataPath = new File(dataDir);
                 if (dataPath.exists() && dataPath.isDirectory())
@@ -41,34 +41,20 @@
         {
             logger.info("Loading schema version " + uuid.toString());
             Collection<KSMetaData> tableDefs = DefsTable.loadFromStorage(uuid);   
-            for (KSMetaData def : tableDefs)
-            {
-                if (!def.name.matches(Migration.NAME_VALIDATOR_REGEX))
-                    throw new RuntimeException("invalid keyspace name: " + def.name);
-                for (CFMetaData cfm : def.cfMetaData().values())
-                {
-                    if (!cfm.cfName.matches(Migration.NAME_VALIDATOR_REGEX))
-                        throw new RuntimeException("invalid column family name: " + cfm.cfName);
-                    try
-                    {
-                        CFMetaData.map(cfm);
-                    }
-                    catch (ConfigurationException ex)
-                    {
-                        throw new IOError(ex);
-                    }
-                }
-                DatabaseDescriptor.setTableDefinition(def, uuid);
-            }
-            
+
             // happens when someone manually deletes all tables and restarts.
             if (tableDefs.size() == 0)
             {
                 logger.warn("No schema definitions were found in local storage.");
-                // set defsVersion so that migrations leading up to emptiness aren't replayed.
-                defsVersion = uuid;
+                // set version so that migrations leading up to emptiness aren't replayed.
+                Schema.instance.setVersion(uuid);
+            }
+            else // if non-system tables where found, trying to load them
+            {
+                Schema.instance.load(tableDefs, uuid);
             }
         }
-        CFMetaData.fixMaxId();
+
+        Schema.instance.fixCFMaxId();
     }
 
