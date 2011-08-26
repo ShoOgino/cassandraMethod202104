@@ -6,14 +6,15 @@
     {
         logger.debug("collectAllData");
         List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
-        ColumnFamily returnCF = ColumnFamily.create(metadata, factory, filter.filter.isReversed());
-        List<SSTableReader> sstables = null;
+        ColumnFamily returnCF = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
+        List<SSTableReader> sstables;
 
-        try
+        while (true)
         {
+            DataTracker.View dataview = cfs.getDataTracker().getView();
             for (Memtable memtable : Iterables.concat(dataview.memtablesPendingFlush, Collections.singleton(dataview.memtable)))
             {
-                IColumnIterator iter = filter.getMemtableColumnIterator(memtable, metadata.comparator);
+                IColumnIterator iter = filter.getMemtableColumnIterator(memtable, cfs.metadata.comparator);
                 if (iter != null)
                 {
                     returnCF.delete(iter.getColumnFamily());
@@ -23,23 +24,30 @@
 
             /* add the SSTables on disk */
             sstables = dataview.intervalTree.search(new Interval(filter.key, filter.key));
-            SSTableReader.acquireReferences(sstables);
-            for (SSTableReader sstable : sstables)
+            if (!SSTableReader.acquireReferences(sstables))
+                continue; // retry w/ new view
+
+            try
             {
-                IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
-                iterators.add(iter);
-                if (iter.getColumnFamily() != null)
+                for (SSTableReader sstable : sstables)
                 {
-                    returnCF.delete(iter.getColumnFamily());
-                    sstablesIterated++;
+                    IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
+                    iterators.add(iter);
+                    if (iter.getColumnFamily() != null)
+                    {
+                        returnCF.delete(iter.getColumnFamily());
+                        sstablesIterated++;
+                    }
                 }
             }
-        }
-        finally
-        {
-            SSTableReader.releaseReferences(sstables);
-            for (IColumnIterator iter : iterators)
-                FileUtils.closeQuietly(iter);
+            finally
+            {
+                SSTableReader.releaseReferences(sstables);
+                for (IColumnIterator iter : iterators)
+                    FileUtils.closeQuietly(iter);
+            }
+
+            break; // sstable reference acquisition was successful
         }
 
         // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
@@ -47,7 +55,7 @@
         if (iterators.isEmpty())
             return null;
 
-        filter.collateColumns(returnCF, iterators, metadata.comparator, gcBefore);
+        filter.collateColumns(returnCF, iterators, cfs.metadata.comparator, gcBefore);
 
         // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
         return returnCF;

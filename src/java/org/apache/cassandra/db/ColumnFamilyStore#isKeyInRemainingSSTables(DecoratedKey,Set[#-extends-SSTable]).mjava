@@ -8,20 +8,13 @@
      */
     public boolean isKeyInRemainingSSTables(DecoratedKey key, Set<? extends SSTable> sstablesToIgnore)
     {
-        DataTracker.View currentView = markCurrentViewReferenced();
-        try
+        // we don't need to acquire references here, since the bloom filter is safe to use even post-compaction
+        List<SSTableReader> filteredSSTables = data.getView().intervalTree.search(new Interval(key, key));
+        for (SSTableReader sstable : filteredSSTables)
         {
-            List<SSTableReader> filteredSSTables = currentView.intervalTree.search(new Interval(key, key));
-            for (SSTableReader sstable : filteredSSTables)
-            {
-                if (!sstablesToIgnore.contains(sstable) && sstable.getBloomFilter().isPresent(key.key))
-                    return true;
-            }
-            return false;
+            if (!sstablesToIgnore.contains(sstable) && sstable.getBloomFilter().isPresent(key.key))
+                return true;
         }
-        finally
-        {
-            SSTableReader.releaseReferences(currentView.sstables);
-        }
+        return false;
     }
 
