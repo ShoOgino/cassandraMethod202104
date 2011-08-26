@@ -8,7 +8,7 @@
         logger.debug("collectTimeOrderedData");
         List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
         final ColumnFamily container = ColumnFamily.create(metadata, factory, filter.filter.isReversed());
-
+        List<SSTableReader> sstables = null;
         try
         {
             for (Memtable memtable : Iterables.concat(dataview.memtablesPendingFlush, Collections.singleton(dataview.memtable)))
@@ -29,8 +29,12 @@
             filterColumns.addAll(((NamesQueryFilter) filter.filter).columns);
             QueryFilter reducedFilter = new QueryFilter(filter.key, filter.path, new NamesQueryFilter(filterColumns));
 
+            /* add the SSTables on disk */
+            sstables = dataview.intervalTree.search(new Interval(filter.key, filter.key));
+            Collections.sort(sstables, SSTable.maxTimestampComparator);
+            SSTableReader.acquireReferences(sstables);
             // read sorted sstables
-            for (SSTableReader sstable : dataview.sstables)
+            for (SSTableReader sstable : sstables)
             {
                 long currentMaxTs = sstable.getMaxTimestamp();
                 reduceNameFilter(reducedFilter, container, currentMaxTs);
@@ -50,6 +54,7 @@
         }
         finally
         {
+            SSTableReader.releaseReferences(sstables);
             for (IColumnIterator iter : iterators)
                 FileUtils.closeQuietly(iter);
         }

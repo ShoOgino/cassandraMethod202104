@@ -1,0 +1,36 @@
+    private static void load(ColumnFamilyStore cfs, LeveledManifest manifest)
+    {
+        ObjectMapper m = new ObjectMapper();
+        try
+        {
+            File manifestFile = tryGetManifest(cfs);
+
+            if (manifestFile != null && manifestFile.exists())
+            {
+                JsonNode rootNode = m.readValue(manifestFile, JsonNode.class);
+                JsonNode generations = rootNode.get("generations");
+                assert generations.isArray();
+                for (JsonNode generation : generations)
+                {
+                    int level = generation.get("generation").getIntValue();
+                    JsonNode generationValues = generation.get("members");
+                    for (JsonNode generationValue : generationValues)
+                    {
+                        for (SSTableReader ssTableReader : cfs.getSSTables())
+                        {
+                            if (ssTableReader.descriptor.generation == generationValue.getIntValue())
+                            {
+                                logger.debug("Loading {} at L{}", ssTableReader, level);
+                                manifest.add(ssTableReader, level);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+    }
+
