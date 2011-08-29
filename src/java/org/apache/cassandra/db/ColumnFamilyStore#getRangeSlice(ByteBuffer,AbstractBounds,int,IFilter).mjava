@@ -20,25 +20,12 @@
         QueryFilter filter = new QueryFilter(null, new QueryPath(columnFamily, superColumn, null), columnFilter);
         int gcBefore = (int)(System.currentTimeMillis() / 1000) - metadata.getGcGraceSeconds();
 
-        DataTracker.View currentView = markCurrentViewReferenced();
+        List<Row> rows;
+        ViewFragment view = markReferenced(startWith, stopAt);
         try
         {
-            Collection<Memtable> memtables = new ArrayList<Memtable>();
-            memtables.add(currentView.memtable);
-            memtables.addAll(currentView.memtablesPendingFlush);
-            // It is fine to aliases the View.sstables since it's an unmodifiable collection
-            Collection<SSTableReader> sstables = currentView.sstables;
-
-            Comparable startWithComp = startWith;
-            Comparable stopAtComp = stopAt;
-            if (startWith.token.equals(partitioner.getMinimumToken()))
-                startWithComp = currentView.intervalTree.min;
-            if (stopAt.token.equals(partitioner.getMinimumToken()))
-                stopAtComp = currentView.intervalTree.max;
-            sstables = currentView.intervalTree.search(new Interval(startWithComp, stopAtComp));
-
-            CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(memtables, sstables, startWith, stopAt, filter, getComparator(), this);
-            List<Row> rows = new ArrayList<Row>();
+            CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(view.memtables, view.sstables, startWith, stopAt, filter, getComparator(), this);
+            rows = new ArrayList<Row>();
 
             try
             {
@@ -80,12 +67,13 @@
                     throw new IOError(e);
                 }
             }
-
-            return rows;
         }
         finally
         {
-            SSTableReader.releaseReferences(currentView.sstables);
+            // separate finally block to release references in case getIterator() throws
+            SSTableReader.releaseReferences(view.sstables);
         }
+
+        return rows;
     }
 

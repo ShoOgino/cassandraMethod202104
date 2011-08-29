@@ -7,12 +7,11 @@
         logger.debug("collectAllData");
         List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
         ColumnFamily returnCF = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
-        List<SSTableReader> sstables;
 
-        while (true)
+        ColumnFamilyStore.ViewFragment view = cfs.markReferenced(filter.key);
+        try
         {
-            DataTracker.View dataview = cfs.getDataTracker().getView();
-            for (Memtable memtable : Iterables.concat(dataview.memtablesPendingFlush, Collections.singleton(dataview.memtable)))
+            for (Memtable memtable : view.memtables)
             {
                 IColumnIterator iter = filter.getMemtableColumnIterator(memtable, cfs.metadata.comparator);
                 if (iter != null)
@@ -22,32 +21,22 @@
                 }
             }
 
-            /* add the SSTables on disk */
-            sstables = dataview.intervalTree.search(new Interval(filter.key, filter.key));
-            if (!SSTableReader.acquireReferences(sstables))
-                continue; // retry w/ new view
-
-            try
+            for (SSTableReader sstable : view.sstables)
             {
-                for (SSTableReader sstable : sstables)
+                IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
+                iterators.add(iter);
+                if (iter.getColumnFamily() != null)
                 {
-                    IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
-                    iterators.add(iter);
-                    if (iter.getColumnFamily() != null)
-                    {
-                        returnCF.delete(iter.getColumnFamily());
-                        sstablesIterated++;
-                    }
+                    returnCF.delete(iter.getColumnFamily());
+                    sstablesIterated++;
                 }
             }
-            finally
-            {
-                SSTableReader.releaseReferences(sstables);
-                for (IColumnIterator iter : iterators)
-                    FileUtils.closeQuietly(iter);
-            }
-
-            break; // sstable reference acquisition was successful
+        }
+        finally
+        {
+            SSTableReader.releaseReferences(view.sstables);
+            for (IColumnIterator iter : iterators)
+                FileUtils.closeQuietly(iter);
         }
 
         // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
