@@ -1,39 +1,52 @@
+    /**
+     * Stream file by it's sections specified by this.header
+     * @throws IOException on any I/O error
+     */
     private void stream() throws IOException
     {
-        ByteBuffer buffer = MessagingService.instance().constructStreamHeader(header, false, Gossiper.instance.getVersion(to));
-        writeHeader(buffer);
+        ByteBuffer HeaderBuffer = MessagingService.instance().constructStreamHeader(header, false, Gossiper.instance.getVersion(to));
+        // write header
+        output.write(ByteBufferUtil.getArray(HeaderBuffer));
 
         if (header.file == null)
             return;
 
-        if (header.file.sstable.compression)
-        {
-            CompressedRandomAccessReader.transfer(header.file, channel);
-            return;
-        }
+        RandomAccessReader file = (header.file.sstable.compression) // try to skip kernel page cache if possible
+                                    ? CompressedRandomAccessReader.open(header.file.getFilename(), true)
+                                    : RandomAccessReader.open(new File(header.file.getFilename()), CHUNK_SIZE, true);
 
-        RandomAccessFile raf = new RandomAccessFile(new File(header.file.getFilename()), "r");
         try
         {
-            FileChannel fc = raf.getChannel();
-            // stream sections of the file as returned by PendingFile.currentSection
+            // stream each of the required sections of the file
             for (Pair<Long, Long> section : header.file.sections)
             {
+                // seek to the beginning of the section
+                file.seek(section.left);
+
+                // length of the section to stream
                 long length = section.right - section.left;
+                // tracks write progress
                 long bytesTransferred = 0;
+
                 while (bytesTransferred < length)
                 {
-                    long lastWrite = write(fc, section, length, bytesTransferred);
+                    long lastWrite = write(file, length, bytesTransferred);
                     bytesTransferred += lastWrite;
+                    // store streaming progress
                     header.file.progress += lastWrite;
                 }
+
+                // make sure that current section is send
+                output.flush();
+
                 if (logger.isDebugEnabled())
                     logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
             }
         }
         finally
         {
-            FileUtils.closeQuietly(raf);
+            // no matter what happens close file
+            FileUtils.closeQuietly(file);
         }
     }
 
