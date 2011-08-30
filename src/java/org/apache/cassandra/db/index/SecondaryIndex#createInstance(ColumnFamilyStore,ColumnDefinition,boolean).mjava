@@ -1,0 +1,46 @@
+    /**
+     * This is the primary way to create a secondary index instance for a CF column.
+     * It will validate the index_options before initializing.
+     * 
+     * @param baseCfs the source of data for the Index
+     * @param cdef the meta information about this column (index_type, index_options, name, etc...)
+     * @param init specify if this index should be initialized after allocated
+     * @return The secondary index instance for this column
+     * @throws ConfigurationException
+     */
+    public static SecondaryIndex createInstance(ColumnFamilyStore baseCfs, ColumnDefinition cdef, boolean init) throws ConfigurationException
+    {
+        SecondaryIndex index = null;
+        
+        switch (cdef.getIndexType())
+        {
+        case KEYS: 
+            index = new KeysIndex();
+            break;
+        case CUSTOM:           
+            assert cdef.getIndexOptions() != null;
+            String class_name = cdef.getIndexOptions().get(CUSTOM_INDEX_OPTION_NAME);
+            assert class_name != null;
+            try
+            {
+                index = (SecondaryIndex) Class.forName(class_name).newInstance();
+            } 
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }            
+            break;
+            default:
+                throw new RuntimeException("Unknown index type: " + cdef.getIndexName());
+        };
+        
+        index.setColumnDef(cdef);
+        index.validateOptions();
+        index.setBaseCfs(baseCfs);
+        
+        if (init)
+            index.init();
+        
+        return index;
+    }
+
