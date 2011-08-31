@@ -19,14 +19,14 @@
         };
         StorageService.scheduledTasks.scheduleWithFixedDelay(logDropped, LOG_DROPPED_INTERVAL_IN_MS, LOG_DROPPED_INTERVAL_IN_MS, TimeUnit.MILLISECONDS);
 
-        Function<Pair<String, Pair<InetAddress, IMessageCallback>>, ?> timeoutReporter = new Function<Pair<String, Pair<InetAddress, IMessageCallback>>, Object>()
+        Function<Pair<String, CallbackInfo>, ?> timeoutReporter = new Function<Pair<String, CallbackInfo>, Object>()
         {
-            public Object apply(Pair<String, Pair<InetAddress, IMessageCallback>> pair)
+            public Object apply(Pair<String, CallbackInfo> pair)
             {
-                Pair<InetAddress, IMessageCallback> expiredValue = pair.right;
-                maybeAddLatency(expiredValue.right, expiredValue.left, (double) DatabaseDescriptor.getRpcTimeout());
+                CallbackInfo expiredCallbackInfo = pair.right;
+                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, (double) DatabaseDescriptor.getRpcTimeout());
                 totalTimeouts++;
-                String ip = expiredValue.left.getHostAddress();
+                String ip = expiredCallbackInfo.target.getHostAddress();
                 AtomicLong c = timeoutsPerHost.get(ip);
                 if (c == null)
                     c = timeoutsPerHost.put(ip, new AtomicLong());
@@ -36,10 +36,18 @@
                 if (recentTimeoutsPerHost.get(ip) == null)
                     recentTimeoutsPerHost.put(ip, new AtomicLong());
 
+                if (expiredCallbackInfo.shouldHint())
+                {
+                    // Trigger hints for expired mutation message.
+                    assert expiredCallbackInfo.message != null;
+                    scheduleMutationHint(expiredCallbackInfo.message, expiredCallbackInfo.target);
+                }
+
                 return null;
             }
         };
-        callbacks = new ExpiringMap<String, Pair<InetAddress, IMessageCallback>>(DEFAULT_CALLBACK_TIMEOUT, timeoutReporter);
+
+        callbacks = new ExpiringMap<String, CallbackInfo>(DEFAULT_CALLBACK_TIMEOUT, timeoutReporter);
 
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
         try

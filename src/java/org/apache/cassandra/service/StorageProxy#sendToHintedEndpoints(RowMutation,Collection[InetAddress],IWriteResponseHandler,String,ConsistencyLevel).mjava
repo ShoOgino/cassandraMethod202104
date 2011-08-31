@@ -1,0 +1,70 @@
+    /**
+     * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
+     * is not available.
+     *
+     * Note about hints:
+     *
+     * | Hinted Handoff | Consist. Level |
+     * | on             |       >=1      | --> wait for hints. We DO NOT notify the handler with handler.response() for hints; 
+     * | on             |       ANY      | --> wait for hints. Responses count towards consistency.
+     * | off            |       >=1      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+     * | off            |       ANY      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+     *
+     * @throws TimeoutException if the hints cannot be written/enqueued 
+     */
+    private static void sendToHintedEndpoints(final RowMutation rm, 
+                                              Collection<InetAddress> targets,
+                                              IWriteResponseHandler responseHandler,
+                                              String localDataCenter,
+                                              ConsistencyLevel consistency_level)
+    throws IOException, TimeoutException
+    {
+        // Multimap that holds onto all the messages and addresses meant for a specific datacenter
+        Map<String, Multimap<Message, InetAddress>> dcMessages = new HashMap<String, Multimap<Message, InetAddress>>(targets.size());
+        MessageProducer producer = new CachingMessageProducer(rm);
+
+        for (InetAddress destination : targets)
+        {
+            if (FailureDetector.instance.isAlive(destination))
+            {
+                String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
+
+                if (destination.equals(FBUtilities.getBroadcastAddress()))
+                {
+                    insertLocal(rm, responseHandler);
+                }
+                else
+                {
+                    // belongs on a different server
+                    if (logger.isDebugEnabled())
+                        logger.debug("insert writing key " + ByteBufferUtil.bytesToHex(rm.key()) + " to " + destination);
+
+                    Multimap<Message, InetAddress> messages = dcMessages.get(dc);
+                    if (messages == null)
+                    {
+                       messages = HashMultimap.create();
+                       dcMessages.put(dc, messages);
+                    }
+
+                    messages.put(producer.getMessage(Gossiper.instance.getVersion(destination)), destination);
+                }
+            }
+            else
+            {
+                if (!shouldHint(destination))
+                    continue;
+
+                // Avoid OOMing from hints waiting to be written.  (Unlike ordinary mutations, hint
+                // not eligible to drop if we fall behind.)
+                if (hintsInProgress.get() > maxHintsInProgress)
+                    throw new TimeoutException();
+
+                // Schedule a local hint and let the handler know it needs to wait for the hint to complete too
+                Future<Void> hintfuture = scheduleLocalHint(rm, destination, responseHandler, consistency_level);
+                responseHandler.addFutureForHint(new CreationTimeAwareFuture<Void>(hintfuture));
+            }
+        }
+
+        sendMessages(localDataCenter, dcMessages, responseHandler);
+    }
+

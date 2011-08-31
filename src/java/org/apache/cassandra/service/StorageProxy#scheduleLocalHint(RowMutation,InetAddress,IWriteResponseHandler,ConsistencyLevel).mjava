@@ -1,0 +1,44 @@
+    public static Future<Void> scheduleLocalHint(final RowMutation mutation,
+                                                 final InetAddress target,
+                                                 final IWriteResponseHandler responseHandler,
+                                                 final ConsistencyLevel consistencyLevel)
+    throws IOException
+    {
+        // Hint of itself doesn't make sense.
+        assert !target.equals(FBUtilities.getBroadcastAddress()) : target;
+        hintsInProgress.incrementAndGet();
+
+        Runnable runnable = new Runnable()
+        {
+
+            public void run()
+            {
+                if (logger.isDebugEnabled())
+                    logger.debug("Adding hint for " + target);
+
+                try
+                {
+                    RowMutation hintedMutation = RowMutation.hintFor(mutation, ByteBufferUtil.bytes(target.getHostAddress()));
+                    hintedMutation.apply();
+
+                    totalHints.incrementAndGet();
+
+                    // Notify the handler only for CL == ANY
+                    if (responseHandler != null && consistencyLevel == ConsistencyLevel.ANY)
+                        responseHandler.response(null);
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+                finally
+                {
+                    // Decrement the current hint in the execution after the task is done.
+                    hintsInProgress.decrementAndGet();
+                }
+            }
+        };
+
+        return (Future<Void>) StageManager.getStage(Stage.MUTATION).submit(runnable);
+    }
+
