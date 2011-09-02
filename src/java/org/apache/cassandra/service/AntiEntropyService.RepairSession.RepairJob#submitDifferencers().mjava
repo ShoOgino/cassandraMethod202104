@@ -4,22 +4,20 @@
              */
             public void submitDifferencers()
             {
-                assert requestedEndpoints.size() == 0;
+                assert remainingEndpoints.isEmpty();
 
-                // Right now, we only difference local host against each other. CASSANDRA-2610 will fix that.
-                // In the meantime ugly special casing will work good enough.
-                MerkleTree localTree =
-                trees.get(FBUtilities.getBroadcastAddress());
-                assert localTree != null;
-                for (Map.Entry<InetAddress, MerkleTree> entry : trees.entrySet())
+                // We need to difference all trees one against another
+                for (int i = 0; i < trees.size() - 1; ++i)
                 {
-                    if (entry.getKey().equals(FBUtilities.getBroadcastAddress()))
-                        continue;
-
-                    Differencer differencer = new Differencer(cfname, entry.getKey(), entry.getValue(), localTree);
-                    syncJobs.add(entry.getKey());
-                    logger.debug("Queueing comparison " + differencer);
-                    StageManager.getStage(Stage.ANTI_ENTROPY).execute(differencer);
+                    TreeResponse r1 = trees.get(i);
+                    for (int j = i + 1; j < trees.size(); ++j)
+                    {
+                        TreeResponse r2 = trees.get(j);
+                        Differencer differencer = new Differencer(cfname, r1, r2);
+                        logger.debug("Queueing comparison {}", differencer);
+                        remainingDifferencers.add(differencer);
+                        StageManager.getStage(Stage.ANTI_ENTROPY).execute(differencer);
+                    }
                 }
                 trees.clear(); // allows gc to do its thing
             }
