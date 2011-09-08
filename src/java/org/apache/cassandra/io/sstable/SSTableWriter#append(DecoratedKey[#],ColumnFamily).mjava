@@ -1,0 +1,21 @@
+    public void append(DecoratedKey<?> decoratedKey, ColumnFamily cf) throws IOException
+    {
+        long startPosition = beforeAppend(decoratedKey);
+        ByteBufferUtil.writeWithShortLength(decoratedKey.key, dataFile.stream);
+
+        // serialize index and bloom filter into in-memory structure
+        ColumnIndexer.RowHeader header = ColumnIndexer.serialize(cf);
+
+        // write out row size
+        dataFile.stream.writeLong(header.serializedSize() + cf.serializedSizeForSSTable());
+
+        // write out row header and data
+        int columnCount = ColumnFamily.serializer().serializeWithIndexes(cf, header, dataFile.stream);
+        afterAppend(decoratedKey, startPosition);
+
+        // track max column timestamp
+        sstableMetadataCollector.updateMaxTimestamp(cf.maxTimestamp());
+        sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - startPosition);
+        sstableMetadataCollector.addColumnCount(columnCount);
+    }
+
