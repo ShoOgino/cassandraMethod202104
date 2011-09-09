@@ -9,45 +9,42 @@
     {
         if (logger.isDebugEnabled())
             logger.debug("resolving " + replies.size() + " responses");
-
         long startTime = System.currentTimeMillis();
-		List<ColumnFamily> versions = new ArrayList<ColumnFamily>();
-		List<InetAddress> endpoints = new ArrayList<InetAddress>();
-
-        // case 1: validate digests against each other; throw immediately on mismatch.
-        // also, collects data results into versions/endpoints lists.
-        //
-        // results are cleared as we process them, to avoid unnecessary duplication of work
-        // when resolve() is called a second time for read repair on responses that were not
-        // necessary to satisfy ConsistencyLevel.
-        for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
-        {
-            Message message = entry.getKey();
-            ReadResponse response = entry.getValue();
-            assert !response.isDigestQuery();
-            versions.add(response.row().cf);
-            endpoints.add(message.getFrom());
-        }
 
         ColumnFamily resolved;
-        if (versions.size() > 1)
+        if (replies.size() > 1)
         {
-            for (ColumnFamily cf : versions)
+            // compute maxLiveColumns to prevent short reads -- see https://issues.apache.org/jira/browse/CASSANDRA-2643
+            for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
             {
+                ReadResponse response = entry.getValue();
+                assert !response.isDigestQuery() : "Received digest response to repair read from " + entry.getKey().getFrom();
+
+                ColumnFamily cf = response.row().cf;
                 int liveColumns = cf.getLiveColumnCount();
                 if (liveColumns > maxLiveColumns)
                     maxLiveColumns = liveColumns;
             }
-            resolved = resolveSuperset(versions);
+
+            // merge the row versions
+            resolved = resolveSuperset(Iterables.transform(replies.values(), new Function<ReadResponse, ColumnFamily>()
+            {
+                public ColumnFamily apply(ReadResponse response)
+                {
+                    return response.row().cf;
+                }
+            }));
             if (logger.isDebugEnabled())
                 logger.debug("versions merged");
-            // resolved can be null even if versions doesn't have all nulls because of the call to removeDeleted in resolveSuperSet
+
+            // send updates to any replica that was missing part of the full row
+            // (resolved can be null even if versions doesn't have all nulls because of the call to removeDeleted in resolveSuperSet)
             if (resolved != null)
-                repairResults = scheduleRepairs(resolved, table, key, versions, endpoints);
+                repairResults = scheduleRepairs(resolved, table, key, replies);
         }
         else
         {
-            resolved = versions.get(0);
+            resolved = replies.values().iterator().next().row().cf;
         }
 
         if (logger.isDebugEnabled())
