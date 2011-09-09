@@ -2,15 +2,13 @@
      * For each row version, compare with resolved (the superset of all row versions);
      * if it is missing anything, send a mutation to the endpoint it come from.
      */
-    public static List<IAsyncResult> scheduleRepairs(ColumnFamily resolved, String table, DecoratedKey<?> key, Map<Message,ReadResponse> replies)
+    public static List<IAsyncResult> scheduleRepairs(ColumnFamily resolved, String table, DecoratedKey<?> key, List<ColumnFamily> versions, List<InetAddress> endpoints)
     {
-        List<IAsyncResult> results = new ArrayList<IAsyncResult>(replies.size());
+        List<IAsyncResult> results = new ArrayList<IAsyncResult>(versions.size());
 
-        for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+        for (int i = 0; i < versions.size(); i++)
         {
-            InetAddress from = entry.getKey().getFrom();
-            ColumnFamily cf = entry.getValue().row().cf;
-            ColumnFamily diffCf = ColumnFamily.diff(cf, resolved);
+            ColumnFamily diffCf = ColumnFamily.diff(versions.get(i), resolved);
             if (diffCf == null) // no repair needs to happen
                 continue;
 
@@ -20,13 +18,13 @@
             Message repairMessage;
             try
             {
-                repairMessage = rowMutation.getMessage(Gossiper.instance.getVersion(from));
+                repairMessage = rowMutation.getMessage(Gossiper.instance.getVersion(endpoints.get(i)));
             }
             catch (IOException e)
             {
                 throw new IOError(e);
             }
-            results.add(MessagingService.instance().sendRR(repairMessage, from));
+            results.add(MessagingService.instance().sendRR(repairMessage, endpoints.get(i)));
         }
 
         return results;
