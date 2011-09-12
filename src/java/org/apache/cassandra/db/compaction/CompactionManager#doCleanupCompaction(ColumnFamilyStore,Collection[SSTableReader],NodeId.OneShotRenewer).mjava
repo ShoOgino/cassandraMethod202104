@@ -40,6 +40,8 @@
 
             SSTableScanner scanner = sstable.getDirectScanner();
             Collection<ByteBuffer> indexedColumns = cfs.indexManager.getIndexedColumns();
+            List<IColumn> indexedColumnsInRow = null;
+
             CleanupInfo ci = new CleanupInfo(sstable, scanner);
             executor.beginCompaction(ci);
             try
@@ -58,17 +60,30 @@
                     }
                     else
                     {
+                                              
                         cfs.invalidateCachedRow(row.getKey());
+                                                
                         if (!indexedColumns.isEmpty() || isCommutative)
                         {
+                            if (indexedColumnsInRow != null)
+                                indexedColumnsInRow.clear();
+                            
                             while (row.hasNext())
                             {
                                 IColumn column = row.next();
                                 if (column instanceof CounterColumn)
                                     renewer.maybeRenew((CounterColumn) column);
                                 if (indexedColumns.contains(column.name()))
-                                    cfs.indexManager.deleteFromIndex(row.getKey().key, column);
+                                {
+                                    if (indexedColumnsInRow == null)
+                                        indexedColumnsInRow = new ArrayList<IColumn>();
+                                    
+                                    indexedColumnsInRow.add(column);
+                                }
                             }
+                            
+                            if (indexedColumnsInRow != null && !indexedColumnsInRow.isEmpty())
+                                cfs.indexManager.deleteFromIndexes(row.getKey(), indexedColumnsInRow);
                         }
                     }
                 }
@@ -97,19 +112,9 @@
                 logger.info(String.format(format, writer.getFilename(), startsize, endsize, (int)(ratio*100), totalkeysWritten, dTime));
             }
 
-            // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd
-            try
-            {
-                cfs.indexManager.flushIndexes();
-            }
-            catch (ExecutionException e)
-            {
-               throw new IOException(e);
-            }
-            catch (InterruptedException e)
-            {
-               throw new IOException(e);
-            }
+            // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd         
+            cfs.indexManager.flushIndexes();
+           
 
             cfs.replaceCompactedSSTables(Arrays.asList(sstable), results);
         }

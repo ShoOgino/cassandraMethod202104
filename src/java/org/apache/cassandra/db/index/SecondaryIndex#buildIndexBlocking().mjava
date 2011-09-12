@@ -2,13 +2,18 @@
      * Builds the index using the data in the underlying CFS
      * Blocks till it's complete
      */
-    protected void buildIndexBlocking()
+    protected void buildIndexBlocking() throws IOException
     {
         logger.info(String.format("Submitting index build of %s for data in %s",
-                baseCfs.metadata.comparator.getString(columnDef.name), StringUtils.join(baseCfs.getSSTables(), ", ")));
+                getIndexName(), StringUtils.join(baseCfs.getSSTables(), ", ")));
 
+        SortedSet<ByteBuffer> columnNames = new TreeSet<ByteBuffer>();
+        
+        for (ColumnDefinition cdef : columnDefs)
+            columnNames.add(cdef.name);
+        
         SecondaryIndexBuilder builder = new SecondaryIndexBuilder(baseCfs,
-                                                                  new TreeSet<ByteBuffer>(Collections.singleton(columnDef.name)),
+                                                                  columnNames,
                                                                   new ReducingKeyIterator(baseCfs.getSSTables()));
 
         Future<?> future = CompactionManager.instance.submitIndexBuild(builder);
@@ -16,7 +21,17 @@
         {
             future.get();
             forceBlockingFlush();
-            SystemTable.setIndexBuilt(baseCfs.table.name, getIndexName());
+            
+            // Mark all indexed columns as built
+            if (this instanceof PerRowSecondaryIndex)
+            {
+                for (ByteBuffer columnName : columnNames)
+                    SystemTable.setIndexBuilt(baseCfs.table.name, getIndexName()+ByteBufferUtil.string(columnName));
+            }
+            else
+            {
+                SystemTable.setIndexBuilt(baseCfs.table.name, getIndexName());
+            }
         }
         catch (InterruptedException e)
         {
@@ -24,8 +39,8 @@
         }
         catch (ExecutionException e)
         {
-            throw new RuntimeException(e);
+            throw new IOException(e);
         }
-        logger.info("Index build of " + baseCfs.metadata.comparator.getString(columnDef.name) + " complete");
+        logger.info("Index build of " + getIndexName() + " complete");
     }
 

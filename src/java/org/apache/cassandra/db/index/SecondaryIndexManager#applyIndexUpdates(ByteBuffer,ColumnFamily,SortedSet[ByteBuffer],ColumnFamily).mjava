@@ -1,17 +1,26 @@
     /**
-     * removes obsolete index entries and creates new ones for the given row key
+     * Removes obsolete index entries and creates new ones for the given row key
      * and mutated columns.
      * 
-     * @return list of full (index CF) memtables
+     * For columns whos underlying index type has the isRowLevelIndex() flag set to true this function will
+     * call the 
+     * 
+     * @param rowKey the row key
+     * @param cf the current rows data
+     * @param mutatedIndexedColumns the set of columns that were changed or added
+     * @param oldIndexedColumns the columns what were deleted
+     * @throws IOException 
      */
     public void applyIndexUpdates(ByteBuffer rowKey,
-                                                 ColumnFamily cf,
-                                                 SortedSet<ByteBuffer> mutatedIndexedColumns,
-                                                 ColumnFamily oldIndexedColumns)
+                                  ColumnFamily cf,
+                                  SortedSet<ByteBuffer> mutatedIndexedColumns,
+                                  ColumnFamily oldIndexedColumns) throws IOException
     {
-        //Track the indexes we touch so we can commit the row across them
-        Set<SecondaryIndex> indexesTouched = new HashSet<SecondaryIndex>(indexesByColumn.size());
-
+        
+        // Identify the columns with PerRowSecondaryIndexes
+        // we need to make sure this is only called once
+        Set<Class<? extends SecondaryIndex>> appliedRowLevelIndexes = null;       
+      
         // remove the old index entries
         if (oldIndexedColumns != null)
         {
@@ -25,17 +34,27 @@
                 
                 //this was previously deleted so should not be in index
                 if (column.isMarkedForDelete())
-                    continue;
-           
+                    continue;              
+                
                 SecondaryIndex index = getIndexForColumn(columnName);
-                assert index != null;
+                assert index != null;               
 
-                indexesTouched.add(index);
+                //Update entire row if we encounter a row level index
+                if (index instanceof PerRowSecondaryIndex)
+                {
+                    if (appliedRowLevelIndexes == null)
+                        appliedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
+                    else
+                        if (appliedRowLevelIndexes.add(index.getClass()))
+                            ((PerRowSecondaryIndex)index).applyIndexUpdates(rowKey, cf, mutatedIndexedColumns, oldIndexedColumns);
+                }
+                else
+                {
+                    DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
 
-                DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
-
-                index.deleteColumn(valueKey, rowKey, column);
-            }           
+                    ((PerColumnSecondaryIndex)index).deleteColumn(valueKey, rowKey, column);
+                }
+            }
         }
         
         //insert new columns
@@ -48,17 +67,21 @@
             SecondaryIndex index = getIndexForColumn(columnName);
             assert index != null;
 
-            indexesTouched.add(index);
-
-            DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
-                        
-            index.insertColumn(valueKey, rowKey, column);         
-        }
-        
-        //Commit the row across all indexes
-        for (SecondaryIndex index : indexesTouched)
-        {
-            index.commitRow(rowKey);
+            //Update entire row if we encounter a row level index
+            if (index instanceof PerRowSecondaryIndex)
+            {
+                if (appliedRowLevelIndexes == null)
+                    appliedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
+                else
+                    if (appliedRowLevelIndexes.add(index.getClass()))
+                        ((PerRowSecondaryIndex)index).applyIndexUpdates(rowKey, cf, mutatedIndexedColumns, oldIndexedColumns);
+            }
+            else
+            {
+                DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
+                
+                ((PerColumnSecondaryIndex)index).insertColumn(valueKey, rowKey, column);         
+            }
         }
     }
 
