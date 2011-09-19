@@ -1,0 +1,24 @@
+    private void close(boolean success)
+    {
+        // Though unlikely, it is possible for close to be called multiple
+        // time, if the endpoint die at the exact wrong time for instance.
+        if (!isClosed.compareAndSet(false, true))
+        {
+            logger.debug("StreamOutSession {} already closed", getSessionId());
+            return;
+        }
+
+        Gossiper.instance.unregister(this);
+        FailureDetector.instance.unregisterFailureDetectionEventListener(this);
+
+        // Release reference on last file (or any uncompleted ones)
+        for (PendingFile file : files.values())
+            file.sstable.releaseReference();
+        streams.remove(context);
+        // Instead of just not calling the callback on failure, we could have
+        // allow to register a specific callback for failures, but we leave
+        // that to a future ticket (likely CASSANDRA-3112)
+        if (callback != null && success)
+            callback.run();
+    }
+
