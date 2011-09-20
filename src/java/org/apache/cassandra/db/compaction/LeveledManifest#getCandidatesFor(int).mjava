@@ -1,25 +1,21 @@
     private Collection<SSTableReader> getCandidatesFor(int level)
     {
         assert !generations[level].isEmpty();
+        logger.debug("Choosing candidates for L{}", level);
 
         if (level == 0)
         {
             // because L0 files may overlap each other, we treat compactions there specially:
             // a L0 compaction also checks other L0 files for overlap.
             Set<SSTableReader> candidates = new HashSet<SSTableReader>();
-            Set<SSTableReader> remaining = new HashSet<SSTableReader>(generations[0]);
-
-            while (!remaining.isEmpty())
-            {
-                // pick a random sstable from L0, and any that overlap with it
-                List<SSTableReader> L0 = overlapping(remaining.iterator().next(), remaining);
-                // add the overlapping ones from L1
-                for (SSTableReader sstable : L0)
-                {
-                    candidates.addAll(overlapping(sstable, generations[1]));
-                    remaining.remove(sstable);
-                }
-            }
+            // pick the oldest sstable from L0, and any that overlap with it
+            List<SSTableReader> ageSortedSSTables = new ArrayList<SSTableReader>(generations[0]);
+            Collections.sort(ageSortedSSTables, SSTable.maxTimestampComparator);
+            List<SSTableReader> L0 = overlapping(ageSortedSSTables.get(0), generations[0]);
+            L0 = L0.size() > MAX_COMPACTING_L0 ? L0.subList(0, MAX_COMPACTING_L0) : L0;
+            // add the overlapping ones from L1
+            for (SSTableReader sstable : L0)
+                candidates.addAll(overlapping(sstable, generations[1]));
             return candidates;
         }
 
