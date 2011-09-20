@@ -1,17 +1,15 @@
     public synchronized void serialize()
     {
-        String dataFileLocation = getDataFilePrefix(cfs);
-        String tempManifestFileName = dataFileLocation + cfs.getColumnFamilyName() + "-" + "tmp.json";
-        String manifestFileName = dataFileLocation + cfs.getColumnFamilyName() + ".json";
-        String oldManifestFileName = dataFileLocation + cfs.getColumnFamilyName() + "-" + "old.json";
-
-        File tmpManifest = new File(tempManifestFileName);
+        File manifestFile = tryGetManifest(cfs);
+        if (manifestFile == null)
+            manifestFile = new File(new File(DatabaseDescriptor.getAllDataFileLocations()[0], cfs.table.name), cfs.columnFamily + ".json");
+        File oldFile = new File(manifestFile.getPath().replace(".json", "-old.json"));
+        File tmpFile = new File(manifestFile.getPath().replace(".json", "-tmp.json"));
 
         JsonFactory f = new JsonFactory();
-
         try
         {
-            JsonGenerator g = f.createJsonGenerator(tmpManifest, JsonEncoding.UTF8);
+            JsonGenerator g = f.createJsonGenerator(tmpFile, JsonEncoding.UTF8);
             g.useDefaultPrettyPrinter();
             g.writeStartObject();
             g.writeArrayFieldStart("generations");
@@ -29,18 +27,18 @@
             g.writeEndArray(); // for field generations
             g.writeEndObject(); // write global object
             g.close();
+
+            if (oldFile.exists() && manifestFile.exists())
+                FileUtils.deleteWithConfirm(oldFile);
+            if (manifestFile.exists())
+                FileUtils.renameWithConfirm(manifestFile, oldFile);
+            assert tmpFile.exists();
+            FileUtils.renameWithConfirm(tmpFile, manifestFile);
+            logger.debug("Saved manifest {}", manifestFile);
         }
         catch (IOException e)
         {
-            e.printStackTrace();
+            throw new IOError(e);
         }
-        File oldFile = new File(oldManifestFileName);
-        if (oldFile.exists())
-            oldFile.delete();
-        File currentManifest = new File(manifestFileName);
-        if (currentManifest.exists())
-            currentManifest.renameTo(new File(oldManifestFileName));
-        if (tmpManifest.exists())
-            tmpManifest.renameTo(new File(manifestFileName));
     }
 
