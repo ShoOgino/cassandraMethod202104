@@ -4,13 +4,15 @@
         RowMutation rm;
         CounterMutation cm;
 
+        NodeId id1 = NodeId.getLocalId();
+
         rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("key1"));
         rm.addCounter(new QueryPath("Counter1", null, ByteBufferUtil.bytes("Column1")), 3);
         cm = new CounterMutation(rm, ConsistencyLevel.ONE);
         cm.apply();
 
         NodeId.renewLocalId(2L); // faking time of renewal for test
-        NodeId id1 = NodeId.getLocalId();
+        NodeId id2 = NodeId.getLocalId();
 
         rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("key1"));
         rm.addCounter(new QueryPath("Counter1", null, ByteBufferUtil.bytes("Column1")), 4);
@@ -18,7 +20,7 @@
         cm.apply();
 
         NodeId.renewLocalId(4L); // faking time of renewal for test
-        NodeId id2 = NodeId.getLocalId();
+        NodeId id3 = NodeId.getLocalId();
 
         rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("key1"));
         rm.addCounter(new QueryPath("Counter1", null, ByteBufferUtil.bytes("Column1")), 5);
@@ -26,19 +28,38 @@
         cm = new CounterMutation(rm, ConsistencyLevel.ONE);
         cm.apply();
 
-        RowMutation reprm = cm.makeReplicationMutation();
-        ColumnFamily cf = reprm.getColumnFamilies().iterator().next();
-        CounterColumn.removeOldShards(cf, Integer.MAX_VALUE);
+        DecoratedKey dk = Util.dk("key1");
+        ColumnFamily cf = Util.getColumnFamily(Table.open("Keyspace1"), dk, "Counter1");
+
+        // First merges old shards
+        CounterColumn.mergeAndRemoveOldShards(dk, cf, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
+        long now = System.currentTimeMillis();
         IColumn c = cf.getColumn(ByteBufferUtil.bytes("Column1"));
         assert c != null;
         assert c instanceof CounterColumn;
-
         assert ((CounterColumn)c).total() == 12L;
         ContextState s = new ContextState(c.value());
         assert s.getNodeId().equals(id1);
-        assert s.getCount() == 7;
+        assert s.getCount() == 0L;
+        assert -s.getClock() > now - 1000 : " >";
+        assert -s.getClock() <= now;
         s.moveToNext();
         assert s.getNodeId().equals(id2);
-        assert s.getCount() == 5;
+        assert s.getCount() == 0L;
+        assert -s.getClock() > now - 1000;
+        assert -s.getClock() <= now;
+        s.moveToNext();
+        assert s.getNodeId().equals(id3);
+        assert s.getCount() == 12L;
+
+        // Then collect old shards
+        CounterColumn.mergeAndRemoveOldShards(dk, cf, Integer.MAX_VALUE, Integer.MIN_VALUE, false);
+        c = cf.getColumn(ByteBufferUtil.bytes("Column1"));
+        assert c != null;
+        assert c instanceof CounterColumn;
+        assert ((CounterColumn)c).total() == 12L;
+        s = new ContextState(c.value());
+        assert s.getNodeId().equals(id3);
+        assert s.getCount() == 12L;
     }
 
