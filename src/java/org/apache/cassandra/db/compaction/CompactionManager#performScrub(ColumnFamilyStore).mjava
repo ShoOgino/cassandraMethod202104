@@ -1,44 +1,11 @@
-    public void performScrub(final ColumnFamilyStore cfStore) throws InterruptedException, ExecutionException
+    public void performScrub(ColumnFamilyStore cfStore) throws InterruptedException, ExecutionException
     {
-        Callable<Object> runnable = new Callable<Object>()
+        performAllSSTableOperation(cfStore, new AllSSTablesOperation()
         {
-            public Object call() throws IOException
+            public void perform(ColumnFamilyStore store, Collection<SSTableReader> sstables) throws IOException
             {
-                // acquire the write lock to schedule all sstables
-                compactionLock.writeLock().lock();
-                try
-                {
-                    Collection<SSTableReader> toscrub = cfStore.getDataTracker().markCompacting(cfStore.getSSTables(), 1, Integer.MAX_VALUE);
-                    if (toscrub == null || toscrub.isEmpty())
-                        return this;
-                    try
-                    {
-                        // downgrade the lock acquisition
-                        compactionLock.readLock().lock();
-                        compactionLock.writeLock().unlock();
-                        try
-                        {
-                            doScrub(cfStore, toscrub);
-                        }
-                        finally
-                        {
-                            compactionLock.readLock().unlock();
-                        }
-                    }
-                    finally
-                    {
-                        cfStore.getDataTracker().unmarkCompacting(toscrub);
-                    }
-                    return this;
-                }
-                finally
-                {
-                    // we probably already downgraded
-                    if (compactionLock.writeLock().isHeldByCurrentThread())
-                        compactionLock.writeLock().unlock();
-                }
+                doScrub(store, sstables);
             }
-        };
-        executor.submit(runnable).get();
+        });
     }
 
