@@ -1,36 +1,35 @@
-    public Future<Object> submitMaximal(final ColumnFamilyStore cfStore, final int gcBefore)
+    public Future<?> submitMaximal(final ColumnFamilyStore cfStore, final int gcBefore)
     {
-        Callable<Object> callable = new Callable<Object>()
+        Runnable runnable = new WrappedRunnable()
         {
-            public Object call() throws IOException
+            protected void runMayThrow() throws IOException
             {
                 // acquire the write lock long enough to schedule all sstables
                 compactionLock.writeLock().lock();
                 try
                 {
-                    AbstractCompactionStrategy strategy = cfStore.getCompactionStrategy();
-                    for (AbstractCompactionTask task : strategy.getMaximalTasks(gcBefore))
+                    AbstractCompactionTask task = cfStore.getCompactionStrategy().getMaximalTask(gcBefore);
+                    if (task == null)
+                        return;
+                    if (!task.markSSTablesForCompaction(0, Integer.MAX_VALUE))
+                        return;
+                    try
                     {
-                        if (!task.markSSTablesForCompaction(0, Integer.MAX_VALUE))
-                            return this;
+                        // downgrade the lock acquisition
+                        compactionLock.readLock().lock();
+                        compactionLock.writeLock().unlock();
                         try
                         {
-                            // downgrade the lock acquisition
-                            compactionLock.readLock().lock();
-                            compactionLock.writeLock().unlock();
-                            try
-                            {
-                                return task.execute(executor);
-                            }
-                            finally
-                            {
-                                compactionLock.readLock().unlock();
-                            }
+                            task.execute(executor);
                         }
                         finally
                         {
-                            task.unmarkSSTables();
+                            compactionLock.readLock().unlock();
                         }
+                    }
+                    finally
+                    {
+                        task.unmarkSSTables();
                     }
                 }
                 finally
@@ -39,9 +38,8 @@
                     if (compactionLock.writeLock().isHeldByCurrentThread())
                         compactionLock.writeLock().unlock();
                 }
-                return this;
             }
         };
-        return executor.submit(callable);
+        return executor.submit(runnable);
     }
 

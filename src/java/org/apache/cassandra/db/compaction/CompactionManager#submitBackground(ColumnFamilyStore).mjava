@@ -3,45 +3,36 @@
      * It's okay to over-call (within reason) since the compactions are single-threaded,
      * and if a call is unnecessary, it will just be no-oped in the bucketing phase.
      */
-    public Future<Integer> submitBackground(final ColumnFamilyStore cfs)
+    public Future<?> submitBackground(final ColumnFamilyStore cfs)
     {
-        Callable<Integer> callable = new Callable<Integer>()
+        Runnable runnable = new WrappedRunnable()
         {
-            public Integer call() throws IOException
+            protected void runMayThrow() throws IOException
             {
                 compactionLock.readLock().lock();
                 try
                 {
-                    boolean taskExecuted = false;
                     AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
-                    List<AbstractCompactionTask> tasks = strategy.getBackgroundTasks(getDefaultGcBefore(cfs));
-                    for (AbstractCompactionTask task : tasks)
+                    AbstractCompactionTask task = strategy.getNextBackgroundTask(getDefaultGcBefore(cfs));
+                    if (task == null || !task.markSSTablesForCompaction())
+                        return;
+
+                    try
                     {
-                        if (!task.markSSTablesForCompaction())
-                            continue;
-
-                        taskExecuted = true;
-                        try
-                        {
-                            task.execute(executor);
-                        }
-                        finally
-                        {
-                            task.unmarkSSTables();
-                        }
+                        task.execute(executor);
                     }
-
-                    // newly created sstables might have made other compactions eligible
-                    if (taskExecuted)
-                        submitBackground(cfs);
+                    finally
+                    {
+                        task.unmarkSSTables();
+                    }
+                    submitBackground(cfs);
                 }
                 finally 
                 {
                     compactionLock.readLock().unlock();
                 }
-                return 0;
             }
         };
-        return executor.submit(callable);
+        return executor.submit(runnable);
     }
 
