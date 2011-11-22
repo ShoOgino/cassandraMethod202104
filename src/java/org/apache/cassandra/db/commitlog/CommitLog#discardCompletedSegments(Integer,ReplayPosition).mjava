@@ -1,19 +1,53 @@
-    /*
-     * This is called on Memtable flush to add to the commit log
-     * a token indicating that this column family has been flushed.
-     * The bit flag associated with this column family is set in the
-     * header and this is used to decide if the log file can be deleted.
-    */
+    /**
+     * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
+     * given. Discards any commit log segments that are no longer used.
+     *
+     * @param cfId    the column family ID that was flushed
+     * @param context the replay position of the flush
+     */
     public void discardCompletedSegments(final Integer cfId, final ReplayPosition context) throws IOException
     {
         Callable task = new Callable()
         {
             public Object call() throws IOException
             {
-                discardCompletedSegmentsInternal(context, cfId);
+                logger.debug("discard completed log segments for {}, column family {}", context, cfId);
+
+                // Go thru the active segment files, which are ordered oldest to newest, marking the
+                // flushed CF as clean, until we reach the segment file containing the ReplayPosition passed
+                // in the arguments. Any segments that become unused after they are marked clean will be
+                // recycled or discarded.
+                for (Iterator<CommitLogSegment> iter = allocator.activeSegments.iterator(); iter.hasNext(); )
+                {
+                    CommitLogSegment segment = iter.next();
+                    segment.markClean(cfId, context);
+
+                    // If the segment is no longer needed, and we have another spare segment in the hopper
+                    // (to keep the last segment from getting discarded), pursue either recycling or deleting
+                    // this segment file.
+                    if (segment.isUnused() && iter.hasNext())
+                    {
+                        logger.debug("Commit log segment {} is unused", segment);
+                        iter.remove();
+                        allocator.recycleSegment(segment);
+                    }
+                    else
+                    {
+                        if (logger.isDebugEnabled())
+                            logger.debug(String.format("Not safe to delete commit log %s; dirty is %s; hasNext: %s",
+                                                       segment, segment.dirtyString(), iter.hasNext()));
+                    }
+
+                    // Don't mark or try to delete any newer segments once we've reached the one containing the
+                    // position of the flush.
+                    if (segment.contains(context))
+                        break;
+                }
+                
                 return null;
             }
         };
+        
         try
         {
             executor.submit(task).get();

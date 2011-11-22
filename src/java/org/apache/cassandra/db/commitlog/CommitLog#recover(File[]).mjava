@@ -1,5 +1,10 @@
-    // returns the number of replayed mutation (useful for tests in particular)
-    public static int recover(File[] clogs) throws IOException
+    /**
+     * Perform recovery on a list of commit log files.
+     *
+     * @param clogs   the list of commit log files to replay
+     * @return the number of mutations replayed
+     */
+    public int recover(File[] clogs) throws IOException
     {
         final Set<Table> tablesRecovered = new HashSet<Table>();
         List<Future<?>> futures = new ArrayList<Future<?>>();
@@ -24,6 +29,8 @@
         Checksum checksum = new CRC32();
         for (final File file : clogs)
         {
+            logger.info("Replaying " + file.getPath());
+
             final long segment = CommitLogSegment.idFromFilename(file.getName());
 
             RandomAccessReader reader = RandomAccessReader.open(new File(file.getAbsolutePath()), true);
@@ -64,6 +71,12 @@
                     {
                         // any of the reads may hit EOF
                         serializedSize = reader.readInt();
+                        if (serializedSize == CommitLog.END_OF_SEGMENT_MARKER)
+                        {
+                            logger.debug("Encountered end of segment marker at " + reader.getFilePointer());
+                            break;
+                        }
+
                         // RowMutation must be at LEAST 10 bytes:
                         // 3 each for a non-empty Table and Key (including the 2-byte length from
                         // writeUTF/writeWithShortLength) and 4 bytes for column count.
@@ -120,7 +133,7 @@
                         logger.debug(String.format("replaying mutation for %s.%s: %s",
                                                     rm.getTable(),
                                                     ByteBufferUtil.bytesToHex(rm.key()),
-                                                    "{" + StringUtils.join(rm.getColumnFamilies(), ", ") + "}"));
+                                                    "{" + StringUtils.join(rm.getColumnFamilies().iterator(), ", ") + "}"));
 
                     final long entryLocation = reader.getFilePointer();
                     final RowMutation frm = rm;
@@ -186,6 +199,8 @@
         for (Table table : tablesRecovered)
             futures.addAll(table.flush());
         FBUtilities.waitOnFutures(futures);
+
+        allocator.enableReserveSegmentCreation();
 
         return replayedCount.get();
     }

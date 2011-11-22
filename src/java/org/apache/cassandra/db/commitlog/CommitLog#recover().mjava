@@ -1,31 +1,34 @@
-    public static int recover() throws IOException
+    /**
+     * Perform recovery on commit logs located in the directory specified by the config file.
+     *
+     * @return the number of mutations replayed
+     */
+    public int recover() throws IOException
     {
-        String directory = DatabaseDescriptor.getCommitLogLocation();
-        File[] files = new File(directory).listFiles(new FilenameFilter()
+        File[] files = new File(DatabaseDescriptor.getCommitLogLocation()).listFiles(new FilenameFilter()
         {
             public boolean accept(File dir, String name)
             {
                 // we used to try to avoid instantiating commitlog (thus creating an empty segment ready for writes)
                 // until after recover was finished.  this turns out to be fragile; it is less error-prone to go
                 // ahead and allow writes before recover(), and just skip active segments when we do.
-                return CommitLogSegment.possibleCommitLogFile(name) && !instance.manages(name);
+                return CommitLogSegment.possibleCommitLogFile(name) && !instance.allocator.manages(name);
             }
         });
+
         if (files.length == 0)
         {
             logger.info("No commitlog files found; skipping replay");
             return 0;
         }
-
+        
         Arrays.sort(files, new FileUtils.FileComparator());
         logger.info("Replaying " + StringUtils.join(files, ", "));
         int replayed = recover(files);
-        for (File f : files)
-        {
-            if (!f.delete())
-                logger.error("Unable to remove " + f + "; you should remove it manually or next restart will replay it again (harmless, but time-consuming)");
-        }
         logger.info("Log replay complete, " + replayed + " replayed mutations");
+
+        for (File f : files)
+            CommitLog.instance.allocator.recycleSegment(f);
         return replayed;
     }
 
