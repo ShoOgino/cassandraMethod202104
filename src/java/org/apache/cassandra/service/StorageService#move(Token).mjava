@@ -31,8 +31,8 @@
 
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
 
-        Map<String, Multimap<InetAddress, Range>> rangesToFetch = new HashMap<String, Multimap<InetAddress, Range>>();
-        Map<String, Multimap<Range, InetAddress>> rangesToStreamByTable = new HashMap<String, Multimap<Range, InetAddress>>();
+        Map<String, Multimap<InetAddress, Range<Token>>> rangesToFetch = new HashMap<String, Multimap<InetAddress, Range<Token>>>();
+        Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByTable = new HashMap<String, Multimap<Range<Token>, InetAddress>>();
 
         TokenMetadata tokenMetaClone = tokenMetadata_.cloneAfterAllSettled();
 
@@ -44,25 +44,25 @@
             AbstractReplicationStrategy strategy = Table.open(table).getReplicationStrategy();
 
             // getting collection of the currently used ranges by this keyspace
-            Collection<Range> currentRanges = getRangesForEndpoint(table, localAddress);
+            Collection<Range<Token>> currentRanges = getRangesForEndpoint(table, localAddress);
             // collection of ranges which this node will serve after move to the new token
-            Collection<Range> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata_, newToken, localAddress);
+            Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata_, newToken, localAddress);
 
             // ring ranges and endpoints associated with them
             // this used to determine what nodes should we ping about range data
-            Multimap<Range, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetadata_);
+            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetadata_);
 
             // calculated parts of the ranges to request/stream from/to nodes in the ring
-            Pair<Set<Range>, Set<Range>> rangesPerTable = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
+            Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerTable = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
 
             /**
              * In this loop we are going through all ranges "to fetch" and determining
              * nodes in the ring responsible for data we are interested in
              */
-            Multimap<Range, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
-            for (Range toFetch : rangesPerTable.right)
+            Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
+            for (Range<Token> toFetch : rangesPerTable.right)
             {
-                for (Range range : rangeAddresses.keySet())
+                for (Range<Token> range : rangeAddresses.keySet())
                 {
                     if (range.contains(toFetch))
                     {
@@ -75,9 +75,9 @@
 
             // calculating endpoints to stream current ranges to if needed
             // in some situations node will handle current ranges as part of the new ranges
-            Multimap<Range, InetAddress> rangeWithEndpoints = HashMultimap.create();
+            Multimap<Range<Token>, InetAddress> rangeWithEndpoints = HashMultimap.create();
 
-            for (Range toStream : rangesPerTable.left)
+            for (Range<Token> toStream : rangesPerTable.left)
             {
                 Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetadata_));
                 Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
@@ -87,7 +87,7 @@
             // associating table with range-to-endpoints map
             rangesToStreamByTable.put(table, rangeWithEndpoints);
 
-            Multimap<InetAddress, Range> workMap = BootStrapper.getWorkMap(rangesToFetchWithPreferredEndpoints);
+            Multimap<InetAddress, Range<Token>> workMap = BootStrapper.getWorkMap(rangesToFetchWithPreferredEndpoints);
             rangesToFetch.put(table, workMap);
 
             if (logger_.isDebugEnabled())

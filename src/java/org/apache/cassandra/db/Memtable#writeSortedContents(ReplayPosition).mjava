@@ -3,8 +3,12 @@
         logger.info("Writing " + this);
 
         long keySize = 0;
-        for (DecoratedKey key : columnFamilies.keySet())
-            keySize += key.key.remaining();
+        for (RowPosition key : columnFamilies.keySet())
+        {
+            //  make sure we don't write non-sensical keys
+            assert key instanceof DecoratedKey;
+            keySize += ((DecoratedKey)key).key.remaining();
+        }
         long estimatedSize = (long) ((keySize // index entries
                                       + keySize // keys in data file
                                       + currentThroughput.get()) // data
@@ -16,7 +20,7 @@
         {
             // (we can't clear out the map as-we-go to free up memory,
             //  since the memtable is being used for queries in the "pending flush" category)
-            for (Map.Entry<DecoratedKey, ColumnFamily> entry : columnFamilies.entrySet())
+            for (Map.Entry<RowPosition, ColumnFamily> entry : columnFamilies.entrySet())
             {
                 ColumnFamily cf = entry.getValue();
                 if (cf.isMarkedForDelete())
@@ -27,7 +31,7 @@
                     // is a CF level tombstone to ensure the delete makes it into an SSTable.
                     ColumnFamilyStore.removeDeletedColumnsOnly(cf, Integer.MIN_VALUE);
                 }
-                writer.append(entry.getKey(), cf);
+                writer.append((DecoratedKey)entry.getKey(), cf);
             }
 
             ssTable = writer.closeAndOpenReader();
