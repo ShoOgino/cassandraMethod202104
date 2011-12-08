@@ -1,29 +1,23 @@
-    private void forwardToLocalNodes(Message message, byte[] forwardBytes) throws UnknownHostException
+    /**
+     * Older version (< 1.0) will not send this message at all, hence we don't
+     * need to check the version of the data.
+     */
+    private void forwardToLocalNodes(Message message, byte[] forwardBytes) throws IOException
     {
+        DataInputStream dis = new DataInputStream(new FastByteArrayInputStream(forwardBytes));
+        int size = dis.readInt();
+        
         // remove fwds from message to avoid infinite loop
         Message messageCopy = message.withHeaderRemoved(RowMutation.FORWARD_HEADER);
-
-        int bytesPerInetAddress = FBUtilities.getBroadcastAddress().getAddress().length;
-        assert forwardBytes.length >= bytesPerInetAddress;
-        assert forwardBytes.length % bytesPerInetAddress == 0;
-
-        int offset = 0;
-        byte[] addressBytes = new byte[bytesPerInetAddress];
-
-        // Send a message to each of the addresses on our Forward List
-        while (offset < forwardBytes.length)
+        for (int i = 0; i < size; i++)
         {
-            System.arraycopy(forwardBytes, offset, addressBytes, 0, bytesPerInetAddress);
-            InetAddress address = InetAddress.getByAddress(addressBytes);
-
+            // Send a message to each of the addresses on our Forward List
+            InetAddress address = CompactEndpointSerializationHelper.deserialize(dis);
+            String id = dis.readUTF();
             if (logger_.isDebugEnabled())
-                logger_.debug("Forwarding message to " + address);
-
-            // Send the original message to the address specified by the FORWARD_HINT
+                logger_.debug("Forwarding message to " + address + " with= ID: " + id);
             // Let the response go back to the coordinator
-            MessagingService.instance().sendOneWay(messageCopy, address);
-
-            offset += bytesPerInetAddress;
+            MessagingService.instance().sendOneWay(messageCopy, id, address);
         }
     }
 
