@@ -1,0 +1,22 @@
+    private void assertIndexQueryWorks(ColumnFamilyStore indexedCFS)
+    {
+        assert "Indexed1".equals(indexedCFS.getColumnFamilyName());
+
+        // make sure all sstables including 2ary indexes load from disk
+        indexedCFS.clearUnsafe();
+        for (ColumnFamilyStore indexCfs : indexedCFS.indexManager.getIndexesBackedByCfs())
+        {
+            indexCfs.clearUnsafe();
+            indexCfs.loadNewSSTables(); // v1.0.4 would fail here (see CASSANDRA-3540)
+        }
+        indexedCFS.loadNewSSTables();
+
+        // query using index to see if sstable for secondary index opens
+        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"), IndexOperator.EQ, ByteBufferUtil.bytes(1L));
+        IndexClause clause = new IndexClause(Arrays.asList(expr), ByteBufferUtil.EMPTY_BYTE_BUFFER, 100);
+        IPartitioner p = StorageService.getPartitioner();
+        Range range = new Range(p.getMinimumToken(), p.getMinimumToken());
+        List<Row> rows = indexedCFS.search(clause, range, new IdentityQueryFilter());
+        assert rows.size() == 1;
+    }
+
