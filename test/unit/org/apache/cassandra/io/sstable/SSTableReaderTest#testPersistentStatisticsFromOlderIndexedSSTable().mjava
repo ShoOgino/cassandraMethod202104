@@ -1,0 +1,31 @@
+    @Test
+    public void testPersistentStatisticsFromOlderIndexedSSTable() throws IOException, ExecutionException, InterruptedException
+    {
+        // copy legacy indexed sstables
+        String root = System.getProperty("legacy-sstable-root");
+        assert root != null;
+        File rootDir = new File(root + File.separator + "hb" + File.separator + "Keyspace1");
+        assert rootDir.isDirectory();
+
+        String[] destDirs = DatabaseDescriptor.getAllDataFileLocationsForTable("Keyspace1");
+        assert destDirs != null;
+        assert destDirs.length > 0;
+
+        FileUtils.createDirectory(destDirs[0]);
+        for (File srcFile : rootDir.listFiles())
+        {
+            if (!srcFile.getName().startsWith("Indexed1"))
+                continue;
+            File destFile = new File(destDirs[0] + File.separator + srcFile.getName());
+            CLibrary.createHardLinkWithExec(srcFile, destFile);
+
+            destFile = new File(destDirs[0] + File.separator + srcFile.getName());
+
+            assert destFile.exists() : destFile.getAbsoluteFile();
+        }
+        ColumnFamilyStore store = Table.open("Keyspace1").getColumnFamilyStore("Indexed1");
+
+        // check if opening and querying works
+        assertIndexQueryWorks(store);
+    }
+
