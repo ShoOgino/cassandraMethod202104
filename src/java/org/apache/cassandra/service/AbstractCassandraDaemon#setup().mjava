@@ -7,10 +7,10 @@
      */
     protected void setup() throws IOException
     {
-    	logger.info("JVM vendor/version: {}/{}", System.getProperty("java.vm.name"), System.getProperty("java.version") );
+        logger.info("JVM vendor/version: {}/{}", System.getProperty("java.vm.name"), System.getProperty("java.version") );
         logger.info("Heap size: {}/{}", Runtime.getRuntime().totalMemory(), Runtime.getRuntime().maxMemory());
-		logger.info("Classpath: {}", System.getProperty("java.class.path"));
-    	CLibrary.tryMlockall();
+        logger.info("Classpath: {}", System.getProperty("java.class.path"));
+        CLibrary.tryMlockall();
 
         listenPort = DatabaseDescriptor.getRpcPort();
         listenAddr = DatabaseDescriptor.getRpcAddress();
@@ -29,7 +29,20 @@
                 }
             }
         });
-        
+
+        // check all directories(data, commitlog, saved cache) for existence and permission
+        Iterable<String> dirs = Iterables.concat(Arrays.asList(DatabaseDescriptor.getAllDataFileLocations()),
+                                                 Arrays.asList(new String[] {DatabaseDescriptor.getCommitLogLocation(),
+                                                                             DatabaseDescriptor.getSavedCachesLocation()}));
+        for (String dataDir : dirs)
+        {
+            logger.debug("Checking directory {}", dataDir);
+            File dir = new File(dataDir);
+            if (dir.exists())
+                assert dir.isDirectory() && dir.canRead() && dir.canWrite() && dir.canExecute()
+                    : String.format("Directory %s is not accessible.", dataDir);
+        }
+
         // check the system table to keep user from shooting self in foot by changing partitioner, cluster name, etc.
         // we do a one-off scrub of the system table first; we can't load the list of the rest of the tables,
         // until system table is opened.
