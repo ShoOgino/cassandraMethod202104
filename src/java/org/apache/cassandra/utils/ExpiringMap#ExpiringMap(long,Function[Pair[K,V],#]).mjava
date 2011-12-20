@@ -1,12 +1,12 @@
     /**
      *
-     * @param expiration the TTL for objects in the cache in milliseconds
+     * @param defaultExpiration the TTL for objects in the cache in milliseconds
      */
-    public ExpiringMap(long expiration, final Function<Pair<K,V>, ?> postExpireHook)
+    public ExpiringMap(long defaultExpiration, final Function<Pair<K,V>, ?> postExpireHook)
     {
-        this.expiration = expiration;
+        this.defaultExpiration = defaultExpiration;
 
-        if (expiration <= 0)
+        if (defaultExpiration <= 0)
         {
             throw new IllegalArgumentException("Argument specified must be a positive number");
         }
@@ -17,17 +17,20 @@
             public void run()
             {
                 long start = System.currentTimeMillis();
+                int n = 0;
                 for (Map.Entry<K, CacheableObject<V>> entry : cache.entrySet())
                 {
-                    if (entry.getValue().isReadyToDie(start))
+                    if (entry.getValue().isReadyToDieAt(start))
                     {
                         cache.remove(entry.getKey());
+                        n++;
                         if (postExpireHook != null)
                             postExpireHook.apply(new Pair<K, V>(entry.getKey(), entry.getValue().getValue()));
                     }
                 }
+                logger.trace("Expired {} entries", n);
             }
         };
-        timer.schedule(task, expiration / 2, expiration / 2);
+        timer.schedule(task, defaultExpiration / 2, defaultExpiration / 2);
     }
 
