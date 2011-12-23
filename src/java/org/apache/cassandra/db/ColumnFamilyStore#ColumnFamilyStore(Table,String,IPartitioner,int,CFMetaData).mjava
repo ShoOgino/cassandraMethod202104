@@ -1,14 +1,12 @@
     private ColumnFamilyStore(Table table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
     {
         assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
+
         this.table = table;
         columnFamily = columnFamilyName;
         this.metadata = metadata;
         this.minCompactionThreshold = new DefaultInteger(metadata.getMinCompactionThreshold());
         this.maxCompactionThreshold = new DefaultInteger(metadata.getMaxCompactionThreshold());
-        this.rowCacheSaveInSeconds = new DefaultInteger(metadata.getRowCacheSavePeriodInSeconds());
-        this.keyCacheSaveInSeconds = new DefaultInteger(metadata.getKeyCacheSavePeriodInSeconds());
-        this.rowCacheKeysToSave = new DefaultInteger(metadata.getRowCacheKeysToSave());
         this.partitioner = partitioner;
         this.indexManager = new SecondaryIndexManager(this);
         fileIndexGenerator.set(generation);
@@ -16,14 +14,9 @@
         if (logger.isDebugEnabled())
             logger.debug("Starting CFS {}", columnFamily);
 
-        ICache<Pair<Descriptor, DecoratedKey>, Long> kc = ConcurrentLinkedHashCache.create(0, table.name, columnFamilyName);
-        keyCache = new AutoSavingKeyCache<Pair<Descriptor, DecoratedKey>, Long>(kc, table.name, columnFamilyName);
-        ICache<DecoratedKey, ColumnFamily> rc = metadata.getRowCacheProvider().create(0, table.name, columnFamilyName);
-        rowCache = new AutoSavingRowCache<DecoratedKey, ColumnFamily>(rc, table.name, columnFamilyName);
-
         // scan for sstables corresponding to this cf and load them
         data = new DataTracker(this);
-        Set<DecoratedKey> savedKeys = keyCache.readSaved();
+        Set<DecoratedKey> savedKeys = CacheService.instance.keyCache.readSaved(table.name, columnFamily);
         Set<Map.Entry<Descriptor, Set<Component>>> entries = files(table.name, columnFamilyName, false, false).entrySet();
         data.addInitialSSTables(SSTableReader.batchOpen(entries, savedKeys, data, metadata, this.partitioner));
 

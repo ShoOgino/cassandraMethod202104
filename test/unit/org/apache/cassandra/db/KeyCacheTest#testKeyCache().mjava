@@ -1,0 +1,71 @@
+    @Test
+    public void testKeyCache() throws IOException, ExecutionException, InterruptedException
+    {
+        CompactionManager.instance.disableAutoCompaction();
+
+        Table table = Table.open(TABLE1);
+        ColumnFamilyStore cfs = table.getColumnFamilyStore(COLUMN_FAMILY1);
+
+        // just to make sure that everything is clean
+        CacheService.instance.invalidateKeyCache();
+
+        // KeyCache should start at size 0 if we're caching X% of zero data.
+        int keyCacheSize = CacheService.instance.keyCache.size();
+        assert keyCacheSize == 0 : keyCacheSize;
+
+        DecoratedKey key1 = Util.dk("key1");
+        DecoratedKey key2 = Util.dk("key2");
+        RowMutation rm;
+
+        // inserts
+        rm = new RowMutation(TABLE1, key1.key);
+        rm.add(new QueryPath(COLUMN_FAMILY1, null, ByteBufferUtil.bytes("1")), ByteBufferUtil.EMPTY_BYTE_BUFFER, 0);
+        rm.apply();
+        rm = new RowMutation(TABLE1, key2.key);
+        rm.add(new QueryPath(COLUMN_FAMILY1, null, ByteBufferUtil.bytes("2")), ByteBufferUtil.EMPTY_BYTE_BUFFER, 0);
+        rm.apply();
+
+        // to make sure we have SSTable
+        cfs.forceBlockingFlush();
+
+        // reads to cache key position
+        cfs.getColumnFamily(QueryFilter.getSliceFilter(key1,
+                                                       new QueryPath(new ColumnParent(COLUMN_FAMILY1)),
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       false,
+                                                       10));
+
+        cfs.getColumnFamily(QueryFilter.getSliceFilter(key2,
+                                                       new QueryPath(new ColumnParent(COLUMN_FAMILY1)),
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       false,
+                                                       10));
+
+        assert CacheService.instance.keyCache.size() == 2;
+
+        Util.compactAll(cfs).get();
+        keyCacheSize = CacheService.instance.keyCache.size();
+        // after compaction cache should have entries for
+        // new SSTables, if we had 2 keys in cache previously it should become 4
+        assert keyCacheSize == 4 : keyCacheSize;
+
+        // re-read same keys to verify that key cache didn't grow further
+        cfs.getColumnFamily(QueryFilter.getSliceFilter(key1,
+                                                       new QueryPath(new ColumnParent(COLUMN_FAMILY1)),
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       false,
+                                                       10));
+
+        cfs.getColumnFamily(QueryFilter.getSliceFilter(key2,
+                                                       new QueryPath(new ColumnParent(COLUMN_FAMILY1)),
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       false,
+                                                       10));
+
+        assert CacheService.instance.keyCache.size() == 4;
+    }
+

@@ -3,44 +3,31 @@
     {
         CompactionManager.instance.disableAutoCompaction();
 
-        ColumnFamilyStore store = Table.open(TABLE1).getColumnFamilyStore(COLUMN_FAMILY3);
+        ColumnFamilyStore store = Table.open(TABLE1).getColumnFamilyStore(COLUMN_FAMILY2);
 
         // empty the cache
-        store.invalidateKeyCache();
-        assert store.getKeyCacheSize() == 0;
+        CacheService.instance.invalidateKeyCache();
+        assert CacheService.instance.keyCache.size() == 0;
 
         // insert data and force to disk
-        insertData(TABLE1, COLUMN_FAMILY3, 0, 100);
+        insertData(TABLE1, COLUMN_FAMILY2, 0, 100);
         store.forceBlockingFlush();
 
         // populate the cache
-        readData(TABLE1, COLUMN_FAMILY3, 0, 100);
-        assertEquals(100, store.getKeyCacheSize());
+        readData(TABLE1, COLUMN_FAMILY2, 0, 100);
+        assertEquals(100, CacheService.instance.keyCache.size());
 
         // really? our caches don't implement the map interface? (hence no .addAll)
-        Map<Pair<Descriptor, DecoratedKey>, Long> savedMap = new HashMap<Pair<Descriptor, DecoratedKey>, Long>();
-        for (Pair<Descriptor, DecoratedKey> k : store.getKeyCache().getKeySet())
+        Map<KeyCacheKey, Long> savedMap = new HashMap<KeyCacheKey, Long>();
+        for (KeyCacheKey k : CacheService.instance.keyCache.getKeySet())
         {
-            savedMap.put(k, store.getKeyCache().get(k));
+            savedMap.put(k, CacheService.instance.keyCache.get(k));
         }
 
         // force the cache to disk
-        store.keyCache.submitWrite(Integer.MAX_VALUE).get();
+        CacheService.instance.keyCache.submitWrite(Integer.MAX_VALUE).get();
 
-        // empty the cache again to make sure values came from disk
-        store.invalidateKeyCache();
-        assert store.getKeyCacheSize() == 0;
-
-        // load the cache from disk.  unregister the old mbean so we can recreate a new CFS object.
-        // but don't invalidate() the old CFS, which would nuke the data we want to try to load
-        store.unregisterMBean();
-        ColumnFamilyStore newStore = ColumnFamilyStore.createColumnFamilyStore(Table.open(TABLE1), COLUMN_FAMILY3);
-        assertEquals(100, newStore.getKeyCacheSize());
-
-        assertEquals(100, savedMap.size());
-        for (Map.Entry<Pair<Descriptor, DecoratedKey>, Long> entry : savedMap.entrySet())
-        {
-            assert newStore.getKeyCache().get(entry.getKey()).equals(entry.getValue());
-        }
+        CacheService.instance.invalidateKeyCache();
+        assert CacheService.instance.keyCache.size() == 0;
     }
 
