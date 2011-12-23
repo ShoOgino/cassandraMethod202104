@@ -46,12 +46,12 @@
         while (true)
         {
             QueryFilter filter = QueryFilter.getSliceFilter(epkey, new QueryPath(HINTS_CF), startColumn, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, PAGE_SIZE);
-            ColumnFamily hintColumnFamily = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), Integer.MAX_VALUE);
-            if (pagingFinished(hintColumnFamily, startColumn))
+            ColumnFamily hintsPage = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), Integer.MAX_VALUE);
+            if (pagingFinished(hintsPage, startColumn))
                 break;
 
             page:
-            for (IColumn hint : hintColumnFamily.getSortedColumns())
+            for (IColumn hint : hintsPage.getSortedColumns())
             {
                 startColumn = hint.name();
                 for (IColumn subColumn : hint.getSubColumns())
@@ -76,14 +76,15 @@
                 DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(mutationColumn.value()));
                 RowMutation rm = RowMutation.serializer().deserialize(in, ByteBufferUtil.toInt(versionColumn.value()));
 
-                if (sendMutation(endpoint, rm))
+                try
                 {
+                    sendMutation(endpoint, rm);
                     deleteHint(tokenBytes, hint.name(), hint.maxTimestamp());
                     rowsReplayed++;
                 }
-                else
+                catch (TimeoutException e)
                 {
-                    logger_.info("Could not complete hinted handoff to " + endpoint);
+                    logger_.info(String.format("Timed out replaying hints to %s; aborting further deliveries", endpoint));
                     break delivery;
                 }
             }
