@@ -1,36 +1,14 @@
     public void waitForStreaming() throws InterruptedException
     {
-        while (true)
-        {
-            boolean stillWaiting = false;
+        // this does not prevent new streams from beginning after a drain begins, but since streams are only
+        // started in response to explicit operator action (bootstrap/move/repair/etc) that feels like a feature.
+        for (DebuggableThreadPoolExecutor e : streamExecutors.values())
+            e.shutdown();
 
-            streamExecutorsLock.lock();
-            try
-            {
-                for (DebuggableThreadPoolExecutor e : streamExecutors.values())
-                {
-                    e.shutdown();
-                    if (!e.isTerminated())
-                    {
-                        stillWaiting = true;
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                streamExecutorsLock.unlock();
-            }
-            if (stillWaiting)
-            {
-                // Up to a second of unneeded delay is acceptable, relative to the amount of time a typical stream
-                // takes.
-                Thread.sleep(1000);
-            }
-            else
-            {
-                break;
-            }
+        for (DebuggableThreadPoolExecutor e : streamExecutors.values())
+        {
+            if (e.awaitTermination(24, TimeUnit.HOURS))
+                logger_.error("Stream took more than 24H to complete; skipping");
         }
     }
 

@@ -7,23 +7,24 @@
 
     public void stream(StreamHeader header, InetAddress to)
     {
-        this.streamExecutorsLock.lock();
-        try
+        DebuggableThreadPoolExecutor executor = streamExecutors.get(to);
+        if (executor == null)
         {
-            if (!streamExecutors.containsKey(to))
+            // Using a core pool size of 0 is important. See documentation of streamExecutors.
+            executor = new DebuggableThreadPoolExecutor(0,
+                                                        1,
+                                                        1,
+                                                        TimeUnit.SECONDS,
+                                                        new LinkedBlockingQueue<Runnable>(),
+                                                        new NamedThreadFactory("Streaming to " + to));
+            DebuggableThreadPoolExecutor old = streamExecutors.putIfAbsent(to, executor);
+            if (old != null)
             {
-                // Using a core pool size of 0 is important. See documentation of streamExecutors.
-                streamExecutors.put(to, new DebuggableThreadPoolExecutor(0, 1, 1, TimeUnit.SECONDS,
-                        new LinkedBlockingQueue<Runnable>(),
-                        new NamedThreadFactory("Streaming to " + to)));
+                executor.shutdown();
+                executor = old;
             }
-            DebuggableThreadPoolExecutor executor = streamExecutors.get(to);
+        }
 
-            executor.execute(new FileStreamTask(header, to));
-        }
-        finally
-        {
-            this.streamExecutorsLock.unlock();
-        }
+        executor.execute(new FileStreamTask(header, to));
     }
 
