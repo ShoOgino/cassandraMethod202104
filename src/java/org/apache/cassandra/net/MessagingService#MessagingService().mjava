@@ -1,0 +1,71 @@
+    private MessagingService()
+    {
+        for (StorageService.Verb verb : DROPPABLE_VERBS)
+        {
+            droppedMessages.put(verb, new AtomicInteger());
+            lastDropped.put(verb, 0);
+            lastDroppedInternal.put(verb, 0);
+        }
+
+        listenGate = new SimpleCondition();
+        verbHandlers_ = new EnumMap<StorageService.Verb, IVerbHandler>(StorageService.Verb.class);
+        Runnable logDropped = new Runnable()
+        {
+            public void run()
+            {
+                logDroppedMessages();
+            }
+        };
+        StorageService.scheduledTasks.scheduleWithFixedDelay(logDropped, LOG_DROPPED_INTERVAL_IN_MS, LOG_DROPPED_INTERVAL_IN_MS, TimeUnit.MILLISECONDS);
+
+        Function<Pair<String, CallbackInfo>, ?> timeoutReporter = new Function<Pair<String, CallbackInfo>, Object>()
+        {
+            public Object apply(Pair<String, CallbackInfo> pair)
+            {
+                CallbackInfo expiredCallbackInfo = pair.right;
+                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, (double) DatabaseDescriptor.getRpcTimeout());
+                totalTimeouts++;
+                String ip = expiredCallbackInfo.target.getHostAddress();
+                AtomicLong c = timeoutsPerHost.get(ip);
+                if (c == null)
+                {
+                    c = new AtomicLong();
+                    timeoutsPerHost.put(ip, c);
+                }
+                c.incrementAndGet();
+                // we only create AtomicLong instances here, so that the write
+                // access to the hashmap happens single-threadedly.
+                if (recentTimeoutsPerHost.get(ip) == null)
+                    recentTimeoutsPerHost.put(ip, new AtomicLong());
+
+                if (expiredCallbackInfo.shouldHint())
+                {
+                    assert expiredCallbackInfo.message != null;
+                    try
+                    {
+                        RowMutation rm = RowMutation.fromBytes(expiredCallbackInfo.message.getMessageBody(), expiredCallbackInfo.message.getVersion());
+                        return StorageProxy.scheduleLocalHint(rm, expiredCallbackInfo.target, null, null);
+                    }
+                    catch (IOException e)
+                    {
+                        logger_.error("Unable to deserialize mutation when writting hint for: " + expiredCallbackInfo.target);
+                    }
+                }
+
+                return null;
+            }
+        };
+
+        callbacks = new ExpiringMap<String, CallbackInfo>(DEFAULT_CALLBACK_TIMEOUT, timeoutReporter);
+
+        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+        try
+        {
+            mbs.registerMBean(this, new ObjectName(MBEAN_NAME));
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
