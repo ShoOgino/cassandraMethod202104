@@ -1,0 +1,48 @@
+    @Test
+    public void testSSTableLister()
+    {
+        for (String cf : CFS)
+        {
+            Directories directories = Directories.create(KS, cf);
+            Directories.SSTableLister lister;
+            Set<File> listed;
+
+            // List all but no snapshot, backup
+            lister = directories.sstableLister();
+            listed = new HashSet<File>(lister.listFiles());
+            for (File f : files.get(cf))
+            {
+                if (f.getPath().contains(Directories.SNAPSHOT_SUBDIR) || f.getPath().contains(Directories.BACKUPS_SUBDIR))
+                    assert !listed.contains(f) : f + " should not be listed";
+                else
+                    assert listed.contains(f) : f + " is missing";
+            }
+
+            // List all but including backup (but no snapshot)
+            lister = directories.sstableLister().includeBackups(true);
+            listed = new HashSet<File>(lister.listFiles());
+            for (File f : files.get(cf))
+            {
+                if (f.getPath().contains(Directories.SNAPSHOT_SUBDIR))
+                    assert !listed.contains(f) : f + " should not be listed";
+                else
+                    assert listed.contains(f) : f + " is missing";
+            }
+
+            // Skip temporary and compacted
+            lister = directories.sstableLister().skipTemporary(true).skipCompacted(true);
+            listed = new HashSet<File>(lister.listFiles());
+            for (File f : files.get(cf))
+            {
+                if (f.getPath().contains(Directories.SNAPSHOT_SUBDIR) || f.getPath().contains(Directories.BACKUPS_SUBDIR))
+                    assert !listed.contains(f) : f + " should not be listed";
+                else if (f.getName().contains("-tmp-"))
+                    assert !listed.contains(f) : f + " should not be listed";
+                else if (f.getName().endsWith("Compacted") || new File(f.getPath().replaceFirst("-[a-zA-Z]+.db", "-Compacted")).exists())
+                    assert !listed.contains(f) : f + " should not be listed";
+                else
+                    assert listed.contains(f) : f + " is missing";
+            }
+        }
+    }
+

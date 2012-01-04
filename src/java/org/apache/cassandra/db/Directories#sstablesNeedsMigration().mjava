@@ -1,0 +1,52 @@
+    /**
+     * To check if sstables needs migration, we look at the System directory.
+     * If it contains a directory for the status cf, we'll attempt a sstable
+     * migration.
+     * Note that it is mostly harmless to try a migration uselessly, except
+     * maybe for some wasted cpu cycles.
+     */
+    public static boolean sstablesNeedsMigration()
+    {
+        if (StorageService.instance.isClientMode())
+            return false;
+
+        boolean hasSystemKeyspace = false;
+        for (File location : dataFileLocations)
+        {
+            File systemDir = new File(location, Table.SYSTEM_TABLE);
+            hasSystemKeyspace |= (systemDir.exists() && systemDir.isDirectory());
+            File statusCFDir = new File(systemDir, SystemTable.STATUS_CF);
+            if (statusCFDir.exists())
+                return false;
+        }
+        if (!hasSystemKeyspace)
+            // This is a brand new node.
+            return false;
+
+        // Check whether the migration migth create too long a filename
+        int longestLocation = -1;
+        try
+        {
+            for (File loc : dataFileLocations)
+                longestLocation = Math.max(longestLocation, loc.getCanonicalPath().length());
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+
+        for (KSMetaData ksm : Schema.instance.getTableDefinitions())
+        {
+            String ksname = ksm.name;
+            for (Map.Entry<String, CFMetaData> entry : ksm.cfMetaData().entrySet())
+            {
+                String cfname = entry.getKey();
+                // max path is roughly (guess-estimate) <location>/ksname/cfname/snapshots/1324314347102-somename/ksname-cfname-tmp-hb-1024-Statistics.db
+                if (longestLocation + (ksname.length() + cfname.length()) * 2 + 62 > 256)
+                    throw new RuntimeException("Starting with 1.1, keyspace names and column family names must be less than 32 characters long. "
+                        + ksname + "/" + cfname + " doesn't respect that restriction. Please rename your keyspace/column families to respect that restriction before updating.");
+            }
+        }
+        return true;
+    }
+
