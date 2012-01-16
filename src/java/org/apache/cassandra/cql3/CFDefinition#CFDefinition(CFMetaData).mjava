@@ -1,0 +1,67 @@
+    public CFDefinition(CFMetaData cfm)
+    {
+        this.cfm = cfm;
+        this.key = new Name(getKeyId(cfm), Name.Kind.KEY_ALIAS, cfm.getKeyValidator());
+        if (cfm.comparator instanceof CompositeType)
+        {
+            this.isComposite = true;
+            CompositeType composite = (CompositeType)cfm.comparator;
+            if (!cfm.getColumn_metadata().isEmpty())
+            {
+                // "sparse" composite
+                this.isCompact = false;
+                this.value = null;
+                assert cfm.getValueAlias() == null;
+                for (int i = 0; i < composite.types.size() - 1; i++)
+                {
+                    ColumnIdentifier id = getColumnId(cfm, i);
+                    this.columns.put(id, new Name(id, Name.Kind.COLUMN_ALIAS, i, composite.types.get(i)));
+                }
+
+                for (Map.Entry<ByteBuffer, ColumnDefinition> def : cfm.getColumn_metadata().entrySet())
+                {
+                    ColumnIdentifier id = new ColumnIdentifier(def.getKey());
+                    this.metadata.put(id, new Name(id, Name.Kind.COLUMN_METADATA, def.getValue().getValidator()));
+                }
+            }
+            else
+            {
+                // "dense" composite
+                this.isCompact = true;
+                for (int i = 0; i < composite.types.size(); i++)
+                {
+                    ColumnIdentifier id = getColumnId(cfm, i);
+                    this.columns.put(id, new Name(id, Name.Kind.COLUMN_ALIAS, i, composite.types.get(i)));
+                }
+                this.value = new Name(getValueId(cfm), Name.Kind.VALUE_ALIAS, cfm.getDefaultValidator());
+            }
+        }
+        else
+        {
+            this.isComposite = false;
+            if (!cfm.getColumn_metadata().isEmpty())
+            {
+                // static CF
+                this.isCompact = false;
+                this.value = null;
+                assert cfm.getValueAlias() == null;
+                assert cfm.getColumnAliases() == null || cfm.getColumnAliases().isEmpty();
+                for (Map.Entry<ByteBuffer, ColumnDefinition> def : cfm.getColumn_metadata().entrySet())
+                {
+                    ColumnIdentifier id = new ColumnIdentifier(def.getKey());
+                    this.metadata.put(id, new Name(id, Name.Kind.COLUMN_METADATA, def.getValue().getValidator()));
+                }
+            }
+            else
+            {
+                // dynamic CF
+                this.isCompact = true;
+                ColumnIdentifier id = getColumnId(cfm, 0);
+                Name name = new Name(id, Name.Kind.COLUMN_ALIAS, 0, cfm.comparator);
+                this.columns.put(id, name);
+                this.value = new Name(getValueId(cfm), Name.Kind.VALUE_ALIAS, cfm.getDefaultValidator());
+            }
+        }
+        assert value == null || metadata.isEmpty();
+    }
+

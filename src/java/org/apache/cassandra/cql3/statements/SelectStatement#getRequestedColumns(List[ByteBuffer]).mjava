@@ -1,0 +1,35 @@
+    private List<ByteBuffer> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        assert !isColumnRange();
+
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        for (CFDefinition.Name name : cfDef.columns.values())
+        {
+            Restriction r = restrictions.get(name.name);
+            assert r != null && r.isEquality() && r.eqValues.size() == 1;
+            builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+        }
+
+        if (cfDef.isCompact)
+        {
+            return Collections.singletonList(builder.build());
+        }
+        else
+        {
+            List<ByteBuffer> columns = new ArrayList<ByteBuffer>();
+            // Adds all (requested) columns
+            Iterator<Pair<CFDefinition.Name, ColumnIdentifier>> iter = getExpandedSelection().iterator();
+            while (iter.hasNext())
+            {
+                CFDefinition.Name name = iter.next().left;
+                // Skip everything that is not a 'metadata' column
+                if (name.kind != CFDefinition.Name.Kind.COLUMN_METADATA)
+                    continue;
+                ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                ByteBuffer cname = b.add(name.name.key).build();
+                columns.add(cname);
+            }
+            return columns;
+        }
+    }
+

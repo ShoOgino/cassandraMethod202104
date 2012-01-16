@@ -1,0 +1,40 @@
+    private ByteBuffer getRequestedBound(boolean isStart, List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        assert isColumnRange();
+
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        for (CFDefinition.Name name : cfDef.columns.values())
+        {
+            Restriction r = restrictions.get(name.name);
+            if (r == null)
+            {
+                // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
+                // For composites, if there was preceding component and we're computing the end, we must change the last component
+                // End-Of-Component, otherwise we would be selecting only one record.
+                if (builder.componentCount() > 0 && !isStart)
+                    return builder.buildAsEndOfRange();
+                else
+                    return builder.build();
+            }
+
+            if (r.isEquality())
+            {
+                assert r.eqValues.size() == 1;
+                builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+            }
+            else
+            {
+                Term t = isStart ? r.start : r.end;
+                Relation.Type op = isStart
+                    ? (r.startInclusive ? Relation.Type.GTE : Relation.Type.GT)
+                    : (r.endInclusive ? Relation.Type.LTE : Relation.Type.LT);
+                if (t == null)
+                    return ByteBufferUtil.EMPTY_BYTE_BUFFER;
+                else
+                    return builder.add(t, op, variables).build();
+            }
+        }
+        // Means no relation at all or everything was an equal
+        return builder.build();
+    }
+

@@ -1,0 +1,93 @@
+        /**
+         * Transform this raw statement into a CreateColumnFamilyStatement.
+         */
+        public CreateColumnFamilyStatement preprocess() throws InvalidRequestException
+        {
+            try
+            {
+                // Column family name
+                if (!columnFamily().matches("\\w+"))
+                    throw new InvalidRequestException(String.format("\"%s\" is not a valid column family name (must be alphanumeric character only: [0-9A-Za-z]+)", columnFamily()));
+                if (columnFamily().length() > 32)
+                    throw new InvalidRequestException(String.format("Column family names shouldn't be more than 32 character long (got \"%s\")", columnFamily()));
+
+                for (Multiset.Entry<ColumnIdentifier> entry : definedNames.entrySet())
+                    if (entry.getCount() > 1)
+                        throw new InvalidRequestException(String.format("Multiple definition of identifier %s", entry.getElement()));
+
+                properties.validate();
+
+                CreateColumnFamilyStatement stmt = new CreateColumnFamilyStatement(cfName, properties);
+                stmt.setBoundTerms(getBoundsTerms());
+                stmt.columns.putAll(definitions); // we'll remove what is not a column below
+
+                // Ensure that exactly one key has been specified.
+                if (keyAliases.size() == 0)
+                    throw new InvalidRequestException("You must specify a PRIMARY KEY");
+                else if (keyAliases.size() > 1)
+                    throw new InvalidRequestException("You may only specify one PRIMARY KEY");
+
+                stmt.keyAlias = keyAliases.get(0).key;
+                stmt.keyValidator = getTypeAndRemove(stmt.columns, keyAliases.get(0));
+
+                // Handle column aliases
+                if (columnAliases != null && !columnAliases.isEmpty())
+                {
+                    // If we use compact storage and have only one alias, it is a
+                    // standard "dynamic" CF, otherwise it's a composite
+                    if (useCompactStorage && columnAliases.size() == 1)
+                    {
+                        stmt.columnAliases.add(columnAliases.get(0).key);
+                        stmt.comparator = getTypeAndRemove(stmt.columns, columnAliases.get(0));
+                    }
+                    else
+                    {
+                        List<AbstractType<?>> types = new ArrayList<AbstractType<?>>();
+                        for (ColumnIdentifier t : columnAliases)
+                        {
+                            stmt.columnAliases.add(t.key);
+                            types.add(getTypeAndRemove(stmt.columns, t));
+                        }
+                        // For sparse, we must add the last UTF8 component
+                        if (!useCompactStorage)
+                            types.add(CFDefinition.definitionType);
+
+                        stmt.comparator = CompositeType.getInstance(types);
+                    }
+                }
+                else
+                {
+                    stmt.comparator = CFDefinition.definitionType;
+                }
+
+                if (useCompactStorage)
+                {
+                    // There should be only one column definition remaining, which gives us the default validator.
+                    if (stmt.columns.isEmpty())
+                        throw new InvalidRequestException("COMPACT STORAGE requires one definition not part of the PRIMARY KEY, none found");
+                    if (stmt.columns.size() > 1)
+                        throw new InvalidRequestException(String.format("COMPACT STORAGE allows only one column not part of the PRIMARY KEY (got: %s)", StringUtils.join(stmt.columns.keySet(), ", ")));
+
+                    Map.Entry<ColumnIdentifier, String> lastEntry = stmt.columns.entrySet().iterator().next();
+                    stmt.defaultValidator = CFPropDefs.parseType(lastEntry.getValue());
+                    stmt.valueAlias = lastEntry.getKey().key;
+                    stmt.columns.remove(lastEntry.getKey());
+                }
+                else
+                {
+                    if (stmt.columns.isEmpty())
+                        throw new InvalidRequestException("No definition found that is not part of the PRIMARY KEY");
+
+                    // There is no way to insert/access a column that is not defined for non-compact
+                    // storage, so the actual validator don't matter much.
+                    stmt.defaultValidator = CFDefinition.definitionType;
+                }
+
+                return stmt;
+            }
+            catch (ConfigurationException e)
+            {
+                throw new InvalidRequestException(e.getMessage());
+            }
+        }
+
