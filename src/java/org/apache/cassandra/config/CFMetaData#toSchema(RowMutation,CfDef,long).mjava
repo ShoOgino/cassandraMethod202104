@@ -1,0 +1,34 @@
+    /**
+     * Convert given Thrift-serialized metadata into schema mutation
+     *
+     * @param mutation The mutation to include ColumnFamily attributes into (can contain keyspace attributes already)
+     * @param cfDef Thrift-serialized metadata to use as source for schema mutation
+     * @param timestamp Timestamp to use
+     *
+     * @throws ConfigurationException if any of the attributes didn't pass validation
+     */
+    public static void toSchema(RowMutation mutation, CfDef cfDef, long timestamp) throws ConfigurationException
+    {
+        applyImplicitDefaults(cfDef);
+
+        for (CfDef._Fields field : CfDef._Fields.values())
+        {
+            if (field.equals(CfDef._Fields.COLUMN_METADATA))
+                continue;
+
+            mutation.add(new QueryPath(SystemTable.SCHEMA_COLUMNFAMILIES_CF, null, compositeNameFor(cfDef.name, field.getFieldName())),
+                         valueAsBytes(cfDef.getFieldValue(field)),
+                         timestamp);
+        }
+
+        if (!cfDef.isSetColumn_metadata())
+            return;
+
+        AbstractType comparator = TypeParser.parse(cfDef.column_type.equals("Super")
+                                           ? cfDef.subcomparator_type
+                                           : cfDef.comparator_type);
+
+        for (ColumnDef columnDef : cfDef.column_metadata)
+            ColumnDefinition.addToSchema(mutation, cfDef.name, comparator, columnDef, timestamp);
+    }
+

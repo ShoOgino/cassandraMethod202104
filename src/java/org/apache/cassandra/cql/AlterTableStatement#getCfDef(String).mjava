@@ -2,7 +2,7 @@
     {
         CFMetaData meta = Schema.instance.getCFMetaData(keyspace, columnFamily);
 
-        CfDef cfDef = meta.toAvro();
+        CfDef cfDef = meta.toThrift();
 
         ByteBuffer columnName = this.oType == OperationType.OPTS ? null
                                                                  : meta.comparator.fromString(this.columnName);
@@ -19,20 +19,27 @@
                                                                TypeParser.parse(validator),
                                                                null,
                                                                null,
-                                                               null).toAvro());
+                                                               null).toThrift());
                 break;
 
             case ALTER:
-                ColumnDefinition column = meta.getColumnDefinition(columnName);
+                ColumnDef toUpdate = null;
 
-                if (column == null)
+                for (ColumnDef columnDef : cfDef.column_metadata)
+                {
+                    if (columnDef.name.equals(columnName))
+                    {
+                        toUpdate = columnDef;
+                        break;
+                    }
+                }
+
+                if (toUpdate == null)
                     throw new InvalidRequestException(String.format("Column '%s' was not found in CF '%s'",
                                                                     this.columnName,
                                                                     columnFamily));
 
-                column.setValidator(TypeParser.parse(validator));
-
-                cfDef.column_metadata.add(column.toAvro());
+                toUpdate.setValidation_class(TypeParser.parse(validator).toString());
                 break;
 
             case DROP:
@@ -51,9 +58,6 @@
                                                                     this.columnName,
                                                                     columnFamily));
 
-                // it is impossible to use ColumnDefinition.deflate() in remove() method
-                // it will throw java.lang.ClassCastException: java.lang.String cannot be cast to org.apache.avro.util.Utf8
-                // some where deep inside of Avro
                 cfDef.column_metadata.remove(toDelete);
                 break;
 

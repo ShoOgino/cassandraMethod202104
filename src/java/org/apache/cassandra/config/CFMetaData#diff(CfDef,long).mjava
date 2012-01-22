@@ -1,0 +1,53 @@
+    /**
+     * Calculate the difference between current metadata and given and serialize it as schema RowMutation
+     *
+     * @param newState The new metadata (for the same CF)
+     * @param modificationTimestamp Timestamp to use for mutation
+     *
+     * @return Difference between attributes in form of schema mutation
+     *
+     * @throws ConfigurationException if any of the attributes didn't pass validation
+     */
+    public RowMutation diff(CfDef newState, long modificationTimestamp) throws ConfigurationException
+    {
+        CfDef curState = toThrift();
+        RowMutation m = new RowMutation(Table.SYSTEM_TABLE, SystemTable.getSchemaKSKey(ksName));
+
+        for (CfDef._Fields field : CfDef._Fields.values())
+        {
+            if (field.equals(CfDef._Fields.COLUMN_METADATA))
+                continue; // deal with columns after main attributes
+
+            Object curValue = curState.getFieldValue(field);
+            Object newValue = newState.getFieldValue(field);
+
+            if (Objects.equal(curValue, newValue))
+                continue;
+
+            m.add(new QueryPath(SystemTable.SCHEMA_COLUMNFAMILIES_CF, null, compositeNameFor(curState.name, field.getFieldName())),
+                  valueAsBytes(newValue),
+                  modificationTimestamp);
+        }
+
+        AbstractType nameComparator = cfType.equals(ColumnFamilyType.Super)
+                                        ? subcolumnComparator
+                                        : comparator;
+
+        MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(column_metadata, ColumnDefinition.fromThrift(newState.column_metadata));
+        Map<ByteBuffer, ColumnDef> columnDefMap = ColumnDefinition.toMap(newState.column_metadata);
+
+        // columns that are no longer needed
+        for (ByteBuffer name : columnDiff.entriesOnlyOnLeft().keySet())
+            ColumnDefinition.deleteFromSchema(m, curState.name, nameComparator, name, modificationTimestamp);
+
+        // newly added columns
+        for (ByteBuffer name : columnDiff.entriesOnlyOnRight().keySet())
+            ColumnDefinition.addToSchema(m, curState.name, nameComparator, columnDefMap.get(name), modificationTimestamp);
+
+        // old columns with updated attributes
+        for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
+            ColumnDefinition.addToSchema(m, curState.name, nameComparator, columnDefMap.get(name), modificationTimestamp);
+
+        return m;
+    }
+

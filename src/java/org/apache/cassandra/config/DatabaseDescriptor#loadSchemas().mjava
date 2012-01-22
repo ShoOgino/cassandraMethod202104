@@ -1,60 +1,47 @@
     /** load keyspace (table) definitions, but do not initialize the table instances. */
     public static void loadSchemas() throws IOException                         
     {
-        // we can load tables from local storage if a version is set in the system table and that acutally maps to
-        // real data in the definitions table.  If we do end up loading from xml, store the defintions so that we
-        // don't load from xml anymore.
-        UUID uuid = Migration.getLastMigrationId();
-        if (uuid == null)
+        ColumnFamilyStore schemaCFS = SystemTable.schemaCFS(SystemTable.SCHEMA_KEYSPACES_CF);
+
+        // if table with definitions is empty try loading the old way
+        if (schemaCFS.estimateKeys() == 0)
         {
-            logger.info("Couldn't detect any schema definitions in local storage.");
-            // peek around the data directories to see if anything is there.
-            boolean hasExistingTables = false;
-            for (String dataDir : getAllDataFileLocations())
+            // we can load tables from local storage if a version is set in the system table and that actually maps to
+            // real data in the definitions table.  If we do end up loading from xml, store the definitions so that we
+            // don't load from xml anymore.
+            UUID uuid = Migration.getLastMigrationId();
+
+            if (uuid == null)
             {
-                File dataPath = new File(dataDir);
-                if (dataPath.exists() && dataPath.isDirectory())
+                logger.info("Couldn't detect any schema definitions in local storage.");
+                // peek around the data directories to see if anything is there.
+                if (hasExistingNoSystemTables())
+                    logger.info("Found table data in data directories. Consider using the CLI to define your schema.");
+                else
+                    logger.info("To create keyspaces and column families, see 'help create keyspace' in the CLI, or set up a schema using the thrift system_* calls.");
+            }
+            else
+            {
+                logger.info("Loading schema version " + uuid.toString());
+                Collection<KSMetaData> tableDefs = DefsTable.loadFromStorage(uuid);
+
+                // happens when someone manually deletes all tables and restarts.
+                if (tableDefs.size() == 0)
                 {
-                    // see if there are other directories present.
-                    int dirCount = dataPath.listFiles(new FileFilter()
-                    {
-                        public boolean accept(File pathname)
-                        {
-                            return pathname.isDirectory();
-                        }
-                    }).length;
-                    if (dirCount > 0)
-                        hasExistingTables = true;
+                    logger.warn("No schema definitions were found in local storage.");
                 }
-                if (hasExistingTables)
+                else // if non-system tables where found, trying to load them
                 {
-                    break;
+                    Schema.instance.load(tableDefs);
                 }
             }
-            
-            if (hasExistingTables)
-                logger.info("Found table data in data directories. Consider using the CLI to define your schema.");
-            else
-                logger.info("To create keyspaces and column families, see 'help create keyspace' in the CLI, or set up a schema using the thrift system_* calls.");
         }
         else
         {
-            logger.info("Loading schema version " + uuid.toString());
-            Collection<KSMetaData> tableDefs = DefsTable.loadFromStorage(uuid);   
-
-            // happens when someone manually deletes all tables and restarts.
-            if (tableDefs.size() == 0)
-            {
-                logger.warn("No schema definitions were found in local storage.");
-                // set version so that migrations leading up to emptiness aren't replayed.
-                Schema.instance.setVersion(uuid);
-            }
-            else // if non-system tables where found, trying to load them
-            {
-                Schema.instance.load(tableDefs, uuid);
-            }
+            Schema.instance.load(DefsTable.loadFromTable());
         }
 
+        Schema.instance.updateVersion();
         Schema.instance.fixCFMaxId();
     }
 

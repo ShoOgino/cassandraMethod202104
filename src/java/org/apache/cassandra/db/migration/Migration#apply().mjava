@@ -1,64 +1,10 @@
-    /** apply changes */
-    public final void apply() throws IOException, ConfigurationException
+    public final void apply() throws ConfigurationException, IOException
     {
-        // ensure migration is serial. don't apply unless the previous version matches.
-        if (!schema.getVersion().equals(lastVersion))
-            throw new ConfigurationException("Previous version mismatch. cannot apply.");
-        if (newVersion.timestamp() <= lastVersion.timestamp())
-            throw new ConfigurationException("New version timestamp is not newer than the current version timestamp.");
-        // write to schema
-        assert rm != null;
+        applyImpl();
+
         if (!StorageService.instance.isClientMode())
-        {
-            rm.apply();
+            MigrationHelper.flushSchemaCFs();
 
-            long now = System.currentTimeMillis();
-            ByteBuffer buf = serialize();
-            RowMutation migration = new RowMutation(Table.SYSTEM_TABLE, MIGRATIONS_KEY);
-            ColumnFamily cf = ColumnFamily.create(Table.SYSTEM_TABLE, MIGRATIONS_CF);
-            column = new Column(ByteBuffer.wrap(UUIDGen.decompose(newVersion)), buf, now);
-            cf.addColumn(column);
-            migration.add(cf);
-            migration.apply();
-            
-            // note that we're storing this in the system table, which is not replicated
-            logger.info("Applying migration {} {}", newVersion.toString(), toString());
-            migration = new RowMutation(Table.SYSTEM_TABLE, LAST_MIGRATION_KEY);
-            migration.add(new QueryPath(SCHEMA_CF, null, LAST_MIGRATION_KEY), ByteBuffer.wrap(UUIDGen.decompose(newVersion)), now);
-            migration.apply();
-
-            // if we fail here, there will be schema changes in the CL that will get replayed *AFTER* the schema is loaded.
-            // CassandraDaemon checks for this condition (the stored version will be greater than the loaded version)
-            // and calls MigrationManager.applyMigrations(loaded version, stored version).
-        
-            // flush changes out of memtables so we don't need to rely on the commit log.
-            ColumnFamilyStore[] schemaStores = new ColumnFamilyStore[] {
-                Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(Migration.MIGRATIONS_CF),
-                Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(Migration.SCHEMA_CF)
-            };
-            List<Future<?>> flushes = new ArrayList<Future<?>>();
-            for (ColumnFamilyStore cfs : schemaStores)
-                flushes.add(cfs.forceFlush());
-            for (Future<?> f : flushes)
-            {
-                if (f == null)
-                    // applying the migration triggered a flush independently
-                    continue;
-                try
-                {
-                    f.get();
-                }
-                catch (ExecutionException e)
-                {
-                    throw new IOException(e);
-                }
-                catch (InterruptedException e)
-                {
-                    throw new IOException(e);
-                }
-            }
-        }
-        
-        applyModels(); 
+        Schema.instance.updateVersion();
     }
 

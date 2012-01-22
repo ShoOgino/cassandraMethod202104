@@ -1,0 +1,45 @@
+    /**
+     * Deserialize ColumnFamilies from low-level schema representation, all of them belong to the same keyspace
+     *
+     * @param serializedColumnFamilies ColumnFamilies in the serialized form
+     *
+     * @return map containing name of the ColumnFamily and it's metadata for faster lookup
+     */
+    public static Map<String, CfDef> deserializeColumnFamilies(ColumnFamily serializedColumnFamilies)
+    {
+        Map<String, CfDef> cfs = new HashMap<String, CfDef>();
+
+        if (serializedColumnFamilies == null)
+            return cfs;
+
+        AbstractType<?> comparator = serializedColumnFamilies.getComparator();
+
+        for (IColumn column : serializedColumnFamilies.getSortedColumns())
+        {
+            if (column == null || column.isMarkedForDelete())
+                continue;
+
+            String[] attr = comparator.getString(column.name()).split(":");
+            assert attr.length == 2;
+
+            CfDef cfDef = cfs.get(attr[0]);
+
+            if (cfDef == null)
+            {
+                cfDef = new CfDef();
+                cfs.put(attr[0], cfDef);
+            }
+
+            CfDef._Fields field = CfDef._Fields.findByName(attr[1]);
+            cfDef.setFieldValue(field, deserializeValue(column.value(), getValueClass(CfDef.class, field.getFieldName())));
+        }
+
+        for (CfDef cfDef : cfs.values())
+        {
+            for (ColumnDef columnDef : ColumnDefinition.fromSchema(cfDef.keyspace, cfDef.name))
+                cfDef.addToColumn_metadata(columnDef);
+        }
+
+        return cfs;
+    }
+

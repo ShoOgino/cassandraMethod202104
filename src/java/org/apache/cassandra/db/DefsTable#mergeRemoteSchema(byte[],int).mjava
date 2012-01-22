@@ -1,0 +1,33 @@
+    /**
+     * Merge remote schema in form of row mutations with local and mutate ks/cf metadata objects
+     * (which also involves fs operations on add/drop ks/cf)
+     *
+     * @param data The data of the message from remote node with schema information
+     * @param version The version of the message
+     *
+     * @throws ConfigurationException If one of metadata attributes has invalid value
+     * @throws IOException If data was corrupted during transportation or failed to apply fs operations
+     */
+    public static void mergeRemoteSchema(byte[] data, int version) throws ConfigurationException, IOException
+    {
+        // save current state of the schema
+        Map<DecoratedKey, ColumnFamily> oldKeyspaces = SystemTable.getSchema(SystemTable.SCHEMA_KEYSPACES_CF);
+        Map<DecoratedKey, ColumnFamily> oldColumnFamilies = SystemTable.getSchema(SystemTable.SCHEMA_COLUMNFAMILIES_CF);
+
+        // apply remote mutations
+        for (RowMutation mutation : MigrationManager.deserializeMigrationMessage(data, version))
+            mutation.apply();
+
+        if (!StorageService.instance.isClientMode())
+            MigrationHelper.flushSchemaCFs();
+
+        Schema.instance.updateVersion();
+
+        Set<String> keyspacesToDrop = mergeKeyspaces(oldKeyspaces, SystemTable.getSchema(SystemTable.SCHEMA_KEYSPACES_CF));
+        mergeColumnFamilies(oldColumnFamilies, SystemTable.getSchema(SystemTable.SCHEMA_COLUMNFAMILIES_CF));
+
+        // it is save to drop a keyspace only when all nested ColumnFamilies where deleted
+        for (String keyspaceToDrop : keyspacesToDrop)
+            MigrationHelper.dropKeyspace(keyspaceToDrop);
+    }
+
