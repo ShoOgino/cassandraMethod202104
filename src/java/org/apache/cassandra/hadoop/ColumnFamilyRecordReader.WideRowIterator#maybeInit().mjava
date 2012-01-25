@@ -1,0 +1,63 @@
+        private void maybeInit()
+        {
+            if (wideColumns != null && wideColumns.hasNext())
+                return;
+
+            // check if we need another batch
+            if (rows != null && ++i >= rows.size())
+                rows = null;
+
+            if (rows != null)
+            {
+                wideColumns = rows.get(i).columns.iterator();
+                return;
+            }
+
+            String startToken;
+            ByteBuffer startColumn;
+            if (lastRow == null)
+            {
+                startToken = split.getStartToken();
+                startColumn = ByteBufferUtil.EMPTY_BYTE_BUFFER;
+            }
+            else
+            {
+                startToken = partitioner.getTokenFactory().toString(partitioner.getToken(lastRow.key));
+                startColumn = Iterables.getLast(lastRow.columns).column.name;
+            }
+
+            KeyRange keyRange = new KeyRange(batchSize)
+                                .setStart_token(startToken)
+                                .setEnd_token(split.getEndToken())
+                                .setRow_filter(filter);
+            try
+            {
+                rows = client.get_paged_slice(cfName, keyRange, startColumn, consistencyLevel);
+
+                // nothing found?
+                if (rows == null || rows.isEmpty() || rows.get(0).columns.isEmpty())
+                {
+                    rows = null;
+                    return;
+                }
+                    
+                // nothing new? reached the end
+                if (lastRow != null && (rows.get(0).key.equals(lastRow.key) || rows.get(0).columns.get(0).column.equals(startColumn)))
+                {
+                    rows = null;
+                    return;
+                }
+
+                // prepare for the next slice to be read
+                lastRow = Iterables.getLast(rows);
+
+                // reset to iterate through this new batch
+                i = 0;
+                wideColumns = rows.get(i).columns.iterator();
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+

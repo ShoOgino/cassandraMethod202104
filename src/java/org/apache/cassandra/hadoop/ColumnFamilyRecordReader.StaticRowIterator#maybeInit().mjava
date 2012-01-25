@@ -1,61 +1,59 @@
         private void maybeInit()
         {
-            // check if we need another batch 
+            // check if we need another batch
             if (rows != null && i >= rows.size())
                 rows = null;
-            
+
             if (rows != null)
                 return;
 
-            if (startToken == null)
+            String startToken;
+            if (lastRow == null)
             {
                 startToken = split.getStartToken();
-            } 
-            else if (startToken.equals(split.getEndToken()))
-            {
-                // reached end of the split
-                rows = null;
-                return;
             }
-            
-            KeyRange keyRange = new KeyRange(batchRowCount)
+            else
+            {
+                startToken = partitioner.getTokenFactory().toString(partitioner.getToken(lastRow.key));
+                if (startToken.equals(split.getEndToken()))
+                {
+                    // reached end of the split
+                    rows = null;
+                    return;
+                }
+            }
+
+            KeyRange keyRange = new KeyRange(batchSize)
                                 .setStart_token(startToken)
                                 .setEnd_token(split.getEndToken())
                                 .setRow_filter(filter);
             try
             {
-                rows = client.get_range_slices(new ColumnParent(cfName),
-                                               predicate,
-                                               keyRange,
-                                               consistencyLevel);
-                  
+                rows = client.get_range_slices(new ColumnParent(cfName), predicate, keyRange, consistencyLevel);
+
                 // nothing new? reached the end
                 if (rows.isEmpty())
                 {
                     rows = null;
                     return;
                 }
-                
+
                 // prepare for the next slice to be read
-                KeySlice lastRow = rows.get(rows.size() - 1);
-                ByteBuffer rowkey = lastRow.key;
-                startToken = partitioner.getTokenFactory().toString(partitioner.getToken(rowkey));
-                
+                lastRow = Iterables.getLast(rows);
+
                 // remove ghosts when fetching all columns
                 if (isEmptyPredicate)
                 {
                     Iterator<KeySlice> it = rows.iterator();
-                    
-                    while(it.hasNext())
+                    while (it.hasNext())
                     {
                         KeySlice ks = it.next();
-                        
                         if (ks.getColumnsSize() == 0)
                         {
                            it.remove();
                         }
                     }
-                
+
                     // all ghosts, spooky
                     if (rows.isEmpty())
                     {
@@ -63,9 +61,9 @@
                         return;
                     }
                 }
-                
+
                 // reset to iterate through this new batch
-                i = 0;             
+                i = 0;
             }
             catch (Exception e)
             {
