@@ -1,4 +1,4 @@
-        public SelectStatement preprocess() throws InvalidRequestException
+        public ParsedStatement.Prepared prepare() throws InvalidRequestException
         {
             CFMetaData cfm = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
             ThriftValidation.validateConsistencyLevel(keyspace(), parameters.consistencyLevel, RequestType.READ);
@@ -7,8 +7,8 @@
                 throw new InvalidRequestException("LIMIT must be strictly positive");
 
             CFDefinition cfDef = cfm.getCfDef();
-            SelectStatement stmt = new SelectStatement(cfDef, parameters);
-            stmt.setBoundTerms(getBoundsTerms());
+            SelectStatement stmt = new SelectStatement(cfDef, getBoundsTerms(), parameters);
+            AbstractType[] types = new AbstractType[getBoundsTerms()];
 
             // Select clause
             if (parameters.isCount)
@@ -47,6 +47,19 @@
 
                 if (name.kind == CFDefinition.Name.Kind.VALUE_ALIAS)
                     throw new InvalidRequestException(String.format("Restricting the value of a compact CF (%s) is not supported", name.name));
+
+                if (rel.operator() == Relation.Type.IN)
+                {
+                    for (Term value : rel.getInValues())
+                        if (value.isBindMarker())
+                            types[value.bindIndex] = name.type;
+                }
+                else
+                {
+                    Term value = rel.getValue();
+                    if (value.isBindMarker())
+                        types[value.bindIndex] = name.type;
+                }
 
                 Restriction restriction = stmt.restrictions.get(name.name);
                 switch (rel.operator())
@@ -167,6 +180,7 @@
                 if (r == null || !r.isEquality())
                     throw new InvalidRequestException("Descending order is only supported is the first part of the PRIMARY KEY is restricted by an Equal or a IN");
             }
-            return stmt;
+
+            return new ParsedStatement.Prepared(stmt, Arrays.<AbstractType<?>>asList(types));
         }
 
