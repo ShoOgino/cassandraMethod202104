@@ -1,0 +1,54 @@
+    /**
+     * Trigger proactive repair for a table and column families.
+     * @param tableName
+     * @param columnFamilies
+     * @throws IOException
+     */
+    public void forceTableRepair(final String tableName, final String... columnFamilies) throws IOException
+    {
+        if (Table.SYSTEM_TABLE.equals(tableName))
+            return;
+
+
+        Collection<Range<Token>> ranges = getLocalRanges(tableName);
+        int cmd = nextRepairCommand.incrementAndGet();
+        logger_.info("Starting repair command #{}, repairing {} ranges.", cmd, ranges.size());
+
+        List<AntiEntropyService.RepairFuture> futures = new ArrayList<AntiEntropyService.RepairFuture>(ranges.size());
+        for (Range<Token> range : ranges)
+        {
+            AntiEntropyService.RepairFuture future = forceTableRepair(range, tableName, columnFamilies);
+            futures.add(future);
+            // wait for a session to be done with its differencing before starting the next one
+            try
+            {
+                future.session.differencingDone.await();
+            }
+            catch (InterruptedException e)
+            {
+                logger_.error("Interrupted while waiting for the differencing of repair session " + future.session + " to be done. Repair may be imprecise.", e);
+            }
+        }
+
+        boolean failedSession = false;
+
+        // block until all repair sessions have completed
+        for (AntiEntropyService.RepairFuture future : futures)
+        {
+            try
+            {
+                future.get();
+            }
+            catch (Exception e)
+            {
+                logger_.error("Repair session " + future.session.getName() + " failed.", e);
+                failedSession = true;
+            }
+        }
+
+        if (failedSession)
+            throw new IOException("Repair command #" + cmd + ": some repair session(s) failed (see log for details).");
+        else
+            logger_.info("Repair command #{} completed successfully", cmd);
+    }
+

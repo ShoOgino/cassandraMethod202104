@@ -1,0 +1,58 @@
+    /*
+     * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
+     * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
+     * from somewhere else.
+     *
+     * onChange only ever sees one ApplicationState piece change at a time (even if many ApplicationState updates were
+     * received at the same time), so we perform a kind of state machine here. We are concerned with two events: knowing
+     * the token associated with an endpoint, and knowing its operation mode. Nodes can start in either bootstrap or
+     * normal mode, and from bootstrap mode can change mode to normal. A node in bootstrap mode needs to have
+     * pendingranges set in TokenMetadata; a node in normal mode should instead be part of the token ring.
+     *
+     * Normal progression of ApplicationState.STATUS values for a node should be like this:
+     * STATUS_BOOTSTRAPPING,token
+     *   if bootstrapping. stays this way until all files are received.
+     * STATUS_NORMAL,token
+     *   ready to serve reads and writes.
+     * STATUS_LEAVING,token
+     *   get ready to leave the cluster as part of a decommission
+     * STATUS_LEFT,token
+     *   set after decommission is completed.
+     *
+     * Other STATUS values that may be seen (possibly anywhere in the normal progression):
+     * STATUS_MOVING,newtoken
+     *   set if node is currently moving to a new token in the ring
+     * REMOVING_TOKEN,deadtoken
+     *   set if the node is dead and is being removed by its REMOVAL_COORDINATOR
+     * REMOVED_TOKEN,deadtoken
+     *   set if the node is dead and has been removed by its REMOVAL_COORDINATOR
+     *
+     * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
+     * you should never bootstrap a new node during a removetoken, decommission or move.
+     */
+    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value)
+    {
+        switch (state)
+        {
+            case STATUS:
+                String apStateValue = value.value;
+                String[] pieces = apStateValue.split(VersionedValue.DELIMITER_STR, -1);
+                assert (pieces.length > 0);
+
+                String moveName = pieces[0];
+
+                if (moveName.equals(VersionedValue.STATUS_BOOTSTRAPPING))
+                    handleStateBootstrap(endpoint, pieces);
+                else if (moveName.equals(VersionedValue.STATUS_NORMAL))
+                    handleStateNormal(endpoint, pieces);
+                else if (moveName.equals(VersionedValue.REMOVING_TOKEN) || moveName.equals(VersionedValue.REMOVED_TOKEN))
+                    handleStateRemoving(endpoint, pieces);
+                else if (moveName.equals(VersionedValue.STATUS_LEAVING))
+                    handleStateLeaving(endpoint, pieces);
+                else if (moveName.equals(VersionedValue.STATUS_LEFT))
+                    handleStateLeft(endpoint, pieces);
+                else if (moveName.equals(VersionedValue.STATUS_MOVING))
+                    handleStateMoving(endpoint, pieces);
+        }
+    }
+

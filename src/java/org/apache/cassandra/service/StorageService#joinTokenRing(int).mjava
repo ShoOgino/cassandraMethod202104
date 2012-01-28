@@ -1,0 +1,140 @@
+    private void joinTokenRing(int delay) throws IOException, org.apache.cassandra.config.ConfigurationException
+    {
+        logger_.info("Starting up server gossip");
+        joined = true;
+
+        Schema.instance.updateVersion();
+
+        // have to start the gossip service before we can see any info on other nodes.  this is necessary
+        // for bootstrap to get the load info it needs.
+        // (we won't be part of the storage ring though until we add a nodeId to our state, below.)
+        Gossiper.instance.register(this);
+        Gossiper.instance.register(migrationManager);
+        Gossiper.instance.start(SystemTable.incrementAndGetGeneration()); // needed for node-ring gathering.
+        // add rpc listening info
+        Gossiper.instance.addLocalApplicationState(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getRpcAddress()));
+        if (null != DatabaseDescriptor.getReplaceToken())
+            Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.hibernate(true));
+
+        MessagingService.instance().listen(FBUtilities.getLocalAddress());
+        LoadBroadcaster.instance.startBroadcasting();
+        MigrationManager.passiveAnnounce(Schema.instance.getVersion());
+        Gossiper.instance.addLocalApplicationState(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
+
+        HintedHandOffManager.instance.start();
+
+        if (DatabaseDescriptor.isAutoBootstrap()
+                && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress())
+                && !SystemTable.isBootstrapped())
+            logger_.info("This node will not auto bootstrap because it is configured to be a seed node.");
+
+        InetAddress current = null;
+        // first startup is only chance to bootstrap
+        Token<?> token;
+        if (DatabaseDescriptor.isAutoBootstrap()
+            && !(SystemTable.isBootstrapped()
+                 || DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress())
+                 || !Schema.instance.getNonSystemTables().isEmpty()))
+        {
+            setMode(Mode.JOINING, "waiting for ring and schema information", true);
+            // first sleep the delay to make sure we see the schema
+            try
+            {
+                Thread.sleep(delay);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+            // now if our schema hasn't matched, keep sleeping until it does
+            while (!MigrationManager.isReadyForBootstrap())
+            {
+                setMode(Mode.JOINING, "waiting for schema information to complete", true);
+                try
+                {
+                    Thread.sleep(delay);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+            setMode(Mode.JOINING, "schema complete, ready to bootstrap", true);
+
+
+            if (logger_.isDebugEnabled())
+                logger_.debug("... got ring + schema info");
+
+            if (DatabaseDescriptor.getReplaceToken() == null)
+            {
+                if (tokenMetadata_.isMember(FBUtilities.getBroadcastAddress()))
+                {
+                    String s = "This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)";
+                    throw new UnsupportedOperationException(s);
+                }
+                setMode(Mode.JOINING, "getting bootstrap token", true);
+                token = BootStrapper.getBootstrapToken(tokenMetadata_, LoadBroadcaster.instance.getLoadInfo());
+            }
+            else
+            {
+                try
+                {
+                    // Sleeping additionally to make sure that the server actually is not alive
+                    // and giving it more time to gossip if alive.
+                    Thread.sleep(LoadBroadcaster.BROADCAST_INTERVAL);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+                token = StorageService.getPartitioner().getTokenFactory().fromString(DatabaseDescriptor.getReplaceToken());
+                // check for operator errors...
+                current = tokenMetadata_.getEndpoint(token);
+                if (null != current && Gossiper.instance.getEndpointStateForEndpoint(current).getUpdateTimestamp() > (System.currentTimeMillis() - delay))
+                    throw new UnsupportedOperationException("Cannnot replace a token for a Live node... ");
+                setMode(Mode.JOINING, "Replacing a node with token: " + token, true);
+            }
+
+            bootstrap(token);
+            assert !isBootstrapMode; // bootstrap will block until finished
+        }
+        else
+        {
+            token = SystemTable.getSavedToken();
+            if (token == null)
+            {
+                String initialToken = DatabaseDescriptor.getInitialToken();
+                if (initialToken == null)
+                {
+                    token = partitioner.getRandomToken();
+                    logger_.warn("Generated random token " + token + ". Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations");
+                }
+                else
+                {
+                    token = partitioner.getTokenFactory().fromString(initialToken);
+                    logger_.info("Saved token not found. Using " + token + " from configuration");
+                }
+            }
+            else
+            {
+                logger_.info("Using saved token " + token);
+            }
+        }
+
+        if (!isSurveyMode)
+        {
+            // start participating in the ring.
+            SystemTable.setBootstrapped(true);
+            setToken(token);
+            // remove the existing info about the replaced node.
+            if (current != null)
+                Gossiper.instance.replacedEndpoint(current);
+            logger_.info("Bootstrap/Replace/Move completed! Now serving reads.");
+            assert tokenMetadata_.sortedTokens().size() > 0;
+        }
+        else
+        {
+            logger_.info("Bootstrap complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
+        }
+    }
+
