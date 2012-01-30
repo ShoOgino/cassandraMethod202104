@@ -1,0 +1,29 @@
+    /**
+     * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
+     * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.
+     */
+    private Multimap<Range<Token>, InetAddress> getAllRangesWithSourcesFor(String table, Collection<Range<Token>> desiredRanges)
+    {
+        AbstractReplicationStrategy strat = Table.open(table).getReplicationStrategy();
+        Multimap<Range<Token>, InetAddress> rangeAddresses = strat.getRangeAddresses(metadata);
+
+        Multimap<Range<Token>, InetAddress> rangeSources = ArrayListMultimap.create();
+        for (Range<Token> desiredRange : desiredRanges)
+        {
+            for (Range<Token> range : rangeAddresses.keySet())
+            {
+                if (range.contains(desiredRange))
+                {
+                    List<InetAddress> preferred = DatabaseDescriptor.getEndpointSnitch().getSortedListByProximity(address, rangeAddresses.get(range));
+                    rangeSources.putAll(desiredRange, preferred);
+                    break;
+                }
+            }
+
+            if (!rangeSources.keySet().contains(desiredRange))
+                throw new IllegalStateException("No sources found for " + desiredRange);
+        }
+
+        return rangeSources;
+    }
+
