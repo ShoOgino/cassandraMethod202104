@@ -3,11 +3,27 @@
         assert !isColumnRange();
 
         ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
-        for (CFDefinition.Name name : cfDef.columns.values())
+        for (Restriction r : columnRestrictions)
         {
-            Restriction r = restrictions.get(name.name);
-            assert r != null && r.isEquality() && r.eqValues.size() == 1;
-            builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+            assert r != null && r.isEquality();
+            if (r.eqValues.size() > 1)
+            {
+                // We have a IN. We only support this for the last column, so just create all columns and return.
+                List<ByteBuffer> columns = new ArrayList<ByteBuffer>(r.eqValues.size());
+                Iterator<Term> iter = r.eqValues.iterator();
+                while (iter.hasNext())
+                {
+                    Term v = iter.next();
+                    ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                    ByteBuffer cname = b.add(v, Relation.Type.EQ, variables).build();
+                    columns.add(cname);
+                }
+                return columns;
+            }
+            else
+            {
+                builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+            }
         }
 
         if (cfDef.isCompact)
