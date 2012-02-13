@@ -5,6 +5,13 @@
 
         if (cfDef.column_type.equals("Super"))
             return null;
+        /*
+        Our returned schema should look like this:
+        (key, index1:(name, value), index2:(name, value), columns:{(name, value)})
+        Which is to say, columns that have metadata will be returned as named tuples, but unknown columns will go into a bag.
+        This way, wide rows can still be handled by the bag, but known columns can easily be referenced.
+         */
+
         // top-level schema, no type
         ResourceSchema schema = new ResourceSchema();
 
@@ -17,54 +24,59 @@
         keyFieldSchema.setName("key");
         keyFieldSchema.setType(getPigType(marshallers.get(2)));
 
-        // will become the bag of tuples
-        ResourceFieldSchema bagFieldSchema = new ResourceFieldSchema();
-        bagFieldSchema.setName("columns");
-        bagFieldSchema.setType(DataType.BAG);
         ResourceSchema bagSchema = new ResourceSchema();
+        ResourceFieldSchema bagField = new ResourceFieldSchema();
+        bagField.setType(DataType.BAG);
+        bagField.setName("columns");
+        // inside the bag, place one tuple with the default comparator/validator schema
+        ResourceSchema bagTupleSchema = new ResourceSchema();
+        ResourceFieldSchema bagTupleField = new ResourceFieldSchema();
+        bagTupleField.setType(DataType.TUPLE);
+        ResourceFieldSchema bagcolSchema = new ResourceFieldSchema();
+        ResourceFieldSchema bagvalSchema = new ResourceFieldSchema();
+        bagcolSchema.setName("name");
+        bagvalSchema.setName("value");
+        bagcolSchema.setType(getPigType(marshallers.get(0)));
+        bagvalSchema.setType(getPigType(marshallers.get(1)));
+        bagTupleSchema.setFields(new ResourceFieldSchema[] { bagcolSchema, bagvalSchema });
+        bagTupleField.setSchema(bagTupleSchema);
+        bagSchema.setFields(new ResourceFieldSchema[] { bagTupleField });
+        bagField.setSchema(bagSchema);
 
-        List<ResourceFieldSchema> tupleFields = new ArrayList<ResourceFieldSchema>();
-
-        // default comparator/validator
-        ResourceSchema innerTupleSchema = new ResourceSchema();
-        ResourceFieldSchema tupleField = new ResourceFieldSchema();
-        tupleField.setType(DataType.TUPLE);
-        tupleField.setSchema(innerTupleSchema);
-
-        ResourceFieldSchema colSchema = new ResourceFieldSchema();
-        colSchema.setName("name");
-        colSchema.setType(getPigType(marshallers.get(0)));
-        tupleFields.add(colSchema);
-
-        ResourceFieldSchema valSchema = new ResourceFieldSchema();
-        AbstractType validator = marshallers.get(1);
-        valSchema.setName("value");
-        valSchema.setType(getPigType(validator));
-        tupleFields.add(valSchema);
+        // will contain all fields for this schema
+        List<ResourceFieldSchema> allSchemaFields = new ArrayList<ResourceFieldSchema>();
+        // add the key first, then the indexed columns, and finally the bag
+        allSchemaFields.add(keyFieldSchema);
 
         // defined validators/indexes
         for (ColumnDef cdef : cfDef.column_metadata)
         {
-            colSchema = new ResourceFieldSchema();
-            colSchema.setName(new String(cdef.getName()));
-            colSchema.setType(getPigType(marshallers.get(0)));
-            tupleFields.add(colSchema);
+            // make a new tuple for each col/val pair
+            ResourceSchema innerTupleSchema = new ResourceSchema();
+            ResourceFieldSchema innerTupleField = new ResourceFieldSchema();
+            innerTupleField.setType(DataType.TUPLE);
+            innerTupleField.setSchema(innerTupleSchema);
+            innerTupleField.setName(new String(cdef.getName()));
 
-            valSchema = new ResourceFieldSchema();
-            validator = validators.get(ByteBuffer.wrap(cdef.getName()));
+            ResourceFieldSchema idxColSchema = new ResourceFieldSchema();
+            idxColSchema.setName("name");
+            idxColSchema.setType(getPigType(marshallers.get(0)));
+
+            ResourceFieldSchema valSchema = new ResourceFieldSchema();
+            AbstractType validator = validators.get(cdef.name);
             if (validator == null)
                 validator = marshallers.get(1);
             valSchema.setName("value");
             valSchema.setType(getPigType(validator));
-            tupleFields.add(valSchema);
-        }
-        innerTupleSchema.setFields(tupleFields.toArray(new ResourceFieldSchema[tupleFields.size()]));
 
-        // a bag can contain only one tuple, but that tuple can contain anything
-        bagSchema.setFields(new ResourceFieldSchema[] { tupleField });
-        bagFieldSchema.setSchema(bagSchema);
+            innerTupleSchema.setFields(new ResourceFieldSchema[] { idxColSchema, valSchema });
+            allSchemaFields.add(innerTupleField);
+        }
+        // bag at the end for unknown columns
+        allSchemaFields.add(bagField);
+
         // top level schema contains everything
-        schema.setFields(new ResourceFieldSchema[] { keyFieldSchema, bagFieldSchema });
+        schema.setFields(allSchemaFields.toArray(new ResourceFieldSchema[allSchemaFields.size()]));
         return schema;
     }
 
