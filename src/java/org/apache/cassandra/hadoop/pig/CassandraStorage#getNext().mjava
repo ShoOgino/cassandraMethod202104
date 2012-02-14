@@ -8,20 +8,37 @@
                 return null;
 
             CfDef cfDef = getCfDef(loadSignature);
-            ByteBuffer key = (ByteBuffer)reader.getCurrentKey();
-            SortedMap<ByteBuffer,IColumn> cf = (SortedMap<ByteBuffer,IColumn>)reader.getCurrentValue();
+            ByteBuffer key = reader.getCurrentKey();
+            Map<ByteBuffer, IColumn> cf = reader.getCurrentValue();
             assert key != null && cf != null;
-            
-            // and wrap it in a tuple
-            Tuple tuple = TupleFactory.getInstance().newTuple(2);
-            ArrayList<Tuple> columns = new ArrayList<Tuple>();
-            tuple.set(0, new DataByteArray(key.array(), key.position()+key.arrayOffset(), key.limit()+key.arrayOffset()));
+
+            // output tuple, will hold the key, each indexed column in a tuple, then a bag of the rest
+            Tuple tuple = TupleFactory.getInstance().newTuple();
+            DefaultDataBag bag = new DefaultDataBag();
+            // set the key
+            tuple.append(new DataByteArray(ByteBufferUtil.getArray(key)));
+            // we must add all the indexed columns first to match the schema
+            Map<ByteBuffer, Boolean> added = new HashMap<ByteBuffer, Boolean>();
+            // take care to iterate these in the same order as the schema does
+            for (ColumnDef cdef : cfDef.column_metadata)
+            {
+                if (cf.containsKey(cdef.name))
+                {
+                    tuple.append(columnToTuple(cf.get(cdef.name), cfDef, parseType(cfDef.getComparator_type())));
+                }
+                else
+                {   // otherwise, we need to add an empty tuple to take its place
+                    tuple.append(TupleFactory.getInstance().newTuple());
+                }
+                added.put(cdef.name, true);
+            }
+            // now add all the other columns
             for (Map.Entry<ByteBuffer, IColumn> entry : cf.entrySet())
             {
-                columns.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+                if (!added.containsKey(entry.getKey()))
+                    bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
             }
-
-            tuple.set(1, new DefaultDataBag(columns));
+            tuple.append(bag);
             return tuple;
         }
         catch (InterruptedException e)
