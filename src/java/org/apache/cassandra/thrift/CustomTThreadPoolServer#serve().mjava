@@ -6,12 +6,12 @@
         }
         catch (TTransportException ttx)
         {
-            LOGGER.error("Error occurred during listening.", ttx);
+            logger.error("Error occurred during listening.", ttx);
             return;
         }
 
-        stopped_ = false;
-        while (!stopped_)
+        stopped = false;
+        while (!stopped)
         {
             // block until we are under max clients
             while (activeClients.get() >= args.maxWorkerThreads)
@@ -31,31 +31,31 @@
                 TTransport client = serverTransport_.accept();
                 activeClients.incrementAndGet();
                 WorkerProcess wp = new WorkerProcess(client);
-                executorService_.execute(wp);
+                executorService.execute(wp);
             }
             catch (TTransportException ttx)
             {
                 if (ttx.getCause() instanceof SocketTimeoutException) // thrift sucks
                     continue;
 
-                if (!stopped_)
+                if (!stopped)
                 {
-                    LOGGER.warn("Transport error occurred during acceptance of message.", ttx);
+                    logger.warn("Transport error occurred during acceptance of message.", ttx);
                 }
             }
 
             if (activeClients.get() >= args.maxWorkerThreads)
-                LOGGER.warn("Maximum number of clients " + args.maxWorkerThreads + " reached");
+                logger.warn("Maximum number of clients " + args.maxWorkerThreads + " reached");
         }
 
-        executorService_.shutdown();
+        executorService.shutdown();
         // Thrift's default shutdown waits for the WorkerProcess threads to complete.  We do not,
         // because doing that allows a client to hold our shutdown "hostage" by simply not sending
         // another message after stop is called (since process will block indefinitely trying to read
         // the next meessage header).
         //
         // The "right" fix would be to update thrift to set a socket timeout on client connections
-        // (and tolerate unintentional timeouts until stopped_ is set).  But this requires deep
+        // (and tolerate unintentional timeouts until stopped is set).  But this requires deep
         // changes to the code generator, so simply setting these threads to daemon (in our custom
         // CleaningThreadPool) and ignoring them after shutdown is good enough.
         //

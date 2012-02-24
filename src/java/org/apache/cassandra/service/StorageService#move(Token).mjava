@@ -10,7 +10,7 @@
         if (newToken == null)
             throw new IOException("Can't move to the undefined (null) token.");
 
-        if (tokenMetadata_.sortedTokens().contains(newToken))
+        if (tokenMetadata.sortedTokens().contains(newToken))
             throw new IOException("target token " + newToken + " is already owned by another node.");
 
         // address of the current node
@@ -20,21 +20,21 @@
         // checking if data is moving to this node
         for (String table : tablesToProcess)
         {
-            if (tokenMetadata_.getPendingRanges(table, localAddress).size() > 0)
+            if (tokenMetadata.getPendingRanges(table, localAddress).size() > 0)
                 throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
         }
 
         // setting 'moving' application state
         Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.moving(newToken));
 
-        logger_.info(String.format("Moving %s from %s to %s.", localAddress, getLocalToken(), newToken));
+        logger.info(String.format("Moving %s from %s to %s.", localAddress, getLocalToken(), newToken));
 
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
 
         Map<String, Multimap<InetAddress, Range<Token>>> rangesToFetch = new HashMap<String, Multimap<InetAddress, Range<Token>>>();
         Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByTable = new HashMap<String, Multimap<Range<Token>, InetAddress>>();
 
-        TokenMetadata tokenMetaClone = tokenMetadata_.cloneAfterAllSettled();
+        TokenMetadata tokenMetaClone = tokenMetadata.cloneAfterAllSettled();
 
         // for each of the non system tables calculating new ranges
         // which current node will handle after move to the new token
@@ -46,11 +46,11 @@
             // getting collection of the currently used ranges by this keyspace
             Collection<Range<Token>> currentRanges = getRangesForEndpoint(table, localAddress);
             // collection of ranges which this node will serve after move to the new token
-            Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata_, newToken, localAddress);
+            Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata, newToken, localAddress);
 
             // ring ranges and endpoints associated with them
             // this used to determine what nodes should we ping about range data
-            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetadata_);
+            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetadata);
 
             // calculated parts of the ranges to request/stream from/to nodes in the ring
             Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerTable = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
@@ -79,7 +79,7 @@
 
             for (Range<Token> toStream : rangesPerTable.left)
             {
-                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetadata_));
+                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetadata));
                 Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
                 rangeWithEndpoints.putAll(toStream, Sets.difference(newEndpoints, currentEndpoints));
             }
@@ -90,13 +90,13 @@
             Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints);
             rangesToFetch.put(table, workMap);
 
-            if (logger_.isDebugEnabled())
-                logger_.debug("Table {}: work map {}.", table, workMap);
+            if (logger.isDebugEnabled())
+                logger.debug("Table {}: work map {}.", table, workMap);
         }
 
         if (!rangesToStreamByTable.isEmpty() || !rangesToFetch.isEmpty())
         {
-            logger_.info("Sleeping {} ms before start streaming/fetching ranges.", RING_DELAY);
+            logger.info("Sleeping {} ms before start streaming/fetching ranges.", RING_DELAY);
 
             try
             {
@@ -109,13 +109,13 @@
 
             setMode(Mode.MOVING, "fetching new ranges and streaming old ranges", true);
 
-            if (logger_.isDebugEnabled())
-                logger_.debug("[Move->STREAMING] Work Map: " + rangesToStreamByTable);
+            if (logger.isDebugEnabled())
+                logger.debug("[Move->STREAMING] Work Map: " + rangesToStreamByTable);
 
             CountDownLatch streamLatch = streamRanges(rangesToStreamByTable);
 
-            if (logger_.isDebugEnabled())
-                logger_.debug("[Move->FETCHING] Work Map: " + rangesToFetch);
+            if (logger.isDebugEnabled())
+                logger.debug("[Move->FETCHING] Work Map: " + rangesToFetch);
 
             CountDownLatch fetchLatch = requestRanges(rangesToFetch);
 
@@ -132,7 +132,7 @@
 
         setToken(newToken); // setting new token as we have everything settled
 
-        if (logger_.isDebugEnabled())
-            logger_.debug("Successfully moved to new token {}", getLocalToken());
+        if (logger.isDebugEnabled())
+            logger.debug("Successfully moved to new token {}", getLocalToken());
     }
 
