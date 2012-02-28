@@ -3,15 +3,15 @@
         long startPosition = beforeAppend(decoratedKey);
         ByteBufferUtil.writeWithShortLength(decoratedKey.key, dataFile.stream);
 
-        // serialize index and bloom filter into in-memory structure
-        ColumnIndexer.RowHeader header = ColumnIndexer.serialize(cf);
+        // build column index
+        // TODO: build and serialization could be merged
+        ColumnIndex index = new ColumnIndex.Builder(cf.getComparator(), decoratedKey.key, cf.getColumnCount()).build(cf);
 
-        // write out row size
-        dataFile.stream.writeLong(header.serializedSize() + cf.serializedSizeForSSTable());
+        // write out row size + data
+        dataFile.stream.writeLong(cf.serializedSizeForSSTable());
+        ColumnFamily.serializer().serializeForSSTable(cf, dataFile.stream);
 
-        // write out row header and data
-        ColumnFamily.serializer().serializeWithIndexes(cf, header, dataFile.stream);
-        afterAppend(decoratedKey, startPosition);
+        afterAppend(decoratedKey, startPosition, cf.deletionInfo(), index);
 
         sstableMetadataCollector.update(dataFile.getFilePointer() - startPosition, cf.getColumnStats());
     }

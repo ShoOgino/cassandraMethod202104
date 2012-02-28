@@ -1,0 +1,39 @@
+        public IColumnIterator next()
+        {
+            try
+            {
+                DecoratedKey currentKey;
+                RowIndexEntry currentEntry;
+
+                if (row == null)
+                {
+                    currentKey = sstable.decodeKey(ByteBufferUtil.readWithShortLength(ifile));
+                    currentEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor);
+                }
+                else
+                {
+                    currentKey = nextKey;
+                    currentEntry = nextEntry;
+                }
+
+                if (ifile.isEOF())
+                {
+                    nextKey = null;
+                    nextEntry = null;
+                }
+                else
+                {
+                    nextKey = sstable.decodeKey(ByteBufferUtil.readWithShortLength(ifile));
+                    nextEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor);
+                }
+
+                assert !dfile.isEOF();
+                return row = filter.getSSTableColumnIterator(sstable, dfile, currentKey, currentEntry);
+            }
+            catch (IOException e)
+            {
+                sstable.markSuspect();
+                throw new RuntimeException(SSTableScanner.this + " failed to provide next columns from " + this, e);
+            }
+        }
+

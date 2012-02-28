@@ -1,21 +1,17 @@
     public SSTableNamesIterator(SSTableReader sstable, DecoratedKey key, SortedSet<ByteBuffer> columns)
     {
         assert columns != null;
+        this.sstable = sstable;
         this.columns = columns;
         this.key = key;
 
-        FileDataInput file = sstable.getFileDataInput(key, DatabaseDescriptor.getIndexedReadBufferSizeInKB() * 1024);
-        if (file == null)
+        RowIndexEntry indexEntry = sstable.getPosition(key, SSTableReader.Operator.EQ);
+        if (indexEntry == null)
             return;
 
         try
         {
-            DecoratedKey keyInDisk = SSTableReader.decodeKey(sstable.partitioner,
-                                                             sstable.descriptor,
-                                                             ByteBufferUtil.readWithShortLength(file));
-            assert keyInDisk.equals(key) : String.format("%s != %s in %s", keyInDisk, key, file.getPath());
-            SSTableReader.readRowSize(file, sstable.descriptor);
-            read(sstable, file);
+            read(sstable, null, indexEntry);
         }
         catch (IOException e)
         {
@@ -24,7 +20,8 @@
         }
         finally
         {
-            FileUtils.closeQuietly(file);
+            if (fileToClose != null)
+                FileUtils.closeQuietly(fileToClose);
         }
     }
 

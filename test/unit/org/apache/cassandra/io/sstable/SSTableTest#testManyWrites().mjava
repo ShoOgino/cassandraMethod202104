@@ -1,18 +1,25 @@
     @Test
-    public void testManyWrites() throws IOException {
-        Map<ByteBuffer, ByteBuffer> map = new HashMap<ByteBuffer,ByteBuffer>();
-        for (int i = 100; i < 1000; ++i)
+    public void testManyWrites() throws IOException
+    {
+        SortedMap<DecoratedKey, ColumnFamily> map = new TreeMap<DecoratedKey, ColumnFamily>();
+        SortedMap<ByteBuffer, ByteBuffer> bytesMap = new TreeMap<ByteBuffer, ByteBuffer>();
+        //for (int i = 100; i < 1000; ++i)
+        for (int i = 100; i < 300; ++i)
         {
-            map.put(ByteBufferUtil.bytes(Integer.toString(i)), ByteBufferUtil.bytes(("Avinash Lakshman is a good man: " + i)));
+            ColumnFamily cf = ColumnFamily.create("Keyspace1", "Standard2");
+            ByteBuffer bytes = ByteBufferUtil.bytes(("Avinash Lakshman is a good man: " + i));
+            cf.addColumn(null, new Column(bytes, bytes));
+            map.put(Util.dk(Integer.toString(i)), cf);
+            bytesMap.put(ByteBufferUtil.bytes(Integer.toString(i)), Util.serializeForSSTable(cf));
         }
 
         // write
-        SSTableReader ssTable = SSTableUtils.prepare().cf("Standard2").writeRaw(map);
+        SSTableReader ssTable = SSTableUtils.prepare().cf("Standard2").write(map);
 
         // verify
-        verifyMany(ssTable, map);
+        verifyMany(ssTable, bytesMap);
         ssTable = SSTableReader.open(ssTable.descriptor); // read the index from disk
-        verifyMany(ssTable, map);
+        verifyMany(ssTable, bytesMap);
 
         Set<Component> live = SSTable.componentsFor(ssTable.descriptor);
         assert !live.isEmpty() : "SSTable has no live components";

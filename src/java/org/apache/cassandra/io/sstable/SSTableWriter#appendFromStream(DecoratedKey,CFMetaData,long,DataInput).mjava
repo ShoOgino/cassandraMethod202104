@@ -7,21 +7,12 @@
         // write row size
         dataFile.stream.writeLong(dataSize);
 
-        // write BF
-        int bfSize = in.readInt();
-        dataFile.stream.writeInt(bfSize);
-        for (int i = 0; i < bfSize; i++)
-            dataFile.stream.writeByte(in.readByte());
-
-        // write index
-        int indexSize = in.readInt();
-        dataFile.stream.writeInt(indexSize);
-        for (int i = 0; i < indexSize; i++)
-            dataFile.stream.writeByte(in.readByte());
-
         // cf data
-        dataFile.stream.writeInt(in.readInt());
-        dataFile.stream.writeLong(in.readLong());
+        int lct = in.readInt();
+        long mfda = in.readLong();
+        DeletionInfo deletionInfo = new DeletionInfo(mfda, lct);
+        dataFile.stream.writeInt(lct);
+        dataFile.stream.writeLong(mfda);
 
         // column size
         int columnCount = in.readInt();
@@ -31,6 +22,7 @@
         long maxTimestamp = Long.MIN_VALUE;
         StreamingHistogram tombstones = new StreamingHistogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
         ColumnFamily cf = ColumnFamily.create(metadata, ArrayBackedSortedColumns.factory());
+        ColumnIndex.Builder columnIndexer = new ColumnIndex.Builder(cf.getComparator(), key.key, columnCount);
         for (int i = 0; i < columnCount; i++)
         {
             // deserialize column with PRESERVE_SIZE because we've written the dataSize based on the
@@ -60,6 +52,7 @@
             }
             maxTimestamp = Math.max(maxTimestamp, column.maxTimestamp());
             cf.getColumnSerializer().serialize(column, dataFile.stream);
+            columnIndexer.add(column);
         }
 
         assert dataSize == dataFile.getFilePointer() - (dataStart + 8)
@@ -68,7 +61,7 @@
         sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - currentPosition);
         sstableMetadataCollector.addColumnCount(columnCount);
         sstableMetadataCollector.mergeTombstoneHistogram(tombstones);
-        afterAppend(key, currentPosition);
+        afterAppend(key, currentPosition, deletionInfo, columnIndexer.build());
         return currentPosition;
     }
 
