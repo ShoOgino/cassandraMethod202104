@@ -5,15 +5,21 @@
 
         RowCacheKey cacheKey = new RowCacheKey(metadata.cfId, key);
 
+        // always invalidate a copying cache value
         if (CacheService.instance.rowCache.isPutCopying())
         {
             invalidateCachedRow(cacheKey);
+            return;
         }
-        else
+
+        // invalidate a normal cache value if it's a sentinel, so the read will retry (and include the new update)
+        IRowCacheEntry cachedRow = getCachedRowInternal(cacheKey);
+        if (cachedRow != null)
         {
-            ColumnFamily cachedRow = getRawCachedRow(cacheKey);
-            if (cachedRow != null)
-                cachedRow.addAll(columnFamily, HeapAllocator.instance);
+            if (cachedRow instanceof RowCacheSentinel)
+                invalidateCachedRow(cacheKey);
+            else
+                ((ColumnFamily) cachedRow).addAll(columnFamily, HeapAllocator.instance);
         }
     }
 
