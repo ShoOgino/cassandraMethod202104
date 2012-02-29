@@ -1,0 +1,36 @@
+    /**
+     * Calculate the difference between current metadata and given and serialize it as schema RowMutation
+     *
+     * @param newState The new metadata (for the same CF)
+     * @param modificationTimestamp Timestamp to use for mutation
+     *
+     * @return Difference between attributes in form of schema mutation
+     *
+     * @throws ConfigurationException if any of the attributes didn't pass validation
+     */
+    public RowMutation diff(CFMetaData newState, long modificationTimestamp) throws ConfigurationException
+    {
+        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, SystemTable.getSchemaKSKey(ksName));
+
+        newState.toSchemaNoColumns(rm, modificationTimestamp);
+
+        MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(column_metadata, newState.column_metadata);
+
+        // columns that are no longer needed
+        for (ColumnDefinition cd : columnDiff.entriesOnlyOnLeft().values())
+            cd.deleteFromSchema(rm, cfName, comparator, modificationTimestamp);
+
+        // newly added columns
+        for (ColumnDefinition cd : columnDiff.entriesOnlyOnRight().values())
+            cd.toSchema(rm, cfName, comparator, modificationTimestamp);
+
+        // old columns with updated attributes
+        for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
+        {
+            ColumnDefinition cd = newState.getColumnDefinition(name);
+            cd.toSchema(rm, cfName, comparator, modificationTimestamp);
+        }
+
+        return rm;
+    }
+
