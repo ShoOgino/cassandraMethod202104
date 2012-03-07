@@ -27,7 +27,21 @@
         }
 
         if (prunedBuckets.isEmpty())
-            return null;
+        {
+            // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
+            // ratio is greater than threshold.
+            for (List<SSTableReader> bucket : buckets)
+            {
+                for (SSTableReader table : bucket)
+                {
+                    if (table.getEstimatedDroppableTombstoneRatio(gcBefore) > tombstoneThreshold)
+                        prunedBuckets.add(Collections.singletonList(table));
+                }
+            }
+
+            if (prunedBuckets.isEmpty())
+                return null;
+        }
 
         List<SSTableReader> smallestBucket = Collections.min(prunedBuckets, new Comparator<List<SSTableReader>>()
         {
@@ -49,6 +63,7 @@
                 return n / sstables.size();
             }
         });
-        return new CompactionTask(cfs, smallestBucket, gcBefore);
+        // when bucket only contains just one sstable, set userDefined to true to force single sstable compaction
+        return new CompactionTask(cfs, smallestBucket, gcBefore).isUserDefined(smallestBucket.size() == 1);
     }
 

@@ -29,6 +29,7 @@
 
         // deserialize each column to obtain maxTimestamp and immediately serialize it.
         long maxTimestamp = Long.MIN_VALUE;
+        StreamingHistogram tombstones = new StreamingHistogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
         ColumnFamily cf = ColumnFamily.create(metadata, ArrayBackedSortedColumns.factory());
         for (int i = 0; i < columnCount; i++)
         {
@@ -51,6 +52,12 @@
                     }
                 }
             }
+
+            int deletionTime = column.getLocalDeletionTime();
+            if (deletionTime < Integer.MAX_VALUE)
+            {
+                tombstones.update(deletionTime);
+            }
             maxTimestamp = Math.max(maxTimestamp, column.maxTimestamp());
             cf.getColumnSerializer().serialize(column, dataFile.stream);
         }
@@ -60,6 +67,7 @@
         sstableMetadataCollector.updateMaxTimestamp(maxTimestamp);
         sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - currentPosition);
         sstableMetadataCollector.addColumnCount(columnCount);
+        sstableMetadataCollector.mergeTombstoneHistogram(tombstones);
         afterAppend(key, currentPosition);
         return currentPosition;
     }
