@@ -1,0 +1,30 @@
+    public MultiRowIndexSearcherIterator(IndexExpression expression,
+                                         ColumnFamilyStore baseCfs,
+                                         ColumnFamilyStore indexCfs,
+                                         ExtendedFilter filter,
+                                         AbstractBounds<RowPosition> range)
+    {
+        this.expression = expression;
+        this.baseCfs = baseCfs;
+        this.range = range;
+        this.filter = filter;
+        this.indexCfs = indexCfs;
+
+        /*
+        * XXX: If the range requested is a token range, we'll have to start at the beginning (and stop at the end) of
+        * the indexed row unfortunately (which will be inefficient), because we have not way to intuit the small
+        * possible key having a given token. A fix would be to actually store the token along the key in the
+        * indexed row.
+        */
+        startKey = range.left instanceof DecoratedKey ? ((DecoratedKey) range.left).key : ByteBufferUtil.EMPTY_BYTE_BUFFER;
+        endKey = range.right instanceof DecoratedKey ? ((DecoratedKey) range.right).key : ByteBufferUtil.EMPTY_BYTE_BUFFER;
+
+        int meanColumns = Math.max(indexCfs.getMeanColumns(), 1);
+
+        // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
+        rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
+        rightRangeIsNotMinimum = !range.right.isMinimum(baseCfs.partitioner);
+        path = new QueryPath(baseCfs.columnFamily);
+
+    }
+
