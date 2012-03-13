@@ -1,0 +1,100 @@
+    protected Row computeNext()
+    {
+        if (currentIndexKeyData == null) // this is first call. Initialize
+            resetState();
+
+        Row result = null;
+        while (result == null && curIndexKey != null) // curIndexKey would be null when endOfData is reached
+        {
+            if (!currentIndexKeyData.hasNext()) // we've finished scanning row page
+            {
+                if (columnsRead < rowsPerQuery) // previously we've read less then we queried. No more pages to read within this row
+                {
+                    logger.debug("Read only {} (< {}) last page through, must be done", columnsRead, rowsPerQuery);
+                    resetState();
+                }
+                else
+                {
+                    if (logger.isDebugEnabled())
+                        logger.debug(String.format("Scanning index %s starting with %s",
+                                                   expressionString(expression), baseCfs.metadata.getKeyValidator().getString(startKey)));
+
+                    QueryFilter indexFilter = QueryFilter.getSliceFilter(curIndexKey,
+                                                                         new QueryPath(indexCfs.getColumnFamilyName()),
+                                                                         lastSeenKey,
+                                                                         endKey,
+                                                                         false,
+                                                                         rowsPerQuery);
+
+                    ColumnFamily indexRow = indexCfs.getColumnFamily(indexFilter); //get next row page
+
+                    if (indexRow != null)
+                    {
+                        Collection<IColumn> sortedColumns = indexRow.getSortedColumns();
+                        columnsRead = sortedColumns.size();
+                        currentIndexKeyData = sortedColumns.iterator();
+                        IColumn firstColumn = sortedColumns.iterator().next();
+
+                        // Paging is racy, so it is possible the first column_name of a page is not the last seen one.
+                        if (lastSeenKey != startKey && lastSeenKey.equals(firstColumn.name()))
+                        {
+                            // skip the row we already saw w/ the last page of results
+                            currentIndexKeyData.next();
+                            logger.debug("Skipping {}", baseCfs.metadata.getKeyValidator().getString(firstColumn.name()));
+                        }
+                        else if (range instanceof Range && currentIndexKeyData.hasNext() && firstColumn.name().equals(startKey))
+                        {
+                            // skip key excluded by range
+                            currentIndexKeyData.next();
+                            logger.debug("Skipping first key as range excludes it {}", baseCfs.metadata.getKeyValidator().getString(firstColumn.name()));
+                        }
+                    }
+                    else // page is empty, nothing to scan within this row
+                    {
+                        columnsRead = 0;
+                        currentIndexKeyData = EMPTY_ITERATOR;
+                    }
+                }
+            }
+
+
+            while (result == null && currentIndexKeyData.hasNext()) // rolling through columns in page
+            {
+                IColumn column = currentIndexKeyData.next();
+                lastSeenKey = column.name();
+
+                if (column.isMarkedForDelete())
+                {
+                    logger.debug("Skipping {}", column);
+                    continue;
+                }
+
+                DecoratedKey dk = baseCfs.partitioner.decorateKey(lastSeenKey);
+
+                if (rightRangeIsNotMinimum && range.right.compareTo(dk) < 0) // rightRangeIsNotMinimum is required to serve ring cycles
+                {
+                    logger.debug("Reached end of assigned scan range");
+                    resetState();
+                }
+                else if (range.contains(dk))
+                {
+                    logger.debug("Returning index hit for {}", dk);
+                    ColumnFamily data = baseCfs.getColumnFamily(new QueryFilter(dk, path, filter.initialFilter()));
+
+                    // While the column family we'll get in the end should contains the primary clause column_name,
+                    // the initialFilter may not have found it and can thus be null
+                    if (data == null)
+                        data = ColumnFamily.create(baseCfs.metadata);
+
+                    result = new Row(dk, data);
+                }
+                else
+                {
+                    logger.debug("Skipping entry {} outside of assigned scan range", dk.token);
+                }
+            }
+        }
+
+        return result == null ? endOfData() : result;
+    }
+
