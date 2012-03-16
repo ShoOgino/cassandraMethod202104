@@ -1,7 +1,7 @@
     public void announceMigration() throws InvalidRequestException, ConfigurationException
     {
         CFMetaData meta = validateColumnFamily(keyspace(), columnFamily());
-        CfDef thriftDef = meta.toThrift();
+        CFMetaData cfm = meta.clone();
 
         CFDefinition cfDef = meta.getCfDef();
         CFDefinition.Name name = this.oType == Type.OPTS ? null : cfDef.get(columnName);
@@ -21,11 +21,11 @@
                             throw new InvalidRequestException(String.format("Invalid column name %s because it conflicts with an existing column", columnName));
                     }
                 }
-                thriftDef.column_metadata.add(new ColumnDefinition(columnName.key,
-                            CFPropDefs.parseType(validator),
-                            null,
-                            null,
-                            null).toThrift());
+                cfm.addColumnDefinition(new ColumnDefinition(columnName.key,
+                                                             CFPropDefs.parseType(validator),
+                                                             null,
+                                                             null,
+                                                             null));
                 break;
 
             case ALTER:
@@ -35,17 +35,17 @@
                 switch (name.kind)
                 {
                     case KEY_ALIAS:
-                        thriftDef.key_validation_class = CFPropDefs.parseType(validator).toString();
+                        cfm.keyValidator(CFPropDefs.parseType(validator));
                         break;
                     case COLUMN_ALIAS:
                         throw new InvalidRequestException(String.format("Cannot alter PRIMARY KEY part %s", columnName));
                     case VALUE_ALIAS:
-                        thriftDef.default_validation_class = CFPropDefs.parseType(validator).toString();
+                        cfm.defaultValidator(CFPropDefs.parseType(validator));
                         break;
                     case COLUMN_METADATA:
                         ColumnDefinition column = meta.getColumnDefinition(columnName.key);
                         column.setValidator(CFPropDefs.parseType(validator));
-                        thriftDef.column_metadata.add(column.toThrift());
+                        cfm.addColumnDefinition(column);
                         break;
                 }
                 break;
@@ -62,14 +62,14 @@
                     case COLUMN_ALIAS:
                         throw new InvalidRequestException(String.format("Cannot drop PRIMARY KEY part %s", columnName));
                     case COLUMN_METADATA:
-                        ColumnDef toDelete = null;
-                        for (ColumnDef columnDef : thriftDef.column_metadata)
+                        ColumnDefinition toDelete = null;
+                        for (ColumnDefinition columnDef : cfm.getColumn_metadata().values())
                         {
                             if (columnDef.name.equals(columnName.key))
                                 toDelete = columnDef;
                         }
                         assert toDelete != null;
-                        thriftDef.column_metadata.remove(toDelete);
+                        cfm.removeColumnDefinition(toDelete);
                         break;
                 }
                 break;
@@ -78,10 +78,10 @@
                     throw new InvalidRequestException(String.format("ALTER COLUMNFAMILY WITH invoked, but no parameters found"));
 
                 cfProps.validate();
-                applyPropertiesToCfDef(thriftDef, cfProps);
+                applyPropertiesToCFMetadata(cfm, cfProps);
                 break;
         }
 
-        MigrationManager.announceColumnFamilyUpdate(CFMetaData.fromThrift(thriftDef));
+        MigrationManager.announceColumnFamilyUpdate(cfm);
     }
 
