@@ -1,13 +1,19 @@
-    /**
-     * actively announce a new version to active hosts via rpc
-     * @param schema The list of schema mutations to be applied on the recipient
-     */
-    public static void announce(Collection<RowMutation> schema)
+    // Returns a future on the local application of the schema
+    private static Future<?> announce(final Collection<RowMutation> schema)
     {
+        Future<?> f = StageManager.getStage(Stage.MIGRATION).submit(new Callable<Object>()
+        {
+            public Object call() throws Exception
+            {
+                DefsTable.mergeSchema(schema);
+                return null;
+            }
+        });
+
         for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
         {
             if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-                continue; // don't push schema mutation to self
+                continue; // we've delt with localhost already
 
             // don't send migrations to the nodes with the versions older than < 1.1
             if (Gossiper.instance.getVersion(endpoint) < MessagingService.VERSION_11)
@@ -15,5 +21,6 @@
 
             pushSchemaMutation(endpoint, schema);
         }
+        return f;
     }
 
