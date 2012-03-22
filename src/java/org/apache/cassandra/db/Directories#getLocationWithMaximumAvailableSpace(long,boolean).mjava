@@ -1,0 +1,41 @@
+    /*
+     * Loop through all the disks to see which disk has the max free space
+     * return the disk with max free space for compactions. If the size of the expected
+     * compacted file is greater than the max disk space available return null, we cannot
+     * do compaction in this case.
+     */
+    public File getLocationWithMaximumAvailableSpace(long estimatedSize, boolean ensureFreeSpace)
+    {
+        long maxFreeDisk = 0;
+        File maxLocation = null;
+
+        for (File dir : sstableDirectories)
+        {
+            if (maxFreeDisk < dir.getUsableSpace())
+            {
+                maxFreeDisk = dir.getUsableSpace();
+                maxLocation = dir;
+            }
+        }
+        logger.debug(String.format("expected data files size is %d; largest free partition (%s) has %d bytes free",
+                                   estimatedSize,
+                                   maxLocation,
+                                   maxFreeDisk));
+
+        // Load factor of 0.9 we do not want to use the entire disk that is too risky.
+        maxFreeDisk = (long) (0.9 * maxFreeDisk);
+
+        if (!ensureFreeSpace || estimatedSize < maxFreeDisk)
+        {
+            if (estimatedSize >= maxFreeDisk)
+                logger.warn(String.format("Data file location %s only has %d free, estimated size is %d",
+                                          maxLocation,
+                                          maxFreeDisk,
+                                          estimatedSize));
+
+            return maxLocation;
+        }
+
+        return null;
+    }
+
