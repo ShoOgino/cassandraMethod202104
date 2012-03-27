@@ -1,0 +1,30 @@
+    @Test
+    public void testKeysSearcher() throws Exception
+    {
+        // Create secondary index and flush to disk
+        Table table = Table.open("Keyspace1");
+        ColumnFamilyStore store = table.getColumnFamilyStore("Indexed1");
+
+        store.truncate();
+
+        for (int i = 0; i < 10; i++)
+        {
+            ByteBuffer key = ByteBufferUtil.bytes(String.valueOf("k" + i));
+            RowMutation rm = new RowMutation("Keyspace1", key);
+
+            rm.add(new QueryPath("Indexed1", null, ByteBufferUtil.bytes("birthdate")),
+                   LongType.instance.decompose(1L),
+                   System.currentTimeMillis());
+
+            rm.apply();
+        }
+
+        store.forceBlockingFlush();
+
+        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"), IndexOperator.EQ, LongType.instance.decompose(1L));
+        // explicitly tell to the KeysSearcher to use column limiting for rowsPerQuery to trigger bogus columnsRead--; (CASSANDRA-3996)
+        List<Row> rows = store.search(Arrays.asList(expr), Util.range("", ""), 10, new IdentityQueryFilter(), true);
+
+        assert rows.size() == 10;
+    }
+
