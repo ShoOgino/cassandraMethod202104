@@ -1,0 +1,67 @@
+        public IntervalNode(Collection<I> toBisect)
+        {
+            assert !toBisect.isEmpty();
+            logger.debug("Creating IntervalNode from {}", toBisect);
+
+            // Building IntervalTree with one interval will be a reasonably
+            // common case for range tombstones, so it's worth optimizing
+            if (toBisect.size() == 1)
+            {
+                I interval = toBisect.iterator().next();
+                low = interval.min;
+                center = interval.max;
+                high = interval.max;
+                List<I> l = Collections.singletonList(interval);
+                intersectsLeft = l;
+                intersectsRight = l;
+                left = null;
+                right = null;
+            }
+            else
+            {
+                // Find min, median and max
+                List<C> allEndpoints = new ArrayList<C>(toBisect.size() * 2);
+                for (I interval : toBisect)
+                {
+                    assert (comparator == null ? ((Comparable)interval.min).compareTo(interval.max)
+                                               : comparator.compare(interval.min, interval.max)) <= 0 : "Interval min > max";
+                    allEndpoints.add(interval.min);
+                    allEndpoints.add(interval.max);
+                }
+                if (comparator == null)
+                    Collections.sort(allEndpoints, comparator);
+                else
+                    Collections.sort((List<Comparable>)allEndpoints);
+
+                low = allEndpoints.get(0);
+                center = allEndpoints.get(toBisect.size());
+                high = allEndpoints.get(allEndpoints.size() - 1);
+
+                // Separate interval in intersecting center, left of center and right of center
+                List<I> intersects = new ArrayList<I>();
+                List<I> leftSegment = new ArrayList<I>();
+                List<I> rightSegment = new ArrayList<I>();
+
+                for (I candidate : toBisect)
+                {
+                    if (comparePoints(candidate.max, center) < 0)
+                        leftSegment.add(candidate);
+                    else if (comparePoints(candidate.min, center) > 0)
+                        rightSegment.add(candidate);
+                    else
+                        intersects.add(candidate);
+                }
+
+                intersectsLeft = minOrdering.sortedCopy(intersects);
+                intersectsRight = maxOrdering.reverse().sortedCopy(intersects);
+                left = leftSegment.isEmpty() ? null : new IntervalNode(leftSegment);
+                right = rightSegment.isEmpty() ? null : new IntervalNode(rightSegment);
+
+                assert (intersects.size() + leftSegment.size() + rightSegment.size()) == toBisect.size() :
+                        "intersects (" + String.valueOf(intersects.size()) +
+                        ") + leftSegment (" + String.valueOf(leftSegment.size()) +
+                        ") + rightSegment (" + String.valueOf(rightSegment.size()) +
+                        ") != toBisect (" + String.valueOf(toBisect.size()) + ")";
+            }
+        }
+

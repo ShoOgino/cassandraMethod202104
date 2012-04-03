@@ -1,0 +1,49 @@
+    /*
+     * Serialized ColumnFamily format:
+     *
+     * [serialized for intra-node writes only, e.g. returning a query result]
+     * <cf nullability boolean: false if the cf is null>
+     * <cf id>
+     *
+     * [in sstable only]
+     * <column bloom filter>
+     * <sparse column index, start/finish columns every ColumnIndexSizeInKB of data>
+     *
+     * [always present]
+     * <local deletion time>
+     * <client-provided deletion time>
+     * <column count>
+     * <columns, serialized individually>
+    */
+    public void serialize(ColumnFamily cf, DataOutput dos, int version)
+    {
+        try
+        {
+            if (cf == null)
+            {
+                dos.writeBoolean(false);
+                return;
+            }
+
+            dos.writeBoolean(true);
+            dos.writeInt(cf.id());
+
+            DeletionInfo.serializer().serialize(cf.deletionInfo(), dos, version);
+
+            IColumnSerializer columnSerializer = cf.getColumnSerializer();
+            int count = cf.getColumnCount();
+            dos.writeInt(count);
+            int written = 0;
+            for (IColumn column : cf)
+            {
+                columnSerializer.serialize(column, dos);
+                written++;
+            }
+            assert count == written: "Column family had " + count + " columns, but " + written + " written";
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

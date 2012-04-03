@@ -19,7 +19,7 @@
             SSTableReader.readRowSize(file, sstable.descriptor);
         }
 
-        if (sstable.descriptor.hasPromotedIndexes)
+        if (sstable.descriptor.version.hasPromotedIndexes)
         {
             bf = indexEntry.isIndexed() ? indexEntry.bloomFilter() : null;
             indexList = indexEntry.columnsIndex();
@@ -27,7 +27,7 @@
         else
         {
             assert file != null;
-            bf = IndexHelper.defreezeBloomFilter(file, sstable.descriptor.filterType);
+            bf = IndexHelper.defreezeBloomFilter(file, sstable.descriptor.version.filterType);
             indexList = IndexHelper.deserializeIndex(file);
         }
 
@@ -38,7 +38,8 @@
             ColumnFamilySerializer serializer = ColumnFamily.serializer;
             try
             {
-                cf = serializer.deserializeFromSSTableNoColumns(ColumnFamily.create(sstable.metadata), file);
+                cf = ColumnFamily.create(sstable.metadata);
+                cf.delete(DeletionInfo.serializer().deserializeFromSSTable(file, sstable.descriptor.version));
             }
             catch (Exception e)
             {
@@ -51,6 +52,7 @@
             cf.delete(indexEntry.deletionInfo());
         }
 
+        List<OnDiskAtom> result = new ArrayList<OnDiskAtom>();
         List<ByteBuffer> filteredColumnNames = new ArrayList<ByteBuffer>(columns.size());
         for (ByteBuffer name : columns)
         {
@@ -64,12 +66,12 @@
 
         if (indexList.isEmpty())
         {
-            readSimpleColumns(file, columns, filteredColumnNames);
+            readSimpleColumns(file, columns, filteredColumnNames, result);
         }
         else
         {
             long basePosition;
-            if (sstable.descriptor.hasPromotedIndexes)
+            if (sstable.descriptor.version.hasPromotedIndexes)
             {
                 basePosition = indexEntry.position;
             }
@@ -79,10 +81,10 @@
                 file.readInt(); // column count
                 basePosition = file.getFilePointer();
             }
-            readIndexedColumns(sstable.metadata, file, columns, filteredColumnNames, indexList, basePosition);
+            readIndexedColumns(sstable.metadata, file, columns, filteredColumnNames, indexList, basePosition, result);
         }
 
         // create an iterator view of the columns we read
-        iter = cf.iterator();
+        iter = result.iterator();
     }
 

@@ -3,7 +3,7 @@
         assert !closed;
 
         DataOutputBuffer clockOut = new DataOutputBuffer();
-        ColumnFamily.serializer.serializeCFInfo(emptyColumnFamily, clockOut);
+        DeletionInfo.serializer().serializeForSSTable(emptyColumnFamily.deletionInfo(), clockOut);
 
         long dataSize = clockOut.getLength() + columnSerializedSize;
         if (logger.isDebugEnabled())
@@ -11,15 +11,12 @@
         assert dataSize > 0;
         out.writeLong(dataSize);
         out.write(clockOut.getData(), 0, clockOut.getLength());
-        out.writeInt(columnStats.columnCount);
+        out.writeInt(indexBuilder.writtenAtomCount());
 
-        IColumnSerializer columnSerializer = emptyColumnFamily.getColumnSerializer();
-        Iterator<IColumn> iter = iterator();
-        while (iter.hasNext())
-        {
-            IColumn column = iter.next();
-            columnSerializer.serialize(column, out);
-        }
+        // We rebuild the column index uselessly, but we need to do that because range tombstone markers depend
+        // on indexing. If we're able to remove the two-phase compaction, we'll avoid that.
+        indexAndWrite(out);
+
         long secondPassColumnSize = reducer == null ? 0 : reducer.serializedSize;
         assert secondPassColumnSize == columnSerializedSize
                : "originally calculated column size of " + columnSerializedSize + " but now it is " + secondPassColumnSize;

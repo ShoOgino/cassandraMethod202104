@@ -3,13 +3,22 @@
         long startPosition = beforeAppend(decoratedKey);
         ByteBufferUtil.writeWithShortLength(decoratedKey.key, dataFile.stream);
 
-        // build column index
-        // TODO: build and serialization could be merged
-        ColumnIndex index = new ColumnIndex.Builder(cf.getComparator(), decoratedKey.key, cf.getColumnCount()).build(cf);
+        // Since the columnIndex may insert RangeTombstone marker, computing
+        // the size of the data is tricky.
+        DataOutputBuffer buffer = new DataOutputBuffer();
 
-        // write out row size + data
-        dataFile.stream.writeLong(ColumnFamily.serializer.serializedSizeForSSTable(cf, typeSizes));
-        ColumnFamily.serializer.serializeForSSTable(cf, dataFile.stream);
+        // build column index && write columns
+        ColumnIndex.Builder builder = new ColumnIndex.Builder(cf, decoratedKey.key, cf.getColumnCount(), buffer);
+        ColumnIndex index = builder.build(cf);
+
+        TypeSizes typeSizes = TypeSizes.NATIVE;
+        long delSize = DeletionTime.serializer.serializedSize(cf.deletionInfo().getTopLevelDeletion(), typeSizes);
+        dataFile.stream.writeLong(buffer.getLength() + delSize + typeSizes.sizeof(0));
+
+        // Write deletion infos + column count
+        DeletionInfo.serializer().serializeForSSTable(cf.deletionInfo(), dataFile.stream);
+        dataFile.stream.writeInt(builder.writtenAtomCount());
+        dataFile.stream.write(buffer.getData(), 0, buffer.getLength());
 
         afterAppend(decoratedKey, startPosition, cf.deletionInfo(), index);
 
