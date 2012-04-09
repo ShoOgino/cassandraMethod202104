@@ -1,0 +1,22 @@
+    public CommitLogReplayer()
+    {
+        this.tablesRecovered = new NonBlockingHashSet<Table>();
+        this.futures = new ArrayList<Future<?>>();
+        this.buffer = new byte[4096];
+        this.invalidMutations = new HashMap<Integer, AtomicInteger>();
+        // count the number of replayed mutation. We don't really care about atomicity, but we need it to be a reference.
+        this.replayedCount = new AtomicInteger();
+        // compute per-CF and global replay positions
+        this.cfPositions = new HashMap<Integer, ReplayPosition>();
+        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
+        {
+            // it's important to call RP.gRP per-cf, before aggregating all the positions w/ the Ordering.min call
+            // below: gRP will return NONE if there are no flushed sstables, which is important to have in the
+            // list (otherwise we'll just start replay from the first flush position that we do have, which is not correct).
+            ReplayPosition rp = ReplayPosition.getReplayPosition(cfs.getSSTables());
+            cfPositions.put(cfs.metadata.cfId, rp);
+        }
+        this.globalPosition = Ordering.from(ReplayPosition.comparator).min(cfPositions.values());
+        this.checksum = new PureJavaCrc32();
+    }
+
