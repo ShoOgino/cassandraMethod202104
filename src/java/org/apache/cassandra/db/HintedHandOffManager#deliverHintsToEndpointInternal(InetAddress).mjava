@@ -15,7 +15,7 @@
             }
         });
 
-        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(HINTS_CF);
+        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(SystemTable.HINTS_CF);
         if (hintStore.isEmpty())
             return; // nothing to do, don't confuse users by logging a no-op handoff
 
@@ -63,12 +63,11 @@
         delivery:
         while (true)
         {
-            QueryFilter filter = QueryFilter.getSliceFilter(epkey, new QueryPath(HINTS_CF), startColumn, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, pageSize);
+            QueryFilter filter = QueryFilter.getSliceFilter(epkey, new QueryPath(SystemTable.HINTS_CF), startColumn, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, pageSize);
             ColumnFamily hintsPage = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), (int)(System.currentTimeMillis() / 1000));
             if (pagingFinished(hintsPage, startColumn))
                 break;
 
-            page:
             for (IColumn hint : hintsPage.getSortedColumns())
             {
                 // Skip tombstones:
@@ -80,30 +79,14 @@
                     continue;
 
                 startColumn = hint.name();
-                for (IColumn subColumn : hint.getSubColumns())
-                {
-                    // both 0.8 and 1.0 column names are UTF8 strings, so this check is safe
-                    if (ByteBufferUtil.string(subColumn.name()).contains(SEPARATOR_08))
-                    {
-                        logger.debug("0.8-style hint found.  This should have been taken care of by purgeIncompatibleHints");
-                        deleteHint(hostIdBytes, hint.name(), hint.maxTimestamp());
-                        continue page;
-                    }
-                }
 
-                IColumn versionColumn = hint.getSubColumn(ByteBufferUtil.bytes("version"));
-                IColumn tableColumn = hint.getSubColumn(ByteBufferUtil.bytes("table"));
-                IColumn keyColumn = hint.getSubColumn(ByteBufferUtil.bytes("key"));
-                IColumn mutationColumn = hint.getSubColumn(ByteBufferUtil.bytes("mutation"));
-                assert versionColumn != null;
-                assert tableColumn != null;
-                assert keyColumn != null;
-                assert mutationColumn != null;
-                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(mutationColumn.value()));
+                ByteBuffer[] components = comparator.split(hint.name());
+                int version = Int32Type.instance.compose(components[1]);
+                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(hint.value()));
                 RowMutation rm;
                 try
                 {
-                    rm = RowMutation.serializer.deserialize(in, ByteBufferUtil.toInt(versionColumn.value()));
+                    rm = RowMutation.serializer.deserialize(in, version);
                 }
                 catch (UnknownColumnFamilyException e)
                 {

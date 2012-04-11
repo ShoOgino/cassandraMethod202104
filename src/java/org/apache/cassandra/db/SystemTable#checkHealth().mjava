@@ -20,10 +20,10 @@
             throw ex;
         }
 
-        SortedSet<ByteBuffer> cols = new TreeSet<ByteBuffer>(BytesType.instance);
-        cols.add(CLUSTERNAME);
-        QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCATION_KEY), new QueryPath(STATUS_CF), cols);
-        ColumnFamilyStore cfs = table.getColumnFamilyStore(STATUS_CF);
+        QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCAL_KEY),
+                                                        new QueryPath(LOCAL_CF),
+                                                        ImmutableSortedSet.<ByteBuffer>of(ByteBufferUtil.bytes("cluster_name")));
+        ColumnFamilyStore cfs = table.getColumnFamilyStore(LOCAL_CF);
         ColumnFamily cf = cfs.getColumnFamily(filter);
 
         if (cf == null)
@@ -33,9 +33,9 @@
                 throw new ConfigurationException("Found system table files, but they couldn't be loaded!");
 
             // no system files.  this is a new node.
-            RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCATION_KEY);
-            cf = ColumnFamily.create(Table.SYSTEM_TABLE, SystemTable.STATUS_CF);
-            cf.addColumn(new Column(CLUSTERNAME, ByteBufferUtil.bytes(DatabaseDescriptor.getClusterName()), FBUtilities.timestampMicros()));
+            RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCAL_KEY);
+            cf = ColumnFamily.create(Table.SYSTEM_TABLE, LOCAL_CF);
+            cf.addColumn(Column.create(ByteBufferUtil.bytes(DatabaseDescriptor.getClusterName()), FBUtilities.timestampMicros(), "cluster_name"));
             rm.add(cf);
             rm.apply();
 
@@ -43,8 +43,7 @@
         }
 
 
-        IColumn clusterCol = cf.getColumn(CLUSTERNAME);
-        assert clusterCol != null;
+        IColumn clusterCol = cf.columns.iterator().next();
         String savedClusterName = ByteBufferUtil.string(clusterCol.value());
         if (!DatabaseDescriptor.getClusterName().equals(savedClusterName))
             throw new ConfigurationException("Saved cluster name " + savedClusterName + " != configured name " + DatabaseDescriptor.getClusterName());

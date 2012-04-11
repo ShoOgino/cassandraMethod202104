@@ -8,15 +8,16 @@
 
         // Look up the Host UUID (return it if found)
         Table table = Table.open(Table.SYSTEM_TABLE);
-        QueryFilter filter = QueryFilter.getIdentityFilter(decorate(HOST_ID_KEY), new QueryPath(HOST_ID_CF));
-        ColumnFamily cf = table.getColumnFamilyStore(HOST_ID_CF).getColumnFamily(filter);
-
+        QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCAL_KEY),
+                                                        new QueryPath(LOCAL_CF),
+                                                        ImmutableSortedSet.<ByteBuffer>of(ByteBufferUtil.bytes("ring_id")));
+        ColumnFamily cf = table.getColumnFamilyStore(LOCAL_CF).getColumnFamily(filter);
         if (cf != null)
         {
             cf = ColumnFamilyStore.removeDeleted(cf, 0);
             assert cf.getColumnCount() <= 1;
             if (cf.getColumnCount() > 0)
-                return UUIDGen.getUUID(cf.iterator().next().name());
+                return UUIDGen.getUUID(cf.iterator().next().value());
         }
 
         // ID not found, generate a new one, persist, and then return it.
@@ -25,10 +26,10 @@
 
         logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
 
-        cf = ColumnFamily.create(Table.SYSTEM_TABLE, HOST_ID_CF);
-        cf.addColumn(new Column(ByteBuffer.wrap(UUIDGen.decompose(hostId)), ByteBufferUtil.bytes(now), now));
+        cf = ColumnFamily.create(Table.SYSTEM_TABLE, LOCAL_CF);
+        cf.addColumn(Column.create(ByteBuffer.wrap(UUIDGen.decompose(hostId)), now, "ring_id"));
 
-        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, HOST_ID_KEY);
+        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCAL_KEY);
         rm.add(cf);
         try
         {
