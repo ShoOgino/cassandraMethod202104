@@ -9,61 +9,18 @@
             return;
 
         String cfName = CliCompiler.getColumnFamily(statement, keyspacesMap.get(keySpace).cf_defs);
-        CfDef columnFamily = getCfDef(cfName);
 
         // VALIDATOR | COMPARATOR | KEYS | SUB_COMPARATOR
         String assumptionElement = statement.getChild(1).getText().toUpperCase();
-        // used to store in this.cfKeysComparator
-        AbstractType<?> comparator;
+
 
         // Could be UTF8Type, IntegerType, LexicalUUIDType etc.
         String defaultType = CliUtils.unescapeSQLString(statement.getChild(2).getText());
-
-        try
+        
+        if (applyAssumption(cfName, assumptionElement, defaultType))
         {
-            comparator = TypeParser.parse(defaultType);
+            assumptions.addAssumption(keySpace, cfName, assumptionElement, defaultType);
+            sessionState.out.println(String.format("Assumption for column family '%s' added successfully.", cfName));
         }
-        catch (ConfigurationException e)
-        {
-            try
-            {
-                comparator = Function.valueOf(defaultType.toUpperCase()).getValidator();
-            }
-            catch (Exception ne)
-            {
-                String functions = Function.getFunctionNames();
-                sessionState.out.println("Type '" + defaultType + "' was not found. Available: " + functions
-                                         + " Or any class which extends o.a.c.db.marshal.AbstractType.");
-                return;
-            }
-        }
-
-        // making string representation look property e.g. o.a.c.db.marshal.UTF8Type
-        defaultType = comparator.getClass().getName();
-
-        if (assumptionElement.equals("COMPARATOR"))
-        {
-            columnFamily.setComparator_type(defaultType);
-        }
-        else if (assumptionElement.equals("SUB_COMPARATOR"))
-        {
-            columnFamily.setSubcomparator_type(defaultType);
-        }
-        else if (assumptionElement.equals("VALIDATOR"))
-        {
-            columnFamily.setDefault_validation_class(defaultType);
-        }
-        else if (assumptionElement.equals("KEYS"))
-        {
-            this.cfKeysComparators.put(columnFamily.getName(), comparator);
-        }
-        else
-        {
-            String elements = "VALIDATOR, COMPARATOR, KEYS, SUB_COMPARATOR.";
-            sessionState.out.println(String.format("'%s' is invalid. Available: %s", assumptionElement, elements));
-            return;
-        }
-
-        sessionState.out.println(String.format("Assumption for column family '%s' added successfully.", columnFamily.getName()));
     }
 
