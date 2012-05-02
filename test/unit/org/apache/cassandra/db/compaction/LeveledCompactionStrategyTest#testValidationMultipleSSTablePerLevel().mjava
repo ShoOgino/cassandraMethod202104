@@ -1,0 +1,48 @@
+    /*
+     * This excercise in particular the code of #4142
+     */
+    @Test
+    public void testValidationMultipleSSTablePerLevel() throws Exception
+    {
+        String ksname = "Keyspace1";
+        String cfname = "StandardLeveled";
+        Table table = Table.open(ksname);
+        ColumnFamilyStore store = table.getColumnFamilyStore(cfname);
+
+        ByteBuffer value = ByteBuffer.wrap(new byte[100 * 1024]); // 100 KB value, make it easy to have multiple files
+
+        // Enough data to have a level 1 and 2
+        int rows = 20;
+        int columns = 10;
+
+        // Adds enough data to trigger multiple sstable per level
+        for (int r = 0; r < rows; r++)
+        {
+            DecoratedKey key = Util.dk(String.valueOf(r));
+            RowMutation rm = new RowMutation(ksname, key.key);
+            for (int c = 0; c < columns; c++)
+            {
+                rm.add(new QueryPath(cfname, null, ByteBufferUtil.bytes("column" + c)), value, 0);
+            }
+            rm.apply();
+            store.forceFlush();
+        }
+
+        LeveledCompactionStrategy strat = (LeveledCompactionStrategy)store.getCompactionStrategy();
+
+        while (strat.getLevelSize(0) > 0)
+        {
+            store.forceMajorCompaction();
+            Thread.sleep(200);
+        }
+        // Checking we're not completely bad at math
+        assert strat.getLevelSize(1) > 0;
+        assert strat.getLevelSize(2) > 0;
+
+        AntiEntropyService.CFPair p = new AntiEntropyService.CFPair(ksname, cfname);
+        Range<Token> range = new Range<Token>(Util.token(""), Util.token(""));
+        AntiEntropyService.TreeRequest req = new AntiEntropyService.TreeRequest("1", FBUtilities.getLocalAddress(), range, p);
+        AntiEntropyService.Validator validator = new AntiEntropyService.Validator(req);
+        CompactionManager.instance.submitValidation(store, validator).get();
+    }
+
