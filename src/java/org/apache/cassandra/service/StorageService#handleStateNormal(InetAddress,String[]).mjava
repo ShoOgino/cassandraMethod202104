@@ -8,7 +8,20 @@
     private void handleStateNormal(InetAddress endpoint, String[] pieces)
     {
         assert pieces.length >= 2;
-        Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
+
+        // Parse versioned values according to end-point version:
+        //   versions  < 1.2 .....: STATUS,TOKEN
+        //   versions >= 1.2 .....: STATUS,HOST_ID,TOKEN,TOKEN,...
+        int tokensPos;
+        if (Gossiper.instance.getVersion(endpoint) >= MessagingService.VERSION_12)
+        {
+            assert pieces.length >= 3;
+            tokensPos = 2;
+        }
+        else
+            tokensPos = 1;
+
+        Token token = getPartitioner().getTokenFactory().fromString(pieces[tokensPos]);
 
         if (logger.isDebugEnabled())
             logger.debug("Node " + endpoint + " state normal, token " + token);
@@ -50,5 +63,8 @@
             tokenMetadata.removeFromMoving(endpoint);
 
         calculatePendingRanges();
+
+        if (Gossiper.instance.getVersion(endpoint) >= MessagingService.VERSION_12)
+            tokenMetadata.updateHostId(UUID.fromString(pieces[1]), endpoint);
     }
 
