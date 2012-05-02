@@ -37,8 +37,15 @@
             Collections.sort(view.sstables, SSTable.maxTimestampComparator);
 
             // read sorted sstables
+            long mostRecentRowTombstone = Long.MIN_VALUE;
             for (SSTableReader sstable : view.sstables)
             {
+                // if we've already seen a row tombstone with a timestamp greater 
+                // than the most recent update to this sstable, we're done, since the rest of the sstables
+                // will also be older
+                if (sstable.getMaxTimestamp() < mostRecentRowTombstone)
+                    break;
+                
                 long currentMaxTs = sstable.getMaxTimestamp();
                 reduceNameFilter(reducedFilter, container, currentMaxTs);
                 if (((NamesQueryFilter) reducedFilter.filter).columns.isEmpty())
@@ -48,7 +55,14 @@
                 iterators.add(iter);
                 if (iter.getColumnFamily() != null)
                 {
-                    container.delete(iter.getColumnFamily());
+                    ColumnFamily cf = iter.getColumnFamily();
+                    if (cf.isMarkedForDelete())
+                    {
+                        // track the most recent row level tombstone we encounter
+                        mostRecentRowTombstone = cf.getMarkedForDeleteAt();
+                    }
+                    
+                    container.delete(cf);
                     sstablesIterated++;
                     while (iter.hasNext())
                         container.addColumn(iter.next());
