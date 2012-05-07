@@ -58,17 +58,17 @@
                 switch (name.kind)
                 {
                     case KEY_ALIAS:
-                        if (rel.operator() != Relation.Type.EQ && rel.operator() != Relation.Type.IN && !StorageService.getPartitioner().preservesOrder())
-                            throw new InvalidRequestException("Only EQ and IN relation are supported on first component of the PRIMARY KEY for RandomPartitioner");
-                        stmt.keyRestriction = updateRestriction(name.name, stmt.keyRestriction, rel);
+                        if (rel.operator() != Relation.Type.EQ && rel.operator() != Relation.Type.IN && !rel.onToken && !StorageService.getPartitioner().preservesOrder())
+                            throw new InvalidRequestException("Only EQ and IN relation are supported on first component of the PRIMARY KEY for RandomPartitioner (unless you use the token() function)");
+                        stmt.keyRestriction = updateRestriction(name, stmt.keyRestriction, rel);
                         break;
                     case COLUMN_ALIAS:
-                        stmt.columnRestrictions[name.position] = updateRestriction(name.name, stmt.columnRestrictions[name.position], rel);
+                        stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel);
                         break;
                     case VALUE_ALIAS:
                         throw new InvalidRequestException(String.format("Restricting the value of a compact CF (%s) is not supported", name.name));
                     case COLUMN_METADATA:
-                        stmt.metadataRestrictions.put(name, updateRestriction(name.name, stmt.metadataRestrictions.get(name), rel));
+                        stmt.metadataRestrictions.put(name, updateRestriction(name, stmt.metadataRestrictions.get(name), rel));
                         break;
                 }
             }
@@ -128,21 +128,9 @@
                 if (!hasEq)
                     throw new InvalidRequestException("No indexed columns present in by-columns clause with Equal operator");
 
-                // If we have indexed columns and the key = X clause, we transform it into a key >= X AND key <= X clause.
-                // If it's a IN relation however, we reject it.
-                if (stmt.keyRestriction != null && stmt.keyRestriction.isEquality())
-                {
-                    if (stmt.keyRestriction.eqValues.size() > 1)
-                        throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
-
-                    Restriction newRestriction = new Restriction();
-                    for (Bound b : Bound.values())
-                    {
-                        newRestriction.setBound(b, stmt.keyRestriction.eqValues.get(0));
-                        newRestriction.setInclusive(b);
-                    }
-                    stmt.keyRestriction = newRestriction;
-                }
+                // If we have indexed columns and the key = X clause, we will do a range query, but if it's a IN relation, we don't know how to handle it.
+                if (stmt.keyRestriction != null && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
+                    throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
             }
 
             if (!stmt.parameters.orderings.isEmpty())
@@ -194,6 +182,10 @@
                 if (stmt.keyRestriction == null || !stmt.keyRestriction.isEquality())
                     throw new InvalidRequestException("Descending order is only supported is the first part of the PRIMARY KEY is restricted by an Equal or a IN");
             }
+
+            // If this is a query on tokens, it's necessary a range query (there can be more than one key per token), so reject IN queries (as we don't know how to do them)
+            if (stmt.keyRestriction != null && stmt.keyRestriction.onToken && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
+                throw new InvalidRequestException("Select using the token() function don't support IN clause");
 
             return new ParsedStatement.Prepared(stmt, Arrays.<AbstractType<?>>asList(types));
         }
