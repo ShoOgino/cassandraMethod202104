@@ -5,8 +5,20 @@
             byLevel.get(manifest.levelOf(sstable)).add(sstable);
 
         List<ICompactionScanner> scanners = new ArrayList<ICompactionScanner>(sstables.size());
-        for (Integer level : ImmutableSortedSet.copyOf(byLevel.keySet()))
-            scanners.add(new LeveledScanner(new ArrayList<SSTableReader>(byLevel.get(level)), range));
+        for (Integer level : byLevel.keySet())
+        {
+            if (level == 0)
+            {
+                // L0 makes no guarantees about overlapping-ness.  Just create a direct scanner for each
+                for (SSTableReader sstable : byLevel.get(level))
+                    scanners.add(sstable.getDirectScanner(range));
+            }
+            else
+            {
+                // Create a LeveledScanner that only opens one sstable at a time, in sorted order
+                scanners.add(new LeveledScanner(byLevel.get(level), range));
+            }
+        }
 
         return scanners;
     }
