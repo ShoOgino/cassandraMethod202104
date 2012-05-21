@@ -4,14 +4,19 @@
         List<Pair<CFDefinition.Name, ColumnIdentifier>> selection = getExpandedSelection();
         List<Column> thriftColumns = null;
 
+        // Add schema only once
+        for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+            addToSchema(schema, p);
+
         for (org.apache.cassandra.db.Row row : rows)
         {
+            // Not columns match the query, skip
+            if (row.cf == null)
+                continue;
+
             if (cfDef.isCompact)
             {
                 // One cqlRow per column
-                if (row.cf == null)
-                    continue;
-
                 for (IColumn c : columnsInOrder(row.cf, variables))
                 {
                     if (c.isMarkedForDelete())
@@ -40,7 +45,6 @@
                         CFDefinition.Name name = p.left;
                         ByteBuffer nameAsRequested = p.right.key;
 
-                        addToSchema(schema, p);
                         Column col = new Column(nameAsRequested);
                         switch (name.kind)
                         {
@@ -76,9 +80,6 @@
             else if (cfDef.isComposite)
             {
                 // Sparse case: group column in cqlRow when composite prefix is equal
-                if (row.cf == null)
-                    continue;
-
                 CompositeType composite = (CompositeType)cfDef.cfm.comparator;
                 int last = composite.types.size() - 1;
 
@@ -107,8 +108,12 @@
             }
             else
             {
+                if (row.cf.getLiveColumnCount() == 0)
+                    continue;
+
                 // Static case: One cqlRow for all columns
                 thriftColumns = new ArrayList<Column>(selection.size());
+
                 // Respect selection order
                 for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
                 {
@@ -117,15 +122,10 @@
 
                     if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS)
                     {
-                        addToSchema(schema, p);
                         thriftColumns.add(new Column(nameAsRequested).setValue(row.key.key).setTimestamp(-1L));
                         continue;
                     }
 
-                    if (row.cf == null)
-                        continue;
-
-                    addToSchema(schema, p);
                     IColumn c = row.cf.getColumn(name.name.key);
                     Column col = new Column(name.name.key);
                     if (c != null && !c.isMarkedForDelete())
@@ -135,8 +135,9 @@
                 cqlRows.add(new CqlRow(row.key.key, thriftColumns));
             }
         }
-        // We don't allow reversed on range scan, but we do on multiget (IN (...)), so let's reverse the rows there too.
-        if (parameters.isColumnsReversed)
+
+        // Internal calls always return columns in the comparator order, even when reverse was set
+        if (isReversed)
             Collections.reverse(cqlRows);
 
         // Trim result if needed to respect the limit

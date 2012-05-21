@@ -19,7 +19,11 @@
 
                 CreateColumnFamilyStatement stmt = new CreateColumnFamilyStatement(cfName, properties);
                 stmt.setBoundTerms(getBoundsTerms());
-                stmt.columns.putAll(definitions); // we'll remove what is not a column below
+                for (Map.Entry<ColumnIdentifier, String> entry : definitions.entrySet())
+                {
+                    AbstractType<?> type = CFPropDefs.parseType(entry.getValue());
+                    stmt.columns.put(entry.getKey(), type); // we'll remove what is not a column below
+                }
 
                 // Ensure that exactly one key has been specified.
                 if (keyAliases.size() == 0)
@@ -29,6 +33,8 @@
 
                 stmt.keyAlias = keyAliases.get(0).key;
                 stmt.keyValidator = getTypeAndRemove(stmt.columns, keyAliases.get(0));
+                if (stmt.keyValidator instanceof CounterColumnType)
+                    throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.keyAlias));
 
                 // Handle column aliases
                 if (columnAliases != null && !columnAliases.isEmpty())
@@ -39,6 +45,8 @@
                     {
                         stmt.columnAliases.add(columnAliases.get(0).key);
                         stmt.comparator = getTypeAndRemove(stmt.columns, columnAliases.get(0));
+                        if (stmt.comparator instanceof CounterColumnType)
+                            throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.columnAliases.get(0)));
                     }
                     else
                     {
@@ -46,7 +54,11 @@
                         for (ColumnIdentifier t : columnAliases)
                         {
                             stmt.columnAliases.add(t.key);
-                            types.add(getTypeAndRemove(stmt.columns, t));
+
+                            AbstractType<?> type = getTypeAndRemove(stmt.columns, t);
+                            if (type instanceof CounterColumnType)
+                                throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t.key));
+                            types.add(type);
                         }
                         // For sparse, we must add the last UTF8 component
                         if (!useCompactStorage)
@@ -64,14 +76,17 @@
 
                 if (useCompactStorage)
                 {
+                    // There should at least have been one column alias
+                    if (stmt.columnAliases.isEmpty())
+                        throw new InvalidRequestException("COMPACT STORAGE requires at least one column part of the clustering key, none found");
                     // There should be only one column definition remaining, which gives us the default validator.
                     if (stmt.columns.isEmpty())
                         throw new InvalidRequestException("COMPACT STORAGE requires one definition not part of the PRIMARY KEY, none found");
                     if (stmt.columns.size() > 1)
                         throw new InvalidRequestException(String.format("COMPACT STORAGE allows only one column not part of the PRIMARY KEY (got: %s)", StringUtils.join(stmt.columns.keySet(), ", ")));
 
-                    Map.Entry<ColumnIdentifier, String> lastEntry = stmt.columns.entrySet().iterator().next();
-                    stmt.defaultValidator = CFPropDefs.parseType(lastEntry.getValue());
+                    Map.Entry<ColumnIdentifier, AbstractType> lastEntry = stmt.columns.entrySet().iterator().next();
+                    stmt.defaultValidator = lastEntry.getValue();
                     stmt.valueAlias = lastEntry.getKey().key;
                     stmt.columns.remove(lastEntry.getKey());
                 }
@@ -81,8 +96,8 @@
                         throw new InvalidRequestException("No definition found that is not part of the PRIMARY KEY");
 
                     // There is no way to insert/access a column that is not defined for non-compact
-                    // storage, so the actual validator don't matter much.
-                    stmt.defaultValidator = CFDefinition.definitionType;
+                    // storage, so the actual validator don't matter much (except that we want to recognize counter CF as limitation apply to them).
+                    stmt.defaultValidator = (stmt.columns.values().iterator().next() instanceof CounterColumnType) ? CounterColumnType.instance : CFDefinition.definitionType;
                 }
 
                 return new ParsedStatement.Prepared(stmt);

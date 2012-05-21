@@ -1,0 +1,49 @@
+    @Test
+    public void getTopLevelColumnsSkipsSSTablesModifiedBeforeRowDelete() 
+            throws IOException, ExecutionException, InterruptedException
+    {
+        Table table = Table.open("Keyspace1");
+        ColumnFamilyStore store = table.getColumnFamilyStore("Standard1");
+        RowMutation rm;
+        DecoratedKey dk = Util.dk("key1");
+        QueryPath path = new QueryPath("Standard1", null, ByteBufferUtil.bytes("Column1"));
+        
+        // add data
+        rm = new RowMutation("Keyspace1", dk.key);
+        rm.add(path, ByteBufferUtil.bytes("asdf"), 0);
+        rm.apply();
+        store.forceBlockingFlush();
+        
+        // remove
+        rm = new RowMutation("Keyspace1", dk.key);
+        rm.delete(new QueryPath("Standard1"), 10);
+        rm.apply();
+        
+        // add another mutation because sstable maxtimestamp isn't set
+        // correctly during flush if the most recent mutation is a row delete
+        rm = new RowMutation("Keyspace1", Util.dk("key2").key);
+        rm.add(path, ByteBufferUtil.bytes("zxcv"), 20);
+        rm.apply();
+        
+        store.forceBlockingFlush();
+
+        // A NamesQueryFilter goes down one code path (through collectTimeOrderedData())
+        QueryFilter filter = QueryFilter.getNamesFilter(dk, path, ByteBufferUtil.bytes("Column1"));
+        CollationController controller = new CollationController(store, false, filter, Integer.MIN_VALUE);
+        controller.getTopLevelColumns();
+        assertEquals(1, controller.getSstablesIterated());
+        
+        // SliceQueryFilter goes down another path (through collectAllData())
+        // Add another mutation, with a lower timestamp then force another flush 
+        // so we can assert that we're not reading every sstable 
+        rm = new RowMutation("Keyspace1", dk.key);
+        rm.add(path, ByteBufferUtil.bytes("asdf"), 5);
+        rm.apply();
+        store.forceBlockingFlush();
+        
+        filter = QueryFilter.getIdentityFilter(dk, path);
+        controller = new CollationController(store, false, filter, Integer.MIN_VALUE);
+        controller.getTopLevelColumns();
+        assertEquals(2, controller.getSstablesIterated());
+    }
+
