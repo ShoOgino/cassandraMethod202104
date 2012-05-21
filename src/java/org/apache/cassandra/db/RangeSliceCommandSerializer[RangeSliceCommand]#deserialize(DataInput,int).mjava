@@ -12,9 +12,31 @@
             superColumn = ByteBuffer.wrap(buf);
         }
 
-        TDeserializer dser = new TDeserializer(new TBinaryProtocol.Factory());
         SlicePredicate pred = new SlicePredicate();
-        FBUtilities.deserialize(dser, pred, dis);
+        if (version < MessagingService.VERSION_12)
+        {
+            FBUtilities.deserialize(new TDeserializer(new TBinaryProtocol.Factory()), pred, dis);
+        }
+        else
+        {
+            int type = dis.readByte();
+            if (type == 0)
+            {
+                pred.slice_range = new SliceRange(ByteBufferUtil.readWithShortLength(dis),
+                                                  ByteBufferUtil.readWithShortLength(dis),
+                                                  dis.readBoolean(),
+                                                  dis.readInt());
+            }
+            else
+            {
+                assert type == 1;
+                int count = dis.readInt();
+                List<ByteBuffer> columns = new ArrayList<ByteBuffer>(count);
+                for (int i = 0; i < count; i++)
+                    columns.add(ByteBufferUtil.readWithShortLength(dis));
+                pred.column_names = columns;
+            }
+        }
 
         List<IndexExpression> rowFilter = null;
         if (version >= MessagingService.VERSION_11)
@@ -23,8 +45,18 @@
             rowFilter = new ArrayList<IndexExpression>(filterCount);
             for (int i = 0; i < filterCount; i++)
             {
-                IndexExpression expr = new IndexExpression();
-                FBUtilities.deserialize(dser, expr, dis);
+                IndexExpression expr;
+                if (version < MessagingService.VERSION_12)
+                {
+                    expr = new IndexExpression();
+                    FBUtilities.deserialize(new TDeserializer(new TBinaryProtocol.Factory()), expr, dis);
+                }
+                else
+                {
+                    expr = new IndexExpression(ByteBufferUtil.readWithShortLength(dis),
+                                               IndexOperator.findByValue(dis.readInt()),
+                                               ByteBufferUtil.readWithShortLength(dis));
+                }
                 rowFilter.add(expr);
             }
         }
