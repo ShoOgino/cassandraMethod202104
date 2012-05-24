@@ -1,11 +1,11 @@
     private List<CqlRow> process(List<Row> rows, CqlMetadata schema, List<ByteBuffer> variables) throws InvalidRequestException
     {
         List<CqlRow> cqlRows = new ArrayList<CqlRow>();
-        List<Pair<CFDefinition.Name, ColumnIdentifier>> selection = getExpandedSelection();
+        List<Pair<CFDefinition.Name, Selector>> selection = getExpandedSelection();
         List<Column> thriftColumns = null;
 
         // Add schema only once
-        for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+        for (Pair<CFDefinition.Name, Selector> p : selection)
             addToSchema(schema, p);
 
         for (org.apache.cassandra.db.Row row : rows)
@@ -40,18 +40,21 @@
                     }
 
                     // Respect selection order
-                    for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+                    for (Pair<CFDefinition.Name, Selector> p : selection)
                     {
                         CFDefinition.Name name = p.left;
-                        ByteBuffer nameAsRequested = p.right.key;
+                        Selector selector = p.right;
 
-                        Column col = new Column(nameAsRequested);
+                        addToSchema(schema, p);
+                        Column col;
                         switch (name.kind)
                         {
                             case KEY_ALIAS:
+                                col = new Column(selector.id().key);
                                 col.setValue(row.key.key).setTimestamp(-1L);
                                 break;
                             case COLUMN_ALIAS:
+                                col = new Column(selector.id().key);
                                 col.setTimestamp(c.timestamp());
                                 if (cfDef.isComposite)
                                 {
@@ -66,10 +69,12 @@
                                 }
                                 break;
                             case VALUE_ALIAS:
-                                col.setValue(value(c)).setTimestamp(c.timestamp());
+                                col = makeReturnColumn(selector, c);
                                 break;
                             case COLUMN_METADATA:
                                 // This should not happen for compact CF
+                                throw new AssertionError();
+                            default:
                                 throw new AssertionError();
                         }
                         thriftColumns.add(col);
@@ -115,22 +120,19 @@
                 thriftColumns = new ArrayList<Column>(selection.size());
 
                 // Respect selection order
-                for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+                for (Pair<CFDefinition.Name, Selector> p : selection)
                 {
                     CFDefinition.Name name = p.left;
-                    ByteBuffer nameAsRequested = p.right.key;
+                    Selector selector = p.right;
 
                     if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS)
                     {
-                        thriftColumns.add(new Column(nameAsRequested).setValue(row.key.key).setTimestamp(-1L));
+                        thriftColumns.add(new Column(selector.id().key).setValue(row.key.key).setTimestamp(-1L));
                         continue;
                     }
 
                     IColumn c = row.cf.getColumn(name.name.key);
-                    Column col = new Column(name.name.key);
-                    if (c != null && !c.isMarkedForDelete())
-                        col.setValue(value(c)).setTimestamp(c.timestamp());
-                    thriftColumns.add(col);
+                    thriftColumns.add(makeReturnColumn(selector, c));
                 }
                 cqlRows.add(new CqlRow(row.key.key, thriftColumns));
             }
