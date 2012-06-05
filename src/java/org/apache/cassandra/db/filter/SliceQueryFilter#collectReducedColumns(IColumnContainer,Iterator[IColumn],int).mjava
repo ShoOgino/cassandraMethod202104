@@ -1,24 +1,25 @@
     public void collectReducedColumns(IColumnContainer container, Iterator<IColumn> reducedColumns, int gcBefore)
     {
-        int liveColumns = 0;
         AbstractType<?> comparator = container.getComparator();
+
+        if (compositesToGroup < 0)
+            columnCounter = new ColumnCounter();
+        else if (compositesToGroup == 0)
+            columnCounter = new ColumnCounter.GroupByPrefix(null, 0);
+        else
+            columnCounter = new ColumnCounter.GroupByPrefix((CompositeType)comparator, compositesToGroup);
 
         while (reducedColumns.hasNext())
         {
-            if (liveColumns >= count)
+            if (columnCounter.count() >= count)
                 break;
 
             IColumn column = reducedColumns.next();
             if (logger.isDebugEnabled())
                 logger.debug(String.format("collecting %s of %s: %s",
-                                           liveColumns, count, column.getString(comparator)));
+                                           columnCounter.count(), count, column.getString(comparator)));
 
-            // only count live columns towards the `count` criteria
-            if (column.isLive()
-                && (!container.deletionInfo().isDeleted(column)))
-            {
-                liveColumns++;
-            }
+            columnCounter.countColum(column, container);
 
             // but we need to add all non-gc-able columns to the result for read repair:
             if (QueryFilter.isRelevant(column, container, gcBefore))

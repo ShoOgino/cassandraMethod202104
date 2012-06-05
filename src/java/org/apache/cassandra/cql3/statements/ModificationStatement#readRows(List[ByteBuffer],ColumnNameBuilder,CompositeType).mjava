@@ -1,0 +1,40 @@
+    public Map<ByteBuffer, ColumnGroupMap> readRows(List<ByteBuffer> keys, ColumnNameBuilder builder, CompositeType composite) throws UnavailableException, TimeoutException, InvalidRequestException
+    {
+        List<ReadCommand> commands = new ArrayList<ReadCommand>(keys.size());
+        for (ByteBuffer key : keys)
+        {
+            commands.add(new SliceFromReadCommand(keyspace(),
+                                                  key,
+                                                  new QueryPath(columnFamily()),
+                                                  builder.copy().build(),
+                                                  builder.copy().buildAsEndOfRange(),
+                                                  false,
+                                                  Integer.MAX_VALUE));
+        }
+
+        try
+        {
+            List<Row> rows = StorageProxy.read(commands, getConsistencyLevel());
+            Map<ByteBuffer, ColumnGroupMap> map = new HashMap<ByteBuffer, ColumnGroupMap>();
+            for (Row row : rows)
+            {
+                if (row.cf == null || row.cf.isEmpty())
+                    continue;
+
+                ColumnGroupMap.Builder groupBuilder = new ColumnGroupMap.Builder(composite, true);
+                for (IColumn column : row.cf)
+                    groupBuilder.add(column);
+
+                List<ColumnGroupMap> groups = groupBuilder.groups();
+                assert groups.isEmpty() || groups.size() == 1;
+                if (!groups.isEmpty())
+                    map.put(row.key.key, groups.get(0));
+            }
+            return map;
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+    }
+

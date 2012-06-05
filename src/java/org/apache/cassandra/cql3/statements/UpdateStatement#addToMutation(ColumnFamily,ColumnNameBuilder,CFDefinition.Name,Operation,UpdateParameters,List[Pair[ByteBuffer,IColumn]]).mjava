@@ -1,0 +1,68 @@
+    private boolean addToMutation(ColumnFamily cf,
+                                  ColumnNameBuilder builder,
+                                  CFDefinition.Name valueDef,
+                                  Operation value,
+                                  UpdateParameters params,
+                                  List<Pair<ByteBuffer, IColumn>> list) throws InvalidRequestException
+    {
+        switch (value.type)
+        {
+            case SET:
+                Value v = ((Operation.Set)value).value;
+                if (v instanceof Term)
+                {
+                    ByteBuffer colName = builder.build();
+                    validateColumnName(colName);
+                    ByteBuffer valueBytes = ((Term)v).getByteBuffer(valueDef.type, params.variables);
+                    cf.addColumn(params.makeColumn(colName, valueBytes));
+                }
+                else
+                {
+                    assert v instanceof Value.CollectionLiteral;
+                    Value.CollectionLiteral l = (Value.CollectionLiteral)v;
+                    l.validateType(valueDef);
+
+                    // Remove previous
+                    cf.addAtom(params.makeTombstoneForOverwrite(builder.copy().build(), builder.copy().buildAsEndOfRange()));
+
+                    if (!l.isEmpty())
+                        addToMutation(cf, builder, valueDef, new Operation.Function(l.constructionFunction(), l.asList()), params, null);
+                }
+                return false;
+            case COUNTER:
+                Operation.Counter cOp = (Operation.Counter)value;
+                long val;
+                try
+                {
+                    val = ByteBufferUtil.toLong(cOp.value.getByteBuffer(LongType.instance, params.variables));
+                }
+                catch (NumberFormatException e)
+                {
+                    throw new InvalidRequestException(String.format("'%s' is an invalid value, should be a long.",
+                                cOp.value.getText()));
+                }
+
+                if (cOp.isSubstraction)
+                {
+                    if (val == Long.MIN_VALUE)
+                        throw new InvalidRequestException("The negation of " + val + " overflows supported integer precision (signed 8 bytes integer)");
+                    else
+                        val = -val;
+                }
+                cf.addCounter(new QueryPath(columnFamily(), null, builder.build()), val);
+                return true;
+            case FUNCTION:
+                Operation.Function fOp = (Operation.Function)value;
+                if (!(valueDef.type instanceof CollectionType))
+                    throw new InvalidRequestException(String.format("Invalid operation %s, %s is not a collection", fOp.fct, valueDef.name));
+
+                if ((valueDef.type instanceof ListType) && fOp.fct.needsReading)
+                    ((ListType)valueDef.type).execute(cf, builder, fOp.fct, fOp.arguments, params, list);
+                else
+                    ((CollectionType)valueDef.type).execute(cf, builder, fOp.fct, fOp.arguments, params);
+
+                return false;
+        }
+        throw new AssertionError();
+    }
+

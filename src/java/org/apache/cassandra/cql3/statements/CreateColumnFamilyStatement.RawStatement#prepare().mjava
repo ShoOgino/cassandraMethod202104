@@ -19,10 +19,19 @@
 
                 CreateColumnFamilyStatement stmt = new CreateColumnFamilyStatement(cfName, properties);
                 stmt.setBoundTerms(getBoundsTerms());
-                for (Map.Entry<ColumnIdentifier, String> entry : definitions.entrySet())
+
+                Map<ByteBuffer, CollectionType> definedCollections = null;
+                for (Map.Entry<ColumnIdentifier, ParsedType> entry : definitions.entrySet())
                 {
-                    AbstractType<?> type = CFPropDefs.parseType(entry.getValue());
-                    stmt.columns.put(entry.getKey(), type); // we'll remove what is not a column below
+                    ColumnIdentifier id = entry.getKey();
+                    ParsedType pt = entry.getValue();
+                    if (pt.isCollection())
+                    {
+                        if (definedCollections == null)
+                            definedCollections = new HashMap<ByteBuffer, CollectionType>();
+                        definedCollections.put(id.key, (CollectionType)pt.getType());
+                    }
+                    stmt.columns.put(id, pt.getType()); // we'll remove what is not a column below
                 }
 
                 // Ensure that exactly one key has been specified.
@@ -43,6 +52,8 @@
                     // standard "dynamic" CF, otherwise it's a composite
                     if (useCompactStorage && columnAliases.size() == 1)
                     {
+                        if (definedCollections != null)
+                            throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
                         stmt.columnAliases.add(columnAliases.get(0).key);
                         stmt.comparator = getTypeAndRemove(stmt.columns, columnAliases.get(0));
                         if (stmt.comparator instanceof CounterColumnType)
@@ -60,9 +71,20 @@
                                 throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t.key));
                             types.add(type);
                         }
-                        // For sparse, we must add the last UTF8 component
-                        if (!useCompactStorage)
+
+                        if (useCompactStorage)
+                        {
+                            if (definedCollections != null)
+                                throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
+                        }
+                        else
+                        {
+                            // For sparse, we must add the last UTF8 component
+                            // and the collection type if there is one
                             types.add(CFDefinition.definitionType);
+                            if (definedCollections != null)
+                                types.add(ColumnToCollectionType.getInstance(definedCollections));
+                        }
 
                         if (types.isEmpty())
                             throw new IllegalStateException("Nonsensical empty parameter list for CompositeType");
@@ -72,9 +94,15 @@
                 else
                 {
                     if (useCompactStorage)
+                    {
+                        if (definedCollections != null)
+                            throw new InvalidRequestException("Collection types are not supported with non composite PRIMARY KEY");
                         stmt.comparator = CFDefinition.definitionType;
+                    }
                     else
+                    {
                         stmt.comparator = CompositeType.getInstance(Collections.<AbstractType<?>>singletonList(CFDefinition.definitionType));
+                    }
                 }
 
                 if (stmt.columns.isEmpty())

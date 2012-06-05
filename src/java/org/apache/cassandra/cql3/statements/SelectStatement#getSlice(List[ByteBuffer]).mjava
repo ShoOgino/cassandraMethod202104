@@ -1,47 +1,35 @@
-    private List<Row> getSlice(List<ByteBuffer> variables) throws InvalidRequestException, TimedOutException, UnavailableException
+    private List<Row> getSlice(List<ByteBuffer> variables) throws InvalidRequestException, TimeoutException, UnavailableException
     {
         QueryPath queryPath = new QueryPath(columnFamily());
         Collection<ByteBuffer> keys = getKeys(variables);
         List<ReadCommand> commands = new ArrayList<ReadCommand>(keys.size());
 
+        IFilter filter = makeFilter(variables);
         // ...a range (slice) of column names
         if (isColumnRange())
         {
-            ByteBuffer start = getColumnStart(variables);
-            ByteBuffer finish = getColumnEnd(variables);
-
-            SliceQueryFilter filter = new SliceQueryFilter(start, finish, isReversed, getLimit());
-            QueryProcessor.validateSliceFilter(cfDef.cfm, filter);
-
             // Note that we use the total limit for every key. This is
             // potentially inefficient, but then again, IN + LIMIT is not a
             // very sensible choice
             for (ByteBuffer key : keys)
             {
                 QueryProcessor.validateKey(key);
-                commands.add(new SliceFromReadCommand(keyspace(), key, queryPath, filter));
+                commands.add(new SliceFromReadCommand(keyspace(), key, queryPath, (SliceQueryFilter)filter));
             }
         }
         // ...of a list of column names
         else
         {
-            Collection<ByteBuffer> columnNames = getRequestedColumns(variables);
-            QueryProcessor.validateColumnNames(columnNames);
-
             for (ByteBuffer key: keys)
             {
                 QueryProcessor.validateKey(key);
-                commands.add(new SliceByNamesReadCommand(keyspace(), key, queryPath, columnNames));
+                commands.add(new SliceByNamesReadCommand(keyspace(), key, queryPath, (NamesQueryFilter)filter));
             }
         }
 
         try
         {
             return StorageProxy.read(commands, parameters.consistencyLevel);
-        }
-        catch (TimeoutException e)
-        {
-            throw new TimedOutException();
         }
         catch (IOException e)
         {

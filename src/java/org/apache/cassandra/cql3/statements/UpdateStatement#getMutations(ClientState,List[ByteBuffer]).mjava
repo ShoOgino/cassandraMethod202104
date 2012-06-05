@@ -1,5 +1,5 @@
     /** {@inheritDoc} */
-    public List<IMutation> getMutations(ClientState clientState, List<ByteBuffer> variables) throws InvalidRequestException
+    public List<IMutation> getMutations(ClientState clientState, List<ByteBuffer> variables) throws UnavailableException, TimeoutException, InvalidRequestException
     {
         // Check key
         List<Term> keys = processedKeys.get(cfDef.key.name);
@@ -29,13 +29,40 @@
             }
         }
 
-        List<IMutation> rowMutations = new LinkedList<IMutation>();
-
+        List<ByteBuffer> rawKeys = new ArrayList<ByteBuffer>(keys.size());
         for (Term key: keys)
+            rawKeys.add(key.getByteBuffer(cfDef.key.type, variables));
+
+        // Lists SET operation incurs a read. Do that now. Note that currently,
+        // if there is at least one list, we just read the whole "row" (in the CQL sense of
+        // row) to simplify. Once #3885 is in, we can improve.
+        boolean needsReading = false;
+        for (Map.Entry<CFDefinition.Name, Operation> entry : processedColumns.entries())
         {
-            ByteBuffer rawKey = key.getByteBuffer(cfDef.key.type, variables);
-            rowMutations.add(mutationForKey(cfDef, clientState, rawKey, builder, variables));
+            CFDefinition.Name name = entry.getKey();
+            Operation value = entry.getValue();
+
+            if (!(name.type instanceof ListType))
+                continue;
+
+            if (value == null || value.type != Operation.Type.FUNCTION)
+                continue;
+
+            Operation.Function fOp = (Operation.Function)value;
+            if (fOp.fct.needsReading)
+            {
+                needsReading = true;
+                break;
+            }
         }
+
+        Map<ByteBuffer, ColumnGroupMap> rows = needsReading ? readRows(rawKeys, builder, (CompositeType)cfDef.cfm.comparator) : null;
+
+        List<IMutation> rowMutations = new LinkedList<IMutation>();
+        UpdateParameters params = new UpdateParameters(variables, getTimestamp(clientState), timeToLive);
+
+        for (ByteBuffer key: rawKeys)
+            rowMutations.add(mutationForKey(cfDef, key, builder, params, rows == null ? null : rows.get(key)));
 
         return rowMutations;
     }
