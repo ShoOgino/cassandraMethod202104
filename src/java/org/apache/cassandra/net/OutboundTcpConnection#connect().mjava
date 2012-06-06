@@ -1,8 +1,10 @@
     private boolean connect()
     {
-        isUpgraded = false;
         if (logger.isDebugEnabled())
             logger.debug("attempting to connect to " + poolReference.endPoint());
+
+        targetVersion = Gossiper.instance.getVersion(poolReference.endPoint());
+
         long start = System.currentTimeMillis();
         while (System.currentTimeMillis() < start + DatabaseDescriptor.getRpcTimeout())
         {
@@ -12,6 +14,41 @@
                 socket.setKeepAlive(true);
                 socket.setTcpNoDelay(true);
                 out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream(), 4096));
+
+                if (targetVersion >= MessagingService.VERSION_12)
+                {
+                    out.writeInt(MessagingService.PROTOCOL_MAGIC);
+                    writeHeader(out, targetVersion, shouldCompressConnection());
+                    out.flush();
+
+                    DataInputStream in = new DataInputStream(socket.getInputStream());
+                    int maxTargetVersion = in.readInt();
+                    if (targetVersion > maxTargetVersion)
+                    {
+                        logger.debug("Target max version is {}; will reconnect with that version", maxTargetVersion);
+                        Gossiper.instance.setVersion(poolReference.endPoint(), maxTargetVersion);
+                        disconnect();
+                        return false;
+                    }
+
+                    if (targetVersion < maxTargetVersion && targetVersion < MessagingService.current_version)
+                    {
+                        logger.debug("Detected higher max version {} (using {}); will reconnect when queued messages are done",
+                                     maxTargetVersion, targetVersion);
+                        Gossiper.instance.setVersion(poolReference.endPoint(), Math.min(MessagingService.current_version, maxTargetVersion));
+                        softCloseSocket();
+                    }
+
+                    out.writeInt(MessagingService.current_version);
+                    CompactEndpointSerializationHelper.serialize(FBUtilities.getBroadcastAddress(), out);
+                    if (shouldCompressConnection())
+                    {
+                        out.flush();
+                        logger.debug("Upgrading OutputStream to be compressed");
+                        out = new DataOutputStream(new SnappyOutputStream(new BufferedOutputStream(socket.getOutputStream())));
+                    }
+                }
+
                 return true;
             }
             catch (IOException e)
@@ -29,9 +66,6 @@
                 }
             }
         }
-        // nodes can change dc during the lifetime of this OutboundTcpConnection, but we cannot upgrade a
-        // connection mid-flight, so it is safe to set here and dont change until the next connect()
-        this.writeToLocalDC = isSameDC(poolReference.endPoint());
         return false;
     }
 
