@@ -12,30 +12,17 @@
             superColumn = ByteBuffer.wrap(buf);
         }
 
-        SlicePredicate pred = new SlicePredicate();
+        IFilter predicate;
+        AbstractType<?> comparator = ColumnFamily.getComparatorFor(keyspace, columnFamily, superColumn);
         if (version < MessagingService.VERSION_12)
         {
+            SlicePredicate pred = new SlicePredicate();
             FBUtilities.deserialize(new TDeserializer(new TBinaryProtocol.Factory()), pred, dis);
+            predicate = ThriftValidation.asIFilter(pred, comparator);
         }
         else
         {
-            int type = dis.readByte();
-            if (type == 0)
-            {
-                pred.slice_range = new SliceRange(ByteBufferUtil.readWithShortLength(dis),
-                                                  ByteBufferUtil.readWithShortLength(dis),
-                                                  dis.readBoolean(),
-                                                  dis.readInt());
-            }
-            else
-            {
-                assert type == 1;
-                int count = dis.readInt();
-                List<ByteBuffer> columns = new ArrayList<ByteBuffer>(count);
-                for (int i = 0; i < count; i++)
-                    columns.add(ByteBufferUtil.readWithShortLength(dis));
-                pred.column_names = columns;
-            }
+            predicate = IFilter.Serializer.instance.deserialize(dis, version, comparator);
         }
 
         List<IndexExpression> rowFilter = null;
@@ -70,6 +57,6 @@
             maxIsColumns = dis.readBoolean();
             isPaging = dis.readBoolean();
         }
-        return new RangeSliceCommand(keyspace, columnFamily, superColumn, pred, range, rowFilter, maxResults, maxIsColumns, isPaging);
+        return new RangeSliceCommand(keyspace, columnFamily, superColumn, predicate, range, rowFilter, maxResults, maxIsColumns, isPaging);
     }
 
