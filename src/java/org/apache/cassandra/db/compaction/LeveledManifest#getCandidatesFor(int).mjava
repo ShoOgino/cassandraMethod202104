@@ -5,17 +5,45 @@
 
         if (level == 0)
         {
-            // because L0 files may overlap each other, we treat compactions there specially:
-            // a L0 compaction also checks other L0 files for overlap.
+            // L0 is the dumping ground for new sstables which thus may overlap each other.
+            //
+            // We treat L0 compactions specially:
+            // 1a. add sstables to the candidate set until we have at least maxSSTableSizeInMB
+            // 1b. prefer choosing older sstables as candidates, to newer ones
+            // 1c. any L0 sstables that overlap a candidate, will also become candidates
+            // 2. At most MAX_COMPACTING_L0 sstables will be compacted at once
+            // 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,
+            //    and the result of the compaction will stay in L0 instead of being promoted (see promote())
             Set<SSTableReader> candidates = new HashSet<SSTableReader>();
-            // pick the oldest sstable from L0, and any that overlap with it
+            Set<SSTableReader> remaining = new HashSet<SSTableReader>(generations[0]);
             List<SSTableReader> ageSortedSSTables = new ArrayList<SSTableReader>(generations[0]);
             Collections.sort(ageSortedSSTables, SSTable.maxTimestampComparator);
-            List<SSTableReader> L0 = overlapping(ageSortedSSTables.get(0), generations[0]);
-            L0 = L0.size() > MAX_COMPACTING_L0 ? L0.subList(0, MAX_COMPACTING_L0) : L0;
-            // add the overlapping ones from L1
-            for (SSTableReader sstable : L0)
-                candidates.addAll(overlapping(sstable, generations[1]));
+            for (SSTableReader sstable : ageSortedSSTables)
+            {
+                if (candidates.contains(sstable))
+                    continue;
+
+                List<SSTableReader> newCandidates = overlapping(sstable, remaining);
+                candidates.addAll(newCandidates);
+                remaining.removeAll(newCandidates);
+
+                if (candidates.size() > MAX_COMPACTING_L0)
+                {
+                    // limit to only the MAX_COMPACTING_L0 oldest candidates
+                    List<SSTableReader> ageSortedCandidates = new ArrayList<SSTableReader>(candidates);
+                    Collections.sort(ageSortedCandidates, SSTable.maxTimestampComparator);
+                    return ageSortedCandidates.subList(0, MAX_COMPACTING_L0);
+                }
+
+                if (SSTable.getTotalBytes(candidates) > maxSSTableSizeInBytes)
+                {
+                    // add sstables from L1 that overlap candidates
+                    for (SSTableReader candidate : new ArrayList<SSTableReader>(candidates))
+                        candidates.addAll(overlapping(candidate, generations[1]));
+                    break;
+                }
+            }
+
             return candidates;
         }
 
