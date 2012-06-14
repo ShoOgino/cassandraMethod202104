@@ -4,10 +4,10 @@
         // This test check that EchoedRow doesn't skipp rows: see CASSANDRA-2653
 
         Table table = Table.open(TABLE1);
-        ColumnFamilyStore store = table.getColumnFamilyStore("Standard2");
+        ColumnFamilyStore cfs = table.getColumnFamilyStore("Standard2");
 
         // disable compaction while flushing
-        store.disableAutoCompaction();
+        cfs.disableAutoCompaction();
 
         // Insert 4 keys in two sstables. We need the sstables to have 2 rows
         // at least to trigger what was causing CASSANDRA-2653
@@ -19,9 +19,9 @@
             rm.apply();
 
             if (i % 2 == 0)
-                store.forceBlockingFlush();
+                cfs.forceBlockingFlush();
         }
-        Collection<SSTableReader> toCompact = store.getSSTables();
+        Collection<SSTableReader> toCompact = cfs.getSSTables();
         assert toCompact.size() == 2;
 
         // Reinserting the same keys. We will compact only the previous sstable, but we need those new ones
@@ -33,22 +33,22 @@
             rm.add(new QueryPath("Standard2", null, ByteBufferUtil.bytes(String.valueOf(i))), ByteBufferUtil.EMPTY_BYTE_BUFFER, i);
             rm.apply();
         }
-        store.forceBlockingFlush();
+        cfs.forceBlockingFlush();
         SSTableReader tmpSSTable = null;
-        for (SSTableReader sstable : store.getSSTables())
+        for (SSTableReader sstable : cfs.getSSTables())
             if (!toCompact.contains(sstable))
                 tmpSSTable = sstable;
         assert tmpSSTable != null;
 
         // Force compaction on first sstables. Since each row is in only one sstable, we will be using EchoedRow.
-        Util.compact(store, toCompact, false);
-        assertEquals(2, store.getSSTables().size());
+        Util.compact(cfs, toCompact, false);
+        assertEquals(2, cfs.getSSTables().size());
 
         // Now, we remove the sstable that was just created to force the use of EchoedRow (so that it doesn't hide the problem)
-        store.markCompacted(Collections.singleton(tmpSSTable), OperationType.UNKNOWN);
-        assertEquals(1, store.getSSTables().size());
+        cfs.markCompacted(Collections.singleton(tmpSSTable), OperationType.UNKNOWN);
+        assertEquals(1, cfs.getSSTables().size());
 
         // Now assert we do have the 4 keys
-        assertEquals(4, Util.getRangeSlice(store).size());
+        assertEquals(4, Util.getRangeSlice(cfs).size());
     }
 
