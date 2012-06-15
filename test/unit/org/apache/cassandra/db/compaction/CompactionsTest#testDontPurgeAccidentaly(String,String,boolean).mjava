@@ -2,11 +2,11 @@
     {
         // This test catches the regression of CASSANDRA-2786
         Table table = Table.open(TABLE1);
-        ColumnFamilyStore store = table.getColumnFamilyStore(cfname);
+        ColumnFamilyStore cfs = table.getColumnFamilyStore(cfname);
 
         // disable compaction while flushing
-        store.clearUnsafe();
-        store.disableAutoCompaction();
+        cfs.clearUnsafe();
+        cfs.disableAutoCompaction();
 
         // Add test row
         DecoratedKey key = Util.dk(k);
@@ -14,32 +14,32 @@
         rm.add(new QueryPath(cfname, ByteBufferUtil.bytes("sc"), ByteBufferUtil.bytes("c")), ByteBufferUtil.EMPTY_BYTE_BUFFER, 0);
         rm.apply();
 
-        store.forceBlockingFlush();
+        cfs.forceBlockingFlush();
 
-        Collection<SSTableReader> sstablesBefore = store.getSSTables();
+        Collection<SSTableReader> sstablesBefore = cfs.getSSTables();
 
         QueryFilter filter = QueryFilter.getIdentityFilter(key, new QueryPath(cfname, null, null));
-        assert !store.getColumnFamily(filter).isEmpty();
+        assert !cfs.getColumnFamily(filter).isEmpty();
 
         // Remove key
         rm = new RowMutation(TABLE1, key.key);
         rm.delete(new QueryPath(cfname, null, null), 2);
         rm.apply();
 
-        ColumnFamily cf = store.getColumnFamily(filter);
+        ColumnFamily cf = cfs.getColumnFamily(filter);
         assert cf == null || cf.isEmpty() : "should be empty: " + cf;
 
-        store.forceBlockingFlush();
+        cfs.forceBlockingFlush();
 
-        Collection<SSTableReader> sstablesAfter = store.getSSTables();
+        Collection<SSTableReader> sstablesAfter = cfs.getSSTables();
         Collection<SSTableReader> toCompact = new ArrayList<SSTableReader>();
         for (SSTableReader sstable : sstablesAfter)
             if (!sstablesBefore.contains(sstable))
                 toCompact.add(sstable);
 
-        Util.compact(store, toCompact, forceDeserialize);
+        Util.compact(cfs, toCompact, forceDeserialize);
 
-        cf = store.getColumnFamily(filter);
+        cf = cfs.getColumnFamily(filter);
         assert cf == null || cf.isEmpty() : "should be empty: " + cf;
     }
 
