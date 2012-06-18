@@ -1,0 +1,44 @@
+        protected boolean fetchMoreData() throws IOException
+        {
+            if (!hasMoreSlice())
+                return false;
+
+            // If we read blocks in reversed disk order, we may have columns from the previous block to handle.
+            // Note that prefetched keeps columns in reversed disk order.
+            if (reversed && !prefetched.isEmpty())
+            {
+                boolean gotSome = false;
+                // Avoids some comparison when we know it's not useful
+                boolean inSlice = false;
+
+                OnDiskAtom prefetchedCol;
+                while ((prefetchedCol = prefetched.peek() ) != null)
+                {
+                    // col is before slice, we update the slice
+                    if (isColumnBeforeSliceStart(prefetchedCol))
+                    {
+                        inSlice = false;
+                        if (!setNextSlice())
+                            return false;
+                    }
+                    // col is within slice, all columns
+                    // (we go in reverse, so as soon as we are in a slice, no need to check
+                    // we're after the slice until we change slice)
+                    else if (inSlice || isColumnBeforeSliceFinish(prefetchedCol))
+                    {
+                        blockColumns.addLast(prefetched.poll());
+                        gotSome = true;
+                        inSlice = true;
+                    }
+                    // if col is after slice, ignore
+                    else
+                    {
+                        prefetched.poll();
+                    }
+                }
+                if (gotSome)
+                    return true;
+            }
+            return getNextBlock();
+        }
+

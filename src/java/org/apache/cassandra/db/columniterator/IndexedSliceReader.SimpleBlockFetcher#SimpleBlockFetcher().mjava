@@ -1,23 +1,37 @@
-        private SimpleBlockFetcher() throws IOException
+        public SimpleBlockFetcher() throws IOException
         {
+            // Since we have to deserialize in order and will read all slices might as well reverse the slices and
+            // behave as if it was not reversed
+            super(reversed ? slices.length - 1 : 0);
+
+            // We remenber when we are whithin a slice to avoid some comparison
+            boolean inSlice = false;
+
             OnDiskAtom.Serializer atomSerializer = emptyColumnFamily.getOnDiskSerializer();
             int columns = file.readInt();
+
             for (int i = 0; i < columns; i++)
             {
                 OnDiskAtom column = atomSerializer.deserializeFromSSTable(file, sstable.descriptor.version);
-                if (reversed)
-                    blockColumns.addFirst(column);
-                else
-                    blockColumns.addLast(column);
 
-                /* see if we can stop seeking. */
-                boolean outOfBounds = false;
-                if (!reversed && finishColumn.remaining() > 0)
-                    outOfBounds = comparator.compare(column.name(), finishColumn) >= 0;
-                else if (reversed && startColumn.remaining() > 0)
-                    outOfBounds = comparator.compare(column.name(), startColumn) >= 0;
-                if (outOfBounds)
-                    break;
+                // col is before slice
+                // (If in slice, don't bother checking that until we change slice)
+                if (!inSlice && isColumnBeforeSliceStart(column))
+                    continue;
+
+                // col is within slice
+                if (isColumnBeforeSliceFinish(column))
+                {
+                    inSlice = true;
+                    addColumn(column);
+                }
+                // col is after slice. more slices?
+                else
+                {
+                    inSlice = false;
+                    if (!setNextSlice())
+                        break;
+                }
             }
         }
 

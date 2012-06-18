@@ -1,0 +1,53 @@
+    /**
+     * This slice reader assumes that slices are sorted correctly, e.g. that for forward lookup slices are in
+     * lexicographic order of start elements and that for reverse lookup they are in reverse lexicographic order of
+     * finish (reverse start) elements. i.e. forward: [a,b],[d,e],[g,h] reverse: [h,g],[e,d],[b,a]. This reader also
+     * assumes that validation has been performed in terms of intervals (no overlapping intervals).
+     */
+    public IndexedSliceReader(SSTableReader sstable, RowIndexEntry indexEntry, FileDataInput input, ColumnSlice[] slices, boolean reversed)
+    {
+        this.sstable = sstable;
+        this.originalInput = input;
+        this.reversed = reversed;
+        this.slices = slices;
+        this.comparator = sstable.metadata.comparator;
+
+        try
+        {
+            if (sstable.descriptor.version.hasPromotedIndexes)
+            {
+                this.indexes = indexEntry.columnsIndex();
+                if (indexes.isEmpty())
+                {
+                    setToRowStart(sstable, indexEntry, input);
+                    this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                    emptyColumnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(file, sstable.descriptor.version));
+                    fetcher = new SimpleBlockFetcher();
+                }
+                else
+                {
+                    this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                    emptyColumnFamily.delete(indexEntry.deletionInfo());
+                    fetcher = new IndexedBlockFetcher(indexEntry.position);
+                }
+            }
+            else
+            {
+                setToRowStart(sstable, indexEntry, input);
+                IndexHelper.skipBloomFilter(file);
+                this.indexes = IndexHelper.deserializeIndex(file);
+                this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                emptyColumnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(file, sstable.descriptor.version));
+                fetcher = indexes.isEmpty()
+                        ? new SimpleBlockFetcher()
+                        : new IndexedBlockFetcher(file.getFilePointer() + 4); // We still have the column count to
+                                                                              // skip to get the basePosition
+            }
+        }
+        catch (IOException e)
+        {
+            sstable.markSuspect();
+            throw new IOError(e);
+        }
+    }
+
