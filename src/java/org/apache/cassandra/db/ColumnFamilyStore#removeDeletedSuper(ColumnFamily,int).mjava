@@ -7,25 +7,27 @@
         while (iter.hasNext())
         {
             SuperColumn c = (SuperColumn)iter.next();
+            long minTimestamp = Math.max(c.getMarkedForDeleteAt(), cf.getMarkedForDeleteAt());
             Iterator<IColumn> subIter = c.getSubColumns().iterator();
             while (subIter.hasNext())
             {
                 IColumn subColumn = subIter.next();
                 // remove subcolumns if
-                // (a) the subcolumn itself is gcable or
-                // (b) the supercolumn is shadowed by the CF and the column is not newer
-                // (b) the subcolumn is shadowed by the supercolumn
-                if (subColumn.getLocalDeletionTime() < gcBefore
-                    || cf.deletionInfo().isDeleted(c.name(), subColumn.timestamp())
-                    || c.deletionInfo().isDeleted(subColumn))
+                // (a) the subcolumn itself is tombstoned or
+                // (b) the supercolumn is tombstoned and the subcolumn is not newer than it
+                if (subColumn.timestamp() <= minTimestamp
+                    || subColumn.getLocalDeletionTime() < gcBefore)
                 {
                     subIter.remove();
                 }
             }
-            c.maybeResetDeletionTimes(gcBefore);
-            if (c.getSubColumns().isEmpty() && !c.isMarkedForDelete())
+            if (c.getSubColumns().isEmpty() && (!c.isMarkedForDelete() || c.getLocalDeletionTime() < gcBefore))
             {
                 iter.remove();
+            }
+            else
+            {
+                c.maybeResetDeletionTimes(gcBefore);
             }
         }
     }
