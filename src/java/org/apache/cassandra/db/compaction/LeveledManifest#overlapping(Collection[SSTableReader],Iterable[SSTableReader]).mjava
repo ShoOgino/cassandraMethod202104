@@ -1,0 +1,27 @@
+    private static Set<SSTableReader> overlapping(Collection<SSTableReader> candidates, Iterable<SSTableReader> others)
+    {
+        assert !candidates.isEmpty();
+        /*
+         * Picking each sstable from others that overlap one of the sstable of candidates is not enough
+         * because you could have the following situation:
+         *   candidates = [ s1(a, c), s2(m, z) ]
+         *   others = [ s3(e, g) ]
+         * In that case, s2 overlaps none of s1 or s2, but if we compact s1 with s2, the resulting sstable will
+         * overlap s3, so we must return s3.
+         *
+         * Thus, the correct approach is to pick sstables overlapping anything between the first key in all
+         * the candidate sstables, and the last.
+         */
+        Iterator<SSTableReader> iter = candidates.iterator();
+        SSTableReader sstable = iter.next();
+        Token first = sstable.first.token;
+        Token last = sstable.last.token;
+        while (iter.hasNext())
+        {
+            sstable = iter.next();
+            first = first.compareTo(sstable.first.token) <= 0 ? first : sstable.first.token;
+            last = last.compareTo(sstable.last.token) >= 0 ? last : sstable.last.token;
+        }
+        return overlapping(first, last, others);
+    }
+
