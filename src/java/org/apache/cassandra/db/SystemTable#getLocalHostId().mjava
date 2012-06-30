@@ -6,40 +6,21 @@
     {
         UUID hostId = null;
 
+        String req = "SELECT ring_id FROM system.%s WHERE key='%s'";
+        UntypedResultSet result = processInternal(String.format(req, LOCAL_CF, LOCAL_KEY));
+
         // Look up the Host UUID (return it if found)
-        Table table = Table.open(Table.SYSTEM_TABLE);
-        QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCAL_KEY),
-                                                        new QueryPath(LOCAL_CF),
-                                                        ImmutableSortedSet.<ByteBuffer>of(ByteBufferUtil.bytes("ring_id")));
-        ColumnFamily cf = table.getColumnFamilyStore(LOCAL_CF).getColumnFamily(filter);
-        if (cf != null)
+        if (!result.isEmpty() && result.one().has("ring_id"))
         {
-            cf = ColumnFamilyStore.removeDeleted(cf, 0);
-            assert cf.getColumnCount() <= 1;
-            if (cf.getColumnCount() > 0)
-                return UUIDGen.getUUID(cf.iterator().next().value());
+            return result.one().getUUID("ring_id");
         }
 
         // ID not found, generate a new one, persist, and then return it.
         hostId = UUID.randomUUID();
-        long now = FBUtilities.timestampMicros();
-
         logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
 
-        cf = ColumnFamily.create(Table.SYSTEM_TABLE, LOCAL_CF);
-        cf.addColumn(Column.create(ByteBuffer.wrap(UUIDGen.decompose(hostId)), now, "ring_id"));
-
-        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCAL_KEY);
-        rm.add(cf);
-        try
-        {
-            rm.apply();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-
+        req = "INSERT INTO system.%s (key, ring_id) VALUES ('%s', '%s')";
+        processInternal(String.format(req, LOCAL_CF, LOCAL_KEY, hostId));
         return hostId;
     }
 
