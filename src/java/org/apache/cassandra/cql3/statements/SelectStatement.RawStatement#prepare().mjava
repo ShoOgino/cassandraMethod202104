@@ -61,8 +61,8 @@
                 {
                     case KEY_ALIAS:
                         if (rel.operator() != Relation.Type.EQ && rel.operator() != Relation.Type.IN && !rel.onToken && !StorageService.getPartitioner().preservesOrder())
-                            throw new InvalidRequestException("Only EQ and IN relation are supported on first component of the PRIMARY KEY for RandomPartitioner (unless you use the token() function)");
-                        stmt.keyRestriction = updateRestriction(name, stmt.keyRestriction, rel);
+                            throw new InvalidRequestException("Only EQ and IN relation are supported on the partition key for RandomPartitioner (unless you use the token() function)");
+                        stmt.keyRestrictions[name.position] = updateRestriction(name, stmt.keyRestrictions[name.position], rel);
                         break;
                     case COLUMN_ALIAS:
                         stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel);
@@ -114,9 +114,63 @@
                 previous = cname;
             }
 
+            // If a component of the partition key is restricted by a non-EQ relation, all preceding
+            // components must have a EQ, and all following must have no restriction
+            shouldBeDone = false;
+            previous = null;
+            stmt.keyIsInRelation = false;
+            iter = cfDef.keys.values().iterator();
+            for (int i = 0; i < stmt.keyRestrictions.length; i++)
+            {
+                CFDefinition.Name cname = iter.next();
+                Restriction restriction = stmt.keyRestrictions[i];
+                if (restriction == null)
+                {
+                    if (stmt.onToken)
+                        throw new InvalidRequestException(String.format("The token() function must be applied to all partition key components or none of them"));
+
+                    stmt.isKeyRange = true;
+                    shouldBeDone = true;
+                }
+                else if (shouldBeDone)
+                {
+                    throw new InvalidRequestException(String.format("partition key part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cname, previous));
+                }
+                else if (restriction.onToken)
+                {
+                    // If this is a query on tokens, it's necessary a range query (there can be more than one key per token), so reject IN queries (as we don't know how to do them)
+                    stmt.isKeyRange = true;
+                    stmt.onToken = true;
+
+                    if (restriction.isEquality() && restriction.eqValues.size() > 1)
+                        throw new InvalidRequestException("Select using the token() function don't support IN clause");
+                }
+                else if (stmt.onToken)
+                {
+                    throw new InvalidRequestException(String.format("The token() function must be applied to all partition key components or none of them"));
+                }
+                else if (restriction.isEquality())
+                {
+                    if (restriction.eqValues.size() > 1)
+                    {
+                        // We only support IN for the last name so far
+                        if (i != stmt.keyRestrictions.length - 1)
+                            throw new InvalidRequestException(String.format("partition KEY part %s cannot be restricted by IN relation (only the last part of the partition key can)", cname));
+                        stmt.keyIsInRelation = true;
+                    }
+                }
+                else
+                {
+                    stmt.isKeyRange = true;
+                    shouldBeDone = true;
+                }
+                previous = cname;
+            }
+
             // Deal with indexed columns
             if (!stmt.metadataRestrictions.isEmpty())
             {
+                stmt.isKeyRange = true;
                 boolean hasEq = false;
                 Set<ByteBuffer> indexed = Table.open(keyspace()).getColumnFamilyStore(columnFamily()).indexManager.getIndexedColumns();
 
@@ -132,7 +186,7 @@
                     throw new InvalidRequestException("No indexed columns present in by-columns clause with Equal operator");
 
                 // If we have indexed columns and the key = X clause, we will do a range query, but if it's a IN relation, we don't know how to handle it.
-                if (stmt.keyRestriction != null && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
+                if (stmt.keyIsInRelation)
                     throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
             }
 
@@ -181,9 +235,6 @@
                 stmt.isReversed = isReversed;
             }
 
-            // If this is a query on tokens, it's necessary a range query (there can be more than one key per token), so reject IN queries (as we don't know how to do them)
-            if (stmt.keyRestriction != null && stmt.keyRestriction.onToken && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
-                throw new InvalidRequestException("Select using the token() function don't support IN clause");
 
             return new ParsedStatement.Prepared(stmt, Arrays.<ColumnSpecification>asList(names));
         }
