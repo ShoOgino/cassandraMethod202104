@@ -1,6 +1,14 @@
-    public Map<String, Float> effectiveOwnership(String keyspace) throws ConfigurationException
+    /**
+     * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
+     * calculated per dc, i.e. each DC will have total ring ownership divided amongst its nodes. Without replication
+     * total ownership will be a multiple of the number of DC's and this value will then go up within each DC depending
+     * on the number of replicas within itself. For DC unaware replication strategies, ownership without replication
+     * will be 100%.
+     * 
+     * @throws ConfigurationException
+     */
+    public LinkedHashMap<InetAddress, Float> effectiveOwnership(String keyspace) throws ConfigurationException
     {
-        Map<String, Float> effective = Maps.newHashMap();
         if (Schema.instance.getNonSystemTables().size() <= 0)
             throw new ConfigurationException("Couldn't find any Non System Keyspaces to infer replication topology");
         if (keyspace == null && !hasSameReplication(Schema.instance.getNonSystemTables()))
@@ -9,19 +17,61 @@
         if (keyspace == null)
             keyspace = Schema.instance.getNonSystemTables().get(0);
 
-        List<Token> sortedTokens = new ArrayList<Token>(tokenMetadata.getTokenToEndpointMapForReading().keySet());
-        Collections.sort(sortedTokens);
-        Map<Token, Float> ownership = getPartitioner().describeOwnership(sortedTokens);
+        final BiMap<InetAddress, Token> endpointsToTokens = ImmutableBiMap.copyOf(tokenMetadata.getTokenToEndpointMapForReading()).inverse();
 
-        for (Entry<InetAddress, Collection<Range<Token>>> ranges : constructEndpointToRangeMap(keyspace).entrySet())
+        Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<Collection<InetAddress>>();
+        if (isDcAwareReplicationStrategy(keyspace))
         {
-            Token token = tokenMetadata.getToken(ranges.getKey());
-            for (Range<Token> range: ranges.getValue())
+            // mapping of dc's to nodes, use sorted map so that we get dcs sorted
+            SortedMap<String, Collection<InetAddress>> sortedDcsToEndpoints = new TreeMap<String, Collection<InetAddress>>();
+            sortedDcsToEndpoints.putAll(tokenMetadata.getTopology().getDatacenterEndpoints().asMap());
+            for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
+                endpointsGroupedByDc.add(endpoints);
+        }
+        else
+        {
+            endpointsGroupedByDc.add(endpointsToTokens.keySet());
+        }
+
+        LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
+
+        // calculate ownership per dc
+        for (Collection<InetAddress> endpoints : endpointsGroupedByDc)
+        {
+            // sort the endpoints by their tokens
+            List<InetAddress> sortedEndpoints = Lists.newArrayListWithExpectedSize(endpoints.size());
+            sortedEndpoints.addAll(endpoints);
+
+            Collections.sort(sortedEndpoints, new Comparator<InetAddress>()
             {
-                float value = effective.get(token.toString()) == null ? 0.0F : effective.get(token.toString());
-                effective.put(token.toString(), value + ownership.get(range.left));
+                public int compare(InetAddress o1, InetAddress o2)
+                {
+                    return endpointsToTokens.get(o1).compareTo(endpointsToTokens.get(o2));
+                }
+            });
+
+            // calculate the ownership without replication
+            Function<InetAddress, Token> f = new Function<InetAddress, Token>()
+            {
+                public Token apply(InetAddress arg0)
+                {
+                    return endpointsToTokens.get(arg0);
+                }
+            };
+            Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(Lists.transform(sortedEndpoints, f));
+
+            // calculate the ownership with replication and add the endpoint to the final ownership map
+            for (InetAddress endpoint : endpoints)
+            {
+                float ownership = 0.0f;
+                for (Range<Token> range : getRangesForEndpoint(keyspace, endpoint))
+                {
+                    if (tokenOwnership.containsKey(range.left))
+                        ownership += tokenOwnership.get(range.left);
+                }
+                finalOwnership.put(endpoint, ownership);
             }
         }
-        return effective;
+        return finalOwnership;
     }
 
