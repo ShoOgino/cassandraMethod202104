@@ -1,4 +1,5 @@
-    public static int importSorted(String jsonFile, ColumnFamily columnFamily, String ssTablePath, IPartitioner<?> partitioner) throws IOException
+    private int importSorted(String jsonFile, ColumnFamily columnFamily, String ssTablePath,
+            IPartitioner<?> partitioner) throws IOException
     {
         int importedKeys = 0; // already imported keys count
         long start = System.currentTimeMillis();
@@ -10,12 +11,12 @@
             keyCountToImport = 0;
             System.out.println("Counting keys to import, please wait... (NOTE: to skip this use -n <num_keys>)");
 
-            parser.nextToken(); // START_OBJECT
+            parser.nextToken(); // START_ARRAY
             while (parser.nextToken() != null)
             {
-                parser.nextToken();
                 parser.skipChildren();
-                if (parser.getCurrentName() == null) continue;
+                if (parser.getCurrentToken() == JsonToken.END_ARRAY)
+                    break;
 
                 keyCountToImport++;
             }
@@ -29,66 +30,49 @@
         int lineNumber = 1;
         DecoratedKey prevStoredKey = null;
 
+        parser.nextToken(); // START_ARRAY
         while (parser.nextToken() != null)
         {
             String key = parser.getCurrentName();
+            Map<?, ?> row = parser.readValueAs(new TypeReference<Map<?, ?>>(){});
+            DecoratedKey currentKey = partitioner.decorateKey(hexToBytes((String) row.get("key")));
 
-            if (key != null)
+            if (row.containsKey("metadata"))
+                parseMeta((Map<?, ?>) row.get("metadata"), columnFamily);
+
+
+            if (columnFamily.getType() == ColumnFamilyType.Super)
+                addToSuperCF((Map<?, ?>)row.get("columns"), columnFamily);
+            else
+                addToStandardCF((List<?>)row.get("columns"), columnFamily);
+
+            if (prevStoredKey != null && prevStoredKey.compareTo(currentKey) != -1)
             {
-                String tokenName = parser.nextToken().name();
-
-                if (tokenName.equals("START_ARRAY"))
-                {
-                    if (columnFamily.getType() == ColumnFamilyType.Super)
-                    {
-                        throw new RuntimeException("Can't write Standard columns to the Super Column Family.");
-                    }
-
-                    List<?> columns = parser.readValueAs(new TypeReference<List<?>>() {});
-                    addToStandardCF(columns, columnFamily);
-                }
-                else if (tokenName.equals("START_OBJECT"))
-                {
-                    if (columnFamily.getType() == ColumnFamilyType.Standard)
-                    {
-                        throw new RuntimeException("Can't write Super columns to the Standard Column Family.");
-                    }
-
-                    Map<?, ?> columns = parser.readValueAs(new TypeReference<Map<?, ?>>() {});
-                    addToSuperCF(columns, columnFamily);
-                }
-                else
-                {
-                    throw new UnsupportedOperationException("Only Array or Hash allowed as row content.");
-                }
-
-                DecoratedKey currentKey = partitioner.decorateKey(hexToBytes(key));
-
-                if (prevStoredKey != null && prevStoredKey.compareTo(currentKey) != -1)
-                {
-                    System.err.printf("Line %d: Key %s is greater than previous, collection is not sorted properly. Aborting import. You might need to delete SSTables manually.%n", lineNumber, key);
-                    return -1;
-                }
-
-                // saving decorated key
-                writer.append(currentKey, columnFamily);
-                columnFamily.clear();
-
-                prevStoredKey = currentKey;
-                importedKeys++;
-                lineNumber++;
-
-                long current = System.currentTimeMillis();
-
-                if (current - start >= 5000) // 5 secs.
-                {
-                    System.out.printf("Currently imported %d keys.%n", importedKeys);
-                    start = current;
-                }
-
-                if (keyCountToImport == importedKeys)
-                    break;
+                System.err
+                        .printf("Line %d: Key %s is greater than previous, collection is not sorted properly. Aborting import. You might need to delete SSTables manually.%n",
+                                lineNumber, key);
+                return -1;
             }
+
+            // saving decorated key
+            writer.append(currentKey, columnFamily);
+            columnFamily.clear();
+
+            prevStoredKey = currentKey;
+            importedKeys++;
+            lineNumber++;
+
+            long current = System.currentTimeMillis();
+
+            if (current - start >= 5000) // 5 secs.
+            {
+                System.out.printf("Currently imported %d keys.%n", importedKeys);
+                start = current;
+            }
+
+            if (keyCountToImport == importedKeys)
+                break;
+
         }
 
         writer.closeAndOpenReader();
