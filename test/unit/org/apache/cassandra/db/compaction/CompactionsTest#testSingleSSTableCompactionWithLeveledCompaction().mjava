@@ -1,14 +1,13 @@
-    /**
-     * Test to see if sstable has enough expired columns, it is compacted itself.
-     */
     @Test
-    public void testSingleSSTableCompaction() throws Exception
+    public void testSingleSSTableCompactionWithLeveledCompaction() throws Exception
     {
         Table table = Table.open(TABLE1);
         ColumnFamilyStore store = table.getColumnFamilyStore("Standard1");
         store.clearUnsafe();
         store.metadata.gcGraceSeconds(1);
-        store.setCompactionStrategyClass(SizeTieredCompactionStrategy.class.getCanonicalName());
+        store.setCompactionStrategyClass(LeveledCompactionStrategy.class.getCanonicalName());
+
+        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) store.getCompactionStrategy();
 
         // disable compaction while flushing
         store.disableAutoCompaction();
@@ -20,9 +19,9 @@
             RowMutation rm = new RowMutation(TABLE1, key.key);
             for (int j = 0; j < 10; j++)
                 rm.add(new QueryPath("Standard1", null, ByteBufferUtil.bytes(Integer.toString(j))),
-                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
-                       timestamp,
-                       j > 0 ? 3 : 0); // let first column never expire, since deleting all columns does not produce sstable
+                              ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                              timestamp,
+                              j > 0 ? 3 : 0); // let first column never expire, since deleting all columns does not produce sstable
             rm.apply();
         }
         store.forceBlockingFlush();
@@ -32,7 +31,6 @@
         // wait enough to force single compaction
         TimeUnit.SECONDS.sleep(5);
 
-        // enable compaction, submit background and wait for it to complete
         store.setMinimumCompactionThreshold(2);
         store.setMaximumCompactionThreshold(4);
         FBUtilities.waitOnFuture(CompactionManager.instance.submitBackground(store));
@@ -46,5 +44,8 @@
 
         // make sure max timestamp of compacted sstables is recorded properly after compaction.
         assertMaxTimestamp(store, timestamp);
+
+        // tombstone removal compaction should not promote level
+        assert strategy.getLevelSize(0) == 1;
     }
 
