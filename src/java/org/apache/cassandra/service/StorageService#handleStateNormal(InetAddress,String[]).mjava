@@ -22,10 +22,12 @@
             tokensPos = 1;
         logger.debug("Using token position {} for {}", tokensPos, endpoint);
 
-        Token token = getPartitioner().getTokenFactory().fromString(pieces[tokensPos]);
+        Collection<Token> tokens = new ArrayList<Token>();
+        for (int i = tokensPos; i < pieces.length; ++i)
+            tokens.add(getPartitioner().getTokenFactory().fromString(pieces[i]));
 
         if (logger.isDebugEnabled())
-            logger.debug("Node " + endpoint + " state normal, token " + token);
+            logger.debug("Node " + endpoint + " state normal, token " + tokens);
 
         if (tokenMetadata.isMember(endpoint))
             logger.info("Node " + endpoint + " state jump to normal");
@@ -34,35 +36,60 @@
         if (usesHostId(endpoint))
             tokenMetadata.updateHostId(UUID.fromString(pieces[1]), endpoint);
 
-        // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
-        InetAddress currentOwner = tokenMetadata.getEndpoint(token);
-        if (currentOwner == null)
+        Set<Token> tokensToUpdateInMetadata = new HashSet<Token>();
+        Set<Token> tokensToUpdateInSystemTable = new HashSet<Token>();
+        Set<InetAddress> endpointsToRemove = new HashSet<InetAddress>();
+        Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
+
+        for (Token token : tokens)
         {
-            logger.debug("New node " + endpoint + " at token " + token);
-            tokenMetadata.updateNormalToken(token, endpoint);
-            if (!isClientMode)
-                SystemTable.updateToken(endpoint, token);
+            // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
+            InetAddress currentOwner = tokenMetadata.getEndpoint(token);
+            if (currentOwner == null)
+            {
+                logger.debug("New node " + endpoint + " at token " + token);
+                tokensToUpdateInMetadata.add(token);
+                if (!isClientMode)
+                    tokensToUpdateInSystemTable.add(token);
+            }
+            else if (endpoint.equals(currentOwner))
+            {
+                // set state back to normal, since the node may have tried to leave, but failed and is now back up
+                // no need to persist, token/ip did not change
+                tokensToUpdateInMetadata.add(token);
+            }
+            else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
+            {
+                tokensToUpdateInMetadata.add(token);
+                if (!isClientMode)
+                    tokensToUpdateInSystemTable.add(token);
+
+                // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
+                // a host no longer has any tokens, we'll want to remove it.
+                epToTokenCopy.get(currentOwner).remove(token);
+                if (epToTokenCopy.get(currentOwner).size() < 1)
+                    endpointsToRemove.add(currentOwner);
+
+                logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
+                                          endpoint,
+                                          currentOwner,
+                                          token,
+                                          endpoint));
+            }
+            else
+            {
+                logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
+                                           endpoint,
+                                           currentOwner,
+                                           token,
+                                           endpoint));
+            }
         }
-        else if (endpoint.equals(currentOwner))
-        {
-            // set state back to normal, since the node may have tried to leave, but failed and is now back up
-            // no need to persist, token/ip did not change
-            tokenMetadata.updateNormalToken(token, endpoint);
-        }
-        else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
-        {
-            logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
-                                       endpoint, currentOwner, token, endpoint));
-            tokenMetadata.updateNormalToken(token, endpoint);
-            Gossiper.instance.removeEndpoint(currentOwner);
-            if (!isClientMode)
-                SystemTable.updateToken(endpoint, token);
-        }
-        else
-        {
-            logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
-                                       endpoint, currentOwner, token, endpoint));
-        }
+
+        tokenMetadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
+        for (InetAddress ep : endpointsToRemove)
+            Gossiper.instance.removeEndpoint(ep);
+        SystemTable.updateTokens(endpoint, tokensToUpdateInSystemTable);
 
         if (tokenMetadata.isMoving(endpoint)) // if endpoint was moving to a new token
             tokenMetadata.removeFromMoving(endpoint);

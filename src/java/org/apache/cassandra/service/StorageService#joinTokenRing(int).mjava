@@ -18,7 +18,7 @@
         Schema.instance.updateVersionAndAnnounce();
         // add rpc listening info
         Gossiper.instance.addLocalApplicationState(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getRpcAddress()));
-        if (null != DatabaseDescriptor.getReplaceToken())
+        if (0 != DatabaseDescriptor.getReplaceTokens().size())
             Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.hibernate(true));
 
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -33,9 +33,9 @@
                 && !SystemTable.isBootstrapped())
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
 
-        InetAddress current = null;
+        Set<InetAddress> current = new HashSet<InetAddress>();
         // first startup is only chance to bootstrap
-        Token<?> token;
+        Collection<Token> tokens;
         if (DatabaseDescriptor.isAutoBootstrap()
             && !(SystemTable.isBootstrapped()
                  || DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress())
@@ -70,7 +70,7 @@
             if (logger.isDebugEnabled())
                 logger.debug("... got ring + schema info");
 
-            if (DatabaseDescriptor.getReplaceToken() == null)
+            if (DatabaseDescriptor.getReplaceTokens().size() == 0)
             {
                 if (tokenMetadata.isMember(FBUtilities.getBroadcastAddress()))
                 {
@@ -78,7 +78,7 @@
                     throw new UnsupportedOperationException(s);
                 }
                 setMode(Mode.JOINING, "getting bootstrap token", true);
-                token = BootStrapper.getBootstrapToken(tokenMetadata, LoadBroadcaster.instance.getLoadInfo());
+                tokens = BootStrapper.getBootstrapTokens(tokenMetadata, LoadBroadcaster.instance.getLoadInfo());
             }
             else
             {
@@ -92,37 +92,53 @@
                 {
                     throw new AssertionError(e);
                 }
-                token = StorageService.getPartitioner().getTokenFactory().fromString(DatabaseDescriptor.getReplaceToken());
+                tokens = new ArrayList<Token>();
+                for (String token : DatabaseDescriptor.getReplaceTokens())
+                    tokens.add(StorageService.getPartitioner().getTokenFactory().fromString(token));
+
                 // check for operator errors...
-                current = tokenMetadata.getEndpoint(token);
-                if (null != current && Gossiper.instance.getEndpointStateForEndpoint(current).getUpdateTimestamp() > (System.currentTimeMillis() - delay))
-                    throw new UnsupportedOperationException("Cannnot replace a token for a Live node... ");
-                setMode(Mode.JOINING, "Replacing a node with token: " + token, true);
+                for (Token token : tokens)
+                {
+                    InetAddress existing = tokenMetadata.getEndpoint(token);
+                    if (null != existing)
+                    {
+                        if (Gossiper.instance.getEndpointStateForEndpoint(existing).getUpdateTimestamp() > (System.currentTimeMillis() - delay))
+                            throw new UnsupportedOperationException("Cannnot replace a token for a Live node... ");
+                        current.add(existing);
+                    }
+                }
+
+                setMode(Mode.JOINING, "Replacing a node with token: " + tokens, true);
             }
 
-            bootstrap(token);
+            bootstrap(tokens);
             assert !isBootstrapMode; // bootstrap will block until finished
         }
         else
         {
-            token = SystemTable.getSavedToken();
-            if (token == null)
+            tokens = SystemTable.getSavedTokens();
+            if (tokens.isEmpty())
             {
-                String initialToken = DatabaseDescriptor.getInitialToken();
-                if (initialToken == null)
+                Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
+                if (initialTokens.size() < 1)
                 {
-                    token = getPartitioner().getRandomToken();
-                    logger.warn("Generated random token " + token + ". Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations");
+                    tokens = BootStrapper.getRandomTokens(tokenMetadata, DatabaseDescriptor.getNumTokens());
+                    if (DatabaseDescriptor.getNumTokens() == 1)
+                        logger.warn("Generated random token " + tokens + ". Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations");
+                    else
+                        logger.info("Generated random tokens.");
                 }
                 else
                 {
-                    token = getPartitioner().getTokenFactory().fromString(initialToken);
-                    logger.info("Saved token not found. Using " + token + " from configuration");
+                    tokens = new ArrayList<Token>();
+                    for (String token : initialTokens)
+                        tokens.add(getPartitioner().getTokenFactory().fromString(token));
+                    logger.info("Saved token not found. Using " + tokens + " from configuration");
                 }
             }
             else
             {
-                logger.info("Using saved token " + token);
+                logger.info("Using saved token " + tokens);
             }
         }
 
@@ -130,10 +146,11 @@
         {
             // start participating in the ring.
             SystemTable.setBootstrapped(true);
-            setToken(token);
+            setTokens(tokens);
             // remove the existing info about the replaced node.
-            if (current != null)
-                Gossiper.instance.replacedEndpoint(current);
+            if (!current.isEmpty())
+                for (InetAddress existing : current)
+                    Gossiper.instance.replacedEndpoint(existing);
             logger.info("Bootstrap/Replace/Move completed! Now serving reads.");
             assert tokenMetadata.sortedTokens().size() > 0;
         }
