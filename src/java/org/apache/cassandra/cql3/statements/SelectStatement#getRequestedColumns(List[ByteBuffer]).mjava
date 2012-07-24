@@ -8,6 +8,7 @@
             assert r != null && r.isEquality();
             if (r.eqValues.size() > 1)
             {
+                assert cfDef.isCompact;
                 // We have a IN. We only support this for the last column, so just create all columns and return.
                 SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfDef.cfm.comparator);
                 Iterator<Term> iter = r.eqValues.iterator();
@@ -36,19 +37,31 @@
             // non-know set of columns, so we shouldn't get there
             assert !cfDef.hasCollections;
 
-            // Adds all columns (even if the user selected a few columns, we
-            // need to query all columns to know if the row exists or not).
-            // Note that when we allow IS NOT NULL in queries and if all
-            // selected name are request 'not null', we will allow to only
-            // query those.
             SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfDef.cfm.comparator);
-            Iterator<ColumnIdentifier> iter = cfDef.metadata.keySet().iterator();
-            while (iter.hasNext())
+
+            // We need to query the selected column as well as the marker
+            // column (for the case where the row exists but has no columns outside the PK)
+            // One exception is "static CF" (non-composite non-compact CF) that
+            // don't have marker and for which we must query all columns instead
+            if (cfDef.isComposite)
             {
-                ColumnIdentifier name = iter.next();
-                ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
-                ByteBuffer cname = b.add(name.key).build();
-                columns.add(cname);
+                // marker
+                columns.add(builder.copy().add(ByteBufferUtil.EMPTY_BYTE_BUFFER).build());
+
+                // selected columns
+                for (Pair<CFDefinition.Name, Selector> p : getExpandedSelection())
+                    columns.add(builder.copy().add(p.right.id().key).build());
+            }
+            else
+            {
+                Iterator<ColumnIdentifier> iter = cfDef.metadata.keySet().iterator();
+                while (iter.hasNext())
+                {
+                    ColumnIdentifier name = iter.next();
+                    ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                    ByteBuffer cname = b.add(name.key).build();
+                    columns.add(cname);
+                }
             }
             return columns;
         }
