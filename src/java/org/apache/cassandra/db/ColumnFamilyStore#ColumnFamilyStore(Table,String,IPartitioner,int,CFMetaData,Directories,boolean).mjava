@@ -28,8 +28,23 @@
 
         if (loadSSTables)
         {
-            Directories.SSTableLister sstables = directories.sstableLister().skipCompacted(true).skipTemporary(true);
-            data.addInitialSSTables(SSTableReader.batchOpen(sstables.list().entrySet(), data, metadata, this.partitioner));
+            Directories.SSTableLister sstableFiles = directories.sstableLister().skipTemporary(true);
+            Collection<SSTableReader> sstables = SSTableReader.batchOpen(sstableFiles.list().entrySet(), data, metadata, this.partitioner);
+
+            // Filter non-compacted sstables, remove compacted ones
+            Set<Integer> compactedSSTables = new HashSet<Integer>();
+            for (SSTableReader sstable : sstables)
+                compactedSSTables.addAll(sstable.getAncestors());
+
+            Set<SSTableReader> liveSSTables = new HashSet<SSTableReader>();
+            for (SSTableReader sstable : sstables)
+            {
+                if (compactedSSTables.contains(sstable.descriptor.generation))
+                    sstable.releaseReference(); // this amount to deleting the sstable
+                else
+                    liveSSTables.add(sstable);
+            }
+            data.addInitialSSTables(liveSSTables);
         }
 
         if (caching == Caching.ALL || caching == Caching.KEYS_ONLY)
