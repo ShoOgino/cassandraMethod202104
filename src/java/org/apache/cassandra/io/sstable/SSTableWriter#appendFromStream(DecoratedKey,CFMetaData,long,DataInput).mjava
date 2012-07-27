@@ -1,19 +1,35 @@
+    /**
+     * @throws IOException if a read from the DataInput fails
+     * @throws FSWriteError if a write to the dataFile fails
+     */
     public long appendFromStream(DecoratedKey key, CFMetaData metadata, long dataSize, DataInput in) throws IOException
     {
         long currentPosition = beforeAppend(key);
-        ByteBufferUtil.writeWithShortLength(key.key, dataFile.stream);
-        long dataStart = dataFile.getFilePointer();
+        long dataStart;
+        try
+        {
+            ByteBufferUtil.writeWithShortLength(key.key, dataFile.stream);
+            dataStart = dataFile.getFilePointer();
+            // write row size
+            dataFile.stream.writeLong(dataSize);
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, dataFile.getPath());
+        }
 
-        // write row size
-        dataFile.stream.writeLong(dataSize);
-
-        // cf data
         DeletionInfo deletionInfo = DeletionInfo.serializer().deserializeFromSSTable(in, descriptor.version);
-        DeletionInfo.serializer().serializeForSSTable(deletionInfo, dataFile.stream);
-
-        // column size
         int columnCount = in.readInt();
-        dataFile.stream.writeInt(columnCount);
+
+        try
+        {
+            DeletionInfo.serializer().serializeForSSTable(deletionInfo, dataFile.stream);
+            dataFile.stream.writeInt(columnCount);
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, dataFile.getPath());
+        }
 
         // deserialize each column to obtain maxTimestamp and immediately serialize it.
         long maxTimestamp = Long.MIN_VALUE;
@@ -51,7 +67,14 @@
                 tombstones.update(deletionTime);
             }
             maxTimestamp = Math.max(maxTimestamp, atom.maxTimestamp());
-            columnIndexer.add(atom); // This write the atom on disk too
+            try
+            {
+                columnIndexer.add(atom); // This write the atom on disk too
+            }
+            catch (IOException e)
+            {
+                throw new FSWriteError(e, dataFile.getPath());
+            }
         }
 
         assert dataSize == dataFile.getFilePointer() - (dataStart + 8)

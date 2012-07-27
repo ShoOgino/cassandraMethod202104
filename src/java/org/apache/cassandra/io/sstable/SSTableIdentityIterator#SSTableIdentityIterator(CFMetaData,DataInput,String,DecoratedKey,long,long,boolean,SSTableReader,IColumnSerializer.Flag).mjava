@@ -1,9 +1,18 @@
     // sstable may be null *if* checkData is false
     // If it is null, we assume the data is in the current file format
-    private SSTableIdentityIterator(CFMetaData metadata, DataInput input, DecoratedKey key, long dataStart, long dataSize, boolean checkData, SSTableReader sstable, IColumnSerializer.Flag flag)
-    throws IOException
+    private SSTableIdentityIterator(CFMetaData metadata,
+                                    DataInput input,
+                                    String filename,
+                                    DecoratedKey key,
+                                    long dataStart,
+                                    long dataSize,
+                                    boolean checkData,
+                                    SSTableReader sstable,
+                                    IColumnSerializer.Flag flag)
     {
+        assert !checkData || (sstable != null);
         this.input = input;
+        this.filename = filename;
         this.inputWithTracker = new BytesReadTracker(input);
         this.key = key;
         this.dataStart = dataStart;
@@ -34,10 +43,11 @@
                             throw (EOFException) e;
 
                         logger.debug("Invalid bloom filter in {}; will rebuild it", sstable);
-                        // deFreeze should have left the file position ready to deserialize index
                     }
+
                     try
                     {
+                        // deFreeze should have left the file position ready to deserialize index
                         IndexHelper.deserializeIndex(file);
                     }
                     catch (Exception e)
@@ -58,14 +68,13 @@
             columnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(inputWithTracker, dataVersion));
             atomSerializer = columnFamily.getOnDiskSerializer();
             columnCount = inputWithTracker.readInt();
-
             columnPosition = dataStart + inputWithTracker.getBytesRead();
         }
         catch (IOException e)
         {
             if (sstable != null)
                 sstable.markSuspect();
-            throw new IOError(e);
+            throw new CorruptSSTableException(e, filename);
         }
     }
 
