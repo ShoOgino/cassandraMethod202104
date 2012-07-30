@@ -1,9 +1,9 @@
     @Override
-    public synchronized void resetAndTruncate(FileMark mark) throws IOException
+    public synchronized void resetAndTruncate(FileMark mark)
     {
         assert mark instanceof CompressedFileWriterMark;
 
-        CompressedFileWriterMark realMark = ((CompressedFileWriterMark) mark);
+        CompressedFileWriterMark realMark = (CompressedFileWriterMark) mark;
 
         // reset position
         current = realMark.uncDataOffset;
@@ -27,16 +27,39 @@
         if (compressed.buffer.length < chunkSize)
             compressed.buffer = new byte[chunkSize];
 
-        out.seek(chunkOffset);
-        out.readFully(compressed.buffer, 0, chunkSize);
+        try
+        {
+            out.seek(chunkOffset);
+            out.readFully(compressed.buffer, 0, chunkSize);
 
-        // decompress data chunk and store its length
-        int validBytes = compressor.uncompress(compressed.buffer, 0, chunkSize, buffer, 0);
+            int validBytes;
+            try
+            {
+                // decompress data chunk and store its length
+                validBytes = compressor.uncompress(compressed.buffer, 0, chunkSize, buffer, 0);
+            }
+            catch (IOException e)
+            {
+                throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
+            }
 
-        checksum.update(buffer, 0, validBytes);
+            checksum.update(buffer, 0, validBytes);
 
-        if (out.readInt() != (int) checksum.getValue())
-            throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
+            if (out.readInt() != (int) checksum.getValue())
+                throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
+        }
+        catch (CorruptBlockException e)
+        {
+            throw new CorruptSSTableException(e, getPath());
+        }
+        catch (EOFException e)
+        {
+            throw new CorruptSSTableException(new CorruptBlockException(getPath(), chunkOffset, chunkSize), getPath());
+        }
+        catch (IOException e)
+        {
+            throw new FSReadError(e, getPath());
+        }
 
         checksum.reset();
 

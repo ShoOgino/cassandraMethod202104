@@ -1,10 +1,19 @@
     @Override
-    protected void flushData() throws IOException
+    protected void flushData()
     {
         seekToChunkStart();
 
-        // compressing data with buffer re-use
-        int compressedLength = compressor.compress(buffer, 0, validBufferBytes, compressed, 0);
+
+        int compressedLength;
+        try
+        {
+            // compressing data with buffer re-use
+            compressedLength = compressor.compress(buffer, 0, validBufferBytes, compressed, 0);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Compression exception", e); // shouldn't happen
+        }
 
         originalSize += validBufferBytes;
         compressedSize += compressedLength;
@@ -12,16 +21,23 @@
         // update checksum
         checksum.update(buffer, 0, validBufferBytes);
 
-        // write an offset of the newly written chunk to the index file
-        metadataWriter.writeLong(chunkOffset);
-        chunkCount++;
+        try
+        {
+            // write an offset of the newly written chunk to the index file
+            metadataWriter.writeLong(chunkOffset);
+            chunkCount++;
 
-        assert compressedLength <= compressed.buffer.length;
+            assert compressedLength <= compressed.buffer.length;
 
-        // write data itself
-        out.write(compressed.buffer, 0, compressedLength);
-        // write corresponding checksum
-        out.writeInt((int) checksum.getValue());
+            // write data itself
+            out.write(compressed.buffer, 0, compressedLength);
+            // write corresponding checksum
+            out.writeInt((int) checksum.getValue());
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, getPath());
+        }
 
         // reset checksum object to the blank state for re-use
         checksum.reset();
