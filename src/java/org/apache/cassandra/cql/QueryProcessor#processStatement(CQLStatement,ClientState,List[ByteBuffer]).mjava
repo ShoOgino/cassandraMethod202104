@@ -1,5 +1,5 @@
     public static CqlResult processStatement(CQLStatement statement,ClientState clientState, List<ByteBuffer> variables )
-    throws  UnavailableException, InvalidRequestException, TimedOutException
+    throws RequestExecutionException, RequestValidationException
     {
         String keyspace = null;
 
@@ -158,14 +158,14 @@
             case INSERT: // insert uses UpdateStatement
             case UPDATE:
                 UpdateStatement update = (UpdateStatement)statement.statement;
-                ThriftValidation.validateConsistencyLevel(keyspace, update.getConsistencyLevel(), RequestType.WRITE);
+                update.getConsistencyLevel().validateForWrite(keyspace);
                 batchUpdate(clientState, Collections.singletonList(update), update.getConsistencyLevel(), variables);
                 result.type = CqlResultType.VOID;
                 return result;
 
             case BATCH:
                 BatchStatement batch = (BatchStatement) statement.statement;
-                ThriftValidation.validateConsistencyLevel(keyspace, batch.getConsistencyLevel(), RequestType.WRITE);
+                batch.getConsistencyLevel().validateForWrite(keyspace);
 
                 if (batch.getTimeToLive() != 0)
                     throw new InvalidRequestException("Global TTL on the BATCH statement is not supported.");
@@ -187,14 +187,7 @@
                     validateKey(mutation.key());
                 }
 
-                try
-                {
-                    StorageProxy.mutate(mutations, batch.getConsistencyLevel());
-                }
-                catch (org.apache.cassandra.thrift.UnavailableException e)
-                {
-                    throw new UnavailableException();
-                }
+                StorageProxy.mutate(mutations, batch.getConsistencyLevel());
 
                 result.type = CqlResultType.VOID;
                 return result;
@@ -218,11 +211,11 @@
                 }
                 catch (TimeoutException e)
                 {
-                    throw (UnavailableException) new UnavailableException().initCause(e);
+                    throw new TruncateException(e);
                 }
                 catch (IOException e)
                 {
-                    throw (UnavailableException) new UnavailableException().initCause(e);
+                    throw new RuntimeException(e);
                 }
 
                 result.type = CqlResultType.VOID;

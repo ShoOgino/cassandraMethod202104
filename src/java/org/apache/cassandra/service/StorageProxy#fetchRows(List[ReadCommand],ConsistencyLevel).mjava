@@ -9,7 +9,8 @@
      * 4. If the digests (if any) match the data return the data
      * 5. else carry out read repair by getting data from all the nodes.
      */
-    private static List<Row> fetchRows(List<ReadCommand> initialCommands, ConsistencyLevel consistency_level) throws IOException, UnavailableException, TimeoutException
+    private static List<Row> fetchRows(List<ReadCommand> initialCommands, ConsistencyLevel consistency_level)
+    throws IOException, UnavailableException, ReadTimeoutException
     {
         List<Row> rows = new ArrayList<Row>(initialCommands.size());
         List<ReadCommand> commandsToRetry = Collections.emptyList();
@@ -98,7 +99,7 @@
                     if (logger.isDebugEnabled())
                         logger.debug("Read: " + (System.currentTimeMillis() - startTime2) + " ms.");
                 }
-                catch (TimeoutException ex)
+                catch (ReadTimeoutException ex)
                 {
                     if (logger.isDebugEnabled())
                         logger.debug("Read timeout: {}", ex.toString());
@@ -137,9 +138,17 @@
                 {
                     ReadCommand command = repairCommands.get(i);
                     RepairCallback handler = repairResponseHandlers.get(i);
-                    // wait for the repair writes to be acknowledged, to minimize impact on any replica that's
-                    // behind on writes in case the out-of-sync row is read multiple times in quick succession
-                    FBUtilities.waitOnFutures(handler.resolver.repairResults, DatabaseDescriptor.getWriteRpcTimeout());
+                    try
+                    {
+                        // wait for the repair writes to be acknowledged, to minimize impact on any replica that's
+                        // behind on writes in case the out-of-sync row is read multiple times in quick succession
+                        FBUtilities.waitOnFutures(handler.resolver.repairResults, DatabaseDescriptor.getWriteRpcTimeout());
+                    }
+                    catch (TimeoutException e)
+                    {
+                        int blockFor = consistency_level.blockFor(command.getKeyspace());
+                        throw new ReadTimeoutException(consistency_level, blockFor, blockFor, true);
+                    }
 
                     Row row;
                     try

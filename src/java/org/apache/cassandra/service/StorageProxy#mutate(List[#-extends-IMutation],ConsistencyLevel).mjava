@@ -7,7 +7,8 @@
      * @param mutations the mutations to be applied across the replicas
      * @param consistency_level the consistency level for the operation
      */
-    public static void mutate(List<? extends IMutation> mutations, ConsistencyLevel consistency_level) throws UnavailableException, TimedOutException
+    public static void mutate(List<? extends IMutation> mutations, ConsistencyLevel consistency_level)
+    throws UnavailableException, OverloadedException, WriteTimeoutException
     {
         logger.debug("Mutations/ConsistencyLevel are {}/{}", mutations, consistency_level);
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
@@ -38,7 +39,7 @@
             }
 
         }
-        catch (TimedOutException ex)
+        catch (WriteTimeoutException ex)
         {
             writeMetrics.timeouts.mark();
             ClientRequestMetrics.writeTimeouts.inc();
@@ -47,13 +48,18 @@
                 List<String> mstrings = new ArrayList<String>(mutations.size());
                 for (IMutation mutation : mutations)
                     mstrings.add(mutation.toString(true));
-                logger.debug("Write timeout {} for one (or more) of: ", ex.toString(), mstrings);
+                logger.debug("Write timeout {} for one (or more) of: {}", ex.toString(), mstrings);
             }
             throw ex;
         }
         catch (UnavailableException e)
         {
             writeMetrics.unavailables.mark();
+            ClientRequestMetrics.writeUnavailables.inc();
+            throw e;
+        }
+        catch (OverloadedException e)
+        {
             ClientRequestMetrics.writeUnavailables.inc();
             throw e;
         }

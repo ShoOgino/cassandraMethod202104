@@ -24,7 +24,9 @@
 
             CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_family);
             ThriftValidation.validateKeyRange(metadata, null, range);
-            ThriftValidation.validateConsistencyLevel(keyspace, consistency_level, RequestType.READ);
+
+            org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
+            consistencyLevel.validateForRead(keyspace);
 
             SlicePredicate predicate = new SlicePredicate().setSlice_range(new SliceRange(start_column,
                     ByteBufferUtil.EMPTY_BYTE_BUFFER, false, -1));
@@ -48,32 +50,37 @@
             }
 
             List<Row> rows;
+            schedule(DatabaseDescriptor.getRangeRpcTimeout());
             try
             {
-                schedule(DatabaseDescriptor.getRangeRpcTimeout());
-                try
-                {
-                    IFilter filter = ThriftValidation.asIFilter(predicate, metadata.comparator);
-                    rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_family, null, filter,
-                            bounds, range.row_filter, range.count, true, true), consistency_level);
-                }
-                finally
-                {
-                    release();
-                }
-                assert rows != null;
+                IFilter filter = ThriftValidation.asIFilter(predicate, metadata.comparator);
+                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_family, null, filter,
+                        bounds, range.row_filter, range.count, true, true), consistencyLevel);
             }
-            catch (TimeoutException e)
+            finally
             {
-                logger.debug("... timed out");
-                throw new TimedOutException();
+                release();
             }
-            catch (IOException e)
-            {
-                throw new RuntimeException(e);
-            }
+            assert rows != null;
 
             return thriftifyKeySlices(rows, new ColumnParent(column_family), predicate);
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (ReadTimeoutException e)
+        {
+            logger.debug("... timed out");
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (org.apache.cassandra.exceptions.UnavailableException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
         }
         finally
         {
