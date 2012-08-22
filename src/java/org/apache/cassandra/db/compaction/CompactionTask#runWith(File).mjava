@@ -1,0 +1,150 @@
+    /**
+     * For internal use and testing only.  The rest of the system should go through the submit* methods,
+     * which are properly serialized.
+     * Caller is in charge of marking/unmarking the sstables as compacting.
+     */
+    protected void runWith(File dataDirectory) throws Exception
+    {
+        // The collection of sstables passed may be empty (but not null); even if
+        // it is not empty, it may compact down to nothing if all rows are deleted.
+        assert sstables != null && dataDirectory != null;
+
+        if (!isCompactionInteresting(toCompact))
+            return;
+
+        if (DatabaseDescriptor.isSnapshotBeforeCompaction())
+            cfs.snapshotWithoutFlush(System.currentTimeMillis() + "-compact-" + cfs.columnFamily);
+
+        // sanity check: all sstables must belong to the same cfs
+        for (SSTableReader sstable : toCompact)
+            assert sstable.descriptor.cfname.equals(cfs.columnFamily);
+
+        CompactionController controller = new CompactionController(cfs, toCompact, gcBefore, isUserDefined);
+        // new sstables from flush can be added during a compaction, but only the compaction can remove them,
+        // so in our single-threaded compaction world this is a valid way of determining if we're compacting
+        // all the sstables (that existed when we started)
+        logger.info("Compacting {}", toCompact);
+
+        long startTime = System.currentTimeMillis();
+        long totalkeysWritten = 0;
+
+        AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+        long estimatedTotalKeys = Math.max(DatabaseDescriptor.getIndexInterval(), SSTableReader.getApproximateKeyCount(toCompact));
+        long estimatedSSTables = Math.max(1, SSTable.getTotalBytes(toCompact) / strategy.getMaxSSTableSize());
+        long keysPerSSTable = (long) Math.ceil((double) estimatedTotalKeys / estimatedSSTables);
+        if (logger.isDebugEnabled())
+            logger.debug("Expected bloom filter size : " + keysPerSSTable);
+
+        AbstractCompactionIterable ci = DatabaseDescriptor.isMultithreadedCompaction()
+                                      ? new ParallelCompactionIterable(compactionType, strategy.getScanners(toCompact), controller)
+                                      : new CompactionIterable(compactionType, strategy.getScanners(toCompact), controller);
+        CloseableIterator<AbstractCompactedRow> iter = ci.iterator();
+        Iterator<AbstractCompactedRow> nni = Iterators.filter(iter, Predicates.notNull());
+        Map<DecoratedKey, RowIndexEntry> cachedKeys = new HashMap<DecoratedKey, RowIndexEntry>();
+
+        // we can't preheat until the tracker has been set. This doesn't happen until we tell the cfs to
+        // replace the old entries.  Track entries to preheat here until then.
+        Map<SSTableReader, Map<DecoratedKey, RowIndexEntry>> cachedKeyMap =  new HashMap<SSTableReader, Map<DecoratedKey, RowIndexEntry>>();
+
+        Collection<SSTableReader> sstables = new ArrayList<SSTableReader>();
+        Collection<SSTableWriter> writers = new ArrayList<SSTableWriter>();
+
+        if (collector != null)
+            collector.beginCompaction(ci);
+        try
+        {
+            if (!nni.hasNext())
+            {
+                // don't mark compacted in the finally block, since if there _is_ nondeleted data,
+                // we need to sync it (via closeAndOpen) first, so there is no period during which
+                // a crash could cause data loss.
+                cfs.markCompacted(toCompact, compactionType);
+                return;
+            }
+
+            SSTableWriter writer = cfs.createCompactionWriter(keysPerSSTable, dataDirectory, toCompact);
+            writers.add(writer);
+            while (nni.hasNext())
+            {
+                if (ci.isStopRequested())
+                    throw new CompactionInterruptedException(ci.getCompactionInfo());
+
+                AbstractCompactedRow row = nni.next();
+                if (row.isEmpty())
+                    continue;
+
+                RowIndexEntry indexEntry = writer.append(row);
+                totalkeysWritten++;
+
+                if (DatabaseDescriptor.getPreheatKeyCache())
+                {
+                    for (SSTableReader sstable : toCompact)
+                    {
+                        if (sstable.getCachedPosition(row.key, false) != null)
+                        {
+                            cachedKeys.put(row.key, indexEntry);
+                            break;
+                        }
+                    }
+                }
+                if (!nni.hasNext() || newSSTableSegmentThresholdReached(writer))
+                {
+                    SSTableReader toIndex = writer.closeAndOpenReader(getMaxDataAge(toCompact));
+                    cachedKeyMap.put(toIndex, cachedKeys);
+                    sstables.add(toIndex);
+                    if (nni.hasNext())
+                    {
+                        writer = cfs.createCompactionWriter(keysPerSSTable, dataDirectory, toCompact);
+                        writers.add(writer);
+                        cachedKeys = new HashMap<DecoratedKey, RowIndexEntry>();
+                    }
+                }
+            }
+        }
+        catch (Throwable t)
+        {
+            for (SSTableWriter writer : writers)
+                writer.abort();
+            throw Throwables.propagate(t);
+        }
+        finally
+        {
+            try
+            {
+                iter.close();
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+
+            if (collector != null)
+                collector.finishCompaction(ci);
+        }
+
+        cfs.replaceCompactedSSTables(toCompact, sstables, compactionType);
+        // TODO: this doesn't belong here, it should be part of the reader to load when the tracker is wired up
+        for (Map.Entry<SSTableReader, Map<DecoratedKey, RowIndexEntry>> ssTableReaderMapEntry : cachedKeyMap.entrySet())
+        {
+            SSTableReader key = ssTableReaderMapEntry.getKey();
+            for (Map.Entry<DecoratedKey, RowIndexEntry> entry : ssTableReaderMapEntry.getValue().entrySet())
+               key.cacheKey(entry.getKey(), entry.getValue());
+        }
+
+        long dTime = System.currentTimeMillis() - startTime;
+        long startsize = SSTable.getTotalBytes(toCompact);
+        long endsize = SSTable.getTotalBytes(sstables);
+        double ratio = (double)endsize / (double)startsize;
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("[");
+        for (SSTableReader reader : sstables)
+            builder.append(reader.getFilename()).append(",");
+        builder.append("]");
+
+        double mbps = dTime > 0 ? (double)endsize/(1024*1024)/((double)dTime/1000) : 0;
+        logger.info(String.format("Compacted to %s.  %,d to %,d (~%d%% of original) bytes for %,d keys at %fMB/s.  Time: %,dms.",
+                                  builder.toString(), startsize, endsize, (int) (ratio * 100), totalkeysWritten, mbps, dTime));
+        logger.debug(String.format("CF Total Bytes Compacted: %,d", CompactionTask.addToTotalBytesCompacted(endsize)));
+    }
+
