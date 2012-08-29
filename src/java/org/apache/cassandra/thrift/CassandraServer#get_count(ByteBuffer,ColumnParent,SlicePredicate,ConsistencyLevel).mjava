@@ -1,65 +1,85 @@
     public int get_count(ByteBuffer key, ColumnParent column_parent, SlicePredicate predicate, ConsistencyLevel consistency_level)
     throws InvalidRequestException, UnavailableException, TimedOutException
     {
-        logger.debug("get_count");
-
-        ClientState cState = state();
-        cState.hasColumnFamilyAccess(column_parent.column_family, Permission.READ);
-        Table table = Table.open(cState.getKeyspace());
-        ColumnFamilyStore cfs = table.getColumnFamilyStore(column_parent.column_family);
-
-        if (predicate.column_names != null)
-            return get_slice(key, column_parent, predicate, consistency_level).size();
-
-        int pageSize;
-        // request by page if this is a large row
-        if (cfs.getMeanColumns() > 0)
+        if (startSessionIfRequested())
         {
-            int averageColumnSize = (int) (cfs.getMeanRowSize() / cfs.getMeanColumns());
-            pageSize = Math.min(COUNT_PAGE_SIZE,
-                                DatabaseDescriptor.getInMemoryCompactionLimit() / averageColumnSize);
-            pageSize = Math.max(2, pageSize);
-            logger.debug("average row column size is {}; using pageSize of {}", averageColumnSize, pageSize);
+            Map<String, String> traceParameters = ImmutableMap.of("key", ByteBufferUtil.bytesToHex(key),
+                    "column_parent", column_parent.toString(),
+                    "predicate", predicate.toString(),
+                    "consistency_level", consistency_level.name());
+            Tracing.instance().begin("get_count", traceParameters);
         }
         else
         {
-            pageSize = COUNT_PAGE_SIZE;
+            logger.debug("get_count");
         }
 
-        int totalCount = 0;
-        List<ColumnOrSuperColumn> columns;
-
-        if (predicate.slice_range == null)
+        try
         {
-            predicate.slice_range = new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER,
-                                                   ByteBufferUtil.EMPTY_BYTE_BUFFER,
-                                                   false,
-                                                   Integer.MAX_VALUE);
-        }
+            ClientState cState = state();
+            cState.hasColumnFamilyAccess(column_parent.column_family, Permission.READ);
+            Table table = Table.open(cState.getKeyspace());
+            ColumnFamilyStore cfs = table.getColumnFamilyStore(column_parent.column_family);
 
-        int requestedCount = predicate.slice_range.count;
-        int pages = 0;
-        while (true)
-        {
-            predicate.slice_range.count = Math.min(pageSize, requestedCount);
-            columns = get_slice(key, column_parent, predicate, consistency_level);
-            if (columns.isEmpty())
-                break;
+            if (predicate.column_names != null)
+                return get_slice(key, column_parent, predicate, consistency_level).size();
 
-            ByteBuffer firstName = getName(columns.get(0));
-            int newColumns = pages == 0 || !firstName.equals(predicate.slice_range.start) ? columns.size() : columns.size() - 1;
-            totalCount += newColumns;
-            requestedCount -= newColumns;
-            pages++;
-            // We're done if either:
-            //   - We've querying the number of columns requested by the user
-            //   - The last page wasn't full
-            if (requestedCount == 0 || columns.size() < predicate.slice_range.count)
-                break;
+            int pageSize;
+            // request by page if this is a large row
+            if (cfs.getMeanColumns() > 0)
+            {
+                int averageColumnSize = (int) (cfs.getMeanRowSize() / cfs.getMeanColumns());
+                pageSize = Math.min(COUNT_PAGE_SIZE,
+                        DatabaseDescriptor.getInMemoryCompactionLimit() / averageColumnSize);
+                pageSize = Math.max(2, pageSize);
+                logger.debug("average row column size is {}; using pageSize of {}", averageColumnSize, pageSize);
+            }
             else
-                predicate.slice_range.start = getName(columns.get(columns.size() - 1));
-        }
+            {
+                pageSize = COUNT_PAGE_SIZE;
+            }
 
-        return totalCount;
+            int totalCount = 0;
+            List<ColumnOrSuperColumn> columns;
+
+            if (predicate.slice_range == null)
+            {
+                predicate.slice_range = new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                        ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                        false,
+                        Integer.MAX_VALUE);
+            }
+
+            int requestedCount = predicate.slice_range.count;
+            int pages = 0;
+            while (true)
+            {
+                predicate.slice_range.count = Math.min(pageSize, requestedCount);
+                columns = get_slice(key, column_parent, predicate, consistency_level);
+                if (columns.isEmpty())
+                    break;
+
+                ByteBuffer firstName = getName(columns.get(0));
+                int newColumns = pages == 0 || !firstName.equals(predicate.slice_range.start) ? columns.size()
+                        : columns.size() - 1;
+
+                totalCount += newColumns;
+                requestedCount -= newColumns;
+                pages++;
+                // We're done if either:
+                // - We've querying the number of columns requested by the user
+                // - The last page wasn't full
+                if (requestedCount == 0 || columns.size() < predicate.slice_range.count)
+                    break;
+                else
+                    predicate.slice_range.start = getName(columns.get(columns.size() - 1));
+            }
+
+            return totalCount;
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
     }
 

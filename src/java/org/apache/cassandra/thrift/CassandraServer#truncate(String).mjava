@@ -1,8 +1,17 @@
     public void truncate(String cfname) throws InvalidRequestException, UnavailableException, TimedOutException, TException
     {
         ClientState cState = state();
-        logger.debug("truncating {} in {}", cfname, cState.getKeyspace());
         cState.hasColumnFamilyAccess(cfname, Permission.WRITE);
+
+        if (startSessionIfRequested())
+        {
+            Tracing.instance().begin("truncate", ImmutableMap.of("cf", cfname, "ks", cState.getKeyspace()));
+        }
+        else
+        {
+            logger.debug("truncating {}.{}", cState.getKeyspace(), cfname);
+        }
+
         try
         {
             schedule(DatabaseDescriptor.getTruncateRpcTimeout());
@@ -23,6 +32,10 @@
         catch (IOException e)
         {
             throw (UnavailableException) new UnavailableException().initCause(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
         }
     }
 

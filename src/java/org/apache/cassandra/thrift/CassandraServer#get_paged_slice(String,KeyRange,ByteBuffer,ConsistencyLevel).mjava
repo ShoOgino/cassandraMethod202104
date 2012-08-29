@@ -1,60 +1,83 @@
     public List<KeySlice> get_paged_slice(String column_family, KeyRange range, ByteBuffer start_column, ConsistencyLevel consistency_level)
     throws InvalidRequestException, UnavailableException, TimedOutException, TException
     {
-        logger.debug("get_paged_slice");
-
-        ClientState cState = state();
-        String keyspace = cState.getKeyspace();
-        cState.hasColumnFamilyAccess(column_family, Permission.READ);
-
-        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_family);
-        ThriftValidation.validateKeyRange(metadata, null, range);
-        ThriftValidation.validateConsistencyLevel(keyspace, consistency_level, RequestType.READ);
-
-        SlicePredicate predicate = new SlicePredicate().setSlice_range(new SliceRange(start_column, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, -1));
-
-        IPartitioner p = StorageService.getPartitioner();
-        AbstractBounds<RowPosition> bounds;
-        if (range.start_key == null)
+        if (startSessionIfRequested())
         {
-            // (token, key) is unsupported, assume (token, token)
-            Token.TokenFactory tokenFactory = p.getTokenFactory();
-            Token left = tokenFactory.fromString(range.start_token);
-            Token right = tokenFactory.fromString(range.end_token);
-            bounds = Range.makeRowRange(left, right, p);
+            Map<String, String> traceParameters = ImmutableMap.of(
+                    "column_family", column_family,
+                    "range", range.toString(),
+                    "start_column", ByteBufferUtil.bytesToHex(start_column),
+                    "consistency_level", consistency_level.name());
+            Tracing.instance().begin("get_paged_slice", traceParameters);
         }
         else
         {
-            RowPosition end = range.end_key == null ? p.getTokenFactory().fromString(range.end_token).maxKeyBound(p)
-                                                    : RowPosition.forKey(range.end_key, p);
-            bounds = new Bounds<RowPosition>(RowPosition.forKey(range.start_key, p), end);
+            logger.debug("get_paged_slice");
         }
 
-        List<Row> rows;
         try
         {
-            schedule(DatabaseDescriptor.getRangeRpcTimeout());
+
+            ClientState cState = state();
+            String keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(column_family, Permission.READ);
+
+            CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_family);
+            ThriftValidation.validateKeyRange(metadata, null, range);
+            ThriftValidation.validateConsistencyLevel(keyspace, consistency_level, RequestType.READ);
+
+            SlicePredicate predicate = new SlicePredicate().setSlice_range(new SliceRange(start_column,
+                    ByteBufferUtil.EMPTY_BYTE_BUFFER, false, -1));
+
+            IPartitioner p = StorageService.getPartitioner();
+            AbstractBounds<RowPosition> bounds;
+            if (range.start_key == null)
+            {
+                // (token, key) is unsupported, assume (token, token)
+                Token.TokenFactory tokenFactory = p.getTokenFactory();
+                Token left = tokenFactory.fromString(range.start_token);
+                Token right = tokenFactory.fromString(range.end_token);
+                bounds = Range.makeRowRange(left, right, p);
+            }
+            else
+            {
+                RowPosition end = range.end_key == null ? p.getTokenFactory().fromString(range.end_token)
+                        .maxKeyBound(p)
+                        : RowPosition.forKey(range.end_key, p);
+                bounds = new Bounds<RowPosition>(RowPosition.forKey(range.start_key, p), end);
+            }
+
+            List<Row> rows;
             try
             {
-                IFilter filter = ThriftValidation.asIFilter(predicate, metadata.comparator);
-                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_family, null, filter, bounds, range.row_filter, range.count, true, true), consistency_level);
+                schedule(DatabaseDescriptor.getRangeRpcTimeout());
+                try
+                {
+                    IFilter filter = ThriftValidation.asIFilter(predicate, metadata.comparator);
+                    rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_family, null, filter,
+                            bounds, range.row_filter, range.count, true, true), consistency_level);
+                }
+                finally
+                {
+                    release();
+                }
+                assert rows != null;
             }
-            finally
+            catch (TimeoutException e)
             {
-                release();
+                logger.debug("... timed out");
+                throw new TimedOutException();
             }
-            assert rows != null;
-        }
-        catch (TimeoutException e)
-        {
-            logger.debug("... timed out");
-            throw new TimedOutException();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
 
-        return thriftifyKeySlices(rows, new ColumnParent(column_family), predicate);
+            return thriftifyKeySlices(rows, new ColumnParent(column_family), predicate);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
     }
 

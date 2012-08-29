@@ -1,0 +1,29 @@
+    public void begin(final String request, final Map<String, String> parameters)
+    {
+        assert isTracing();
+
+        final long started_at = System.currentTimeMillis();
+        final ByteBuffer sessionIdBytes = state.get().sessionIdBytes;
+
+        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable()
+        {
+            public void runMayThrow() throws TimedOutException, UnavailableException
+            {
+                ColumnFamily cf = ColumnFamily.create(CFMetaData.TraceSessionsCf);
+                addColumn(cf,
+                          buildName(CFMetaData.TraceSessionsCf, bytes("coordinator")),
+                          InetAddressType.instance.decompose(FBUtilities.getBroadcastAddress()));
+                addColumn(cf,
+                          buildName(CFMetaData.TraceSessionsCf, bytes("request")),
+                          UTF8Type.instance.decompose(request));
+                addColumn(cf,
+                          buildName(CFMetaData.TraceSessionsCf, bytes("started_at")),
+                          LongType.instance.decompose(started_at));
+                addParameterColumns(cf, parameters);
+                RowMutation mutation = new RowMutation(TRACE_KS, sessionIdBytes);
+                mutation.add(cf);
+                StorageProxy.mutate(Arrays.asList(mutation), ConsistencyLevel.ANY);
+            }
+        });
+    }
+
