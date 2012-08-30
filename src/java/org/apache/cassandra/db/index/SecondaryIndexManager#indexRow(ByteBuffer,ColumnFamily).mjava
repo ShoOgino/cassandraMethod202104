@@ -1,0 +1,34 @@
+    /**
+     * When building an index against existing data, add the given row to the index
+     *
+     * @param key the row key
+     * @param cf the current rows data
+     */
+    public void indexRow(ByteBuffer key, ColumnFamily cf)
+    {
+        // Update entire row only once per row level index
+        Set<Class<? extends SecondaryIndex>> appliedRowLevelIndexes = null;
+
+        for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
+        {
+            SecondaryIndex index = entry.getValue();
+
+            if (index instanceof PerRowSecondaryIndex)
+            {
+                if (appliedRowLevelIndexes == null)
+                    appliedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
+
+                if (appliedRowLevelIndexes.add(index.getClass()))
+                    ((PerRowSecondaryIndex)index).index(key, cf);
+            }
+            else
+            {
+                IColumn column = cf.getColumn(entry.getKey());
+                if (column == null)
+                    continue;
+
+                ((PerColumnSecondaryIndex) index).insert(key, column);
+            }
+        }
+    }
+
