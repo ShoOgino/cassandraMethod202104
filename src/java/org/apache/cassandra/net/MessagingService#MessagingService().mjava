@@ -2,8 +2,7 @@
     {
         for (Verb verb : DROPPABLE_VERBS)
         {
-            droppedMessages.put(verb, new AtomicInteger());
-            lastDropped.put(verb, 0);
+            droppedMessages.put(verb, new DroppedMessageMetrics(verb));
             lastDroppedInternal.put(verb, 0);
         }
 
@@ -24,19 +23,8 @@
             {
                 CallbackInfo expiredCallbackInfo = pair.right.value;
                 maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, pair.right.timeout);
-                totalTimeouts++;
-                String ip = expiredCallbackInfo.target.getHostAddress();
-                AtomicLong c = timeoutsPerHost.get(ip);
-                if (c == null)
-                {
-                    c = new AtomicLong();
-                    timeoutsPerHost.put(ip, c);
-                }
-                c.incrementAndGet();
-                // we only create AtomicLong instances here, so that the write
-                // access to the hashmap happens single-threadedly.
-                if (recentTimeoutsPerHost.get(ip) == null)
-                    recentTimeoutsPerHost.put(ip, new AtomicLong());
+                ConnectionMetrics.totalTimeouts.mark();
+                getConnectionPool(expiredCallbackInfo.target).incrementTimeout();
 
                 if (expiredCallbackInfo.shouldHint())
                 {

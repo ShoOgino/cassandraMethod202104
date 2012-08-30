@@ -17,9 +17,10 @@
         // setting up data compression stream
         compressedoutput = new LZFOutputStream(output);
 
-        MessagingService.instance().incrementActiveStreamsOutbound();
+        StreamingMetrics.activeStreamsOutbound.inc();
         try
         {
+            long totalBytesTransferred = 0;
             // stream each of the required sections of the file
             for (Pair<Long, Long> section : header.file.sections)
             {
@@ -35,6 +36,7 @@
                 {
                     long lastWrite = write(file, length, bytesTransferred);
                     bytesTransferred += lastWrite;
+                    totalBytesTransferred += lastWrite;
                     // store streaming progress
                     header.file.progress += lastWrite;
                 }
@@ -45,12 +47,14 @@
                 if (logger.isDebugEnabled())
                     logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
             }
+            StreamingMetrics.totalOutgoingBytes.inc(totalBytesTransferred);
+            metrics.outgoingBytes.inc(totalBytesTransferred);
             // receive reply confirmation
             receiveReply();
         }
         finally
         {
-            MessagingService.instance().decrementActiveStreamsOutbound();
+            StreamingMetrics.activeStreamsOutbound.dec();
 
             // no matter what happens close file
             FileUtils.closeQuietly(file);

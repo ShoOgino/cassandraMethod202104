@@ -12,11 +12,12 @@
         RandomAccessReader file = RandomAccessReader.open(new File(header.file.getFilename()), true);
         FileChannel fc = file.getChannel();
 
-        MessagingService.instance().incrementActiveStreamsOutbound();
+        StreamingMetrics.activeStreamsOutbound.inc();
         // calculate chunks to transfer. we want to send continuous chunks altogether.
         List<Pair<Long, Long>> sections = getTransferSections(header.file.compressionInfo.chunks);
         try
         {
+            long totalBytesTransferred = 0;
             // stream each of the required sections of the file
             for (Pair<Long, Long> section : sections)
             {
@@ -44,18 +45,21 @@
                         throttle.throttleDelta(toTransfer);
                         lastWrite = toTransfer;
                     }
+                    totalBytesTransferred += lastWrite;
                     bytesTransferred += lastWrite;
                     header.file.progress += lastWrite;
                 }
 
                 logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
             }
+            StreamingMetrics.totalOutgoingBytes.inc(totalBytesTransferred);
+            metrics.outgoingBytes.inc(totalBytesTransferred);
             // receive reply confirmation
             receiveReply();
         }
         finally
         {
-            MessagingService.instance().decrementActiveStreamsOutbound();
+            StreamingMetrics.activeStreamsOutbound.dec();
 
             // no matter what happens close file
             FileUtils.closeQuietly(file);
