@@ -11,20 +11,14 @@
 
         // Parse versioned values according to end-point version:
         //   versions  < 1.2 .....: STATUS,TOKEN
-        //   versions >= 1.2 .....: STATUS,HOST_ID,TOKEN,TOKEN,...
-        int tokensPos;
-        if (usesHostId(endpoint))
-        {
-            assert pieces.length >= 3;
-            tokensPos = 2;
-        }
-        else
-            tokensPos = 1;
-        logger.debug("Using token position {} for {}", tokensPos, endpoint);
+        //   versions >= 1.2 .....: uses HOST_ID/TOKENS app states
 
-        Collection<Token> tokens = new ArrayList<Token>();
-        for (int i = tokensPos; i < pieces.length; ++i)
-            tokens.add(getPartitioner().getTokenFactory().fromString(pieces[i]));
+        Collection<Token> tokens;
+
+        if (Gossiper.instance.usesHostId(endpoint))
+            tokens = getTokensFor(endpoint);
+        else
+            tokens = Arrays.asList(getPartitioner().getTokenFactory().fromString(pieces[1]));
 
         if (logger.isDebugEnabled())
             logger.debug("Node " + endpoint + " state normal, token " + tokens);
@@ -33,8 +27,8 @@
             logger.info("Node " + endpoint + " state jump to normal");
 
         // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-        if (usesHostId(endpoint))
-            tokenMetadata.updateHostId(UUID.fromString(pieces[1]), endpoint);
+        if (Gossiper.instance.usesHostId(endpoint))
+            tokenMetadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
 
         Set<Token> tokensToUpdateInMetadata = new HashSet<Token>();
         Set<Token> tokensToUpdateInSystemTable = new HashSet<Token>();
