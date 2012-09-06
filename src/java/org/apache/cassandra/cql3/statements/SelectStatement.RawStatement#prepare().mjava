@@ -203,6 +203,28 @@
                 if (stmt.isKeyRange)
                     throw new InvalidRequestException("ORDER BY is only supported when the partition key is restricted by an EQ or an IN.");
 
+                // check if we are trying to order by column that wouldn't be included in the results
+                if (!stmt.selectedNames.isEmpty()) // empty means wildcard was used
+                {
+                    for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
+                    {
+                        CFDefinition.Name name = cfDef.get(column);
+
+                        boolean hasColumn = false;
+                        for (Pair<CFDefinition.Name, Selector> selectPair : stmt.selectedNames)
+                        {
+                            if (selectPair.left.equals(name))
+                            {
+                                hasColumn = true;
+                                break;
+                            }
+                        }
+
+                        if (!hasColumn)
+                            throw new InvalidRequestException("ORDER BY could not be used on columns missing in select clause.");
+                    }
+                }
+
                 Boolean[] reversedMap = new Boolean[cfDef.columns.size()];
                 int i = 0;
                 for (Map.Entry<ColumnIdentifier, Boolean> entry : stmt.parameters.orderings.entrySet())
