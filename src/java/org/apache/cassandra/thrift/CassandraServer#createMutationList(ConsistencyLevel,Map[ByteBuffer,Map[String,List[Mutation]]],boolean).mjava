@@ -1,5 +1,7 @@
-    private void internal_batch_mutate(Map<ByteBuffer,Map<String,List<Mutation>>> mutation_map, ConsistencyLevel consistency_level)
-    throws RequestValidationException, UnavailableException, TimedOutException
+    private List<IMutation> createMutationList(ConsistencyLevel consistency_level,
+                                               Map<ByteBuffer,Map<String,List<Mutation>>> mutation_map,
+                                               boolean allowCounterMutations)
+    throws RequestValidationException
     {
         List<String> cfamsSeen = new ArrayList<String>();
         List<IMutation> rowMutations = new ArrayList<IMutation>();
@@ -59,10 +61,16 @@
             }
             if (rmStandard != null && !rmStandard.isEmpty())
                 rowMutations.add(rmStandard);
+
             if (rmCounter != null && !rmCounter.isEmpty())
-                rowMutations.add(new org.apache.cassandra.db.CounterMutation(rmCounter, ThriftConversion.fromThrift(consistency_level)));
+            {
+                if (allowCounterMutations)
+                    rowMutations.add(new CounterMutation(rmCounter, ThriftConversion.fromThrift(consistency_level)));
+                else
+                    throw new org.apache.cassandra.exceptions.InvalidRequestException("Counter mutations are not allowed in atomic batches");
+            }
         }
 
-        doInsert(consistency_level, rowMutations);
+        return rowMutations;
     }
 

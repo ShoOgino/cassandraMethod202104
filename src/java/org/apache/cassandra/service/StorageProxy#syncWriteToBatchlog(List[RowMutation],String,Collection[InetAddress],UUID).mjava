@@ -1,0 +1,28 @@
+    private static void syncWriteToBatchlog(List<RowMutation> mutations,
+                                            String localDataCenter,
+                                            Collection<InetAddress> endpoints,
+                                            UUID uuid)
+    throws WriteTimeoutException
+    {
+        RowMutation rm = BatchlogManager.getBatchlogMutationFor(mutations, uuid);
+        IWriteResponseHandler handler = WriteResponseHandler.create(endpoints, ConsistencyLevel.ONE, Table.SYSTEM_KS, null);
+
+        try
+        {
+            sendMessagesToOneDC(rm.createMessage(), endpoints, true, handler);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Error writing to batchlog", e);
+        }
+
+        try
+        {
+            handler.get();
+        }
+        catch (WriteTimeoutException e)
+        {
+            throw new WriteTimeoutException(e.consistency, 0, e.blockFor, false);
+        }
+    }
+
