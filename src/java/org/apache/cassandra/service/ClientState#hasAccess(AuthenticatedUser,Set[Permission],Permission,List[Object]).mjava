@@ -1,10 +1,45 @@
     private static void hasAccess(AuthenticatedUser user, Set<Permission> perms, Permission perm, List<Object> resource) throws UnauthorizedException
     {
-        if (perms.contains(perm))
-            return;
+        if (perms.contains(Permission.FULL_ACCESS))
+            return; // full access
+
+        if (perms.contains(Permission.NO_ACCESS))
+            throw new UnauthorizedException(String.format("%s does not have permission %s for %s",
+                                                          user,
+                                                          perm,
+                                                          Resources.toString(resource)));
+
+        boolean granular = false;
+
+        for (Permission p : perms)
+        {
+            // mixing of old and granular permissions is denied by IAuthorityContainer
+            // and CQL grammar so it's name to assume that once a granular permission is found
+            // all other permissions are going to be a subset of Permission.GRANULAR_PERMISSIONS
+            if (Permission.GRANULAR_PERMISSIONS.contains(p))
+            {
+                granular = true;
+                break;
+            }
+        }
+
+        if (granular)
+        {
+            if (perms.contains(perm))
+                return; // user has a given permission, perm is always one of Permission.GRANULAR_PERMISSIONS
+        }
+        else
+        {
+            for (Permission p : perms)
+            {
+                if (Permission.oldToNew.get(p).contains(perm))
+                    return;
+            }
+        }
+
         throw new UnauthorizedException(String.format("%s does not have permission %s for %s",
                                                       user,
                                                       perm,
-                                                       Resources.toString(resource)));
+                                                      Resources.toString(resource)));
     }
 
