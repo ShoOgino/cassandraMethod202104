@@ -1,43 +1,27 @@
-    private static void replayAllFailedBatches()
+    private void replayAllFailedBatches()
     {
-        if (logger.isDebugEnabled())
-            logger.debug("Started replayAllFailedBatches");
-
-        ColumnFamilyStore store = Table.open(Table.SYSTEM_KS).getColumnFamilyStore(SystemTable.BATCHLOG_CF);
-
-        if (store.isEmpty())
+        if (!isReplaying.compareAndSet(false, true))
             return;
 
-        IPartitioner partitioner = StorageService.getPartitioner();
-        RowPosition minPosition = partitioner.getMinimumToken().minKeyBound();
-        AbstractBounds<RowPosition> range = new Range<RowPosition>(minPosition, minPosition, partitioner);
-
-        List<Row> rows = store.getRangeSlice(null, range, Integer.MAX_VALUE, new NamesQueryFilter(META), null);
-
-        for (Row row : rows)
+        try
         {
-            if (row.cf.isMarkedForDelete())
-                continue;
+            logger.debug("Started replayAllFailedBatches");
 
-            IColumn coordinatorColumn = row.cf.getColumn(COORDINATOR);
-            IColumn writtenAtColumn = row.cf.getColumn(WRITTEN_AT);
-
-            if (coordinatorColumn == null || writtenAtColumn == null)
+            for (Row row : getRangeSlice(new NamesQueryFilter(WRITTEN_AT)))
             {
-                replayBatch(row.key);
-                continue;
+                if (row.cf == null || row.cf.isMarkedForDelete())
+                    continue;
+
+                IColumn writtenAt = row.cf.getColumn(WRITTEN_AT);
+                if (writtenAt == null || System.currentTimeMillis() > LongType.instance.compose(writtenAt.value()) + TIMEOUT)
+                    replayBatch(row.key);
             }
-
-            InetAddress coordinator = InetAddressType.instance.compose(coordinatorColumn.value());
-            long writtenAt = LongType.instance.compose(writtenAtColumn.value());
-            // if the batch is new and its coordinator is alive - give it a chance to complete naturally.
-            if (System.currentTimeMillis() < writtenAt + TIMEOUT && FailureDetector.instance.isAlive(coordinator))
-                continue;
-
-            replayBatch(row.key);
+        }
+        finally
+        {
+            isReplaying.set(false);
         }
 
-        if (logger.isDebugEnabled())
-            logger.debug("Finished replayAllFailedBatches");
+        logger.debug("Finished replayAllFailedBatches");
     }
 
