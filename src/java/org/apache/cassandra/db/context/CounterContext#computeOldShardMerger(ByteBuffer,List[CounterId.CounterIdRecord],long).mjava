@@ -1,27 +1,27 @@
     /**
      * Compute a new context such that if applied to context yields the same
-     * total but with old local node ids nulified and there content merged to
-     * the current localNodeId.
+     * total but with old local counter ids nulified and there content merged to
+     * the current localCounterId.
      */
-    public ByteBuffer computeOldShardMerger(ByteBuffer context, List<NodeId.NodeIdRecord> oldIds, long mergeBefore)
+    public ByteBuffer computeOldShardMerger(ByteBuffer context, List<CounterId.CounterIdRecord> oldIds, long mergeBefore)
     {
         long now = System.currentTimeMillis();
         int hlength = headerLength(context);
-        NodeId localId = NodeId.getLocalId();
+        CounterId localId = CounterId.getLocalId();
 
-        Iterator<NodeId.NodeIdRecord> recordIterator = oldIds.iterator();
-        NodeId.NodeIdRecord currRecord = recordIterator.hasNext() ? recordIterator.next() : null;
+        Iterator<CounterId.CounterIdRecord> recordIterator = oldIds.iterator();
+        CounterId.CounterIdRecord currRecord = recordIterator.hasNext() ? recordIterator.next() : null;
 
         ContextState state = new ContextState(context, hlength);
 
-        List<NodeId> toMerge = new ArrayList<NodeId>();
+        List<CounterId> toMerge = new ArrayList<CounterId>();
         long mergeTotal = 0;
         while (state.hasRemaining() && currRecord != null)
         {
             assert !currRecord.id.equals(localId);
 
-            NodeId nodeId = state.getNodeId();
-            int c = nodeId.compareTo(currRecord.id);
+            CounterId counterId = state.getCounterId();
+            int c = counterId.compareTo(currRecord.id);
 
             if (c > 0)
             {
@@ -35,15 +35,15 @@
                 {
                     // Already merged shard, waiting to be collected
 
-                    if (nodeId.equals(localId))
+                    if (counterId.equals(localId))
                         // we should not get there, but we have been creating problematic context prior to #2968
-                        throw new RuntimeException("Current nodeId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
+                        throw new RuntimeException("Current counterId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
 
                     if (state.getCount() != 0)
                     {
                         // This should not happen, but previous bugs have generated this (#2968 in particular) so fixing it.
-                        logger.error(String.format("Invalid counter context (clock is %d and count is %d for NodeId %s), will fix", state.getCount(), state.getCount(), nodeId.toString()));
-                        toMerge.add(nodeId);
+                        logger.error(String.format("Invalid counter context (clock is %d and count is %d for CounterId %s), will fix", state.getCount(), state.getCount(), counterId.toString()));
+                        toMerge.add(counterId);
                         mergeTotal += state.getCount();
                     }
                 }
@@ -53,7 +53,7 @@
                     // we check that it has been renewed before mergeBefore.
                     if (currRecord.timestamp < mergeBefore)
                     {
-                        toMerge.add(nodeId);
+                        toMerge.add(counterId);
                         mergeTotal += state.getCount();
                     }
                 }
@@ -67,18 +67,18 @@
         // Continuing the iteration so that we can repair invalid shards
         while (state.hasRemaining())
         {
-            NodeId nodeId = state.getNodeId();
+            CounterId counterId = state.getCounterId();
             if (state.isDelta() && state.getClock() < 0)
             {
-                if (nodeId.equals(localId))
+                if (counterId.equals(localId))
                     // we should not get there, but we have been creating problematic context prior to #2968
-                    throw new RuntimeException("Current nodeId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
+                    throw new RuntimeException("Current counterId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
 
                 if (state.getCount() != 0)
                 {
                     // This should not happen, but previous bugs have generated this (#2968 in particular) so fixing it.
-                    logger.error(String.format("Invalid counter context (clock is %d and count is %d for NodeId %s), will fix", state.getClock(), state.getCount(), nodeId.toString()));
-                    toMerge.add(nodeId);
+                    logger.error(String.format("Invalid counter context (clock is %d and count is %d for CounterId %s), will fix", state.getClock(), state.getCount(), counterId.toString()));
+                    toMerge.add(counterId);
                     mergeTotal += state.getCount();
                 }
             }
@@ -95,17 +95,17 @@
         boolean localWritten = false;
         while (state.hasRemaining())
         {
-            NodeId nodeId = state.getNodeId();
-            if (nodeId.compareTo(localId) > 0)
+            CounterId counterId = state.getCounterId();
+            if (counterId.compareTo(localId) > 0)
             {
                 merger.writeElement(localId, 1L, mergeTotal, true);
                 localWritten = true;
             }
-            else if (i < toMerge.size() && nodeId.compareTo(toMerge.get(i)) == 0)
+            else if (i < toMerge.size() && counterId.compareTo(toMerge.get(i)) == 0)
             {
                 long count = state.getCount();
                 removedTotal += count;
-                merger.writeElement(nodeId, -now - state.getClock(), -count, true);
+                merger.writeElement(counterId, -now - state.getClock(), -count, true);
                 ++i;
             }
             state.moveToNext();
