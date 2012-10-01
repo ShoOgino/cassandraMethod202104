@@ -1,50 +1,31 @@
-    public List<IMutation> getMutations(ClientState clientState, List<ByteBuffer> variables, boolean local)
+    public Collection<? extends IMutation> getMutations(ClientState clientState, List<ByteBuffer> variables, boolean local)
     throws RequestExecutionException, RequestValidationException
     {
-        Map<Pair<String, ByteBuffer>, RowAndCounterMutation> mutations = new HashMap<Pair<String, ByteBuffer>, RowAndCounterMutation>();
+        Map<Pair<String, ByteBuffer>, IMutation> mutations = new HashMap<Pair<String, ByteBuffer>, IMutation>();
         for (ModificationStatement statement : statements)
         {
             if (isSetTimestamp())
                 statement.setTimestamp(getTimestamp(clientState));
 
-            List<IMutation> lm = statement.getMutations(clientState, variables, local);
             // Group mutation together, otherwise they won't get applied atomically
-            for (IMutation m : lm)
+            for (IMutation m : statement.getMutations(clientState, variables, local))
             {
-                Pair<String, ByteBuffer> key = Pair.create(m.getTable(), m.key());
-                RowAndCounterMutation racm = mutations.get(key);
-                if (racm == null)
-                {
-                    racm = new RowAndCounterMutation();
-                    mutations.put(key, racm);
-                }
+                if (m instanceof CounterMutation && type != Type.COUNTER)
+                    throw new InvalidRequestException("Counter mutations are only allowed in COUNTER batches");
 
-                if (m instanceof CounterMutation)
-                {
-                    if (racm.cm == null)
-                        racm.cm = (CounterMutation)m;
-                    else
-                        racm.cm.addAll(m);
-                }
+                if (m instanceof RowMutation && type == Type.COUNTER)
+                    throw new InvalidRequestException("Only counter mutations are allowed in COUNTER batches");
+
+                Pair<String, ByteBuffer> key = Pair.create(m.getTable(), m.key());
+                IMutation existing = mutations.get(key);
+
+                if (existing == null)
+                    mutations.put(key, m);
                 else
-                {
-                    assert m instanceof RowMutation;
-                    if (racm.rm == null)
-                        racm.rm = (RowMutation)m;
-                    else
-                        racm.rm.addAll(m);
-                }
+                    existing.addAll(m);
             }
         }
 
-        List<IMutation> batch = new LinkedList<IMutation>();
-        for (RowAndCounterMutation racm : mutations.values())
-        {
-            if (racm.rm != null)
-                batch.add(racm.rm);
-            if (racm.cm != null)
-                batch.add(racm.cm);
-        }
-        return batch;
+        return mutations.values();
     }
 
