@@ -3,55 +3,27 @@
      * It's okay to over-call (within reason) since the compactions are single-threaded,
      * and if a call is unnecessary, it will just be no-oped in the bucketing phase.
      */
-    public Future<?> submitBackground(final ColumnFamilyStore cfs)
+    public List<Future<?>> submitBackground(final ColumnFamilyStore cfs)
     {
+        int count = compactingCF.count(cfs);
+        if (count > 0 && executor.getActiveCount() >= executor.getMaximumPoolSize())
+        {
+            logger.debug("Background compaction is still running for {}.{} ({} remaining). Skipping",
+                         new Object[] {cfs.table.name, cfs.columnFamily, count});
+            return Collections.emptyList();
+        }
+
         logger.debug("Scheduling a background task check for {}.{} with {}",
                      new Object[] {cfs.table.name,
                                    cfs.columnFamily,
                                    cfs.getCompactionStrategy().getClass().getSimpleName()});
-        Runnable runnable = new Runnable()
+        List<Future<?>> futures = new ArrayList<Future<?>>();
+        // if we have room for more compactions, then fill up executor
+        while (executor.getActiveCount() + futures.size() < executor.getMaximumPoolSize())
         {
-            public void run()
-            {
-                compactionLock.readLock().lock();
-                try
-                {
-                    logger.debug("Checking {}.{}", cfs.table.name, cfs.columnFamily); // log after we get the lock so we can see delays from that if any
-                    if (!cfs.isValid())
-                    {
-                        logger.debug("Aborting compaction for dropped CF");
-                        return;
-                    }
-
-                    AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
-                    AbstractCompactionTask task = strategy.getNextBackgroundTask(getDefaultGcBefore(cfs));
-                    if (task == null)
-                    {
-                        logger.debug("No tasks available");
-                        return;
-                    }
-                    if (!task.markSSTablesForCompaction())
-                    {
-                        logger.debug("Unable to mark SSTables for {}", task);
-                        return;
-                    }
-
-                    try
-                    {
-                        task.execute(metrics);
-                    }
-                    finally
-                    {
-                        task.unmarkSSTables();
-                    }
-                    submitBackground(cfs);
-                }
-                finally
-                {
-                    compactionLock.readLock().unlock();
-                }
-            }
-        };
-        return executor.submit(runnable);
+            futures.add(executor.submit(new BackgroundCompactionTask(cfs)));
+            compactingCF.add(cfs);
+        }
+        return futures;
     }
 

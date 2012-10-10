@@ -1,12 +1,5 @@
-    public AbstractCompactionTask getMaximalTask(int gcBefore)
+    public synchronized AbstractCompactionTask getMaximalTask(int gcBefore)
     {
-        LeveledCompactionTask currentTask = task.get();
-        if (currentTask != null && !currentTask.isDone())
-        {
-            logger.debug("Compaction still in progress for {}", this);
-            return null;
-        }
-
         Collection<SSTableReader> sstables = manifest.getCompactionCandidates();
         OperationType op = OperationType.COMPACTION;
         if (sstables.isEmpty())
@@ -22,10 +15,14 @@
             op = OperationType.TOMBSTONE_COMPACTION;
         }
 
-        LeveledCompactionTask newTask = new LeveledCompactionTask(cfs, sstables, gcBefore, this.maxSSTableSizeInMB);
+        if (!cfs.getDataTracker().markCompacting(sstables))
+        {
+            logger.debug("Unable to mark {} for compaction; probably a user-defined compaction got in the way", sstables);
+            return null;
+        }
+
+        LeveledCompactionTask newTask = new LeveledCompactionTask(cfs, sstables, gcBefore, maxSSTableSizeInMB);
         newTask.setCompactionType(op);
-        return task.compareAndSet(currentTask, newTask)
-               ? newTask
-               : null;
+        return newTask;
     }
 

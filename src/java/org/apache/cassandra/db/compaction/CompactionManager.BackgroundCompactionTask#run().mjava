@@ -1,0 +1,36 @@
+        public void run()
+        {
+            compactionLock.readLock().lock();
+            try
+            {
+                logger.debug("Checking {}.{}", cfs.table.name, cfs.columnFamily); // log after we get the lock so we can see delays from that if any
+                if (!cfs.isValid())
+                {
+                    logger.debug("Aborting compaction for dropped CF");
+                    return;
+                }
+
+                AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+                AbstractCompactionTask task = strategy.getNextBackgroundTask(getDefaultGcBefore(cfs));
+                if (task == null)
+                {
+                    logger.debug("No tasks available");
+                    return;
+                }
+                try
+                {
+                    task.execute(metrics);
+                }
+                finally
+                {
+                    task.unmarkSSTables();
+                }
+            }
+            finally
+            {
+                compactingCF.remove(cfs);
+                compactionLock.readLock().unlock();
+            }
+            submitBackground(cfs);
+        }
+

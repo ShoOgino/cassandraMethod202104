@@ -1,7 +1,14 @@
+    /**
+     * @return highest-priority sstables to compact for the given level.
+     * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
+     * for prior failure), will return an empty list.  Never returns null.
+     */
     private Collection<SSTableReader> getCandidatesFor(int level)
     {
         assert !generations[level].isEmpty();
         logger.debug("Choosing candidates for L{}", level);
+
+        final Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
 
         if (level == 0)
         {
@@ -19,17 +26,16 @@
             // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
             // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
             Set<SSTableReader> candidates = new HashSet<SSTableReader>();
-            Set<SSTableReader> remaining = new HashSet<SSTableReader>(generations[0]);
-            List<SSTableReader> ageSortedSSTables = new ArrayList<SSTableReader>(generations[0]);
-            Collections.sort(ageSortedSSTables, SSTable.maxTimestampComparator);
-            for (SSTableReader sstable : ageSortedSSTables)
+            Set<SSTableReader> remaining = new HashSet<SSTableReader>();
+            Iterables.addAll(remaining, Iterables.filter(generations[0], Predicates.not(suspectP)));
+            for (SSTableReader sstable : ageSortedSSTables(remaining))
             {
                 if (candidates.contains(sstable))
                     continue;
 
                 for (SSTableReader newCandidate : Sets.union(Collections.singleton(sstable), overlapping(sstable, remaining)))
                 {
-                    if (!newCandidate.isMarkedSuspect())
+                    if (!compacting.contains(newCandidate))
                     {
                         candidates.add(newCandidate);
                         remaining.remove(newCandidate);
@@ -39,17 +45,22 @@
                 if (candidates.size() > MAX_COMPACTING_L0)
                 {
                     // limit to only the MAX_COMPACTING_L0 oldest candidates
-                    List<SSTableReader> ageSortedCandidates = new ArrayList<SSTableReader>(candidates);
-                    Collections.sort(ageSortedCandidates, SSTable.maxTimestampComparator);
-                    candidates = new HashSet<SSTableReader>(ageSortedCandidates.subList(0, MAX_COMPACTING_L0));
+                    candidates = new HashSet<SSTableReader>(ageSortedSSTables(candidates).subList(0, MAX_COMPACTING_L0));
                     break;
                 }
             }
 
+            // leave everything in L0 if we didn't end up with a full sstable's worth of data
             if (SSTable.getTotalBytes(candidates) > maxSSTableSizeInBytes)
             {
                 // add sstables from L1 that overlap candidates
-                candidates.addAll(overlapping(candidates, generations[1]));
+                // if the overlapping ones are already busy in a compaction, leave it out.
+                // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
+                candidates = Sets.union(candidates, overlapping(candidates, generations[1]));
+                // check overlap with L0 compacting sstables to make sure we are not generating overlap in L1.
+                Iterable<SSTableReader> compactingL0 = Iterables.filter(generations[0], Predicates.in(compacting));
+                if (!Sets.intersection(candidates, compacting).isEmpty() || !overlapping(candidates, compactingL0).isEmpty())
+                    return Collections.emptyList();
             }
 
             return candidates.size() > 1 ? candidates : Collections.<SSTableReader>emptyList();
@@ -70,23 +81,14 @@
 
         // look for a non-suspect table to compact with, starting with where we left off last time,
         // and wrapping back to the beginning of the generation if necessary
-        int i = start;
-        outer:
-        while (true)
+        for (int i = 0; i < generations[level].size(); i++)
         {
-            SSTableReader sstable = generations[level].get(i);
-            Set<SSTableReader> candidates = Sets.union(Collections.singleton(sstable), overlapping(sstable, generations[(level + 1)]));
-            for (SSTableReader candidate : candidates)
-            {
-                if (candidate.isMarkedSuspect())
-                {
-                    i = (i + 1) % generations[level].size();
-                    if (i == start)
-                        break outer;
-                    continue outer;
-                }
-            }
-            return candidates;
+            SSTableReader sstable = generations[level].get((start + i) % generations[level].size());
+            Set<SSTableReader> candidates = Sets.union(Collections.singleton(sstable), overlapping(sstable, generations[level + 1]));
+            if (Iterables.any(candidates, suspectP))
+                continue;
+            if (Sets.intersection(candidates, compacting).isEmpty())
+                return candidates;
         }
 
         // all the sstables were suspect or overlapped with something suspect

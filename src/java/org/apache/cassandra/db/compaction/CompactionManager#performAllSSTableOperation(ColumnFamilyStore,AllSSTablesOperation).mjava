@@ -1,4 +1,4 @@
-    private void performAllSSTableOperation(final ColumnFamilyStore cfStore, final AllSSTablesOperation operation) throws InterruptedException, ExecutionException
+    private void performAllSSTableOperation(final ColumnFamilyStore cfs, final AllSSTablesOperation operation) throws InterruptedException, ExecutionException
     {
         Callable<Object> runnable = new Callable<Object>()
         {
@@ -7,9 +7,16 @@
                 compactionLock.writeLock().lock();
                 try
                 {
-                    Collection<SSTableReader> sstables = cfStore.getDataTracker().markCompacting(cfStore.getSSTables(), 1, Integer.MAX_VALUE);
-                    if (sstables == null || sstables.isEmpty())
-                        return this;
+                    Collection<SSTableReader> sstables;
+                    while (true)
+                    {
+                        sstables = cfs.getDataTracker().getUncompactingSSTables();
+                        if (sstables.isEmpty())
+                            return this;
+                        if (cfs.getDataTracker().markCompacting(sstables))
+                            break;
+                    }
+
                     try
                     {
                         // downgrade the lock acquisition
@@ -17,7 +24,7 @@
                         compactionLock.writeLock().unlock();
                         try
                         {
-                            operation.perform(cfStore, sstables);
+                            operation.perform(cfs, sstables);
                         }
                         finally
                         {
@@ -26,7 +33,7 @@
                     }
                     finally
                     {
-                        cfStore.getDataTracker().unmarkCompacting(sstables);
+                        cfs.getDataTracker().unmarkCompacting(sstables);
                     }
                     return this;
                 }
