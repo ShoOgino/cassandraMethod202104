@@ -1,7 +1,7 @@
         public List<InputSplit> call() throws Exception
         {
             ArrayList<InputSplit> splits = new ArrayList<InputSplit>();
-            List<String> tokens = getSubSplits(keyspace, cfName, range, conf);
+            List<CfSplit> subSplits = getSubSplits(keyspace, cfName, range, conf);
             assert range.rpc_endpoints.size() == range.endpoints.size() : "rpc_endpoints size must match endpoints size";
             // turn the sub-ranges into InputSplits
             String[] endpoints = range.endpoints.toArray(new String[range.endpoints.size()]);
@@ -16,15 +16,21 @@
             }
 
             Token.TokenFactory factory = partitioner.getTokenFactory();
-            for (int i = 1; i < tokens.size(); i++)
+            for (CfSplit subSplit : subSplits)
             {
-                Token left = factory.fromString(tokens.get(i - 1));
-                Token right = factory.fromString(tokens.get(i));
+                Token left = factory.fromString(subSplit.getStart_token());
+                Token right = factory.fromString(subSplit.getEnd_token());
                 Range<Token> range = new Range<Token>(left, right, partitioner);
                 List<Range<Token>> ranges = range.isWrapAround() ? range.unwrap() : ImmutableList.of(range);
                 for (Range<Token> subrange : ranges)
                 {
-                    ColumnFamilySplit split = new ColumnFamilySplit(factory.toString(subrange.left), factory.toString(subrange.right), endpoints);
+                    ColumnFamilySplit split =
+                            new ColumnFamilySplit(
+                                    factory.toString(subrange.left),
+                                    factory.toString(subrange.right),
+                                    subSplit.getRow_count(),
+                                    endpoints);
+
                     logger.debug("adding " + split);
                     splits.add(split);
                 }
