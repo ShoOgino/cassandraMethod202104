@@ -28,7 +28,7 @@
             {
                 ReadCommand command = commands.get(i);
                 assert !command.isDigestQuery();
-                logger.debug("Command/ConsistencyLevel is {}/{}", command, consistency_level);
+                logger.trace("Command/ConsistencyLevel is {}/{}", command, consistency_level);
 
                 List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(command.table,
                                                                                               command.key);
@@ -44,12 +44,12 @@
                 InetAddress dataPoint = handler.endpoints.get(0);
                 if (dataPoint.equals(FBUtilities.getBroadcastAddress()) && OPTIMIZE_LOCAL_REQUESTS)
                 {
-                    logger.debug("reading data locally");
+                    logger.trace("reading data locally");
                     StageManager.getStage(Stage.READ).execute(new LocalReadRunnable(command, handler));
                 }
                 else
                 {
-                    logger.debug("reading data from {}", dataPoint);
+                    logger.trace("reading data from {}", dataPoint);
                     MessagingService.instance().sendRR(command.createMessage(), dataPoint, handler);
                 }
 
@@ -62,14 +62,14 @@
                 MessageOut message = null;
                 for (InetAddress digestPoint : handler.endpoints.subList(1, handler.endpoints.size()))
                 {
-                    if (digestPoint.equals(FBUtilities.getBroadcastAddress()))
+                    if (digestPoint.equals(FBUtilities.getBroadcastAddress()) && OPTIMIZE_LOCAL_REQUESTS)
                     {
-                        logger.debug("reading digest locally");
+                        logger.trace("reading digest locally");
                         StageManager.getStage(Stage.READ).execute(new LocalReadRunnable(digestCommand, handler));
                     }
                     else
                     {
-                        logger.debug("reading digest from {}", digestPoint);
+                        logger.trace("reading digest from {}", digestPoint);
                         // (We lazy-construct the digest Message object since it may not be necessary if we
                         // are doing a local digest read, or no digest reads at all.)
                         if (message == null)
@@ -95,9 +95,6 @@
                         command.maybeTrim(row);
                         rows.add(row);
                     }
-
-                    if (logger.isDebugEnabled())
-                        logger.debug("Read: " + (System.currentTimeMillis() - startTime2) + " ms.");
                 }
                 catch (ReadTimeoutException ex)
                 {
@@ -107,8 +104,7 @@
                 }
                 catch (DigestMismatchException ex)
                 {
-                    if (logger.isDebugEnabled())
-                        logger.debug("Digest mismatch: {}", ex.toString());
+                    logger.debug("Digest mismatch: {}", ex.toString());
                     RowRepairResolver resolver = new RowRepairResolver(command.table, command.key);
                     RepairCallback repairHandler = new RepairCallback(resolver, handler.endpoints);
 
@@ -165,7 +161,7 @@
                     ReadCommand retryCommand = command.maybeGenerateRetryCommand(handler, row);
                     if (retryCommand != null)
                     {
-                        logger.debug("issuing retry for read command");
+                        logger.debug("Issuing retry for read command");
                         if (commandsToRetry == Collections.EMPTY_LIST)
                             commandsToRetry = new ArrayList<ReadCommand>();
                         commandsToRetry.add(retryCommand);
