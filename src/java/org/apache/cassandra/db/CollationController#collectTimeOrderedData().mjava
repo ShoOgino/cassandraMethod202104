@@ -5,7 +5,7 @@
      */
     private ColumnFamily collectTimeOrderedData()
     {
-        logger.debug("collectTimeOrderedData");
+        logger.trace("collectTimeOrderedData");
 
         // AtomicSortedColumns doesn't work for super columi ns (see #3821)
         ISortedColumns.Factory factory = mutableColumns
@@ -13,9 +13,11 @@
                                        : TreeMapBackedSortedColumns.factory();
         ColumnFamily container = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
         List<OnDiskAtomIterator> iterators = new ArrayList<OnDiskAtomIterator>();
+        logger.debug("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.markReferenced(filter.key);
         try
         {
+            logger.debug("Merging memtable contents");
             for (Memtable memtable : view.memtables)
             {
                 OnDiskAtomIterator iter = filter.getMemtableColumnIterator(memtable);
@@ -64,6 +66,7 @@
 
                     container.delete(cf);
                     sstablesIterated++;
+                    logger.debug("Merging data from sstable {}", sstable.descriptor.generation);
                     while (iter.hasNext())
                         container.addAtom(iter.next());
                 }
@@ -96,6 +99,7 @@
                 }
             };
             ColumnFamily returnCF = container.cloneMeShallow();
+            logger.debug("Final collate");
             filter.collateOnDiskAtom(returnCF, Collections.singletonList(toCollate), gcBefore);
 
             // "hoist up" the requested data into a more recent sstable
@@ -103,6 +107,7 @@
                 && !cfs.isCompactionDisabled()
                 && cfs.getCompactionStrategy() instanceof SizeTieredCompactionStrategy)
             {
+                logger.debug("Defragmenting requested data");
                 RowMutation rm = new RowMutation(cfs.table.name, new Row(filter.key, returnCF.cloneMe()));
                 // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
                 Table.open(rm.getTable()).apply(rm, false, false);
