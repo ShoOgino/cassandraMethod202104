@@ -1,0 +1,40 @@
+    /** {@inheritDoc} */
+    public List<IMutation> prepareRowMutations(String keyspace, ThriftClientState clientState, Long timestamp, List<ByteBuffer> variables)
+    throws InvalidRequestException, UnauthorizedException
+    {
+        List<String> cfamsSeen = new ArrayList<String>();
+
+        boolean hasCommutativeOperation = false;
+
+        for (Map.Entry<Term, Operation> column : getColumns().entrySet())
+        {
+            if (!column.getValue().isUnary())
+                hasCommutativeOperation = true;
+
+            if (hasCommutativeOperation && column.getValue().isUnary())
+                throw new InvalidRequestException("Mix of commutative and non-commutative operations is not allowed.");
+        }
+
+        CFMetaData metadata = validateColumnFamily(keyspace, columnFamily, hasCommutativeOperation);
+        if (hasCommutativeOperation)
+            getConsistencyLevel().validateCounterForWrite(metadata);
+
+        QueryProcessor.validateKeyAlias(metadata, keyName);
+
+        // Avoid unnecessary authorizations.
+        if (!(cfamsSeen.contains(columnFamily)))
+        {
+            clientState.hasColumnFamilyAccess(columnFamily, Permission.UPDATE);
+            cfamsSeen.add(columnFamily);
+        }
+
+        List<IMutation> rowMutations = new LinkedList<IMutation>();
+
+        for (Term key: keys)
+        {
+            rowMutations.add(mutationForKey(keyspace, key.getByteBuffer(getKeyType(keyspace),variables), metadata, timestamp, clientState, variables));
+        }
+
+        return rowMutations;
+    }
+
