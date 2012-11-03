@@ -4,6 +4,13 @@
         List<Row> rows = new ArrayList<Row>();
         int columnsCount = 0;
         int total = 0, matched = 0;
+
+        // disable tracing for the actual scan; otherwise it will log a full trace for each row fetched
+        // -- since index only contains the key, we have to do a "join" on the main table to get the actual data.
+        // this could be useful but it obscures the most important information which is the scanned:matched ratio.
+        TraceState state = Tracing.instance().get();
+        Tracing.instance().set(null);
+
         try
         {
             while (rowIterator.hasNext() && rows.size() < filter.maxRows() && columnsCount < filter.maxColumns())
@@ -41,7 +48,6 @@
                 filter.updateFilter(columnsCount);
             }
 
-            logger.debug("Scanned {} rows and matched {}", total, matched);
             return rows;
         }
         finally
@@ -49,6 +55,9 @@
             try
             {
                 rowIterator.close();
+                // re-enable tracing
+                Tracing.instance().set(state);
+                logger.debug("Scanned {} rows and matched {}", total, matched);
             }
             catch (IOException e)
             {
