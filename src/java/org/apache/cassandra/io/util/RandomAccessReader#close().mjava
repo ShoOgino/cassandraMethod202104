@@ -1,18 +1,18 @@
     @Override
     public void close()
     {
-        buffer = null;
-
-        if (skipIOCache && bytesSinceCacheFlush > 0)
-            CLibrary.trySkipCache(fd, 0, 0);
-
-        try
+        if (owner == null || buffer == null)
         {
-            super.close();
+            // The buffer == null check is so that if the pool owner has deallocated us, calling close()
+            // will re-call deallocate rather than recycling a deallocated object.
+            // I'd be more comfortable if deallocate didn't have to handle being idempotent like that,
+            // but RandomAccessFile.close will call AbstractInterruptibleChannel.close which will
+            // re-call RAF.close -- in this case, [C]RAR.close since we are overriding that.
+            deallocate();
         }
-        catch (IOException e)
+        else
         {
-            throw new FSReadError(e, filePath);
+            owner.recycle(this);
         }
     }
 
