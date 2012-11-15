@@ -1,0 +1,53 @@
+    public void forceTableRepairRange(final String tableName, final Collection<Range<Token>> ranges, boolean isSequential, boolean  isLocal, final String... columnFamilies) throws IOException
+    {
+        if (Table.SYSTEM_KS.equals(tableName) || Tracing.TRACE_KS.equals(tableName))
+            return;
+
+        int cmd = nextRepairCommand.incrementAndGet();
+        logger.info("Starting repair command #{}, repairing {} ranges.", cmd, ranges.size());
+
+        List<AntiEntropyService.RepairFuture> futures = new ArrayList<AntiEntropyService.RepairFuture>(ranges.size());
+        for (Range<Token> range : ranges)
+        {
+            AntiEntropyService.RepairFuture future = forceTableRepair(range, tableName, isSequential, isLocal, columnFamilies);
+            if (future == null)
+                continue;
+            futures.add(future);
+            // wait for a session to be done with its differencing before starting the next one
+            try
+            {
+                future.session.differencingDone.await();
+            }
+            catch (InterruptedException e)
+            {
+                logger.error("Interrupted while waiting for the differencing of repair session " + future.session + " to be done. Repair may be imprecise.", e);
+            }
+        }
+        if (futures.isEmpty())
+        {
+            logger.info("Nothing to repair on {} for command #{}", tableName, cmd);
+            return;
+        }
+
+        boolean failedSession = false;
+
+        // block until all repair sessions have completed
+        for (AntiEntropyService.RepairFuture future : futures)
+        {
+            try
+            {
+                future.get();
+            }
+            catch (Exception e)
+            {
+                logger.error("Repair session " + future.session.getName() + " failed.", e);
+                failedSession = true;
+            }
+        }
+
+        if (failedSession)
+            throw new IOException("Repair command #" + cmd + ": some repair session(s) failed (see log for details).");
+        else
+            logger.info("Repair command #{} completed successfully", cmd);
+    }
+
