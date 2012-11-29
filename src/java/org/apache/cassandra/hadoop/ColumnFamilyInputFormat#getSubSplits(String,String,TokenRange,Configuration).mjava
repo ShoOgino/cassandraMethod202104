@@ -12,7 +12,21 @@
             {
                 Cassandra.Client client = ConfigHelper.createConnection(conf, host, ConfigHelper.getInputRpcPort(conf));
                 client.set_keyspace(keyspace);
-                return client.describe_splits_ex(cfName, range.start_token, range.end_token, splitsize);
+
+                try
+                {
+                    return client.describe_splits_ex(cfName, range.start_token, range.end_token, splitsize);
+                }
+                catch (TApplicationException e)
+                {
+                    // fallback to guessing split size if talking to a server without describe_splits_ex method
+                    if (e.getType() == TApplicationException.UNKNOWN_METHOD)
+                    {
+                        List<String> splitPoints = client.describe_splits(cfName, range.start_token, range.end_token, splitsize);
+                        return tokenListToSplits(splitPoints, splitsize);
+                    }
+                    throw e;
+                }
             }
             catch (IOException e)
             {
