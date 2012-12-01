@@ -1,4 +1,4 @@
-    public static boolean loadSummary(SSTableReader reader, SegmentedFile.Builder ibuilder, SegmentedFile.Builder dbuilder)
+    public static boolean loadSummary(SSTableReader reader, SegmentedFile.Builder ibuilder, SegmentedFile.Builder dbuilder, CFMetaData metadata)
     {
         File summariesFile = new File(reader.descriptor.filenameFor(Component.SUMMARY));
         if (!summariesFile.exists())
@@ -9,6 +9,14 @@
         {
             iStream = new DataInputStream(new FileInputStream(summariesFile));
             reader.indexSummary = IndexSummary.serializer.deserialize(iStream, reader.partitioner);
+            if (reader.indexSummary.getIndexInterval() != metadata.getIndexInterval())
+            {
+                iStream.close();
+                logger.debug("Cannot read the saved summary for {} because Index Interval changed from {} to {}.",
+                             reader.toString(), reader.indexSummary.getIndexInterval(), metadata.getIndexInterval());
+                FileUtils.deleteWithConfirm(summariesFile);
+                return false;
+            }
             reader.first = decodeKey(reader.partitioner, reader.descriptor, ByteBufferUtil.readWithLength(iStream));
             reader.last = decodeKey(reader.partitioner, reader.descriptor, ByteBufferUtil.readWithLength(iStream));
             ibuilder.deserializeBounds(iStream);
@@ -17,10 +25,8 @@
         catch (IOException e)
         {
             logger.debug("Cannot deserialize SSTable Summary: ", e);
-            // corrupted hence delete it and let it load it now.
-            if (summariesFile.exists())
-                summariesFile.delete();
-
+            // corrupted; delete it and fall back to creating a new summary
+            FileUtils.deleteWithConfirm(summariesFile);
             return false;
         }
         finally
