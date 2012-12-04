@@ -4,7 +4,7 @@
                         UpdateParameters params,
                         List<Pair<ByteBuffer, IColumn>> list) throws InvalidRequestException
     {
-        if (!(validator instanceof ListType))
+        if (!(validator instanceof ListType || (kind == Kind.SET_IDX && validator instanceof MapType)))
             throw new InvalidRequestException("List operations are only supported on List typed columns, but " + validator + " given.");
 
         switch (kind)
@@ -14,7 +14,17 @@
                 doAppend(cf, builder, (CollectionType)validator, params);
                 break;
             case SET_IDX:
-                doSet(cf, builder, params, (CollectionType)validator, list);
+                // Since the parser couldn't disambiguate between a 'list set by idx'
+                // and a 'map put by key', we have to do it now.
+                if (validator instanceof MapType)
+                {
+                    assert values.size() == 2;
+                    MapOperation.Put(values.get(0), values.get(1)).execute(cf, builder, validator, params, null);
+                }
+                else
+                {
+                    doSet(cf, builder, params, (CollectionType)validator, list);
+                }
                 break;
             case APPEND:
                 doAppend(cf, builder, (CollectionType)validator, params);
