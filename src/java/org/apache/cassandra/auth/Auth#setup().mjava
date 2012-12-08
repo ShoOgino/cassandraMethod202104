@@ -1,0 +1,24 @@
+    /**
+     * Sets up Authenticator and Authorizer.
+     */
+    public static void setup()
+    {
+        authenticator().setup();
+        authorizer().setup();
+
+        // register a custom MigrationListener for permissions cleanup after dropped keyspaces/cfs.
+        MigrationManager.instance.register(new MigrationListener());
+
+        // schedule seeding a superuser in RING_DELAY milliseconds.
+        Runnable runnable = new WrappedRunnable()
+        {
+            public void runMayThrow() throws InvalidRequestException
+            {
+                // insert a default superuser if AUTH_KS.USERS_CF is empty.
+                if (QueryProcessor.process(String.format("SELECT * FROM %s.%s", AUTH_KS, USERS_CF)).isEmpty())
+                    insertUser(DEFAULT_SUPERUSER_NAME, true);
+            }
+        };
+        StorageService.tasks.schedule(runnable, StorageService.RING_DELAY, TimeUnit.MILLISECONDS);
+    }
+
