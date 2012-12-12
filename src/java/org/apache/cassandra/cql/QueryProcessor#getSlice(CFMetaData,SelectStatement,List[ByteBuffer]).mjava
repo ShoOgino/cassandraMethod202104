@@ -1,13 +1,12 @@
     private static List<org.apache.cassandra.db.Row> getSlice(CFMetaData metadata, SelectStatement select, List<ByteBuffer> variables)
     throws InvalidRequestException, ReadTimeoutException, UnavailableException, IsBootstrappingException
     {
-        QueryPath queryPath = new QueryPath(select.getColumnFamily());
         List<ReadCommand> commands = new ArrayList<ReadCommand>();
 
         // ...of a list of column names
         if (!select.isColumnRange())
         {
-            Collection<ByteBuffer> columnNames = getColumnNames(select, metadata, variables);
+            SortedSet<ByteBuffer> columnNames = getColumnNames(select, metadata, variables);
             validateColumnNames(columnNames);
 
             for (Term rawKey: select.getKeys())
@@ -15,7 +14,7 @@
                 ByteBuffer key = rawKey.getByteBuffer(metadata.getKeyValidator(),variables);
 
                 validateKey(key);
-                commands.add(new SliceByNamesReadCommand(metadata.ksName, key, queryPath, columnNames));
+                commands.add(new SliceByNamesReadCommand(metadata.ksName, key, select.getColumnFamily(), new NamesQueryFilter(columnNames)));
             }
         }
         // ...a range (slice) of column names
@@ -33,11 +32,8 @@
                 validateSliceFilter(metadata, start, finish, select.isColumnsReversed());
                 commands.add(new SliceFromReadCommand(metadata.ksName,
                                                       key,
-                                                      queryPath,
-                                                      start,
-                                                      finish,
-                                                      select.isColumnsReversed(),
-                                                      select.getColumnsLimit()));
+                                                      select.getColumnFamily(),
+                                                      new SliceQueryFilter(start, finish, select.isColumnsReversed(), select.getColumnsLimit())));
             }
         }
 

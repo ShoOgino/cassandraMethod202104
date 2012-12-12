@@ -1,0 +1,39 @@
+        public OnDiskAtom next()
+        {
+            try
+            {
+                if (subColumnsIterator != null && subColumnsIterator.hasNext())
+                {
+                    Column c = subColumnsIterator.next();
+                    return c.withUpdatedName(CompositeType.build(scName, c.name()));
+                }
+
+                // Read one more super column
+                ++read;
+
+                scName = ByteBufferUtil.readWithShortLength(dis);
+                DeletionInfo delInfo = DeletionInfo.serializer().deserialize(dis, MessagingService.VERSION_10, null);
+                assert !delInfo.rangeIterator().hasNext(); // We assume no range tombstone (there was no way to insert some in a SCF in 1.2)
+
+                /* read the number of columns */
+                int size = dis.readInt();
+                List<Column> subColumns = new ArrayList<Column>(size);
+
+                for (int i = 0; i < size; ++i)
+                    subColumns.add(Column.serializer().deserialize(dis, flag, expireBefore));
+
+                subColumnsIterator = subColumns.iterator();
+
+                // If the SC was deleted, return that first, otherwise return the first subcolumn
+                DeletionTime dtime = delInfo.getTopLevelDeletion();
+                if (!dtime.equals(DeletionTime.LIVE))
+                    return new RangeTombstone(startOf(scName), endOf(scName), dtime);
+
+                return next();
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+        }
+

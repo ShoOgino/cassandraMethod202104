@@ -10,10 +10,24 @@
         org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
         consistencyLevel.validateForRead(keyspace);
 
-        QueryPath path = new QueryPath(column_path.column_family, column_path.column == null ? null : column_path.super_column);
-        List<ByteBuffer> nameAsList = Arrays.asList(column_path.column == null ? column_path.super_column : column_path.column);
         ThriftValidation.validateKey(metadata, key);
-        ReadCommand command = new SliceByNamesReadCommand(keyspace, key, path, nameAsList);
+
+        IDiskAtomFilter filter;
+        if (metadata.isSuper())
+        {
+            CompositeType type = (CompositeType)metadata.comparator;
+            SortedSet names = new TreeSet<ByteBuffer>(column_path.column == null ? type.types.get(0) : type.types.get(1));
+            names.add(column_path.column == null ? column_path.super_column : column_path.column);
+            filter = SuperColumns.fromSCNamesFilter(type, column_path.column == null ? null : column_path.bufferForSuper_column(), new NamesQueryFilter(names));
+        }
+        else
+        {
+            SortedSet<ByteBuffer> names = new TreeSet<ByteBuffer>(metadata.comparator);
+            names.add(column_path.column);
+            filter = new NamesQueryFilter(names);
+        }
+
+        ReadCommand command = ReadCommand.create(keyspace, key, column_path.column_family, filter);
 
         Map<DecoratedKey, ColumnFamily> cfamilies = readColumnFamily(Arrays.asList(command), consistencyLevel);
 
@@ -21,7 +35,7 @@
 
         if (cf == null)
             throw new NotFoundException();
-        List<ColumnOrSuperColumn> tcolumns = thriftifyColumnFamily(cf, command.queryPath.superColumnName != null, false);
+        List<ColumnOrSuperColumn> tcolumns = thriftifyColumnFamily(cf, metadata.isSuper() && column_path.column != null, false);
         if (tcolumns.isEmpty())
             throw new NotFoundException();
         assert tcolumns.size() == 1;

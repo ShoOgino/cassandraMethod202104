@@ -1,0 +1,33 @@
+    public static void serializeSuperColumnFamily(ColumnFamily scf, DataOutput dos, int version) throws IOException
+    {
+        /*
+         * There is 2 complications:
+         *   1) We need to know the number of super columns in the column
+         *   family to write in the header (so we do a first pass to group
+         *   columns before serializing).
+         *   2) For deletion infos, we need to figure out which are top-level
+         *   deletions and which are super columns deletions (i.e. the
+         *   subcolumns range deletions).
+         */
+        DeletionInfo delInfo = scf.deletionInfo();
+        Map<ByteBuffer, List<Column>> scMap = groupSuperColumns(scf);
+
+        // Actually Serialize
+        DeletionInfo.serializer().serialize(new DeletionInfo(delInfo.getTopLevelDeletion()), dos, version);
+        dos.writeInt(scMap.size());
+
+        for (Map.Entry<ByteBuffer, List<Column>> entry : scMap.entrySet())
+        {
+            ByteBufferUtil.writeWithShortLength(entry.getKey(), dos);
+
+            List<DeletionTime> delTimes = delInfo.rangeCovering(entry.getKey());
+            assert delTimes.size() <= 1; // We're supposed to have either no deletion, or a full SC deletion.
+            DeletionInfo scDelInfo = delTimes.isEmpty() ? DeletionInfo.LIVE : new DeletionInfo(delTimes.get(0));
+            DeletionInfo.serializer().serialize(scDelInfo, dos, MessagingService.VERSION_10);
+
+            dos.writeInt(entry.getValue().size());
+            for (Column subColumn : entry.getValue())
+                Column.serializer().serialize(subColumn, dos);
+        }
+    }
+
