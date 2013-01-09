@@ -3,15 +3,21 @@
         if (channel.position() != chunk.offset)
             channel.position(chunk.offset);
 
-        if (compressed.length < chunk.length)
-            compressed = new byte[chunk.length];
+        if (compressed.capacity() < chunk.length)
+            compressed = ByteBuffer.wrap(new byte[chunk.length]);
+        else
+            compressed.clear();
+        compressed.limit(chunk.length);
 
-        if (source.read(compressed, 0, chunk.length) != chunk.length)
+        if (channel.read(compressed) != chunk.length)
             throw new CorruptBlockException(getPath(), chunk);
 
+        // technically flip() is unnecessary since all the remaining work uses the raw array, but if that changes
+        // in the future this will save a lot of hair-pulling
+        compressed.flip();
         try
         {
-            validBufferBytes = metadata.compressor().uncompress(compressed, 0, chunk.length, buffer, 0);
+            validBufferBytes = metadata.compressor().uncompress(compressed.array(), 0, chunk.length, buffer, 0);
         }
         catch (IOException e)
         {
