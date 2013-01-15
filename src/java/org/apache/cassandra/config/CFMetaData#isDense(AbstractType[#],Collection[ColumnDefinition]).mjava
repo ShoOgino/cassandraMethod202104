@@ -1,0 +1,80 @@
+    /*
+     * We call dense a CF for which each component of the comparator is a clustering column, i.e. no
+     * component is used to store a regular column names. In other words, non-composite static "thrift"
+     * and CQL3 CF are *not* dense.
+     * Note that his method is only used by rebuildCQL3Metadata. Once said metadata are built, finding
+     * if a CF is dense amounts more simply to check if clusteringKeyColumns.size() == comparator.componentsCount().
+     */
+    private static boolean isDense(AbstractType<?> comparator, Collection<ColumnDefinition> defs)
+    {
+        /*
+         * This is a bit subtle to compute because of thrift upgrades. A CQL3
+         * CF will have all it's column metadata set up from creation, so
+         * checking isDense should just be looking the ColumnDefinition of
+         * type CLUSTERING_KEY having the biggest componentIndex and comparing that
+         * to comparator.componentsCount.
+         * However, thrift CF will have no or only some (through ALTER RENAME)
+         * metadata set and we still need to make our best effort at finding whether
+         * it is intended as a dense CF or not.
+         */
+
+        // First, we compute the number of clustering columns metadata actually defined (and 
+        // whether there is some "hole" in the metadata)
+        boolean[] definedClusteringKeys = new boolean[comparator.componentsCount()];
+        boolean hasRegular = false;
+        for (ColumnDefinition def : defs)
+        {
+            switch (def.type)
+            {
+                case CLUSTERING_KEY:
+                    definedClusteringKeys[def.componentIndex == null ? 0 : def.componentIndex] = true;
+                    break;
+                case REGULAR:
+                    hasRegular = true;
+                    break;
+            }
+        }
+        boolean hasNulls = false;
+        int maxIdx = -1;
+        for (int i = definedClusteringKeys.length - 1; i >= 0; i--)
+        {
+            if (maxIdx == -1)
+            {
+                if (definedClusteringKeys[i])
+                    maxIdx = i;
+            }
+            else
+            {
+                if (!definedClusteringKeys[i])
+                    hasNulls = true;
+            }
+        }
+
+        if (comparator instanceof CompositeType)
+        {
+            List<AbstractType<?>> types = ((CompositeType)comparator).types;
+            /*
+             * There was no real way to define a non-dense composite CF in thrift (the ColumnDefinition.componentIndex
+             * is not exposed), so consider dense anything that don't look like a CQL3 created CF.
+             *
+             * Note that this is not perfect: if someone upgrading from thrift "renames" all but
+             * the last column alias, the cf will be considered "sparse" and he will be stuck with
+             * that even though that might not be what he wants. But the simple workaround is
+             * for that user to rename all the aliases at the same time in the first place.
+             */
+            AbstractType<?> lastType = types.get(types.size() - 1);
+            if (lastType instanceof ColumnToCollectionType)
+                return false;
+
+            return !(maxIdx == types.size() - 2 && lastType instanceof UTF8Type && !hasNulls);
+        }
+        else
+        {
+            /*
+             * For non-composite, we only need to "detect" case where the CF is clearly used as static.
+             * For that, just check if we have regular columns metadata sets up and no defined clustering key.
+             */
+            return !(hasRegular && maxIdx == -1);
+        }
+    }
+
