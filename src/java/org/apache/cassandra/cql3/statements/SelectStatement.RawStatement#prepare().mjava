@@ -6,48 +6,19 @@
                 throw new InvalidRequestException("LIMIT must be strictly positive");
 
             CFDefinition cfDef = cfm.getCfDef();
-            SelectStatement stmt = new SelectStatement(cfDef, getBoundsTerms(), parameters);
-            CFDefinition.Name[] names = new CFDefinition.Name[getBoundsTerms()];
+
+            ColumnSpecification[] names = new ColumnSpecification[getBoundsTerms()];
             IPartitioner partitioner = StorageService.getPartitioner();
 
             // Select clause
-            if (parameters.isCount)
-            {
-                if (!selectClause.isEmpty())
-                    throw new InvalidRequestException("Only COUNT(*) and COUNT(1) operations are currently supported.");
-            }
-            else
-            {
-                for (Selector t : selectClause)
-                {
-                    CFDefinition.Name name = cfDef.get(t.id());
-                    if (name == null)
-                        throw new InvalidRequestException(String.format("Undefined name %s in selection clause", t.id()));
-                    if (t.hasFunction())
-                    {
-                        if (name.type.isCollection())
-                            throw new InvalidRequestException(String.format("Function %s is not supported on collections", t.function()));
-                        switch (t.function())
-                        {
-                            case WRITE_TIME:
-                            case TTL:
-                                if (name.kind != CFDefinition.Name.Kind.COLUMN_METADATA && name.kind != CFDefinition.Name.Kind.VALUE_ALIAS)
-                                    throw new InvalidRequestException(String.format("Cannot use function %s on PRIMARY KEY part %s", t.function(), name));
-                                break;
-                            case DATE_OF:
-                            case UNIXTIMESTAMP_OF:
-                                if (!(name.type instanceof TimeUUIDType))
-                                    throw new InvalidRequestException(String.format("Function %s is only allowed on timeuuid columns", t.function()));
-                                break;
-                        }
-                    }
+            if (parameters.isCount && !selectClause.isEmpty())
+                throw new InvalidRequestException("Only COUNT(*) and COUNT(1) operations are currently supported.");
 
-                    if (t.hasKey())
-                        throw new InvalidRequestException("Selecting a list/map element by index/key is not yet supported");
+            Selection selection = selectClause.isEmpty()
+                                ? Selection.wildcard(cfDef)
+                                : Selection.fromSelectors(cfDef, selectClause);
 
-                    stmt.selectedNames.add(Pair.create(name, t));
-                }
-            }
+            SelectStatement stmt = new SelectStatement(cfDef, getBoundsTerms(), parameters, selection);
 
             /*
              * WHERE clause. For a given entity, rules are:
@@ -63,41 +34,18 @@
                 if (name == null)
                     throw new InvalidRequestException(String.format("Undefined name %s in where clause ('%s')", rel.getEntity(), rel));
 
-                if (rel.operator() == Relation.Type.IN)
-                {
-                    for (Term value : rel.getInValues())
-                    {
-                        if (!rel.onToken || value.isToken)
-                            value.validateType(name.toString(), name.type);
-                        else
-                            value.validateType("token of " + name.toString(), StorageService.getPartitioner().getTokenValidator());
-                        if (value.isBindMarker())
-                            names[value.bindIndex] = name;
-                    }
-                }
-                else
-                {
-                    Term value = rel.getValue();
-                    if (!rel.onToken || value.isToken)
-                        value.validateType(name.toString(), name.type);
-                    else
-                        value.validateType("token of " + name.toString(), StorageService.getPartitioner().getTokenValidator());
-                    if (value.isBindMarker())
-                        names[value.bindIndex] = name;
-                }
-
                 switch (name.kind)
                 {
                     case KEY_ALIAS:
-                        stmt.keyRestrictions[name.position] = updateRestriction(name, stmt.keyRestrictions[name.position], rel);
+                        stmt.keyRestrictions[name.position] = updateRestriction(name, stmt.keyRestrictions[name.position], rel, names);
                         break;
                     case COLUMN_ALIAS:
-                        stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel);
+                        stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel, names);
                         break;
                     case VALUE_ALIAS:
                         throw new InvalidRequestException(String.format("Restricting the value of a compact CF (%s) is not supported", name.name));
                     case COLUMN_METADATA:
-                        stmt.metadataRestrictions.put(name, updateRestriction(name, stmt.metadataRestrictions.get(name), rel));
+                        stmt.metadataRestrictions.put(name, updateRestriction(name, stmt.metadataRestrictions.get(name), rel, names));
                         break;
                 }
             }
@@ -151,6 +99,7 @@
             {
                 CFDefinition.Name cname = iter.next();
                 Restriction restriction = stmt.keyRestrictions[i];
+
                 if (restriction == null)
                 {
                     if (stmt.onToken)
@@ -251,16 +200,16 @@
                 // If we order an IN query, we'll have to do a manual sort post-query. Currently, this sorting requires that we
                 // have queried the column on which we sort (TODO: we should update it to add the column on which we sort to the one
                 // queried automatically, and then removing it from the resultSet afterwards if needed)
-                if (stmt.keyIsInRelation && !stmt.selectedNames.isEmpty()) // empty means wildcard was used
+                if (stmt.keyIsInRelation && !selectClause.isEmpty()) // empty means wildcard was used
                 {
                     for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
                     {
                         CFDefinition.Name name = cfDef.get(column);
 
                         boolean hasColumn = false;
-                        for (Pair<CFDefinition.Name, Selector> selectPair : stmt.selectedNames)
+                        for (RawSelector selector : selectClause)
                         {
-                            if (selectPair.left.equals(name))
+                            if (name.name.equals(selector))
                             {
                                 hasColumn = true;
                                 break;
