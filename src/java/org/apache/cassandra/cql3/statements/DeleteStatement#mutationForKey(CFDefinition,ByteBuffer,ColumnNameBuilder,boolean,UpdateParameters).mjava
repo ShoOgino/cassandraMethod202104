@@ -1,0 +1,40 @@
+    public RowMutation mutationForKey(CFDefinition cfDef, ByteBuffer key, ColumnNameBuilder builder, boolean isRange, UpdateParameters params)
+    throws InvalidRequestException
+    {
+        QueryProcessor.validateKey(key);
+        RowMutation rm = new RowMutation(cfDef.cfm.ksName, key);
+        ColumnFamily cf = rm.addOrGet(columnFamily());
+
+        if (toRemove.isEmpty() && builder.componentCount() == 0)
+        {
+            // No columns specified, delete the row
+            cf.delete(new DeletionInfo(params.timestamp, params.localDeletionTime));
+        }
+        else
+        {
+            if (isRange)
+            {
+                assert toRemove.isEmpty();
+                ByteBuffer start = builder.build();
+                ByteBuffer end = builder.buildAsEndOfRange();
+                cf.addAtom(params.makeRangeTombstone(start, end));
+            }
+            else
+            {
+                // Delete specific columns
+                if (cfDef.isCompact)
+                {
+                    ByteBuffer columnName = builder.build();
+                    cf.addColumn(params.makeTombstone(columnName));
+                }
+                else
+                {
+                    for (Operation op : toRemove)
+                        op.execute(key, cf, builder.copy(), params);
+                }
+            }
+        }
+
+        return rm;
+    }
+

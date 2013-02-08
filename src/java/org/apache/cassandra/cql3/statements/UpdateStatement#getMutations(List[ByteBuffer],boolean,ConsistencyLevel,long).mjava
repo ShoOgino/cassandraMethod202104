@@ -9,29 +9,23 @@
 
         // Lists SET operation incurs a read.
         Set<ByteBuffer> toRead = null;
-        for (Map.Entry<CFDefinition.Name, Operation> entry : processedColumns.entries())
+        for (Operation op : processedColumns)
         {
-            CFDefinition.Name name = entry.getKey();
-            Operation value = entry.getValue();
-
-            if (!(name.type instanceof ListType))
-                continue;
-
-            if (value.requiresRead(name.type))
+            if (op.requiresRead())
             {
                 if (toRead == null)
                     toRead = new TreeSet<ByteBuffer>(UTF8Type.instance);
-                toRead.add(name.name.key);
+                toRead.add(op.columnName.key);
             }
         }
 
         Map<ByteBuffer, ColumnGroupMap> rows = toRead != null ? readRows(keys, builder, toRead, (CompositeType)cfDef.cfm.comparator, local, cl) : null;
 
         Collection<IMutation> mutations = new LinkedList<IMutation>();
-        UpdateParameters params = new UpdateParameters(cfDef.cfm, variables, getTimestamp(now), getTimeToLive());
+        UpdateParameters params = new UpdateParameters(cfDef.cfm, variables, getTimestamp(now), getTimeToLive(), rows);
 
         for (ByteBuffer key: keys)
-            mutations.add(mutationForKey(cfDef, key, builder, params, rows == null ? null : rows.get(key), cl));
+            mutations.add(mutationForKey(cfDef, key, builder, params, cl));
 
         return mutations;
     }
