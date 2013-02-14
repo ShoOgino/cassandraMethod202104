@@ -1,0 +1,36 @@
+    // Called after a resource is removed (DROP KEYSPACE, DROP TABLE, etc.).
+    public void revokeAll(IResource droppedResource)
+    {
+
+        UntypedResultSet rows;
+        try
+        {
+            // TODO: switch to secondary index on 'resource' once https://issues.apache.org/jira/browse/CASSANDRA-5125 is resolved.
+            rows = process(String.format("SELECT username FROM %s.%s WHERE resource = '%s' ALLOW FILTERING",
+                                         Auth.AUTH_KS,
+                                         PERMISSIONS_CF,
+                                         escape(droppedResource.getName())));
+        }
+        catch (Throwable e)
+        {
+            logger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", droppedResource, e);
+            return;
+        }
+
+        for (UntypedResultSet.Row row : rows)
+        {
+            try
+            {
+                process(String.format("DELETE FROM %s.%s WHERE username = '%s' AND resource = '%s'",
+                                      Auth.AUTH_KS,
+                                      PERMISSIONS_CF,
+                                      escape(row.getString(USERNAME)),
+                                      escape(droppedResource.getName())));
+            }
+            catch (Throwable e)
+            {
+                logger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", droppedResource, e);
+            }
+        }
+    }
+
