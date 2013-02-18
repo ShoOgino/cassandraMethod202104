@@ -1,81 +1,14 @@
-    // synchronized so that multiple callers as in CompactionManager.submitBackground will compute different candidates
-    public synchronized AbstractCompactionTask getNextBackgroundTask(final int gcBefore)
+    public AbstractCompactionTask getNextBackgroundTask(int gcBefore)
     {
-        // make local copies so they can't be changed out from under us mid-method
-        int minThreshold = cfs.getMinimumCompactionThreshold();
-        int maxThreshold = cfs.getMaximumCompactionThreshold();
-        if (minThreshold == 0 || maxThreshold == 0)
+        while (true)
         {
-            logger.debug("Compaction is currently disabled.");
-            return null;
-        }
+            List<SSTableReader> smallestBucket = getNextBackgroundSSTables(gcBefore);
 
-        Set<SSTableReader> candidates = cfs.getUncompactingSSTables();
-        List<List<SSTableReader>> buckets = getBuckets(createSSTableAndLengthPairs(filterSuspectSSTables(candidates)));
-        logger.debug("Compaction buckets are {}", buckets);
-        updateEstimatedCompactionsByTasks(buckets);
-
-        List<List<SSTableReader>> prunedBuckets = new ArrayList<List<SSTableReader>>();
-        for (List<SSTableReader> bucket : buckets)
-        {
-            if (bucket.size() < minThreshold)
-                continue;
-
-            Collections.sort(bucket, new Comparator<SSTableReader>()
-            {
-                public int compare(SSTableReader o1, SSTableReader o2)
-                {
-                    return o1.descriptor.generation - o2.descriptor.generation;
-                }
-            });
-            List<SSTableReader> prunedBucket = bucket.subList(0, Math.min(bucket.size(), maxThreshold));
-            prunedBuckets.add(prunedBucket);
-        }
-
-        if (prunedBuckets.isEmpty())
-        {
-            // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
-            // ratio is greater than threshold.
-            for (List<SSTableReader> bucket : buckets)
-            {
-                for (SSTableReader table : bucket)
-                {
-                    if (worthDroppingTombstones(table, gcBefore))
-                        prunedBuckets.add(Collections.singletonList(table));
-                }
-            }
-
-            if (prunedBuckets.isEmpty())
+            if (smallestBucket.isEmpty())
                 return null;
+
+            if (cfs.getDataTracker().markCompacting(smallestBucket))
+                return new CompactionTask(cfs, smallestBucket, gcBefore);
         }
-
-        List<SSTableReader> smallestBucket = Collections.min(prunedBuckets, new Comparator<List<SSTableReader>>()
-        {
-            public int compare(List<SSTableReader> o1, List<SSTableReader> o2)
-            {
-                long n = avgSize(o1) - avgSize(o2);
-                if (n < 0)
-                    return -1;
-                if (n > 0)
-                    return 1;
-                return 0;
-            }
-
-            private long avgSize(List<SSTableReader> sstables)
-            {
-                long n = 0;
-                for (SSTableReader sstable : sstables)
-                    n += sstable.bytesOnDisk();
-                return n / sstables.size();
-            }
-        });
-
-        if (!cfs.getDataTracker().markCompacting(smallestBucket))
-        {
-            logger.debug("Unable to mark {} for compaction; probably a user-defined compaction got in the way", smallestBucket);
-            return null;
-        }
-
-        return new CompactionTask(cfs, smallestBucket, gcBefore);
     }
 
