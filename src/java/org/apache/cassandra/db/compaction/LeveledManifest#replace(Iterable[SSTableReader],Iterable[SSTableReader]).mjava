@@ -1,16 +1,30 @@
     public synchronized void replace(Iterable<SSTableReader> removed, Iterable<SSTableReader> added)
     {
-        // replace is for compaction operation that operate on exactly one sstable, with no merging.
-        // Thus, removed will be exactly one sstable, and added will be 0 or 1.
-        assert Iterables.size(removed) == 1 : Iterables.size(removed);
-        assert Iterables.size(added) <= 1 : Iterables.size(added);
+        assert !Iterables.isEmpty(removed); // use add() instead of promote when adding new sstables
         logDistribution();
-        logger.debug("Replacing {} with {}", removed, added);
+        if (logger.isDebugEnabled())
+            logger.debug("Replacing [" + toString(removed) + "]");
 
-        int level = remove(removed.iterator().next());
-        if (!Iterables.isEmpty(added))
-            add(added.iterator().next(), level);
+        // the level for the added sstables is the max of the removed ones,
+        // plus one if the removed were all on the same level
+        for (SSTableReader sstable : removed)
+        {
+            remove(sstable);
+        }
 
-        serialize();
+        // it's valid to do a remove w/o an add (e.g. on truncate)
+        if (!added.iterator().hasNext())
+            return;
+
+        if (logger.isDebugEnabled())
+            logger.debug("Adding [{}]", toString(added));
+
+        int minLevel = Integer.MAX_VALUE;
+        for (SSTableReader ssTableReader : added)
+        {
+            minLevel = Math.min(minLevel, ssTableReader.getSSTableLevel());
+            add(ssTableReader);
+        }
+        lastCompactedKeys[minLevel] = SSTable.sstableOrdering.max(added).last;
     }
 
