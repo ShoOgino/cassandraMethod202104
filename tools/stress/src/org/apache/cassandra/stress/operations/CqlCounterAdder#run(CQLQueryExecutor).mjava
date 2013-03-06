@@ -1,4 +1,4 @@
-    public void run(CassandraClient client) throws IOException
+    protected void run(CQLQueryExecutor executor) throws IOException
     {
         if (session.getColumnFamilyType() == ColumnFamilyType.Super)
             throw new RuntimeException("Super columns are not implemented for CQL");
@@ -26,7 +26,7 @@
         }
 
         String key = String.format("%0" + session.getTotalKeysLength() + "d", index);
-        String formattedQuery = null;
+        List<String> queryParams = Collections.singletonList(getUnQuotedCqlBlob(key, session.cqlVersion.startsWith("3")));
 
         TimerContext context = session.latency.time();
 
@@ -40,25 +40,7 @@
 
             try
             {
-                if (session.usePreparedStatements())
-                {
-                    Integer stmntId = getPreparedStatement(client, cqlQuery);
-                    if (session.cqlVersion.startsWith("3"))
-                        client.execute_prepared_cql3_query(stmntId, Collections.singletonList(ByteBuffer.wrap(key.getBytes())), session.getConsistencyLevel());
-                    else
-                        client.execute_prepared_cql_query(stmntId, Collections.singletonList(ByteBuffer.wrap(key.getBytes())));
-                }
-                else
-                {
-                    if (formattedQuery == null)
-                        formattedQuery = formatCqlQuery(cqlQuery, Collections.singletonList(getUnQuotedCqlBlob(key, session.cqlVersion.startsWith("3"))));
-                    if (session.cqlVersion.startsWith("3"))
-                        client.execute_cql3_query(ByteBuffer.wrap(formattedQuery.getBytes()), Compression.NONE, session.getConsistencyLevel());
-                    else
-                        client.execute_cql_query(ByteBuffer.wrap(formattedQuery.getBytes()), Compression.NONE);
-                }
-
-                success = true;
+                success = executor.execute(cqlQuery, queryParams);
             }
             catch (Exception e)
             {
