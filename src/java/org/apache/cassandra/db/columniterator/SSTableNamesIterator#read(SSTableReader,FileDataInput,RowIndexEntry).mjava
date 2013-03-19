@@ -1,7 +1,6 @@
     private void read(SSTableReader sstable, FileDataInput file, RowIndexEntry indexEntry)
     throws IOException
     {
-        IFilter bf;
         List<IndexHelper.IndexInfo> indexList;
 
         // If the entry is not indexed or the index is not promoted, read from the row start
@@ -21,13 +20,12 @@
 
         if (sstable.descriptor.version.hasPromotedIndexes)
         {
-            bf = indexEntry.isIndexed() ? indexEntry.bloomFilter() : null;
             indexList = indexEntry.columnsIndex();
         }
         else
         {
             assert file != null;
-            bf = IndexHelper.defreezeBloomFilter(file, sstable.descriptor.version.filterType);
+            IndexHelper.skipBloomFilter(file);
             indexList = IndexHelper.deserializeIndex(file);
         }
 
@@ -53,20 +51,9 @@
         }
 
         List<OnDiskAtom> result = new ArrayList<OnDiskAtom>();
-        List<ByteBuffer> filteredColumnNames = new ArrayList<ByteBuffer>(columns.size());
-        for (ByteBuffer name : columns)
-        {
-            if (bf == null || bf.isPresent(name))
-            {
-                filteredColumnNames.add(name);
-            }
-        }
-        if (filteredColumnNames.isEmpty())
-            return;
-
         if (indexList.isEmpty())
         {
-            readSimpleColumns(file, columns, filteredColumnNames, result);
+            readSimpleColumns(file, columns, result);
         }
         else
         {
@@ -81,7 +68,7 @@
                 file.readInt(); // column count
                 basePosition = file.getFilePointer();
             }
-            readIndexedColumns(sstable.metadata, file, columns, filteredColumnNames, indexList, basePosition, result);
+            readIndexedColumns(sstable.metadata, file, columns, indexList, basePosition, result);
         }
 
         // create an iterator view of the columns we read
