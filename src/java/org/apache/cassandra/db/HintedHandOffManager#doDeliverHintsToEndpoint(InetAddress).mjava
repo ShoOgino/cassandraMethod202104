@@ -1,0 +1,129 @@
+    /*
+     * 1. Get the key of the endpoint we need to handoff
+     * 2. For each column, deserialize the mutation and send it to the endpoint
+     * 3. Delete the subcolumn if the write was successful
+     * 4. Force a flush
+     * 5. Do major compaction to clean up all deletes etc.
+     */
+    private void doDeliverHintsToEndpoint(InetAddress endpoint)
+    {
+        // find the hints for the node using its token.
+        UUID hostId = Gossiper.instance.getHostId(endpoint);
+        logger.info("Started hinted handoff for host: {} with IP: {}", hostId, endpoint);
+        final ByteBuffer hostIdBytes = ByteBuffer.wrap(UUIDGen.decompose(hostId));
+        DecoratedKey epkey =  StorageService.getPartitioner().decorateKey(hostIdBytes);
+
+        final AtomicInteger rowsReplayed = new AtomicInteger(0);
+        ByteBuffer startColumn = ByteBufferUtil.EMPTY_BYTE_BUFFER;
+
+        int pageSize = calculatePageSize();
+        logger.debug("Using pageSize of {}", pageSize);
+
+        // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
+        int throttleInKB = DatabaseDescriptor.getHintedHandoffThrottleInKB();
+        RateLimiter rateLimiter = RateLimiter.create(throttleInKB == 0 ? Double.MAX_VALUE : throttleInKB * 1024);
+
+        delivery:
+        while (true)
+        {
+            QueryFilter filter = QueryFilter.getSliceFilter(epkey,
+                                                            new QueryPath(SystemTable.HINTS_CF),
+                                                            startColumn,
+                                                            ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                            false,
+                                                            pageSize);
+
+            ColumnFamily hintsPage = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter),
+                                                                     (int) (System.currentTimeMillis() / 1000));
+
+            if (pagingFinished(hintsPage, startColumn))
+                break;
+
+            // check if node is still alive and we should continue delivery process
+            if (!FailureDetector.instance.isAlive(endpoint))
+            {
+                logger.info("Endpoint {} died during hint delivery; aborting ({} delivered)", endpoint, rowsReplayed);
+                return;
+            }
+
+            List<WriteResponseHandler> responseHandlers = Lists.newArrayList();
+
+            for (final IColumn hint : hintsPage.getSortedColumns())
+            {
+                // check if hints delivery has been paused during the process
+                if (hintedHandOffPaused)
+                {
+                    logger.debug("Hints delivery process is paused, aborting");
+                    break delivery;
+                }
+
+                // Skip tombstones:
+                // if we iterate quickly enough, it's possible that we could request a new page in the same millisecond
+                // in which the local deletion timestamp was generated on the last column in the old page, in which
+                // case the hint will have no columns (since it's deleted) but will still be included in the resultset
+                // since (even with gcgs=0) it's still a "relevant" tombstone.
+                if (!hint.isLive())
+                    continue;
+
+                startColumn = hint.name();
+
+                ByteBuffer[] components = comparator.split(hint.name());
+                int version = Int32Type.instance.compose(components[1]);
+                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(hint.value()));
+                RowMutation rm;
+                try
+                {
+                    rm = RowMutation.serializer.deserialize(in, version);
+                }
+                catch (UnknownColumnFamilyException e)
+                {
+                    logger.debug("Skipping delivery of hint for deleted columnfamily", e);
+                    deleteHint(hostIdBytes, hint.name(), hint.maxTimestamp());
+                    continue;
+                }
+                catch (IOException e)
+                {
+                    throw new AssertionError(e);
+                }
+
+                MessageOut<RowMutation> message = rm.createMessage();
+                rateLimiter.acquire(message.serializedSize(MessagingService.current_version));
+                Runnable callback = new Runnable()
+                {
+                    public void run()
+                    {
+                        rowsReplayed.incrementAndGet();
+                        deleteHint(hostIdBytes, hint.name(), hint.maxTimestamp());
+                    }
+                };
+                WriteResponseHandler responseHandler = new WriteResponseHandler(endpoint, WriteType.UNLOGGED_BATCH, callback);
+                MessagingService.instance().sendRR(message, endpoint, responseHandler);
+                responseHandlers.add(responseHandler);
+            }
+
+            for (WriteResponseHandler handler : responseHandlers)
+            {
+                try
+                {
+                    handler.get();
+                }
+                catch (WriteTimeoutException e)
+                {
+                    logger.info("Timed out replaying hints to {}; aborting ({} delivered)", endpoint, rowsReplayed);
+                    return;
+                }
+            }
+        }
+
+        logger.info("Finished hinted handoff of {} rows to endpoint {}", rowsReplayed, endpoint);
+
+        try
+        {
+            compact().get();
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
