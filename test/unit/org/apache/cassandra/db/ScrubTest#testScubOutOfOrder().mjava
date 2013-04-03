@@ -1,0 +1,39 @@
+    @Test
+    public void testScubOutOfOrder() throws Exception
+    {
+         CompactionManager.instance.disableAutoCompaction();
+         Table table = Table.open(TABLE);
+         String columnFamily = "Standard3";
+         ColumnFamilyStore cfs = table.getColumnFamilyStore(columnFamily);
+
+        /*
+         * Code used to generate an outOfOrder sstable. The test for out-of-order key in SSTableWriter must also be commented out.
+         * The test also assumes an ordered partitioner.
+         *
+         *  ColumnFamily cf = ColumnFamily.create(TABLE, columnFamily);
+         *  cf.addColumn(new Column(ByteBufferUtil.bytes("someName"), ByteBufferUtil.bytes("someValue"), 0L));
+
+         *  SSTableWriter writer = cfs.createCompactionWriter((long)DatabaseDescriptor.getIndexInterval(), new File("."), Collections.<SSTableReader>emptyList());
+         *  writer.append(Util.dk("a"), cf);
+         *  writer.append(Util.dk("b"), cf);
+         *  writer.append(Util.dk("z"), cf);
+         *  writer.append(Util.dk("c"), cf);
+         *  writer.append(Util.dk("y"), cf);
+         *  writer.append(Util.dk("d"), cf);
+         *  writer.closeAndOpenReader();
+         */
+
+        copySSTables(columnFamily);
+        cfs.loadNewSSTables();
+        assert cfs.getSSTables().size() > 0;
+
+        List<Row> rows;
+        rows = cfs.getRangeSlice(Util.range("", ""), 1000, new IdentityQueryFilter(), null);
+        assert !isRowOrdered(rows) : "'corrupt' test file actually was not";
+
+        CompactionManager.instance.performScrub(cfs);
+        rows = cfs.getRangeSlice(Util.range("", ""), 1000, new IdentityQueryFilter(), null);
+        assert isRowOrdered(rows) : "Scrub failed: " + rows;
+        assert rows.size() == 6: "Got " + rows.size();
+    }
+
