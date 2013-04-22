@@ -18,12 +18,12 @@
             throw new FSWriteError(e, dataFile.getPath());
         }
 
-        DeletionTime deletion = DeletionTime.serializer.deserialize(in);
+        DeletionInfo deletionInfo = DeletionInfo.serializer().deserializeFromSSTable(in, descriptor.version);
         int columnCount = in.readInt();
 
         try
         {
-            DeletionTime.serializer.serialize(deletion, dataFile.stream);
+            DeletionInfo.serializer().serializeForSSTable(deletionInfo, dataFile.stream);
             dataFile.stream.writeInt(columnCount);
         }
         catch (IOException e)
@@ -36,7 +36,7 @@
         long maxTimestamp = Long.MIN_VALUE;
         StreamingHistogram tombstones = new StreamingHistogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
         ColumnFamily cf = ColumnFamily.create(metadata, ArrayBackedSortedColumns.factory());
-        cf.delete(new DeletionInfo(deletion));
+        cf.delete(deletionInfo);
 
         ColumnIndex.Builder columnIndexer = new ColumnIndex.Builder(cf, key.key, columnCount, dataFile.stream, true);
         OnDiskAtom.Serializer atomSerializer = cf.getOnDiskSerializer();
@@ -86,7 +86,7 @@
         sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - currentPosition);
         sstableMetadataCollector.addColumnCount(columnCount);
         sstableMetadataCollector.mergeTombstoneHistogram(tombstones);
-        afterAppend(key, currentPosition, deletion, columnIndexer.build());
+        afterAppend(key, currentPosition, deletionInfo, columnIndexer.build());
         return currentPosition;
     }
 

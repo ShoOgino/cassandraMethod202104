@@ -4,7 +4,7 @@
      * finish (reverse start) elements. i.e. forward: [a,b],[d,e],[g,h] reverse: [h,g],[e,d],[b,a]. This reader also
      * assumes that validation has been performed in terms of intervals (no overlapping intervals).
      */
-    public IndexedSliceReader(SSTableReader sstable, RowIndexEntry rowEntry, FileDataInput input, ColumnSlice[] slices, boolean reversed)
+    public IndexedSliceReader(SSTableReader sstable, RowIndexEntry indexEntry, FileDataInput input, ColumnSlice[] slices, boolean reversed)
     {
         this.sstable = sstable;
         this.originalInput = input;
@@ -15,53 +15,34 @@
         try
         {
             Descriptor.Version version = sstable.descriptor.version;
-            emptyColumnFamily = ColumnFamily.create(sstable.metadata);
-
-            if (version.hasPromotedRowTombstones && !rowEntry.columnsIndex().isEmpty())
-            {
-                // skip the row header entirely
-                indexes = rowEntry.columnsIndex();
-                emptyColumnFamily.delete(new DeletionInfo(rowEntry.deletionTime()));
-                fetcher = new IndexedBlockFetcher(rowEntry.position);
-                return;
-            }
-
-            // skip up to bloom filter where things get a bit more interesting
-            if (input == null)
-            {
-                file = sstable.getFileDataInput(rowEntry.position);
-            }
-            else
-            {
-                file = input;
-                file.seek(rowEntry.position);
-            }
-            this.sstable.decodeKey(ByteBufferUtil.readWithShortLength(file));
-            SSTableReader.readRowSize(file, this.sstable.descriptor);
-
-            // read the row header up to and including the row-level tombstones
             if (version.hasPromotedIndexes)
             {
-                indexes = rowEntry.columnsIndex();
-                // we'll get row deletion time from the row header below
+                this.indexes = indexEntry.columnsIndex();
+                if (indexes.isEmpty())
+                {
+                    setToRowStart(sstable, indexEntry, input);
+                    this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                    emptyColumnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(file, version));
+                    fetcher = new SimpleBlockFetcher();
+                }
+                else
+                {
+                    this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                    emptyColumnFamily.delete(indexEntry.deletionInfo());
+                    fetcher = new IndexedBlockFetcher(indexEntry.position);
+                }
             }
             else
             {
+                setToRowStart(sstable, indexEntry, input);
                 IndexHelper.skipSSTableBloomFilter(file, version);
-                indexes = IndexHelper.deserializeIndex(file);
-            }
-            emptyColumnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(file, version));
-
-            if (indexes.isEmpty())
-            {
-                fetcher = new SimpleBlockFetcher();
-            }
-            else
-            {
-                // index offsets changed to be based against the row key start in 1.2
-                fetcher = version.hasPromotedIndexes
-                        ? new IndexedBlockFetcher(rowEntry.position)
-                        : new IndexedBlockFetcher(file.getFilePointer() + 4); // +4 to skip the int column count
+                this.indexes = IndexHelper.deserializeIndex(file);
+                this.emptyColumnFamily = ColumnFamily.create(sstable.metadata);
+                emptyColumnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(file, version));
+                fetcher = indexes.isEmpty()
+                        ? new SimpleBlockFetcher()
+                        : new IndexedBlockFetcher(file.getFilePointer() + 4); // We still have the column count to
+                                                                              // skip to get the basePosition
             }
         }
         catch (IOException e)
