@@ -1,25 +1,29 @@
         public RowIndexEntry deserialize(DataInput in, Descriptor.Version version) throws IOException
         {
             long position = in.readLong();
-            if (version.hasPromotedIndexes)
-            {
-                int size = in.readInt();
-                if (size > 0)
-                {
-                    DeletionInfo delInfo = DeletionInfo.serializer().deserializeFromSSTable(in, version);
-                    int entries = in.readInt();
-                    List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<IndexHelper.IndexInfo>(entries);
-                    for (int i = 0; i < entries; i++)
-                        columnsIndex.add(IndexHelper.IndexInfo.deserialize(in));
 
-                    if (version.hasRowLevelBF)
-                        IndexHelper.skipBloomFilter(in, version.filterType);
-                    return new IndexedEntry(position, delInfo, columnsIndex);
-                }
-                else
+            if (!version.hasPromotedIndexes)
+                return new RowIndexEntry(position);
+
+            int size = in.readInt();
+            if (size > 0)
+            {
+                DeletionTime deletionTime = DeletionTime.serializer.deserialize(in);
+
+                int entries = in.readInt();
+                List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<IndexHelper.IndexInfo>(entries);
+                for (int i = 0; i < entries; i++)
+                    columnsIndex.add(IndexHelper.IndexInfo.deserialize(in));
+
+                if (version.hasRowLevelBF)
                 {
-                    return new RowIndexEntry(position);
+                    // we only ever used murmur3 BF in the promoted index
+                    in.readInt(); // hash count
+                    int words = in.readInt(); // number of Longs in the OpenBitSet
+                    FileUtils.skipBytesFully(in, words * 8);
                 }
+
+                return new IndexedEntry(position, deletionTime, columnsIndex);
             }
             else
             {
