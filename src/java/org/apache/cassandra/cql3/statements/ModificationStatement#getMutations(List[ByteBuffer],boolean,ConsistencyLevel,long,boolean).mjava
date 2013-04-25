@@ -1,0 +1,31 @@
+    /**
+     * Convert statement into a list of mutations to apply on the server
+     *
+     * @param variables value for prepared statement markers
+     * @param local if true, any requests (for collections) performed by getMutation should be done locally only.
+     * @param cl the consistency to use for the potential reads involved in generating the mutations (for lists set/delete operations)
+     * @param now the current timestamp in microseconds to use if no timestamp is user provided.
+     *
+     * @return list of the mutations
+     * @throws InvalidRequestException on invalid requests
+     */
+    public Collection<? extends IMutation> getMutations(List<ByteBuffer> variables, boolean local, ConsistencyLevel cl, long now, boolean isBatch)
+    throws RequestExecutionException, RequestValidationException
+    {
+        List<ByteBuffer> keys = buildPartitionKeyNames(variables);
+        ColumnNameBuilder clusteringPrefix = createClusteringPrefixBuilder(variables);
+
+        // Some lists operation requires reading
+        Map<ByteBuffer, ColumnGroupMap> rows = readRequiredRows(keys, clusteringPrefix, local, cl);
+        UpdateParameters params = new UpdateParameters(cfm, variables, getTimestamp(now), getTimeToLive(), rows);
+
+        Collection<IMutation> mutations = new ArrayList<IMutation>();
+        for (ByteBuffer key: keys)
+        {
+            ThriftValidation.validateKey(cfm, key);
+            ColumnFamily cf = updateForKey(key, clusteringPrefix, params);
+            mutations.add(makeMutation(key, cf, cl, isBatch));
+        }
+        return mutations;
+    }
+
