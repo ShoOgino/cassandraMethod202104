@@ -33,7 +33,12 @@
             {
                 CFDefinition.Name name = cfDef.get(rel.getEntity());
                 if (name == null)
-                    throw new InvalidRequestException(String.format("Undefined name %s in where clause ('%s')", rel.getEntity(), rel));
+                {
+                    if (containsAlias(rel.getEntity()))
+                        throw new InvalidRequestException(String.format("Aliases aren't allowed in where clause ('%s')", rel));
+                    else
+                        throw new InvalidRequestException(String.format("Undefined name %s in where clause ('%s')", rel.getEntity(), rel));
+                }
 
                 ColumnDefinition def = cfDef.cfm.getColumnDefinition(name.name.key);
                 stmt.restrictedNames.add(name);
@@ -240,24 +245,47 @@
                 // If we order an IN query, we'll have to do a manual sort post-query. Currently, this sorting requires that we
                 // have queried the column on which we sort (TODO: we should update it to add the column on which we sort to the one
                 // queried automatically, and then removing it from the resultSet afterwards if needed)
-                if (stmt.keyIsInRelation && !selectClause.isEmpty()) // empty means wildcard was used
+                if (stmt.keyIsInRelation)
                 {
+                    stmt.orderingIndexes = new HashMap<CFDefinition.Name, Integer>();
                     for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
                     {
-                        CFDefinition.Name name = cfDef.get(column);
-
-                        boolean hasColumn = false;
-                        for (RawSelector selector : selectClause)
+                        final CFDefinition.Name name = cfDef.get(column);
+                        if (name == null)
                         {
-                            if (name.name.equals(selector))
-                            {
-                                hasColumn = true;
-                                break;
-                            }
+                            if (containsAlias(column))
+                                throw new InvalidRequestException(String.format("Aliases are not allowed in order by clause ('%s')", column));
+                            else
+                                throw new InvalidRequestException(String.format("Order by on unknown column %s", column));
                         }
 
-                        if (!hasColumn)
-                            throw new InvalidRequestException("ORDER BY could not be used on columns missing in select clause.");
+                        if (selectClause.isEmpty()) // wildcard
+                        {
+                            stmt.orderingIndexes.put(name, Iterables.indexOf(cfDef, new Predicate<CFDefinition.Name>()
+                                                                                    {
+                                                                                        public boolean apply(CFDefinition.Name n)
+                                                                                        {
+                                                                                            return name.equals(n);
+                                                                                        }
+                                                                                    }));
+                        }
+                        else
+                        {
+                            boolean hasColumn = false;
+                            for (int i = 0; i < selectClause.size(); i++)
+                            {
+                                RawSelector selector = selectClause.get(i);
+                                if (name.name.equals(selector.selectable))
+                                {
+                                    stmt.orderingIndexes.put(name, i);
+                                    hasColumn = true;
+                                    break;
+                                }
+                            }
+
+                            if (!hasColumn)
+                                throw new InvalidRequestException("ORDER BY could not be used on columns missing in select clause.");
+                        }
                     }
                 }
 
@@ -270,7 +298,12 @@
 
                     CFDefinition.Name name = cfDef.get(column);
                     if (name == null)
-                        throw new InvalidRequestException(String.format("Order by on unknown column %s", column));
+                    {
+                        if (containsAlias(column))
+                            throw new InvalidRequestException(String.format("Aliases are not allowed in order by clause ('%s')", column));
+                        else
+                            throw new InvalidRequestException(String.format("Order by on unknown column %s", column));
+                    }
 
                     if (name.kind != CFDefinition.Name.Kind.COLUMN_ALIAS)
                         throw new InvalidRequestException(String.format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got %s", column));
