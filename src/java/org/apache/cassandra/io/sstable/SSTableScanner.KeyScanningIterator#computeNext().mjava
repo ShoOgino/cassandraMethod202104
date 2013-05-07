@@ -1,0 +1,60 @@
+        protected OnDiskAtomIterator computeNext()
+        {
+            try
+            {
+                if (ifile.isEOF() && nextKey == null)
+                    return endOfData();
+
+                if (currentKey == null)
+                {
+                    currentKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
+                    currentEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                }
+                else
+                {
+                    currentKey = nextKey;
+                    currentEntry = nextEntry;
+                }
+
+                assert currentEntry.position <= stopAt;
+                if (currentEntry.position == stopAt)
+                    return endOfData();
+
+                if (ifile.isEOF())
+                {
+                    nextKey = null;
+                    nextEntry = null;
+                }
+                else
+                {
+                    nextKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
+                    nextEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                }
+
+                assert !dfile.isEOF();
+
+                if (filter == null)
+                {
+                    dfile.seek(currentEntry.position);
+                    ByteBufferUtil.readWithShortLength(dfile); // key
+                    if (sstable.descriptor.version.hasRowSizeAndColumnCount)
+                        dfile.readLong();
+                    long dataSize = (nextEntry == null ? dfile.length() : nextEntry.position) - dfile.getFilePointer();
+                    return new SSTableIdentityIterator(sstable, dfile, currentKey, dataSize);
+                }
+
+                return new LazyColumnIterator(currentKey, new IColumnIteratorFactory()
+                {
+                    public OnDiskAtomIterator create()
+                    {
+                        return filter.getSSTableColumnIterator(sstable, dfile, currentKey, currentEntry);
+                    }
+                });
+            }
+            catch (IOException e)
+            {
+                sstable.markSuspect();
+                throw new CorruptSSTableException(e, sstable.getFilename());
+            }
+        }
+

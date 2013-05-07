@@ -1,0 +1,36 @@
+    // sstable may be null *if* checkData is false
+    // If it is null, we assume the data is in the current file format
+    private SSTableIdentityIterator(CFMetaData metadata,
+                                    DataInput in,
+                                    String filename,
+                                    DecoratedKey key,
+                                    long dataSize,
+                                    boolean checkData,
+                                    SSTableReader sstable,
+                                    ColumnSerializer.Flag flag)
+    {
+        assert !checkData || (sstable != null);
+        this.in = in;
+        this.filename = filename;
+        this.key = key;
+        this.dataSize = dataSize;
+        this.expireBefore = (int)(System.currentTimeMillis() / 1000);
+        this.flag = flag;
+        this.validateColumns = checkData;
+        this.dataVersion = sstable == null ? Descriptor.Version.CURRENT : sstable.descriptor.version;
+
+        try
+        {
+            columnFamily = EmptyColumns.factory.create(metadata);
+            columnFamily.delete(DeletionInfo.serializer().deserializeFromSSTable(in, dataVersion));
+            columnCount = dataVersion.hasRowSizeAndColumnCount ? in.readInt() : Integer.MAX_VALUE;
+            atomIterator = columnFamily.metadata().getOnDiskIterator(in, columnCount, dataVersion);
+        }
+        catch (IOException e)
+        {
+            if (sstable != null)
+                sstable.markSuspect();
+            throw new CorruptSSTableException(e, filename);
+        }
+    }
+

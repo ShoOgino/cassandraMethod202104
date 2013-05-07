@@ -9,10 +9,10 @@
      */
     public static void export(Descriptor desc, PrintStream outs, Collection<String> toExport, String[] excludes) throws IOException
     {
-        SSTableReader reader = SSTableReader.open(desc);
-        SSTableScanner scanner = reader.getScanner();
+        SSTableReader sstable = SSTableReader.open(desc);
+        RandomAccessReader dfile = sstable.openDataReader();
 
-        IPartitioner<?> partitioner = reader.partitioner;
+        IPartitioner<?> partitioner = sstable.partitioner;
 
         if (excludes != null)
             toExport.removeAll(Arrays.asList(excludes));
@@ -33,16 +33,20 @@
 
             lastKey = decoratedKey;
 
-            scanner.seekTo(decoratedKey);
-
-            if (!scanner.hasNext())
+            RowIndexEntry entry = sstable.getPosition(decoratedKey, SSTableReader.Operator.EQ);
+            if (entry == null)
                 continue;
 
-            SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
-            if (!row.getKey().equals(decoratedKey))
-                continue;
+            dfile.seek(entry.position);
+            ByteBufferUtil.readWithShortLength(dfile); // row key
+            if (sstable.descriptor.version.hasRowSizeAndColumnCount)
+                dfile.readLong(); // row size
+            DeletionInfo deletionInfo = DeletionInfo.serializer().deserializeFromSSTable(dfile, sstable.descriptor.version);
+            int columnCount = sstable.descriptor.version.hasRowSizeAndColumnCount ? dfile.readInt() : Integer.MAX_VALUE;
 
-            serializeRow(row, decoratedKey, outs);
+            Iterator<OnDiskAtom> atomIterator = sstable.metadata.getOnDiskIterator(dfile, columnCount, sstable.descriptor.version);
+
+            serializeRow(deletionInfo, atomIterator, sstable.metadata, decoratedKey, outs);
 
             if (i != 0)
                 outs.println(",");
@@ -53,7 +57,5 @@
 
         outs.println("\n]");
         outs.flush();
-
-        scanner.close();
     }
 

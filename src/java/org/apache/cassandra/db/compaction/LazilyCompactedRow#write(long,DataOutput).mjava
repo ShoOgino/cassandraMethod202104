@@ -1,0 +1,39 @@
+    public RowIndexEntry write(long currentPosition, DataOutput out) throws IOException
+    {
+        assert !closed;
+
+        ColumnIndex columnsIndex;
+        try
+        {
+            indexBuilder = new ColumnIndex.Builder(emptyColumnFamily, key.key, out);
+            columnsIndex = indexBuilder.build(this);
+            if (columnsIndex.columnsIndex.isEmpty())
+            {
+                boolean cfIrrelevant = shouldPurge
+                                       ? ColumnFamilyStore.removeDeletedCF(emptyColumnFamily, controller.gcBefore) == null
+                                       : !emptyColumnFamily.isMarkedForDelete(); // tombstones are relevant
+                if (cfIrrelevant)
+                    return null;
+            }
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        // reach into the reducer (created during iteration) to get column count, size, max column timestamp
+        // (however, if there are zero columns, iterator() will not be called by ColumnIndexer and reducer will be null)
+        columnStats = new ColumnStats(reducer == null ? 0 : reducer.columns,
+                                      reducer == null ? Long.MAX_VALUE : reducer.minTimestampSeen,
+                                      reducer == null ? maxDelTimestamp : Math.max(maxDelTimestamp, reducer.maxTimestampSeen),
+                                      reducer == null ? Integer.MIN_VALUE : reducer.maxLocalDeletionTimeSeen,
+                                      reducer == null ? new StreamingHistogram(SSTable.TOMBSTONE_HISTOGRAM_BIN_SIZE) : reducer.tombstones
+        );
+        reducer = null;
+
+        out.writeShort(SSTableWriter.END_OF_ROW);
+
+        close();
+
+        return RowIndexEntry.create(currentPosition, emptyColumnFamily.deletionInfo().getTopLevelDeletion(), columnsIndex);
+    }
+

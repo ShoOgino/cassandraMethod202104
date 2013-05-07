@@ -36,9 +36,6 @@
             if (logger.isDebugEnabled())
                 logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
 
-            SSTableWriter writer = null;
-            SSTableReader newSstable = null;
-
             logger.info("Cleaning up " + sstable);
             // Calculate the expected compacted filesize
             long expectedRangeFileSize = cfs.getExpectedCompactedFileSize(Arrays.asList(sstable), OperationType.CLEANUP);
@@ -52,6 +49,11 @@
 
             CleanupInfo ci = new CleanupInfo(sstable, scanner);
             metrics.beginCompaction(ci);
+            SSTableWriter writer = createWriter(cfs,
+                                                compactionFileLocation,
+                                                expectedBloomFilterSize,
+                                                sstable);
+            SSTableReader newSstable = null;
             try
             {
                 while (scanner.hasNext())
@@ -62,11 +64,8 @@
                     if (Range.isInRanges(row.getKey().token, ranges))
                     {
                         AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
-                        if (compactedRow.isEmpty())
-                            continue;
-                        writer = maybeCreateWriter(cfs, OperationType.CLEANUP, compactionFileLocation, expectedBloomFilterSize, writer, sstable);
-                        writer.append(compactedRow);
-                        totalkeysWritten++;
+                        if (writer.append(compactedRow) != null)
+                            totalkeysWritten++;
                     }
                     else
                     {
@@ -107,13 +106,14 @@
                         }
                     }
                 }
-                if (writer != null)
+                if (totalkeysWritten > 0)
                     newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
+                else
+                    writer.abort();
             }
             catch (Throwable e)
             {
-                if (writer != null)
-                    writer.abort();
+                writer.abort();
                 throw Throwables.propagate(e);
             }
             finally
