@@ -71,6 +71,21 @@
         }
 
         if (dcMessages != null)
-            sendMessages(localDataCenter, dcMessages, responseHandler);
+        {
+            // for each datacenter, send a message to one node to relay the write to other replicas
+            for (Map.Entry<String, Multimap<MessageOut, InetAddress>> entry: dcMessages.entrySet())
+            {
+                boolean isLocalDC = entry.getKey().equals(localDataCenter);
+                for (Map.Entry<MessageOut, Collection<InetAddress>> messages: entry.getValue().asMap().entrySet())
+                {
+                    MessageOut message = messages.getKey();
+                    Collection<InetAddress> targets1 = messages.getValue();
+                    // a single message object is used for unhinted writes, so clean out any forwards
+                    // from previous loop iterations
+                    message = message.withHeaderRemoved(RowMutation.FORWARD_TO);
+                    sendMessagesToOneDC(message, targets1, isLocalDC, responseHandler);
+                }
+            }
+        }
     }
 
