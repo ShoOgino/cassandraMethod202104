@@ -31,9 +31,11 @@
      *
      * @return true if the operation succeeds in updating the row
      */
-    public static boolean cas(String table, String cfName, ByteBuffer key, ColumnFamily expected, ColumnFamily updates)
+    public static boolean cas(String table, String cfName, ByteBuffer key, ColumnFamily expected, ColumnFamily updates, ConsistencyLevel consistencyLevel)
     throws UnavailableException, IsBootstrappingException, ReadTimeoutException, WriteTimeoutException, InvalidRequestException
     {
+        consistencyLevel.validateForCas(table);
+
         CFMetaData metadata = Schema.instance.getCFMetaData(table, cfName);
 
         long start = System.nanoTime();
@@ -68,7 +70,10 @@
             Tracing.trace("CAS precondition is met; proposing client-requested updates for {}", ballot);
             if (proposePaxos(proposal, liveEndpoints, requiredParticipants))
             {
-                commitPaxos(proposal, liveEndpoints);
+                if (consistencyLevel == ConsistencyLevel.SERIAL)
+                    sendCommit(proposal, liveEndpoints);
+                else
+                    commitPaxos(proposal, consistencyLevel);
                 Tracing.trace("CAS successful");
                 return true;
             }
