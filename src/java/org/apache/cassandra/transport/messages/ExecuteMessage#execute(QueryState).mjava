@@ -7,6 +7,9 @@
             if (statement == null)
                 throw new PreparedQueryNotFoundException(statementId);
 
+            if (resultPageSize == 0)
+                throw new ProtocolException("The page size cannot be 0");
+
             UUID tracingId = null;
             if (isTracingRequested())
             {
@@ -17,11 +20,16 @@
             if (state.traceNextQuery())
             {
                 state.createTracingSession();
+
+                ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+                if (resultPageSize > 0)
+                    builder.put("page_size", Integer.toString(resultPageSize));
+
                 // TODO we don't have [typed] access to CQL bind variables here.  CASSANDRA-4560 is open to add support.
-                Tracing.instance.begin("Execute CQL3 prepared query", Collections.<String, String>emptyMap());
+                Tracing.instance.begin("Execute CQL3 prepared query", builder.build());
             }
 
-            Message.Response response = QueryProcessor.processPrepared(statement, consistency, state, values);
+            Message.Response response = QueryProcessor.processPrepared(statement, consistency, state, values, resultPageSize);
 
             if (tracingId != null)
                 response.setTracingId(tracingId);
@@ -35,6 +43,9 @@
         finally
         {
             Tracing.instance.stopSession();
+            // Trash the current session id if we won't need it anymore
+            if (!state.hasPager())
+                state.getAndResetCurrentTracingSession();
         }
     }
 

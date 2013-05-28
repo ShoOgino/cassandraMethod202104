@@ -2,6 +2,9 @@
     {
         try
         {
+            if (resultPageSize == 0)
+                throw new ProtocolException("The page size cannot be 0");
+
             UUID tracingId = null;
             if (isTracingRequested())
             {
@@ -12,10 +15,16 @@
             if (state.traceNextQuery())
             {
                 state.createTracingSession();
-                Tracing.instance.begin("Execute CQL3 query", ImmutableMap.of("query", query));
+
+                ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+                builder.put("query", query);
+                if (resultPageSize > 0)
+                    builder.put("page_size", Integer.toString(resultPageSize));
+
+                Tracing.instance.begin("Execute CQL3 query", builder.build());
             }
 
-            Message.Response response = QueryProcessor.process(query, values, consistency, state);
+            Message.Response response = QueryProcessor.process(query, values, consistency, state, resultPageSize);
 
             if (tracingId != null)
                 response.setTracingId(tracingId);
@@ -31,6 +40,9 @@
         finally
         {
             Tracing.instance.stopSession();
+            // Trash the current session id if we won't need it anymore
+            if (!state.hasPager())
+                state.getAndResetCurrentTracingSession();
         }
     }
 

@@ -1,0 +1,56 @@
+    /**
+      * Iterate over a range of rows and columns from memtables/sstables.
+      *
+      * @param range The range of keys and columns within those keys to fetch
+     */
+    private AbstractScanIterator getSequentialIterator(final DataRange range, long now)
+    {
+        assert !(range.keyRange() instanceof Range) || !((Range)range.keyRange()).isWrapAround() || range.keyRange().right.isMinimum() : range.keyRange();
+
+        final ViewFragment view = markReferenced(range.keyRange());
+        Tracing.trace("Executing seq scan across {} sstables for {}", view.sstables.size(), range.keyRange().getString(metadata.getKeyValidator()));
+
+        try
+        {
+            final CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(view.memtables, view.sstables, range, this, now);
+
+            // todo this could be pushed into SSTableScanner
+            return new AbstractScanIterator()
+            {
+                protected Row computeNext()
+                {
+                    // pull a row out of the iterator
+                    if (!iterator.hasNext())
+                        return endOfData();
+
+                    Row current = iterator.next();
+                    DecoratedKey key = current.key;
+
+                    if (!range.stopKey().isMinimum() && range.stopKey().compareTo(key) < 0)
+                        return endOfData();
+
+                    // skipping outside of assigned range
+                    if (!range.contains(key))
+                        return computeNext();
+
+                    if (logger.isTraceEnabled())
+                        logger.trace("scanned {}", metadata.getKeyValidator().getString(key.key));
+
+                    return current;
+                }
+
+                public void close() throws IOException
+                {
+                    SSTableReader.releaseReferences(view.sstables);
+                    iterator.close();
+                }
+            };
+        }
+        catch (RuntimeException e)
+        {
+            // In case getIterator() throws, otherwise the iteror close method releases the references.
+            SSTableReader.releaseReferences(view.sstables);
+            throw e;
+        }
+    }
+
