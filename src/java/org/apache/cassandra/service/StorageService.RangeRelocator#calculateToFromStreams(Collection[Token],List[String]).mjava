@@ -6,15 +6,15 @@
             // clone to avoid concurrent modification in calculateNaturalEndpoints
             TokenMetadata tokenMetaClone = tokenMetadata.cloneOnlyTokenMap();
 
-            for (String table : tables)
+            for (String keyspace : tables)
             {
                 for (Token newToken : newTokens)
                 {
                     // replication strategy of the current keyspace (aka table)
-                    AbstractReplicationStrategy strategy = Table.open(table).getReplicationStrategy();
+                    AbstractReplicationStrategy strategy = Table.open(keyspace).getReplicationStrategy();
 
                     // getting collection of the currently used ranges by this keyspace
-                    Collection<Range<Token>> currentRanges = getRangesForEndpoint(table, localAddress);
+                    Collection<Range<Token>> currentRanges = getRangesForEndpoint(keyspace, localAddress);
                     // collection of ranges which this node will serve after move to the new token
                     Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata, newToken, localAddress);
 
@@ -45,24 +45,27 @@
 
                     // calculating endpoints to stream current ranges to if needed
                     // in some situations node will handle current ranges as part of the new ranges
-                    Multimap<Range<Token>, InetAddress> rangeWithEndpoints = HashMultimap.create();
-
+                    Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
                     for (Range<Token> toStream : rangesPerTable.left)
                     {
                         Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
                         Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
                         logger.debug("Range:" + toStream + "Current endpoints: " + currentEndpoints + " New endpoints: " + newEndpoints);
-                        rangeWithEndpoints.putAll(toStream, Sets.difference(newEndpoints, currentEndpoints));
+                        for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
+                            endpointRanges.put(address, toStream);
                     }
 
-                    // associating table with range-to-endpoints map
-                    rangesToStreamByTable.put(table, rangeWithEndpoints);
+                    // stream ranges
+                    for (InetAddress address : endpointRanges.keySet())
+                        streamPlan.transferRanges(address, keyspace, endpointRanges.get(address));
 
+                    // stream requests
                     Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints);
-                    rangesToFetch.put(table, workMap);
+                    for (InetAddress address : workMap.keySet())
+                        streamPlan.requestRanges(address, keyspace, workMap.get(address));
 
                     if (logger.isDebugEnabled())
-                        logger.debug("Table {}: work map {}.", table, workMap);
+                        logger.debug("Table {}: work map {}.", keyspace, workMap);
                 }
             }
         }

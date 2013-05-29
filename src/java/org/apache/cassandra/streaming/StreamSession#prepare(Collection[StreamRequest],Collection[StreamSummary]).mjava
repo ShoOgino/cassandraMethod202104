@@ -1,0 +1,30 @@
+    /**
+     * Prepare this session for sending/receiving files.
+     */
+    public void prepare(Collection<StreamRequest> requests, Collection<StreamSummary> summaries)
+    {
+        logger.debug("Start preparing this session (" + requests.size() + " requests, " + summaries.size() + " columnfamilies receiving)");
+        // prepare tasks
+        state(State.PREPARING);
+        for (StreamRequest request : requests)
+            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true); // always flush on stream request
+        for (StreamSummary summary : summaries)
+            prepareReceiving(summary);
+
+        // send back prepare message if prepare message contains stream request
+        if (!requests.isEmpty())
+        {
+            PrepareMessage prepare = new PrepareMessage();
+            for (StreamTransferTask task : transfers.values())
+                prepare.summaries.add(task.getSummary());
+            handler.sendMessage(prepare);
+        }
+
+        // if there are files to stream
+        if (!maybeCompleted())
+        {
+            logger.debug("Prepare complete. Start streaming files.");
+            startStreamingFiles();
+        }
+    }
+

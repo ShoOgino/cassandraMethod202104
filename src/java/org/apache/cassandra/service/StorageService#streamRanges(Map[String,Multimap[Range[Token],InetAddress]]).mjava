@@ -2,26 +2,21 @@
      * Seed data to the endpoints that will be responsible for it at the future
      *
      * @param rangesToStreamByTable tables and data ranges with endpoints included for each
-     * @return latch to count down
+     * @return async Future for whether stream was success
      */
-    private CountDownLatch streamRanges(final Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByTable)
+    private Future<StreamState> streamRanges(final Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByTable)
     {
         // First, we build a list of ranges to stream to each host, per table
         final Map<String, Map<InetAddress, List<Range<Token>>>> sessionsToStreamByTable = new HashMap<String, Map<InetAddress, List<Range<Token>>>>();
-        // The number of stream out sessions we need to start, to be built up as we build sessionsToStreamByTable
-        int sessionCount = 0;
-
         for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : rangesToStreamByTable.entrySet())
         {
+            String keyspace = entry.getKey();
             Multimap<Range<Token>, InetAddress> rangesWithEndpoints = entry.getValue();
 
             if (rangesWithEndpoints.isEmpty())
                 continue;
 
-            final String table = entry.getKey();
-
             Map<InetAddress, List<Range<Token>>> rangesPerEndpoint = new HashMap<InetAddress, List<Range<Token>>>();
-
             for (final Map.Entry<Range<Token>, InetAddress> endPointEntry : rangesWithEndpoints.entries())
             {
                 final Range<Token> range = endPointEntry.getKey();
@@ -36,12 +31,10 @@
                 curRanges.add(range);
             }
 
-            sessionCount += rangesPerEndpoint.size();
-            sessionsToStreamByTable.put(table, rangesPerEndpoint);
+            sessionsToStreamByTable.put(keyspace, rangesPerEndpoint);
         }
 
-        final CountDownLatch latch = new CountDownLatch(sessionCount);
-
+        StreamPlan streamPlan = new StreamPlan("Unbootstrap");
         for (Map.Entry<String, Map<InetAddress, List<Range<Token>>>> entry : sessionsToStreamByTable.entrySet())
         {
             final String table = entry.getKey();
@@ -53,13 +46,9 @@
                 final InetAddress newEndpoint = rangesEntry.getKey();
 
                 // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-                StreamOut.transferRanges(newEndpoint,
-                                         Table.open(table),
-                                         ranges,
-                                         new CountingDownStreamCallback(latch, newEndpoint),
-                                         OperationType.UNBOOTSTRAP);
+                streamPlan.transferRanges(newEndpoint, table, ranges);
             }
         }
-        return latch;
+        return streamPlan.execute();
     }
 

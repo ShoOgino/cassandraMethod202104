@@ -1,0 +1,30 @@
+    /**
+     * Set up transfer of the specific SSTables.
+     * {@code sstables} must be marked as referenced so that not get deleted until transfer completes.
+     *
+     * @param ranges Transfer ranges
+     * @param sstables Transfer files
+     */
+    public void addTransferFiles(Collection<Range<Token>> ranges, Collection<SSTableReader> sstables)
+    {
+        for (SSTableReader sstable : sstables)
+        {
+            List<Pair<Long, Long>> sections = sstable.getPositionsForRanges(ranges);
+            if (sections.isEmpty())
+            {
+                // A reference was acquired on the sstable and we won't stream it
+                sstable.releaseReference();
+                continue;
+            }
+            long estimatedKeys = sstable.estimatedKeysForRanges(ranges);
+            UUID cfId = sstable.metadata.cfId;
+            StreamTransferTask task = transfers.get(cfId);
+            if (task == null)
+            {
+                task = new StreamTransferTask(this, cfId);
+                transfers.put(cfId, task);
+            }
+            task.addTransferFile(sstable, estimatedKeys, sections);
+        }
+    }
+

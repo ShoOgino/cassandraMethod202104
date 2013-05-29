@@ -1,52 +1,20 @@
     public static void main(String args[])
     {
         LoaderOptions options = LoaderOptions.parseArgs(args);
+        OutputHandler handler = new OutputHandler.SystemOutput(options.verbose, options.debug);
+        SSTableLoader loader = new SSTableLoader(options.directory, new ExternalClient(options.hosts, options.rpcPort, options.user, options.passwd), handler);
+        DatabaseDescriptor.setStreamThroughputOutboundMegabitsPerSec(options.throttle);
+        StreamResultFuture future = loader.stream(options.ignores);
+        future.addEventListener(new ProgressIndicator(handler));
         try
         {
-            OutputHandler handler = new OutputHandler.SystemOutput(options.verbose, options.debug);
-            SSTableLoader loader = new SSTableLoader(options.directory, new ExternalClient(handler, options.hosts, options.rpcPort, options.user, options.passwd), handler);
-            DatabaseDescriptor.setStreamThroughputOutboundMegabitsPerSec(options.throttle);
-            SSTableLoader.LoaderFuture future = loader.stream(options.ignores);
-
-            if (options.noProgress)
-            {
-                future.get();
-            }
-            else
-            {
-                ProgressIndicator indicator = new ProgressIndicator(future.getPendingFiles());
-                indicator.start();
-                System.out.println("");
-                boolean printEnd = false;
-                while (!future.isDone())
-                {
-                    if (indicator.printProgress())
-                    {
-                        // We're done with streaming
-                        System.out.println("\nWaiting for targets to rebuild indexes ...");
-                        printEnd = true;
-                        future.get();
-                        assert future.isDone();
-                    }
-                    else
-                    {
-                        Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
-                    }
-                }
-                if (!printEnd)
-                    indicator.printProgress();
-                if (future.hadFailures())
-                {
-                    System.err.println("Streaming to the following hosts failed:");
-                    System.err.println(future.getFailedHosts());
-                    System.exit(1);
-                }
-            }
-
+            future.get();
             System.exit(0); // We need that to stop non daemonized threads
         }
         catch (Exception e)
         {
+            System.err.println("Streaming to the following hosts failed:");
+            System.err.println(loader.getFailedHosts());
             System.err.println(e.getMessage());
             if (options.debug)
                 e.printStackTrace(System.err);
