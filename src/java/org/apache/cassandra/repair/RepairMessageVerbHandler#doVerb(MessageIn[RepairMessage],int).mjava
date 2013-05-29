@@ -1,0 +1,27 @@
+    public void doVerb(MessageIn<RepairMessage> message, int id)
+    {
+        // TODO add cancel/interrupt message
+        RepairJobDesc desc = message.payload.desc;
+        switch (message.payload.messageType)
+        {
+            case VALIDATION_REQUEST:
+                ValidationRequest validationRequest = (ValidationRequest) message.payload;
+                // trigger read-only compaction
+                ColumnFamilyStore store = Table.open(desc.keyspace).getColumnFamilyStore(desc.columnFamily);
+                Validator validator = new Validator(desc, message.from, validationRequest.gcBefore);
+                CompactionManager.instance.submitValidation(store, validator);
+                break;
+
+            case SYNC_REQUEST:
+                // forwarded sync request
+                SyncRequest request = (SyncRequest) message.payload;
+                StreamingRepairTask task = new StreamingRepairTask(desc, request);
+                task.run();
+                break;
+
+            default:
+                ActiveRepairService.instance.handleMessage(message.from, message.payload);
+                break;
+        }
+    }
+
