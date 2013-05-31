@@ -1,0 +1,31 @@
+    /**
+     * A simplified load that creates a minimal partition index
+     */
+    private void loadForBatch() throws IOException
+    {
+        // force buffered i/o in non-compressed mode so we don't need to worry about mmap segments
+        SegmentedFile.Builder ibuilder = new BufferedSegmentedFile.Builder();
+        SegmentedFile.Builder dbuilder = compression
+                                         ? SegmentedFile.getCompressedBuilder()
+                                         : new BufferedSegmentedFile.Builder();
+
+        // build a bare-bones IndexSummary
+        IndexSummaryBuilder summaryBuilder = new IndexSummaryBuilder(1, 1);
+        RandomAccessReader in = RandomAccessReader.open(new File(descriptor.filenameFor(Component.PRIMARY_INDEX)));
+        try
+        {
+            first = partitioner.decorateKey(ByteBufferUtil.readWithShortLength(in));
+            summaryBuilder.maybeAddEntry(first, 0);
+            indexSummary = summaryBuilder.build(partitioner);
+        }
+        finally
+        {
+            FileUtils.closeQuietly(in);
+        }
+
+        last = null; // shouldn't need this for batch operations
+
+        ifile = ibuilder.complete(descriptor.filenameFor(Component.PRIMARY_INDEX));
+        dfile = dbuilder.complete(descriptor.filenameFor(Component.DATA));
+    }
+
