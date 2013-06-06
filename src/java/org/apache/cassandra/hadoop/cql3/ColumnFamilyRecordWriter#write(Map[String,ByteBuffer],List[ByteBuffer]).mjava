@@ -1,0 +1,34 @@
+    /**
+     * If the key is to be associated with a valid value, a mutation is created
+     * for it with the given column family and columns. In the event the value
+     * in the column is missing (i.e., null), then it is marked for
+     * {@link Deletion}. Similarly, if the entire value for a key is missing
+     * (i.e., null), then the entire key is marked for {@link Deletion}.
+     * </p>
+     *
+     * @param keybuff
+     *            the key to write.
+     * @param values
+     *            the values to write.
+     * @throws IOException
+     */
+    @Override
+    public void write(Map<String, ByteBuffer> keys, List<ByteBuffer> values) throws IOException
+    {
+        ByteBuffer rowKey = getRowKey(keys);
+        Range<Token> range = ringCache.getRange(rowKey);
+
+        // get the client for the given range, or create a new one
+        RangeClient client = clients.get(range);
+        if (client == null)
+        {
+            // haven't seen keys for this range: create new client
+            client = new RangeClient(ringCache.getEndpoint(range));
+            client.start();
+            clients.put(range, client);
+        }
+
+        client.put(Pair.create(rowKey, values));
+        progressable.progress();
+    }
+

@@ -1,0 +1,73 @@
+        /**
+         * Loops collecting cql binded variable values from the queue and sending to Cassandra
+         */
+        public void run()
+        {
+            outer:
+            while (run || !queue.isEmpty())
+            {
+                Pair<ByteBuffer, List<ByteBuffer>> bindVariables;
+                try
+                {
+                    bindVariables = queue.take();
+                }
+                catch (InterruptedException e)
+                {
+                    // re-check loop condition after interrupt
+                    continue;
+                }
+
+                Iterator<InetAddress> iter = endpoints.iterator();
+                while (true)
+                {
+                    // send the mutation to the last-used endpoint.  first time through, this will NPE harmlessly.
+                    try
+                    {
+                        int i = 0;
+                        int itemId = preparedStatement(client);
+                        while (bindVariables != null)
+                        {
+                            client.execute_prepared_cql3_query(itemId, bindVariables.right, ConsistencyLevel.ONE);
+                            i++;
+                            
+                            if (i >= batchThreshold)
+                                break;
+                            
+                            bindVariables = queue.poll();
+                        }
+                        
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        closeInternal();
+                        if (!iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+
+                    // attempt to connect to a different endpoint
+                    try
+                    {
+                        InetAddress address = iter.next();
+                        String host = address.getHostName();
+                        int port = ConfigHelper.getOutputRpcPort(conf);
+                        client = ColumnFamilyOutputFormat.createAuthenticatedClient(host, port, conf);
+                    }
+                    catch (Exception e)
+                    {
+                        closeInternal();
+                        // TException means something unexpected went wrong to that endpoint, so
+                        // we should try again to another.  Other exceptions (auth or invalid request) are fatal.
+                        if ((!(e instanceof TException)) || !iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+                }
+            }
+        }
+
