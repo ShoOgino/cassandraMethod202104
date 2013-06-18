@@ -1,4 +1,4 @@
-    public ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final AbstractBounds<RowPosition> range, final ExtendedFilter filter)
+    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final AbstractBounds<RowPosition> range, final ExtendedFilter filter)
     {
         // Start with the most-restrictive indexed clause, then apply remaining clauses
         // to each row matching that clause.
@@ -51,7 +51,8 @@
                                                                              lastSeenKey,
                                                                              endKey,
                                                                              false,
-                                                                             rowsPerQuery);
+                                                                             rowsPerQuery,
+                                                                             filter.timestamp);
                         ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
                         logger.trace("fetched {}", indexRow);
                         if (indexRow == null)
@@ -84,7 +85,7 @@
                     {
                         Column column = indexColumns.next();
                         lastSeenKey = column.name();
-                        if (column.isMarkedForDelete())
+                        if (column.isMarkedForDelete(filter.timestamp))
                         {
                             logger.trace("skipping {}", column.name());
                             continue;
@@ -103,7 +104,7 @@
                         }
 
                         logger.trace("Returning index hit for {}", dk);
-                        ColumnFamily data = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, filter.initialFilter()));
+                        ColumnFamily data = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, filter.initialFilter(), filter.timestamp));
                         // While the column family we'll get in the end should contains the primary clause column, the initialFilter may not have found it and can thus be null
                         if (data == null)
                             data = TreeMapBackedSortedColumns.factory.create(baseCfs.metadata);
@@ -113,12 +114,12 @@
                         IDiskAtomFilter extraFilter = filter.getExtraFilter(data);
                         if (extraFilter != null)
                         {
-                            ColumnFamily cf = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, extraFilter));
+                            ColumnFamily cf = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, extraFilter, filter.timestamp));
                             if (cf != null)
                                 data.addAll(cf, HeapAllocator.instance);
                         }
 
-                        if (((KeysIndex)index).isIndexEntryStale(indexKey.key, data))
+                        if (((KeysIndex)index).isIndexEntryStale(indexKey.key, data, filter.timestamp))
                         {
                             // delete the index entry w/ its own timestamp
                             Column dummyColumn = new Column(primary.column_name, indexKey.key, column.timestamp());

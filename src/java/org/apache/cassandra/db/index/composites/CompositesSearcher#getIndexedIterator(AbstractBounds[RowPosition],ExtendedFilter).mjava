@@ -1,4 +1,4 @@
-    public ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final AbstractBounds<RowPosition> range, final ExtendedFilter filter)
+    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final AbstractBounds<RowPosition> range, final ExtendedFilter filter)
     {
         // Start with the most-restrictive indexed clause, then apply remaining clauses
         // to each row matching that clause.
@@ -9,8 +9,7 @@
         final DecoratedKey indexKey = index.getIndexKeyFor(primary.value);
 
         if (logger.isDebugEnabled())
-            logger.debug("Most-selective indexed predicate is {}",
-                         ((AbstractSimplePerColumnSecondaryIndex) index).expressionString(primary));
+            logger.debug("Most-selective indexed predicate is {}", index.expressionString(primary));
 
         /*
          * XXX: If the range requested is a token range, we'll have to start at the beginning (and stop at the end) of
@@ -84,14 +83,15 @@
 
                         if (logger.isTraceEnabled())
                             logger.trace("Scanning index {} starting with {}",
-                                         ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), indexComparator.getString(startPrefix));
+                                         index.expressionString(primary), indexComparator.getString(startPrefix));
 
                         QueryFilter indexFilter = QueryFilter.getSliceFilter(indexKey,
                                                                              index.getIndexCfs().name,
                                                                              lastSeenPrefix,
                                                                              endPrefix,
                                                                              false,
-                                                                             rowsPerQuery);
+                                                                             rowsPerQuery,
+                                                                             filter.timestamp);
                         ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
                         if (indexRow == null || indexRow.getColumnCount() == 0)
                             return makeReturn(currentKey, data);
@@ -114,7 +114,7 @@
                     {
                         Column column = indexColumns.poll();
                         lastSeenPrefix = column.name();
-                        if (column.isMarkedForDelete())
+                        if (column.isMarkedForDelete(filter.timestamp))
                         {
                             logger.trace("skipping {}", column.name());
                             continue;
@@ -171,8 +171,8 @@
                                                                            false,
                                                                            Integer.MAX_VALUE,
                                                                            baseCfs.metadata.clusteringKeyColumns().size());
-                        ColumnFamily newData = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, dataFilter));
-                        if (index.isStale(entry, newData))
+                        ColumnFamily newData = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, dataFilter, filter.timestamp));
+                        if (index.isStale(entry, newData, filter.timestamp))
                         {
                             index.delete(entry);
                             continue;

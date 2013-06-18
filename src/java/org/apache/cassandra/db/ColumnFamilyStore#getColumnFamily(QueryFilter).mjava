@@ -5,6 +5,49 @@
      */
     public ColumnFamily getColumnFamily(QueryFilter filter)
     {
-        return getColumnFamily(filter, gcBefore());
+        assert name.equals(filter.getColumnFamilyName()) : filter.getColumnFamilyName();
+
+        ColumnFamily result = null;
+
+        long start = System.nanoTime();
+        try
+        {
+            int gcBefore = gcBefore(filter.timestamp);
+            if (isRowCacheEnabled())
+            {
+                UUID cfId = Schema.instance.getId(table.getName(), name);
+                if (cfId == null)
+                {
+                    logger.trace("no id found for {}.{}", table.getName(), name);
+                    return null;
+                }
+
+                ColumnFamily cached = getThroughCache(cfId, filter);
+                if (cached == null)
+                {
+                    logger.trace("cached row is empty");
+                    return null;
+                }
+
+                result = filterColumnFamily(cached, filter);
+            }
+            else
+            {
+                ColumnFamily cf = getTopLevelColumns(filter, gcBefore);
+
+                if (cf == null)
+                    return null;
+
+                result = removeDeletedCF(cf, gcBefore);
+            }
+
+            removeDroppedColumns(result);
+        }
+        finally
+        {
+            metric.readLatency.addNano(System.nanoTime() - start);
+        }
+
+        return result;
     }
 
