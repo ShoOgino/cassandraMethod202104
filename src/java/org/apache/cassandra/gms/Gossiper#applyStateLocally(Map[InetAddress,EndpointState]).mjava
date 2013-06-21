@@ -30,6 +30,7 @@
                     if (logger.isTraceEnabled())
                         logger.trace("Updating heartbeat state generation to " + remoteGeneration + " from " + localGeneration + " for " + ep);
                     // major state change will handle the update by inserting the remote state directly
+                    copyNewerApplicationStates(remoteState, localEpStatePtr);
                     handleMajorStateChange(ep, remoteState);
                 }
                 else if ( remoteGeneration == localGeneration ) // generation has not changed, apply new states
@@ -39,11 +40,18 @@
                     int remoteMaxVersion = getMaxEndpointStateVersion(remoteState);
                     if ( remoteMaxVersion > localMaxVersion )
                     {
-                        // apply states, but do not notify since there is no major change
-                        applyNewStates(ep, localEpStatePtr, remoteState);
+                        if (logger.isTraceEnabled())
+                        {
+                            logger.trace("Updating heartbeat state version to " + remoteState.getHeartBeatState().getHeartBeatVersion() +
+                                    " from " + localEpStatePtr.getHeartBeatState().getHeartBeatVersion() + " for " + ep);
+                        }
+                        localEpStatePtr.setHeartBeatState(remoteState.getHeartBeatState());
+                        Map<ApplicationState, VersionedValue> merged = copyNewerApplicationStates(localEpStatePtr, remoteState);
+                        for (Entry<ApplicationState, VersionedValue> appState : merged.entrySet())
+                            doNotifications(ep, appState.getKey(), appState.getValue());
                     }
                     else if (logger.isTraceEnabled())
-                            logger.trace("Ignoring remote version " + remoteMaxVersion + " <= " + localMaxVersion + " for " + ep);
+                        logger.trace("Ignoring remote version " + remoteMaxVersion + " <= " + localMaxVersion + " for " + ep);
                     if (!localEpStatePtr.isAlive() && !isDeadState(localEpStatePtr)) // unless of course, it was dead
                         markAlive(ep, localEpStatePtr);
                 }
