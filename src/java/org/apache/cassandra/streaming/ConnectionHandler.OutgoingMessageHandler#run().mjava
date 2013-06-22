@@ -1,27 +1,33 @@
         public void run()
         {
-            while (!terminated())
+            StreamMessage next;
+            while (!isClosed())
             {
                 try
                 {
-                    StreamMessage next = messageQueue.poll(1, TimeUnit.SECONDS);
-                    if (next != null)
+                    if ((next = messageQueue.poll(1, TimeUnit.SECONDS)) != null)
                     {
-                        logger.debug("Sending " + next);
-                        StreamMessage.serialize(next, out, protocolVersion, session);
+                        logger.debug("Sending {}", next);
+                        sendMessage(next);
                         if (next.type == StreamMessage.Type.SESSION_FAILED)
-                            terminate();
+                            close();
                     }
                 }
-                catch (SocketException e)
+                catch (InterruptedException e)
                 {
-                    session.onError(e);
-                    terminate();
+                    throw new AssertionError(e);
                 }
-                catch (InterruptedException | IOException e)
-                {
-                    session.onError(e);
-                }
+            }
+
+            try
+            {
+                // Sends the last messages on the queue
+                while ((next = messageQueue.poll()) != null)
+                    sendMessage(next);
+            }
+            finally
+            {
+                signalCloseDone();
             }
         }
 

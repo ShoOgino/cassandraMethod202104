@@ -2,18 +2,22 @@
      * Connect to peer and start exchanging message.
      * When connect attempt fails, this retries for maximum of MAX_CONNECT_ATTEMPTS times.
      *
+     * @param peer the peer to connect to.
+     * @return the created socket.
+     *
      * @throws IOException when connection failed.
      */
-    public void connect() throws IOException
+    private static Socket connect(InetAddress peer) throws IOException
     {
         int attempts = 0;
         while (true)
         {
             try
             {
-                socket = MessagingService.instance().getConnectionPool(session.peer).newSocket();
+                logger.info("Connecting to {} for streaming", peer);
+                Socket socket = MessagingService.instance().getConnectionPool(peer).newSocket();
                 socket.setSoTimeout(DatabaseDescriptor.getStreamingSocketTimeout());
-                break;
+                return socket;
             }
             catch (IOException e)
             {
@@ -21,7 +25,7 @@
                     throw e;
 
                 long waitms = DatabaseDescriptor.getRpcTimeout() * (long)Math.pow(2, attempts);
-                logger.warn("Failed attempt " + attempts + " to connect to " + session.peer + ". Retrying in " + waitms + " ms. (" + e + ")");
+                logger.warn("Failed attempt " + attempts + " to connect to " + peer + ". Retrying in " + waitms + " ms. (" + e + ")");
                 try
                 {
                     Thread.sleep(waitms);
@@ -32,21 +36,5 @@
                 }
             }
         }
-        // send stream init message
-        SocketChannel channel = socket.getChannel();
-        WritableByteChannel out = channel;
-        // socket channel is null when encrypted(SSL)
-        if (channel == null)
-        {
-            out = Channels.newChannel(socket.getOutputStream());
-        }
-        logger.debug("Sending stream init...");
-        StreamInitMessage message = new StreamInitMessage(session.planId(), session.description());
-        out.write(message.createMessage(false, protocolVersion));
-
-        connected = true;
-
-        start();
-        session.onConnect();
     }
 
