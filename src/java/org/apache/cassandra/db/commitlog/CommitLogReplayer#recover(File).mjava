@@ -46,7 +46,7 @@
                     }
 
                     // RowMutation must be at LEAST 10 bytes:
-                    // 3 each for a non-empty Table and Key (including the
+                    // 3 each for a non-empty Keyspace and Key (including the
                     // 2-byte length from writeUTF/writeWithShortLength) and 4 bytes for column count.
                     // This prevents CRC by being fooled by special-case garbage in the file; see CASSANDRA-2128
                     if (serializedSize < 10)
@@ -106,7 +106,7 @@
                 }
 
                 if (logger.isDebugEnabled())
-                    logger.debug(String.format("replaying mutation for %s.%s: %s", rm.getTable(), ByteBufferUtil.bytesToHex(rm.key()), "{" + StringUtils.join(rm.getColumnFamilies().iterator(), ", ")
+                    logger.debug(String.format("replaying mutation for %s.%s: %s", rm.getKeyspaceName(), ByteBufferUtil.bytesToHex(rm.key()), "{" + StringUtils.join(rm.getColumnFamilies().iterator(), ", ")
                             + "}"));
 
                 final long entryLocation = reader.getFilePointer();
@@ -115,12 +115,12 @@
                 {
                     public void runMayThrow() throws IOException
                     {
-                        if (Schema.instance.getKSMetaData(frm.getTable()) == null)
+                        if (Schema.instance.getKSMetaData(frm.getKeyspaceName()) == null)
                             return;
                         if (pointInTimeExceeded(frm))
                             return;
 
-                        final Table table = Table.open(frm.getTable());
+                        final Keyspace keyspace = Keyspace.open(frm.getKeyspaceName());
 
                         // Rebuild the row mutation, omitting column families that 
                         // a) have already been flushed,
@@ -139,7 +139,7 @@
                             if (segment > rp.segment || (segment == rp.segment && entryLocation > rp.position))
                             {
                                 if (newRm == null)
-                                    newRm = new RowMutation(frm.getTable(), frm.key());
+                                    newRm = new RowMutation(frm.getKeyspaceName(), frm.key());
                                 newRm.add(columnFamily);
                                 replayedCount.incrementAndGet();
                             }
@@ -147,8 +147,8 @@
                         if (newRm != null)
                         {
                             assert !newRm.isEmpty();
-                            Table.open(newRm.getTable()).apply(newRm, false);
-                            tablesRecovered.add(table);
+                            Keyspace.open(newRm.getKeyspaceName()).apply(newRm, false);
+                            keyspacesRecovered.add(keyspace);
                         }
                     }
                 };

@@ -29,7 +29,7 @@
      *  values) between the prepare and accept phases.  This gives us a slightly longer window for another
      *  coordinator to come along and trump our own promise with a newer one but is otherwise safe.
      *
-     * @param table the table for the CAS
+     * @param keyspaceName the keyspace for the CAS
      * @param cfName the column family for the CAS
      * @param key the row key for the row to CAS
      * @param prefix a column name prefix that selects the CQL3 row to check if {@code expected} is null. If {@code expected}
@@ -43,19 +43,19 @@
      * expected (since, if the CAS doesn't succeed, it means the current value do not match the one in expected). If
      * expected == null and the CAS is unsuccessfull, the first live column of the CF is returned.
      */
-    public static ColumnFamily cas(String table, String cfName, ByteBuffer key, ColumnNameBuilder prefix, ColumnFamily expected, ColumnFamily updates, ConsistencyLevel consistencyLevel)
+    public static ColumnFamily cas(String keyspaceName, String cfName, ByteBuffer key, ColumnNameBuilder prefix, ColumnFamily expected, ColumnFamily updates, ConsistencyLevel consistencyLevel)
     throws UnavailableException, IsBootstrappingException, ReadTimeoutException, WriteTimeoutException, InvalidRequestException
     {
-        consistencyLevel.validateForCas(table);
+        consistencyLevel.validateForCas(keyspaceName);
 
-        CFMetaData metadata = Schema.instance.getCFMetaData(table, cfName);
+        CFMetaData metadata = Schema.instance.getCFMetaData(keyspaceName, cfName);
 
         long start = System.nanoTime();
         long timeout = TimeUnit.MILLISECONDS.toNanos(DatabaseDescriptor.getCasContentionTimeout());
         while (System.nanoTime() - start < timeout)
         {
             // for simplicity, we'll do a single liveness check at the start of each attempt
-            Pair<List<InetAddress>, Integer> p = getPaxosParticipants(table, key);
+            Pair<List<InetAddress>, Integer> p = getPaxosParticipants(keyspaceName, key);
             List<InetAddress> liveEndpoints = p.left;
             int requiredParticipants = p.right;
 
@@ -72,11 +72,11 @@
                 SliceQueryFilter filter = prefix == null
                                         ? new SliceQueryFilter(ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, 1)
                                         : new SliceQueryFilter(prefix.build(), prefix.buildAsEndOfRange(), false, 1, prefix.componentCount());
-                readCommand = new SliceFromReadCommand(table, key, cfName, timestamp, filter);
+                readCommand = new SliceFromReadCommand(keyspaceName, key, cfName, timestamp, filter);
             }
             else
             {
-                readCommand = new SliceByNamesReadCommand(table, key, cfName, timestamp, new NamesQueryFilter(ImmutableSortedSet.copyOf(expected.getColumnNames())));
+                readCommand = new SliceByNamesReadCommand(keyspaceName, key, cfName, timestamp, new NamesQueryFilter(ImmutableSortedSet.copyOf(expected.getColumnNames())));
             }
             List<Row> rows = read(Arrays.asList(readCommand), ConsistencyLevel.QUORUM);
             ColumnFamily current = rows.get(0).cf;

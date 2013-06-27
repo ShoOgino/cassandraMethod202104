@@ -4,21 +4,21 @@
         joined = true;
 
         // Seed the host ID-to-endpoint map with our own ID.
-        getTokenMetadata().updateHostId(SystemTable.getLocalHostId(), FBUtilities.getBroadcastAddress());
+        getTokenMetadata().updateHostId(SystemKeyspace.getLocalHostId(), FBUtilities.getBroadcastAddress());
 
         // have to start the gossip service before we can see any info on other nodes.  this is necessary
         // for bootstrap to get the load info it needs.
         // (we won't be part of the storage ring though until we add a counterId to our state, below.)
         Map<ApplicationState, VersionedValue> appStates = new HashMap<ApplicationState, VersionedValue>();
         appStates.put(ApplicationState.NET_VERSION, valueFactory.networkVersion());
-        appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(SystemTable.getLocalHostId()));
+        appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(SystemKeyspace.getLocalHostId()));
         appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getRpcAddress()));
         if (0 != DatabaseDescriptor.getReplaceTokens().size())
             appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
         appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
         Gossiper.instance.register(this);
         Gossiper.instance.register(migrationManager);
-        Gossiper.instance.start(SystemTable.incrementAndGetGeneration(), appStates); // needed for node-ring gathering.
+        Gossiper.instance.start(SystemKeyspace.incrementAndGetGeneration(), appStates); // needed for node-ring gathering.
         // gossip snitch infos (local DC and rack)
         gossipSnitchInfo();
         // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
@@ -44,17 +44,17 @@
         Collection<Token> tokens;
         logger.debug("Bootstrap variables: {} {} {} {}",
                      DatabaseDescriptor.isAutoBootstrap(),
-                     SystemTable.bootstrapInProgress(),
-                     SystemTable.bootstrapComplete(),
+                     SystemKeyspace.bootstrapInProgress(),
+                     SystemKeyspace.bootstrapComplete(),
                      DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
         if (DatabaseDescriptor.isAutoBootstrap()
-            && !SystemTable.bootstrapComplete()
+            && !SystemKeyspace.bootstrapComplete()
             && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
         {
-            if (SystemTable.bootstrapInProgress())
+            if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
             else
-                SystemTable.setBootstrapState(SystemTable.BootstrapState.IN_PROGRESS);
+                SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
             setMode(Mode.JOINING, "waiting for ring information", true);
             // first sleep the delay to make sure we see all our peers
             for (int i = 0; i < delay; i += 1000)
@@ -119,7 +119,7 @@
         }
         else
         {
-            tokens = SystemTable.getSavedTokens();
+            tokens = SystemKeyspace.getSavedTokens();
             if (tokens.isEmpty())
             {
                 Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
@@ -192,7 +192,7 @@
         if (!isSurveyMode)
         {
             // start participating in the ring.
-            SystemTable.setBootstrapState(SystemTable.BootstrapState.COMPLETED);
+            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
             setTokens(tokens);
             // remove the existing info about the replaced node.
             if (!current.isEmpty())

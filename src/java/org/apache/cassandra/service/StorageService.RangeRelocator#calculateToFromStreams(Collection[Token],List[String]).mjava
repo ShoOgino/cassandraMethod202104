@@ -1,4 +1,4 @@
-        private void calculateToFromStreams(Collection<Token> newTokens, List<String> tables)
+        private void calculateToFromStreams(Collection<Token> newTokens, List<String> keyspaceNames)
         {
             InetAddress localAddress = FBUtilities.getBroadcastAddress();
             IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
@@ -6,12 +6,12 @@
             // clone to avoid concurrent modification in calculateNaturalEndpoints
             TokenMetadata tokenMetaClone = tokenMetadata.cloneOnlyTokenMap();
 
-            for (String keyspace : tables)
+            for (String keyspace : keyspaceNames)
             {
                 for (Token newToken : newTokens)
                 {
                     // replication strategy of the current keyspace (aka table)
-                    AbstractReplicationStrategy strategy = Table.open(keyspace).getReplicationStrategy();
+                    AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
 
                     // getting collection of the currently used ranges by this keyspace
                     Collection<Range<Token>> currentRanges = getRangesForEndpoint(keyspace, localAddress);
@@ -23,14 +23,14 @@
                     Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
 
                     // calculated parts of the ranges to request/stream from/to nodes in the ring
-                    Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerTable = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
+                    Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
 
                     /**
                      * In this loop we are going through all ranges "to fetch" and determining
                      * nodes in the ring responsible for data we are interested in
                      */
                     Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
-                    for (Range<Token> toFetch : rangesPerTable.right)
+                    for (Range<Token> toFetch : rangesPerKeyspace.right)
                     {
                         for (Range<Token> range : rangeAddresses.keySet())
                         {
@@ -46,7 +46,7 @@
                     // calculating endpoints to stream current ranges to if needed
                     // in some situations node will handle current ranges as part of the new ranges
                     Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
-                    for (Range<Token> toStream : rangesPerTable.left)
+                    for (Range<Token> toStream : rangesPerKeyspace.left)
                     {
                         Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
                         Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
@@ -65,7 +65,7 @@
                         streamPlan.requestRanges(address, keyspace, workMap.get(address));
 
                     if (logger.isDebugEnabled())
-                        logger.debug("Table {}: work map {}.", keyspace, workMap);
+                        logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
                 }
             }
         }

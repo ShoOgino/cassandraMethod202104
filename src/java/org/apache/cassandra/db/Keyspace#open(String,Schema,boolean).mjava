@@ -1,0 +1,26 @@
+    private static Keyspace open(String keyspaceName, Schema schema, boolean loadSSTables)
+    {
+        Keyspace keyspaceInstance = schema.getKeyspaceInstance(keyspaceName);
+
+        if (keyspaceInstance == null)
+        {
+            // instantiate the Keyspace.  we could use putIfAbsent but it's important to making sure it is only done once
+            // per keyspace, so we synchronize and re-check before doing it.
+            synchronized (Keyspace.class)
+            {
+                keyspaceInstance = schema.getKeyspaceInstance(keyspaceName);
+                if (keyspaceInstance == null)
+                {
+                    // open and store the keyspace
+                    keyspaceInstance = new Keyspace(keyspaceName, loadSSTables);
+                    schema.storeKeyspaceInstance(keyspaceInstance);
+
+                    // keyspace has to be constructed and in the cache before cacheRow can be called
+                    for (ColumnFamilyStore cfs : keyspaceInstance.getColumnFamilyStores())
+                        cfs.initRowCache();
+                }
+            }
+        }
+        return keyspaceInstance;
+    }
+
