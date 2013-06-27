@@ -3,11 +3,10 @@
         if (logger.isDebugEnabled())
             logger.debug("attempting to connect to " + poolReference.endPoint());
 
-        targetVersion = MessagingService.instance().getVersion(poolReference.endPoint());
-
         long start = System.currentTimeMillis();
         while (System.currentTimeMillis() < start + DatabaseDescriptor.getRpcTimeout())
         {
+            targetVersion = MessagingService.instance().getVersion(poolReference.endPoint());
             try
             {
                 socket = poolReference.newSocket();
@@ -40,7 +39,16 @@
                     out.flush();
 
                     DataInputStream in = new DataInputStream(socket.getInputStream());
-                    int maxTargetVersion = in.readInt();
+                    int maxTargetVersion = handshakeVersion(in);
+                    if (maxTargetVersion == NO_VERSION) 
+                    {
+                        // no version is returned, so disconnect an try again: we will either get
+                        // a different target version (targetVersion < MessagingService.VERSION_12)
+                        // or if the same version the handshake will finally succeed
+                        logger.debug("Target max version is {}; no version information yet, will retry", maxTargetVersion);
+                        disconnect();
+                        continue;
+                    }
                     if (targetVersion > maxTargetVersion)
                     {
                         logger.debug("Target max version is {}; will reconnect with that version", maxTargetVersion);
