@@ -73,7 +73,7 @@
                     }
                     else
                     {
-                        Tracing.trace("Enqueuing digest request to {}", dataPoint);
+                        Tracing.trace("Enqueuing digest request to {}", digestPoint);
                         // (We lazy-construct the digest Message object since it may not be necessary if we
                         // are doing a local digest read, or no digest reads at all.)
                         if (message == null)
@@ -101,8 +101,21 @@
                 }
                 catch (ReadTimeoutException ex)
                 {
-                    if (logger.isDebugEnabled())
-                        logger.debug("Read timeout: {}", ex.toString());
+                    int blockFor = consistency_level.blockFor(Table.open(command.getKeyspace()));
+                    int responseCount = handler.getReceivedCount();
+                    String gotData = responseCount > 0 ?
+                                     gotData = handler.resolver.isDataPresent() ? " (including data)" : " (only digests)" :
+                                     "";
+
+                    if (Tracing.isTracing())
+                    {
+                        Tracing.trace("Timed out; received {} of {} responses{}",
+                                      new Object[]{ responseCount, blockFor, gotData });
+                    }
+                    else if (logger.isDebugEnabled())
+                    {
+                        logger.debug("Read timeout; received {} of {} responses{}", responseCount, blockFor, gotData);
+                    }
                     throw ex;
                 }
                 catch (DigestMismatchException ex)
@@ -162,6 +175,7 @@
                     }
                     catch (TimeoutException e)
                     {
+                        Tracing.trace("Timed out on digest mismatch retries");
                         int blockFor = consistency_level.blockFor(Table.open(command.getKeyspace()));
                         throw new ReadTimeoutException(consistency_level, blockFor, blockFor, true);
                     }
