@@ -52,6 +52,26 @@
                     }
                     if (logger.isDebugEnabled())
                         logger.debug("Read: {} ms.", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - exec.handler.start));
+
+                }
+                catch (ReadTimeoutException ex)
+                {
+                    int blockFor = consistency_level.blockFor(Keyspace.open(exec.command.getKeyspace()));
+                    int responseCount = exec.handler.getReceivedCount();
+                    String gotData = responseCount > 0
+                                   ? exec.resolver.isDataPresent() ? " (including data)" : " (only digests)"
+                                   : "";
+
+                    if (Tracing.isTracing())
+                    {
+                        Tracing.trace("Timed out; received {} of {} responses{}",
+                                      new Object[]{ responseCount, blockFor, gotData });
+                    }
+                    else if (logger.isDebugEnabled())
+                    {
+                        logger.debug("Read timeout; received {} of {} responses{}", responseCount, blockFor, gotData);
+                    }
+                    throw ex;
                 }
                 catch (DigestMismatchException ex)
                 {
@@ -110,6 +130,7 @@
                     }
                     catch (TimeoutException e)
                     {
+                        Tracing.trace("Timed out on digest mismatch retries");
                         int blockFor = consistency_level.blockFor(Keyspace.open(command.getKeyspace()));
                         throw new ReadTimeoutException(consistency_level, blockFor, blockFor, true);
                     }
