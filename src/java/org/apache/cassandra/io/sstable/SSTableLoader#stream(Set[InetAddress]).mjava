@@ -1,15 +1,18 @@
     public StreamResultFuture stream(Set<InetAddress> toIgnore)
     {
         client.init(keyspace);
+        outputHandler.output("Established connection to initial hosts");
 
         StreamPlan plan = new StreamPlan("Bulk Load");
-        Collection<SSTableReader> sstables = openSSTables();
+
+        Map<InetAddress, Collection<Range<Token>>> endpointToRanges = client.getEndpointToRangesMap();
+        openSSTables(endpointToRanges);
         if (sstables.isEmpty())
         {
             // return empty result
             return plan.execute();
         }
-        Map<InetAddress, Collection<Range<Token>>> endpointToRanges = client.getEndpointToRangesMap();
+
         outputHandler.output(String.format("Streaming relevant part of %sto %s", names(sstables), endpointToRanges.keySet()));
 
         for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : endpointToRanges.entrySet())
@@ -17,10 +20,14 @@
             InetAddress remote = entry.getKey();
             if (toIgnore.contains(remote))
                 continue;
-            Collection<Range<Token>> ranges = entry.getValue();
+
+            Collection<StreamSession.SSTableStreamingSections> endpointDetails = streamingDetails.get(remote);
+
             // transferSSTables assumes references have been acquired
-            SSTableReader.acquireReferences(sstables);
-            plan.transferFiles(remote, ranges, sstables);
+            for (StreamSession.SSTableStreamingSections details : endpointDetails)
+                details.sstable.acquireReference();
+
+            plan.transferFiles(remote, streamingDetails.get(remote));
         }
         StreamResultFuture bulkResult = plan.execute();
         bulkResult.addEventListener(this);

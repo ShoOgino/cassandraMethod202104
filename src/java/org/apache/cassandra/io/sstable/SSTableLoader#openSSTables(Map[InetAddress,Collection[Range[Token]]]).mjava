@@ -1,6 +1,6 @@
-    protected Collection<SSTableReader> openSSTables()
+    protected Collection<SSTableReader> openSSTables(final Map<InetAddress, Collection<Range<Token>>> ranges)
     {
-        final List<SSTableReader> sstables = new LinkedList<SSTableReader>();
+        outputHandler.output("Opening sstables and calculating sections to stream");
 
         directory.list(new FilenameFilter()
         {
@@ -29,6 +29,8 @@
                 Set<Component> components = new HashSet<Component>();
                 components.add(Component.DATA);
                 components.add(Component.PRIMARY_INDEX);
+                if (new File(desc.filenameFor(Component.SUMMARY)).exists())
+                    components.add(Component.SUMMARY);
                 if (new File(desc.filenameFor(Component.COMPRESSION_INFO)).exists())
                     components.add(Component.COMPRESSION_INFO);
                 if (new File(desc.filenameFor(Component.STATS)).exists())
@@ -36,7 +38,28 @@
 
                 try
                 {
-                    sstables.add(SSTableReader.open(desc, components, metadata, client.getPartitioner()));
+                    // To conserve heap space, open SSTableReaders without bloom filters and discard
+                    // the index summary after calculating the file sections to stream and the estimated
+                    // number of keys for each endpoint. See CASSANDRA-5555 for details.
+                    SSTableReader sstable = SSTableReader.openForBatch(desc, components, metadata, client.getPartitioner());
+                    sstables.add(sstable);
+
+                    // calculate the sstable sections to stream as well as the estimated number of
+                    // keys per host
+                    for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : ranges.entrySet())
+                    {
+                        InetAddress endpoint = entry.getKey();
+                        Collection<Range<Token>> tokenRanges = entry.getValue();
+
+                        List<Pair<Long, Long>> sstableSections = sstable.getPositionsForRanges(tokenRanges);
+                        long estimatedKeys = sstable.estimatedKeysForRanges(tokenRanges);
+
+                        StreamSession.SSTableStreamingSections details = new StreamSession.SSTableStreamingSections(sstable, sstableSections, estimatedKeys);
+                        streamingDetails.put(endpoint, details);
+                    }
+
+                    // to conserve heap space when bulk loading
+                    sstable.releaseSummary();
                 }
                 catch (IOException e)
                 {
