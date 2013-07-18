@@ -1,0 +1,72 @@
+        private void calculateToFromStreams(Collection<Token> newTokens, List<String> keyspaceNames)
+        {
+            InetAddress localAddress = FBUtilities.getBroadcastAddress();
+            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+            TokenMetadata tokenMetaCloneAllSettled = tokenMetadata.cloneAfterAllSettled();
+            // clone to avoid concurrent modification in calculateNaturalEndpoints
+            TokenMetadata tokenMetaClone = tokenMetadata.cloneOnlyTokenMap();
+
+            for (String keyspace : keyspaceNames)
+            {
+                for (Token newToken : newTokens)
+                {
+                    // replication strategy of the current keyspace (aka table)
+                    AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
+
+                    // getting collection of the currently used ranges by this keyspace
+                    Collection<Range<Token>> currentRanges = getRangesForEndpoint(keyspace, localAddress);
+                    // collection of ranges which this node will serve after move to the new token
+                    Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetadata, newToken, localAddress);
+
+                    // ring ranges and endpoints associated with them
+                    // this used to determine what nodes should we ping about range data
+                    Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
+
+                    // calculated parts of the ranges to request/stream from/to nodes in the ring
+                    Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
+
+                    /**
+                     * In this loop we are going through all ranges "to fetch" and determining
+                     * nodes in the ring responsible for data we are interested in
+                     */
+                    Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
+                    for (Range<Token> toFetch : rangesPerKeyspace.right)
+                    {
+                        for (Range<Token> range : rangeAddresses.keySet())
+                        {
+                            if (range.contains(toFetch))
+                            {
+                                List<InetAddress> endpoints = snitch.getSortedListByProximity(localAddress, rangeAddresses.get(range));
+                                // storing range and preferred endpoint set
+                                rangesToFetchWithPreferredEndpoints.putAll(toFetch, endpoints);
+                            }
+                        }
+                    }
+
+                    // calculating endpoints to stream current ranges to if needed
+                    // in some situations node will handle current ranges as part of the new ranges
+                    Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
+                    for (Range<Token> toStream : rangesPerKeyspace.left)
+                    {
+                        Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
+                        Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
+                        logger.debug("Range:" + toStream + "Current endpoints: " + currentEndpoints + " New endpoints: " + newEndpoints);
+                        for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
+                            endpointRanges.put(address, toStream);
+                    }
+
+                    // stream ranges
+                    for (InetAddress address : endpointRanges.keySet())
+                        streamPlan.transferRanges(address, keyspace, endpointRanges.get(address));
+
+                    // stream requests
+                    Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints);
+                    for (InetAddress address : workMap.keySet())
+                        streamPlan.requestRanges(address, keyspace, workMap.get(address));
+
+                    if (logger.isDebugEnabled())
+                        logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
+                }
+            }
+        }
+
