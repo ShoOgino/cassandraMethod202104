@@ -1,9 +1,9 @@
-    private static ByteBuffer buildBound(Bound bound,
-                                         Collection<CFDefinition.Name> names,
-                                         Restriction[] restrictions,
-                                         boolean isReversed,
-                                         ColumnNameBuilder builder,
-                                         List<ByteBuffer> variables) throws InvalidRequestException
+    private static List<ByteBuffer> buildBound(Bound bound,
+                                               Collection<CFDefinition.Name> names,
+                                               Restriction[] restrictions,
+                                               boolean isReversed,
+                                               ColumnNameBuilder builder,
+                                               List<ByteBuffer> variables) throws InvalidRequestException
     {
         // The end-of-component of composite doesn't depend on whether the
         // component type is reversed or not (i.e. the ReversedType is applied
@@ -22,15 +22,30 @@
                 // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
                 // For composites, if there was preceding component and we're computing the end, we must change the last component
                 // End-Of-Component, otherwise we would be selecting only one record.
-                if (builder.componentCount() > 0 && eocBound == Bound.END)
-                    return builder.buildAsEndOfRange();
-                else
-                    return builder.build();
+                return Collections.singletonList(builder.componentCount() > 0 && eocBound == Bound.END
+                                                 ? builder.buildAsEndOfRange()
+                                                 : builder.build());
             }
 
             if (r.isEquality())
             {
-                assert r.eqValues.size() == 1;
+                if (r.eqValues.size() > 1)
+                {
+                    // IN query, we only support it on the clustering column
+                    assert name.position == names.size() - 1;
+                    List<ByteBuffer> l = new ArrayList<ByteBuffer>(r.eqValues.size());
+                    for (Term t : r.eqValues)
+                    {
+                        ByteBuffer val = t.bindAndGet(variables);
+                        if (val == null)
+                            throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
+                        ColumnNameBuilder copy = builder.copy().add(val);
+                        // See below for why this
+                        l.add((bound == Bound.END && copy.remainingCount() > 0) ? copy.buildAsEndOfRange() : copy.build());
+                    }
+                    return l;
+                }
+
                 ByteBuffer val = r.eqValues.get(0).bindAndGet(variables);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
@@ -43,7 +58,7 @@
                 ByteBuffer val = t.bindAndGet(variables);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
-                return builder.add(val, r.getRelation(eocBound, b)).build();
+                return Collections.singletonList(builder.add(val, r.getRelation(eocBound, b)).build());
             }
         }
         // Means no relation at all or everything was an equal
@@ -52,6 +67,6 @@
         // with 2ndary index is done, and with the the partition provided with an EQ, we'll end up here, and in that
         // case using the eoc would be bad, since for the random partitioner we have no guarantee that
         // builder.buildAsEndOfRange() will sort after builder.build() (see #5240).
-        return (bound == Bound.END && builder.remainingCount() > 0) ? builder.buildAsEndOfRange() : builder.build();
+        return Collections.singletonList((bound == Bound.END && builder.remainingCount() > 0) ? builder.buildAsEndOfRange() : builder.build());
     }
 
