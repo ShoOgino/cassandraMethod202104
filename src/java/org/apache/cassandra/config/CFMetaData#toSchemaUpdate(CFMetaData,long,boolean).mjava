@@ -11,7 +11,7 @@
     {
         RowMutation rm = new RowMutation(Keyspace.SYSTEM_KS, SystemKeyspace.getSchemaKSKey(ksName));
 
-        newState.toSchemaNoColumns(rm, modificationTimestamp);
+        newState.toSchemaNoColumnsNoTriggers(rm, modificationTimestamp);
 
         MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(column_metadata, newState.column_metadata);
 
@@ -37,11 +37,15 @@
             cd.toSchema(rm, cfName, getColumnDefinitionComparator(cd), modificationTimestamp);
         }
 
-        MapDifference<String, Map<String, String>> tdiffrence = Maps.difference(triggers, newState.triggers);
-        for (Entry<String, Map<String, String>> tentry : tdiffrence.entriesOnlyOnLeft().entrySet())
-            TriggerOptions.deleteColumns(rm, cfName, tentry, modificationTimestamp);
-        for (Entry<String, Map<String, String>> tentry : tdiffrence.entriesOnlyOnRight().entrySet())
-            TriggerOptions.addColumns(rm, cfName, tentry, modificationTimestamp);
+        MapDifference<String, TriggerDefinition> triggerDiff = Maps.difference(triggers, newState.triggers);
+
+        // dropped triggers
+        for (TriggerDefinition td : triggerDiff.entriesOnlyOnLeft().values())
+            td.deleteFromSchema(rm, cfName, modificationTimestamp);
+
+        // newly created triggers
+        for (TriggerDefinition td : triggerDiff.entriesOnlyOnRight().values())
+            td.toSchema(rm, cfName, modificationTimestamp);
 
         return rm;
     }
