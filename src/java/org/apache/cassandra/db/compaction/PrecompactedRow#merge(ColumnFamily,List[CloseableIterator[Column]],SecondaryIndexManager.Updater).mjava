@@ -11,9 +11,15 @@
             public void reduce(Column column)
             {
                 container.addColumn(column);
-                if (indexer != SecondaryIndexManager.nullUpdater
-                    && !column.isMarkedForDelete(System.currentTimeMillis())
-                    && !container.getColumn(column.name()).equals(column))
+
+                // skip the index-update checks if there is no indexing needed since they are a bit expensive
+                if (indexer == SecondaryIndexManager.nullUpdater)
+                    return;
+
+                // notify the index that the column has been overwritten if the value being reduced has been
+                // superceded by another directly, or indirectly by a range tombstone
+                if ((!column.isMarkedForDelete(System.currentTimeMillis()) && !container.getColumn(column.name()).equals(column))
+                    || returnCF.deletionInfo().isDeleted(column.name(), CompactionManager.NO_GC))
                 {
                     indexer.remove(column);
                 }
