@@ -1,0 +1,55 @@
+    /**
+     * Calculate the min, mean, max and standard deviation of the items in the builder, and
+     * generate an EstimatedHistogram with upto <code>maxdev</code> stdev size ranges  either
+     * side of the mean, until min/max are hit; if either min/max are not reached a further range is
+     * inserted at the relevant ends. e.g., with a <code>maxdevs</code> of 3, there may be <i>up to</i> 8 ranges
+     * (between 9 boundaries, the middle being the mean); the middle 6 will have the same size (stdev)
+     * with the outermost two stretching out to min and max.
+     *
+     * @param maxdevs
+     * @return
+     */
+    public EstimatedHistogram buildWithStdevRangesAroundMean(int maxdevs)
+    {
+        if (maxdevs < 0)
+            throw new IllegalArgumentException("maxdevs must be greater than or equal to zero");
+
+        final int count = this.count;
+        final long[] values = this.values;
+
+        if (count == 0)
+            return new EstimatedHistogram(new long[] { }, new long[] { 0 });
+
+        long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
+        double sum = 0, sumsq = 0;
+        for (int i = 0 ; i < count ; i++)
+        {
+            final long value = values[i];
+            sum += value;
+            sumsq += value * value;
+            if (value < min)
+                min = value;
+            if (value > max)
+                max = value;
+        }
+
+        final long mean = (long)Math.round(sum / count);
+        final double stdev =
+                Math.sqrt((sumsq / count) - (mean * (double) mean));
+
+        // build the ranges either side of the mean
+        final long[] lowhalf = buildRange(mean, min, true, stdev, maxdevs);
+        final long[] highhalf = buildRange(mean, max, false, stdev, maxdevs);
+
+        // combine the ranges
+        final long[] ranges = new long[lowhalf.length + highhalf.length + 1];
+        System.arraycopy(lowhalf, 0, ranges, 0, lowhalf.length);
+        ranges[lowhalf.length] = mean;
+        System.arraycopy(highhalf, 0, ranges, lowhalf.length + 1, highhalf.length);
+
+        final EstimatedHistogram hist = new EstimatedHistogram(ranges, new long[ranges.length + 1]);
+        for (int i = 0 ; i < count ; i++)
+            hist.add(values[i]);
+        return hist;
+    }
+
