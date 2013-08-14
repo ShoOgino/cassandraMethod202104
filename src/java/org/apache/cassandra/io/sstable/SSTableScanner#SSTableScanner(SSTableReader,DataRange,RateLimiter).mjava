@@ -1,6 +1,6 @@
     /**
      * @param sstable SSTable to scan; must not be null
-     * @param filter range of data to fetch; must not be null
+     * @param dataRange a single range to scan; must not be null
      * @param limiter background i/o RateLimiter; may be null
      */
     SSTableScanner(SSTableReader sstable, DataRange dataRange, RateLimiter limiter)
@@ -11,10 +11,19 @@
         this.ifile = sstable.openIndexReader();
         this.sstable = sstable;
         this.dataRange = dataRange;
-        this.stopAt = computeStopAt();
 
-        // If we wrap (stopKey == minimum don't count), we'll seek to start *after* having read from beginning till stopAt
-        if (dataRange.stopKey().isMinimum(sstable.partitioner) || !dataRange.isWrapAround())
-            seekToStart();
+        List<AbstractBounds<RowPosition>> boundsList = new ArrayList<>(2);
+        if (dataRange.isWrapAround() && !dataRange.stopKey().isMinimum(sstable.partitioner))
+        {
+            // split the wrapping range into two parts: 1) the part that starts at the beginning of the sstable, and
+            // 2) the part that comes before the wrap-around
+            boundsList.add(new Bounds<>(sstable.partitioner.getMinimumToken().minKeyBound(), dataRange.stopKey()));
+            boundsList.add(new Bounds<>(dataRange.startKey(), sstable.partitioner.getMinimumToken().maxKeyBound()));
+        }
+        else
+        {
+            boundsList.add(new Bounds<>(dataRange.startKey(), dataRange.stopKey()));
+        }
+        this.rangeIterator = boundsList.iterator();
     }
 

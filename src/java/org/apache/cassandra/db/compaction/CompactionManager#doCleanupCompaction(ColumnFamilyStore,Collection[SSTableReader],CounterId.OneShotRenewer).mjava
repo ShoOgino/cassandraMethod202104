@@ -4,7 +4,7 @@
      *
      * @throws IOException
      */
-    private void doCleanupCompaction(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, CounterId.OneShotRenewer renewer) throws IOException
+    private void doCleanupCompaction(final ColumnFamilyStore cfs, Collection<SSTableReader> sstables, CounterId.OneShotRenewer renewer) throws IOException
     {
         assert !cfs.isIndex();
         Keyspace keyspace = cfs.keyspace;
@@ -15,8 +15,8 @@
             return;
         }
 
-        boolean isCommutative = cfs.metadata.getDefaultValidator().isCommutative();
         boolean hasIndexes = !cfs.indexManager.getIndexes().isEmpty();
+        CleanupStrategy cleanupStrategy = CleanupStrategy.get(cfs, ranges, renewer);
 
         for (SSTableReader sstable : sstables)
         {
@@ -43,10 +43,9 @@
             if (compactionFileLocation == null)
                 throw new IOException("disk full");
 
-            SSTableScanner scanner = sstable.getScanner(getRateLimiter());
-            List<Column> indexedColumnsInRow = null;
+            ICompactionScanner scanner = cleanupStrategy.getScanner(sstable, getRateLimiter());
+            CleanupInfo ci = new CleanupInfo(sstable, (SSTableScanner)scanner);
 
-            CleanupInfo ci = new CleanupInfo(sstable, scanner);
             metrics.beginCompaction(ci);
             SSTableWriter writer = createWriter(cfs,
                                                 compactionFileLocation,
@@ -60,50 +59,13 @@
                     if (ci.isStopRequested())
                         throw new CompactionInterruptedException(ci.getCompactionInfo());
                     SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
-                    if (Range.isInRanges(row.getKey().token, ranges))
-                    {
-                        AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
-                        if (writer.append(compactedRow) != null)
-                            totalkeysWritten++;
-                    }
-                    else
-                    {
-                        cfs.invalidateCachedRow(row.getKey());
 
-                        if (hasIndexes || isCommutative)
-                        {
-                            if (indexedColumnsInRow != null)
-                                indexedColumnsInRow.clear();
-
-                            while (row.hasNext())
-                            {
-                                OnDiskAtom column = row.next();
-                                if (column instanceof CounterColumn)
-                                    renewer.maybeRenew((CounterColumn) column);
-                                if (column instanceof Column && cfs.indexManager.indexes((Column) column))
-                                {
-                                    if (indexedColumnsInRow == null)
-                                        indexedColumnsInRow = new ArrayList<Column>();
-
-                                    indexedColumnsInRow.add((Column) column);
-                                }
-                            }
-
-                            if (indexedColumnsInRow != null && !indexedColumnsInRow.isEmpty())
-                            {
-                                // acquire memtable lock here because secondary index deletion may cause a race. See CASSANDRA-3712
-                                Keyspace.switchLock.readLock().lock();
-                                try
-                                {
-                                    cfs.indexManager.deleteFromIndexes(row.getKey(), indexedColumnsInRow);
-                                }
-                                finally
-                                {
-                                    Keyspace.switchLock.readLock().unlock();
-                                }
-                            }
-                        }
-                    }
+                    row = cleanupStrategy.cleanup(row);
+                    if (row == null)
+                        continue;
+                    AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
+                    if (writer.append(compactedRow) != null)
+                        totalkeysWritten++;
                 }
                 if (totalkeysWritten > 0)
                     newSstable = writer.closeAndOpenReader(sstable.maxDataAge);

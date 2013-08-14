@@ -2,55 +2,59 @@
         {
             try
             {
-                if (ifile.isEOF() && nextKey == null)
-                    return endOfData();
-
-                if (currentKey == null)
+                if (nextEntry == null)
                 {
-                    currentKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
-                    currentEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                    do
+                    {
+                        // we're starting the first range or we just passed the end of the previous range
+                        if (!rangeIterator.hasNext())
+                            return endOfData();
+
+                        currentRange = rangeIterator.next();
+                        seekToCurrentRangeStart();
+
+                        if (ifile.isEOF())
+                            return endOfData();
+
+                        currentKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
+                        currentEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                    } while (!currentRange.contains(currentKey));
                 }
                 else
                 {
+                    // we're in the middle of a range
                     currentKey = nextKey;
                     currentEntry = nextEntry;
                 }
 
-                if (currentEntry.position >= stopAt)
-                {
-                    // We're in the wrapping, if we have just read the first part (we haven't seeked yet),
-                    // seek to the beginning of the 2nd part and continue;
-                    if (!hasSeeked)
-                    {
-                        seekToStart(); // This sets hasSeeked
-                        stopAt = dfile.length();
-                        // reset currentKey and nextKey since we have seeked
-                        currentKey = null;
-                        nextKey = null;
-                        return computeNext();
-                    }
-                    return endOfData();
-                }
-
+                long readEnd;
                 if (ifile.isEOF())
                 {
-                    nextKey = null;
                     nextEntry = null;
+                    nextKey = null;
+                    readEnd = dfile.length();
                 }
                 else
                 {
+                    // we need the position of the start of the next key, regardless of whether it falls in the current range
                     nextKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
                     nextEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                    readEnd = nextEntry.position;
+
+                    if (!currentRange.contains(nextKey))
+                    {
+                        nextKey = null;
+                        nextEntry = null;
+                    }
                 }
 
-                assert !dfile.isEOF();
-                if (dataRange.selectsFullRowFor(currentKey.key))
+                if (dataRange == null || dataRange.selectsFullRowFor(currentKey.key))
                 {
                     dfile.seek(currentEntry.position);
                     ByteBufferUtil.readWithShortLength(dfile); // key
                     if (sstable.descriptor.version.hasRowSizeAndColumnCount)
                         dfile.readLong();
-                    long dataSize = (nextEntry == null ? dfile.length() : nextEntry.position) - dfile.getFilePointer();
+                    long dataSize = readEnd - dfile.getFilePointer();
                     return new SSTableIdentityIterator(sstable, dfile, currentKey, dataSize);
                 }
 
@@ -61,6 +65,7 @@
                         return dataRange.columnFilter(currentKey.key).getSSTableColumnIterator(sstable, dfile, currentKey, currentEntry);
                     }
                 });
+
             }
             catch (IOException e)
             {

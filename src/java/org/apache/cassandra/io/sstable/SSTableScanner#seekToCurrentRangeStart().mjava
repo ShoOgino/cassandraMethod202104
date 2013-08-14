@@ -1,11 +1,9 @@
-    private void seekToStart()
+    private void seekToCurrentRangeStart()
     {
-        hasSeeked = true;
-
-        if (dataRange.startKey().isMinimum(sstable.partitioner))
+        if (currentRange.left.isMinimum(sstable.partitioner))
             return;
 
-        long indexPosition = sstable.getIndexScanPosition(dataRange.startKey());
+        long indexPosition = sstable.getIndexScanPosition(currentRange.left);
         // -1 means the key is before everything in the sstable. So just start from the beginning.
         if (indexPosition == -1)
             return;
@@ -13,12 +11,15 @@
         ifile.seek(indexPosition);
         try
         {
+
             while (!ifile.isEOF())
             {
                 indexPosition = ifile.getFilePointer();
                 DecoratedKey indexDecoratedKey = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(ifile));
-                int comparison = indexDecoratedKey.compareTo(dataRange.startKey());
-                if (comparison >= 0)
+                int comparison = indexDecoratedKey.compareTo(currentRange.left);
+                // because our range start may be inclusive or exclusive, we need to also contains()
+                // instead of just checking (comparison >= 0)
+                if (comparison > 0 || currentRange.contains(indexDecoratedKey))
                 {
                     // Found, just read the dataPosition and seek into index and data files
                     long dataPosition = ifile.readLong();
@@ -37,6 +38,5 @@
             sstable.markSuspect();
             throw new CorruptSSTableException(e, sstable.getFilename());
         }
-
     }
 
