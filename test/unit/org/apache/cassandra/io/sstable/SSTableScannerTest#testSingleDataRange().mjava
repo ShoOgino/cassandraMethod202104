@@ -1,0 +1,45 @@
+    @Test
+    public void testSingleDataRange()
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore(TABLE);
+        store.clearUnsafe();
+
+        // disable compaction while flushing
+        store.disableAutoCompaction();
+
+        for (int i = 2; i < 10; i++)
+            insertRowWithKey(i);
+        store.forceBlockingFlush();
+
+        assertEquals(1, store.getSSTables().size());
+        SSTableReader sstable = store.getSSTables().iterator().next();
+
+        // full range scan
+        SSTableScanner scanner = sstable.getScanner();
+        for (int i = 2; i < 10; i++)
+            assertEquals(toKey(i), new String(scanner.next().getKey().key.array()));
+
+        // a simple read of a chunk in the middle
+        assertScanMatches(sstable, 3, 6, 3, 6);
+
+        // start of range edge conditions
+        assertScanMatches(sstable, 1, 9, 2, 9);
+        assertScanMatches(sstable, 2, 9, 2, 9);
+        assertScanMatches(sstable, 3, 9, 3, 9);
+
+        // end of range edge conditions
+        assertScanMatches(sstable, 1, 8, 2, 8);
+        assertScanMatches(sstable, 1, 9, 2, 9);
+        assertScanMatches(sstable, 1, 9, 2, 9);
+
+        // single item ranges
+        assertScanMatches(sstable, 2, 2, 2, 2);
+        assertScanMatches(sstable, 5, 5, 5, 5);
+        assertScanMatches(sstable, 9, 9, 9, 9);
+
+        // empty ranges
+        assertScanEmpty(sstable, 0, 1);
+        assertScanEmpty(sstable, 10, 11);
+    }
+
