@@ -1,11 +1,22 @@
     // Used by ModificationStatement for CAS operations
-    void processColumnFamily(ByteBuffer key, ColumnFamily cf, List<ByteBuffer> variables, int limit, long now, Selection.ResultSetBuilder result) throws InvalidRequestException
+    void processColumnFamily(ByteBuffer key, ColumnFamily cf, List<ByteBuffer> variables, long now, Selection.ResultSetBuilder result)
+    throws InvalidRequestException
     {
         ByteBuffer[] keyComponents = cfDef.hasCompositeKey
                                    ? ((CompositeType)cfDef.cfm.getKeyValidator()).split(key)
                                    : new ByteBuffer[]{ key };
 
-        if (cfDef.isCompact)
+        if (parameters.isDistinct)
+        {
+            if (!cf.hasOnlyTombstones(now))
+            {
+                result.newRow();
+                // selection.getColumnsList() will contain only the partition key components - all of them.
+                for (CFDefinition.Name name : selection.getColumnsList())
+                    result.add(keyComponents[name.position]);
+            }
+        }
+        else if (cfDef.isCompact)
         {
             // One cqlRow per column
             for (Column c : columnsInOrder(cf, variables))
