@@ -30,12 +30,6 @@
         {
             long positionToSeek = basePosition + indexInfo.offset;
 
-            // SortedSet.subSet() is end-exclusive, so we special-case that
-            // if it's one of the columns we're looking for
-            ByteBuffer maximalColumnName = columnNames.contains(indexInfo.lastName)
-                                         ? indexInfo.lastName
-                                         : columnNames.subSet(indexInfo.firstName, indexInfo.lastName).last();
-
             // With new promoted indexes, our first seek in the data file will happen at that point.
             if (file == null)
                 file = createFileDataInput(positionToSeek);
@@ -43,20 +37,13 @@
             OnDiskAtom.Serializer atomSerializer = cf.getOnDiskSerializer();
             file.seek(positionToSeek);
             FileMark mark = file.mark();
-
             // TODO only completely deserialize columns we are interested in
             while (file.bytesPastMark(mark) < indexInfo.width)
             {
                 OnDiskAtom column = atomSerializer.deserializeFromSSTable(file, sstable.descriptor.version);
-                ByteBuffer columnName = column.name();
-
                 // we check vs the original Set, not the filtered List, for efficiency
-                if (!(column instanceof IColumn) || columnNames.contains(columnName))
+                if (!(column instanceof IColumn) || columnNames.contains(column.name()))
                     result.add(column);
-
-                // Already consumed all of this block that's going to have columns that apply to this query.
-                if (comparator.compare(columnName, maximalColumnName) >= 0)
-                    break;
             }
         }
     }
