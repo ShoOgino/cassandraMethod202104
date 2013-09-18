@@ -5,12 +5,14 @@
         for (CFDefinition.Name name : cfDef.keys.values())
         {
             Restriction r = keyRestrictions[name.position];
-            assert r != null;
+            assert r != null && !r.isSlice();
+
+            List<ByteBuffer> values = r.values(variables);
+
             if (builder.remainingCount() == 1)
             {
-                for (Term t : r.eqValues)
+                for (ByteBuffer val : values)
                 {
-                    ByteBuffer val = t.bindAndGet(variables);
                     if (val == null)
                         throw new InvalidRequestException(String.format("Invalid null value for partition key part %s", name));
                     keys.add(builder.copy().add(val).build());
@@ -18,9 +20,10 @@
             }
             else
             {
-                if (r.isINRestriction())
+                // Note: for backward compatibility reasons, we let INs with 1 value slide
+                if (values.size() != 1)
                     throw new InvalidRequestException("IN is only supported on the last column of the partition key");
-                ByteBuffer val = r.eqValues.get(0).bindAndGet(variables);
+                ByteBuffer val = values.get(0);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null value for partition key part %s", name));
                 builder.add(val);
