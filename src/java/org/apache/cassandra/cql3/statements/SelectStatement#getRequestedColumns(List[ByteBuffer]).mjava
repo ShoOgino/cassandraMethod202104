@@ -7,21 +7,29 @@
         for (Restriction r : columnRestrictions)
         {
             ColumnIdentifier id = idIter.next();
-            assert r != null && r.isEquality();
-            if (r.isINRestriction())
+            assert r != null && !r.isSlice();
+
+            List<ByteBuffer> values = r.values(variables);
+            if (values.size() == 1)
+            {
+                ByteBuffer val = values.get(0);
+                if (val == null)
+                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", id));
+                builder.add(val);
+            }
+            else
             {
                 // We have a IN, which we only support for the last column.
                 // If compact, just add all values and we're done. Otherwise,
                 // for each value of the IN, creates all the columns corresponding to the selection.
-                if (r.eqValues.isEmpty())
+                if (values.isEmpty())
                     return null;
                 SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfDef.cfm.comparator);
-                Iterator<Term> iter = r.eqValues.iterator();
+                Iterator<ByteBuffer> iter = values.iterator();
                 while (iter.hasNext())
                 {
-                    Term v = iter.next();
+                    ByteBuffer val = iter.next();
                     ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
-                    ByteBuffer val = v.bindAndGet(variables);
                     if (val == null)
                         throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", id));
                     b.add(val);
@@ -31,13 +39,6 @@
                         columns.addAll(addSelectedColumns(b));
                 }
                 return columns;
-            }
-            else
-            {
-                ByteBuffer val = r.eqValues.get(0).bindAndGet(variables);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", id));
-                builder.add(val);
             }
         }
 

@@ -17,7 +17,7 @@
             // But if the actual comparator itself is reversed, we must inversed the bounds too.
             Bound b = isReversed == isReversedType(name) ? bound : Bound.reverse(bound);
             Restriction r = restrictions[name.position];
-            if (r == null || (!r.isEquality() && r.bound(b) == null))
+            if (r == null || (r.isSlice() && !((Restriction.Slice)r).hasBound(b)))
             {
                 // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
                 // For composites, if there was preceding component and we're computing the end, we must change the last component
@@ -27,18 +27,27 @@
                                                  : builder.build());
             }
 
-            if (r.isEquality())
+            if (r.isSlice())
             {
-                if (r.isINRestriction())
+                Restriction.Slice slice = (Restriction.Slice)r;
+                assert slice.hasBound(b);
+                ByteBuffer val = slice.bound(b, variables);
+                if (val == null)
+                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
+                return Collections.singletonList(builder.add(val, slice.getRelation(eocBound, b)).build());
+            }
+            else
+            {
+                List<ByteBuffer> values = r.values(variables);
+                if (values.size() != 1)
                 {
                     // IN query, we only support it on the clustering column
                     assert name.position == names.size() - 1;
                     // The IN query might not have listed the values in comparator order, so we need to re-sort
                     // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
                     TreeSet<ByteBuffer> s = new TreeSet<ByteBuffer>(isReversed ? cfDef.cfm.comparator.reverseComparator : cfDef.cfm.comparator);
-                    for (Term t : r.eqValues)
+                    for (ByteBuffer val : values)
                     {
-                        ByteBuffer val = t.bindAndGet(variables);
                         if (val == null)
                             throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
                         ColumnNameBuilder copy = builder.copy().add(val);
@@ -48,19 +57,10 @@
                     return new ArrayList<ByteBuffer>(s);
                 }
 
-                ByteBuffer val = r.eqValues.get(0).bindAndGet(variables);
+                ByteBuffer val = values.get(0);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
                 builder.add(val);
-            }
-            else
-            {
-                Term t = r.bound(b);
-                assert t != null;
-                ByteBuffer val = t.bindAndGet(variables);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
-                return Collections.singletonList(builder.add(val, r.getRelation(eocBound, b)).build());
             }
         }
         // Means no relation at all or everything was an equal
