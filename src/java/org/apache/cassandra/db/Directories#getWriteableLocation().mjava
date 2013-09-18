@@ -1,0 +1,35 @@
+    /**
+     * @return a non-blacklisted directory with the most free space and least current tasks.
+     *
+     * @throws IOError if all directories are blacklisted.
+     */
+    public DataDirectory getWriteableLocation()
+    {
+        List<DataDirectory> candidates = new ArrayList<DataDirectory>();
+
+        // pick directories with enough space and so that resulting sstable dirs aren't blacklisted for writes.
+        for (DataDirectory dataDir : dataFileLocations)
+        {
+            if (BlacklistedDirectories.isUnwritable(getLocationForDisk(dataDir)))
+                continue;
+            candidates.add(dataDir);
+        }
+
+        if (candidates.isEmpty())
+            throw new IOError(new IOException("All configured data directories have been blacklisted as unwritable for erroring out"));
+
+        // sort directories by free space, in _descending_ order.
+        Collections.sort(candidates);
+
+        // sort directories by load, in _ascending_ order.
+        Collections.sort(candidates, new Comparator<DataDirectory>()
+        {
+            public int compare(DataDirectory a, DataDirectory b)
+            {
+                return a.currentTasks.get() - b.currentTasks.get();
+            }
+        });
+
+        return candidates.get(0);
+    }
+
