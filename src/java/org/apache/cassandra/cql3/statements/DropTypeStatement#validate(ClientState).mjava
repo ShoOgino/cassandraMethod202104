@@ -1,0 +1,32 @@
+    public void validate(ClientState state) throws RequestValidationException
+    {
+        UserType old = Schema.instance.userTypes.getType(name);
+        if (old == null)
+        {
+            if (ifExists)
+                return;
+            else
+                throw new InvalidRequestException(String.format("No user type named %s exists.", name));
+        }
+
+        // We don't want to drop a type unless it's not used anymore (mainly because
+        // if someone drops a type and recreates one with the same name but different
+        // definition with the previous name still in use, things can get messy).
+        // We have two places to check: 1) other user type that can nest the one
+        // we drop and 2) existing tables referencing the type (maybe in a nested
+        // way).
+        for (UserType ut : Schema.instance.userTypes.getAllTypes().values())
+        {
+            if (ut.name.equals(name.bytes))
+                continue;
+            if (isUsedBy(ut))
+                throw new InvalidRequestException(String.format("Cannot drop user type %s as it is still used by user type %s", name, ut.asCQL3Type()));
+        }
+
+        for (KSMetaData ksm : Schema.instance.getKeyspaceDefinitions())
+            for (CFMetaData cfm : ksm.cfMetaData().values())
+                for (ColumnDefinition def : cfm.allColumns())
+                    if (isUsedBy(def.type))
+                        throw new InvalidRequestException(String.format("Cannot drop user type %s as it is still used by table %s.%s", name, cfm.ksName, cfm.cfName));
+    }
+

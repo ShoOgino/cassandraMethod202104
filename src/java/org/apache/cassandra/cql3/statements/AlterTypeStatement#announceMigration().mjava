@@ -1,0 +1,43 @@
+    public void announceMigration() throws InvalidRequestException, ConfigurationException
+    {
+        UserType toUpdate = Schema.instance.userTypes.getType(name);
+        // Shouldn't happen, unless we race with a drop
+        if (toUpdate == null)
+            throw new InvalidRequestException(String.format("No user type named %s exists.", name));
+
+        UserType updated = makeUpdatedType(toUpdate);
+
+        // Now, we need to announce the type update to basically change it for new tables using this type,
+        // but we also need to find all existing user types and CF using it and change them.
+        MigrationManager.announceTypeUpdate(updated);
+
+        for (KSMetaData ksm : Schema.instance.getKeyspaceDefinitions())
+        {
+            for (CFMetaData cfm : ksm.cfMetaData().values())
+            {
+                CFMetaData copy = cfm.clone();
+                boolean modified = false;
+                for (ColumnDefinition def : copy.allColumns())
+                    modified |= updateDefinition(copy, def, toUpdate.name, updated);
+                if (modified)
+                    MigrationManager.announceColumnFamilyUpdate(copy, false);
+            }
+        }
+
+        // Other user types potentially using the updated type
+        for (UserType ut : Schema.instance.userTypes.getAllTypes().values())
+        {
+            // Re-updating the type we've just updated would be harmless but useless so we avoid it.
+            // Besides, we use the occasion to drop the old version of the type if it's a type rename
+            if (ut.name.equals(toUpdate.name))
+            {
+                if (!ut.name.equals(updated.name))
+                    MigrationManager.announceTypeDrop(ut);
+                continue;
+            }
+            AbstractType<?> upd = updateWith(ut, toUpdate.name, updated);
+            if (upd != null)
+                MigrationManager.announceTypeUpdate((UserType)upd);
+        }
+    }
+
