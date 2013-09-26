@@ -1,0 +1,64 @@
+    @Test
+    public void testScrubOutOfOrder() throws Exception
+    {
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        String columnFamily = "Standard3";
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(columnFamily);
+
+        /*
+         * Code used to generate an outOfOrder sstable. The test for out-of-order key in SSTableWriter must also be commented out.
+         * The test also assumes an ordered partitioner.
+         *
+        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(cfs.metadata);
+        cf.addColumn(new Column(ByteBufferUtil.bytes("someName"), ByteBufferUtil.bytes("someValue"), 0L));
+
+        SSTableWriter writer = new SSTableWriter(cfs.getTempSSTablePath(new File(System.getProperty("corrupt-sstable-root"))),
+                                                 cfs.metadata.getIndexInterval(),
+                                                 cfs.metadata,
+                                                 cfs.partitioner,
+                                                 SSTableMetadata.createCollector(BytesType.instance));
+        writer.append(Util.dk("a"), cf);
+        writer.append(Util.dk("b"), cf);
+        writer.append(Util.dk("z"), cf);
+        writer.append(Util.dk("c"), cf);
+        writer.append(Util.dk("y"), cf);
+        writer.append(Util.dk("d"), cf);
+        writer.closeAndOpenReader();
+        */
+
+
+        String root = System.getProperty("corrupt-sstable-root");
+        assert root != null;
+        File rootDir = new File(root);
+        assert rootDir.isDirectory();
+        Descriptor desc = new Descriptor(new Descriptor.Version("jb"), rootDir, KEYSPACE, columnFamily, 1, false);
+        CFMetaData metadata = Schema.instance.getCFMetaData(desc.ksname, desc.cfname);
+
+        try
+        {
+            SSTableReader.open(desc, metadata);
+            fail("SSTR validation should have caught the out-of-order rows");
+        }
+        catch (IllegalStateException ise) { /* this is expected */ }
+
+        // open without validation for scrubbing
+        Set<Component> components = new HashSet<>();
+        components.add(Component.COMPRESSION_INFO);
+        components.add(Component.DATA);
+        components.add(Component.PRIMARY_INDEX);
+        components.add(Component.FILTER);
+        components.add(Component.STATS);
+        components.add(Component.SUMMARY);
+        components.add(Component.TOC);
+        SSTableReader sstable = SSTableReader.openNoValidation(desc, components, metadata);
+
+        Scrubber scrubber = new Scrubber(cfs, sstable);
+        scrubber.scrub();
+
+        cfs.loadNewSSTables();
+        List<Row> rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
+        assert isRowOrdered(rows) : "Scrub failed: " + rows;
+        assert rows.size() == 6 : "Got " + rows.size();
+    }
+
