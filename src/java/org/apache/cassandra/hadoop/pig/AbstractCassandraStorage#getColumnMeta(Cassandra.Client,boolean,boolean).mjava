@@ -1,5 +1,5 @@
     /** get column meta data */
-    protected List<ColumnDef> getColumnMeta(Cassandra.Client client, boolean cassandraStorage)
+    protected List<ColumnDef> getColumnMeta(Cassandra.Client client, boolean cassandraStorage, boolean includeCompactValueColumn)
             throws InvalidRequestException,
             UnavailableException,
             TimedOutException,
@@ -24,9 +24,13 @@
 
         List<CqlRow> rows = result.rows;
         List<ColumnDef> columnDefs = new ArrayList<ColumnDef>();
-        if (!cassandraStorage && (rows == null || rows.isEmpty()))
+        if (rows == null || rows.isEmpty())
         {
-            // check classic thrift tables
+            // if CassandraStorage, just return the empty list
+            if (cassandraStorage)
+                return columnDefs;
+
+            // otherwise for CqlStorage, check metadata for classic thrift tables
             CFDefinition cfDefinition = getCfDefinition(keyspace, column_family, client);
             for (ColumnIdentifier column : cfDefinition.metadata.keySet())
             {
@@ -38,7 +42,9 @@
                 cDef.validation_class = type;
                 columnDefs.add(cDef);
             }
-            if (columnDefs.size() == 0)
+            // we may not need to include the value column for compact tables as we 
+            // could have already processed it as schema_columnfamilies.value_alias
+            if (columnDefs.size() == 0 && includeCompactValueColumn)
             {
                 String value = cfDefinition.value != null ? cfDefinition.value.toString() : null;
                 if ("value".equals(value))
@@ -51,8 +57,6 @@
             }
             return columnDefs;
         }
-        else if (rows == null || rows.isEmpty())
-            return columnDefs;
 
         Iterator<CqlRow> iterator = rows.iterator();
         while (iterator.hasNext())
