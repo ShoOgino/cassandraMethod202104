@@ -1,0 +1,25 @@
+        public void maybeTryAdditionalReplicas()
+        {
+            // no latency information, or we're overloaded
+            if (cfs.sampleLatency > TimeUnit.MILLISECONDS.toNanos(command.getTimeout()))
+                return;
+
+            if (!handler.await(cfs.sampleLatency, TimeUnit.NANOSECONDS))
+            {
+                // Could be waiting on the data, or on enough digests.
+                ReadCommand retryCommand = command;
+                if (resolver.getData() != null)
+                {
+                    retryCommand = command.copy();
+                    retryCommand.setDigestQuery(true);
+                }
+
+                InetAddress extraReplica = Iterables.getLast(targetReplicas);
+                logger.trace("speculating read retry on {}", extraReplica);
+                MessagingService.instance().sendRR(retryCommand.createMessage(), extraReplica, handler);
+                speculated = true;
+
+                cfs.metric.speculativeRetry.inc();
+            }
+        }
+
