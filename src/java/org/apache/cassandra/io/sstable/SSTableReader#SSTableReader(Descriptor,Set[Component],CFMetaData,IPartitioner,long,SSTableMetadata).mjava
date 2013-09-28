@@ -1,4 +1,4 @@
-    private SSTableReader(Descriptor desc,
+    private SSTableReader(final Descriptor desc,
                           Set<Component> components,
                           CFMetaData metadata,
                           IPartitioner partitioner,
@@ -9,6 +9,24 @@
         this.sstableMetadata = sstableMetadata;
         this.maxDataAge = maxDataAge;
 
-        this.deletingTask = new SSTableDeletingTask(this);
+        deletingTask = new SSTableDeletingTask(this);
+
+        // Don't track read rates for tables in the system keyspace
+        if (Keyspace.SYSTEM_KS.equals(desc.ksname))
+        {
+            readMeter = null;
+            return;
+        }
+
+        readMeter = SystemKeyspace.getSSTableReadMeter(desc.ksname, desc.cfname, desc.generation);
+        // sync the average read rate to system.sstable_activity every five minutes, starting one minute from now
+        syncExecutor.scheduleAtFixedRate(new Runnable()
+        {
+            public void run()
+            {
+                meterSyncThrottle.acquire();
+                SystemKeyspace.persistSSTableReadMeter(desc.ksname, desc.cfname, desc.generation, readMeter);
+            }
+        }, 1, 5, TimeUnit.MINUTES);
     }
 
