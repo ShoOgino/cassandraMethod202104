@@ -1,0 +1,40 @@
+    /**
+     * Estimate the number of result rows (either cql3 rows or storage rows, as called for by the command) per
+     * range in the ring based on our local data.  This assumes that ranges are uniformly distributed across the cluster
+     * and that the queried data is also uniformly distributed.
+     */
+    private static float estimateResultRowsPerRange(AbstractRangeCommand command, Keyspace keyspace)
+    {
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.columnFamily);
+        float resultRowsPerRange;
+        if (command.rowFilter != null && !command.rowFilter.isEmpty())
+        {
+            // secondary index query (cql3 or otherwise)
+            SecondaryIndexSearcher searcher = Iterables.getOnlyElement(cfs.indexManager.getIndexSearchersForQuery(command.rowFilter));
+            SecondaryIndex highestSelectivityIndex = searcher.highestSelectivityIndex(command.rowFilter);
+            // use our own mean column count as our estimate for how many matching rows each node will have
+            resultRowsPerRange = highestSelectivityIndex.getIndexCfs().getMeanColumns();
+        }
+        else if (!command.countCQL3Rows())
+        {
+            // non-cql3 query
+            resultRowsPerRange = cfs.estimateKeys();
+        }
+        else
+        {
+            if (cfs.metadata.getCfDef().isCompact)
+            {
+                // one storage row per result row, so use key estimate directly
+                resultRowsPerRange = cfs.estimateKeys();
+            }
+            else
+            {
+                float resultRowsPerStorageRow = cfs.getMeanColumns() / cfs.metadata.regularColumns().size();
+                resultRowsPerRange = resultRowsPerStorageRow * (cfs.estimateKeys());
+            }
+        }
+
+        // adjust resultRowsPerRange by the number of tokens this node has and the replication factor for this ks
+        return (resultRowsPerRange / DatabaseDescriptor.getNumTokens()) / keyspace.getReplicationStrategy().getReplicationFactor();
+    }
+
