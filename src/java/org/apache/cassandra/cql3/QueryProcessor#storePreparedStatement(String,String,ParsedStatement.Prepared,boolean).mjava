@@ -1,8 +1,16 @@
     private static ResultMessage.Prepared storePreparedStatement(String queryString, String keyspace, ParsedStatement.Prepared prepared, boolean forThrift)
+    throws InvalidRequestException
     {
         // Concatenate the current keyspace so we don't mix prepared statements between keyspace (#5352).
         // (if the keyspace is null, queryString has to have a fully-qualified keyspace so it's fine.
         String toHash = keyspace == null ? queryString : keyspace + queryString;
+        long statementSize = meter.measureDeep(prepared.statement);
+        // don't execute the statement if it's bigger than the allowed threshold
+        if (statementSize > MAX_CACHE_PREPARED_MEMORY)
+            throw new InvalidRequestException(String.format("Prepared statement of size %d bytes is larger than allowed maximum of %d bytes.",
+                                                            statementSize,
+                                                            MAX_CACHE_PREPARED_MEMORY));
+
         if (forThrift)
         {
             int statementId = toHash.hashCode();
@@ -15,10 +23,10 @@
         else
         {
             MD5Digest statementId = MD5Digest.compute(toHash);
+            preparedStatements.put(statementId, prepared.statement);
             logger.trace(String.format("Stored prepared statement %s with %d bind markers",
                                        statementId,
                                        prepared.statement.getBoundsTerms()));
-            preparedStatements.put(statementId, prepared.statement);
             return new ResultMessage.Prepared(statementId, prepared);
         }
     }
