@@ -4,7 +4,8 @@
      */
     public void unmarkCompacting(Collection<SSTableReader> unmark)
     {
-        if (!cfstore.isValid())
+        boolean isValid = cfstore.isValid();
+        if (!isValid)
         {
             // We don't know if the original compaction suceeded or failed, which makes it difficult to know
             // if the sstable reference has already been released.
@@ -21,5 +22,13 @@
             newView = currentView.unmarkCompacting(unmark);
         }
         while (!view.compareAndSet(currentView, newView));
+
+        if (!isValid)
+        {
+            // when the CFS is invalidated, it will call unreferenceSSTables().  However, unreferenceSSTables only deals
+            // with sstables that aren't currently being compacted.  If there are ongoing compactions that finish or are
+            // interrupted after the CFS is invalidated, those sstables need to be unreferenced as well, so we do that here.
+            unreferenceSSTables();
+        }
     }
 

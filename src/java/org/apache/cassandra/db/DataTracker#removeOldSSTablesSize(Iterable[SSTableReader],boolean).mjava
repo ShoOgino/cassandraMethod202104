@@ -1,4 +1,4 @@
-    private void removeOldSSTablesSize(Iterable<SSTableReader> oldSSTables)
+    private void removeOldSSTablesSize(Iterable<SSTableReader> oldSSTables, boolean tolerateCompacted)
     {
         for (SSTableReader sstable : oldSSTables)
         {
@@ -8,8 +8,13 @@
             long size = sstable.bytesOnDisk();
             StorageMetrics.load.dec(size);
             cfstore.metric.liveDiskSpaceUsed.dec(size);
+
+            // tolerateCompacted will be true when the CFS is no longer valid (dropped). If there were ongoing
+            // compactions when it was invalidated, sstables may already be marked compacted, so we should
+            // tolerate that (see CASSANDRA-5957)
             boolean firstToCompact = sstable.markCompacted();
-            assert firstToCompact : sstable + " was already marked compacted";
+            assert (tolerateCompacted || firstToCompact) : sstable + " was already marked compacted";
+
             sstable.releaseReference();
         }
     }
