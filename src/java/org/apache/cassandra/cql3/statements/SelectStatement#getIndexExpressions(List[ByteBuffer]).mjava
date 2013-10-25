@@ -1,25 +1,25 @@
     public List<IndexExpression> getIndexExpressions(List<ByteBuffer> variables) throws InvalidRequestException
     {
-        if (!usesSecondaryIndexing || restrictedNames.isEmpty())
+        if (!usesSecondaryIndexing || restrictedColumns.isEmpty())
             return Collections.emptyList();
 
         List<IndexExpression> expressions = new ArrayList<IndexExpression>();
-        for (CFDefinition.Name name : restrictedNames)
+        for (ColumnDefinition def : restrictedColumns)
         {
             Restriction restriction;
-            switch (name.kind)
+            switch (def.kind)
             {
-                case KEY_ALIAS:
-                    restriction = keyRestrictions[name.position];
+                case PARTITION_KEY:
+                    restriction = keyRestrictions[def.position()];
                     break;
-                case COLUMN_ALIAS:
-                    restriction = columnRestrictions[name.position];
+                case CLUSTERING_COLUMN:
+                    restriction = columnRestrictions[def.position()];
                     break;
-                case COLUMN_METADATA:
-                    restriction = metadataRestrictions.get(name);
+                case REGULAR:
+                    restriction = metadataRestrictions.get(def.name);
                     break;
                 default:
-                    // We don't allow restricting a VALUE_ALIAS for now in prepare.
+                    // We don't allow restricting a COMPACT_VALUE for now in prepare.
                     throw new AssertionError();
             }
 
@@ -32,10 +32,10 @@
                     {
                         ByteBuffer value = slice.bound(b, variables);
                         if (value == null)
-                            throw new InvalidRequestException(String.format("Unsupported null value for indexed column %s", name));
+                            throw new InvalidRequestException(String.format("Unsupported null value for indexed column %s", def.name));
                         if (value.remaining() > 0xFFFF)
                             throw new InvalidRequestException("Index expression values may not be larger than 64K");
-                        expressions.add(new IndexExpression(name.name.key, slice.getIndexOperator(b), value));
+                        expressions.add(new IndexExpression(def.name.bytes, slice.getIndexOperator(b), value));
                     }
                 }
             }
@@ -48,10 +48,10 @@
 
                 ByteBuffer value = values.get(0);
                 if (value == null)
-                    throw new InvalidRequestException(String.format("Unsupported null value for indexed column %s", name));
+                    throw new InvalidRequestException(String.format("Unsupported null value for indexed column %s", def.name));
                 if (value.remaining() > 0xFFFF)
                     throw new InvalidRequestException("Index expression values may not be larger than 64K");
-                expressions.add(new IndexExpression(name.name.key, IndexExpression.Operator.EQ, value));
+                expressions.add(new IndexExpression(def.name.bytes, IndexExpression.Operator.EQ, value));
             }
         }
         return expressions;

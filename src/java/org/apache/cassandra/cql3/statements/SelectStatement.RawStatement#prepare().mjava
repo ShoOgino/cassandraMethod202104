@@ -2,8 +2,6 @@
         {
             CFMetaData cfm = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
 
-            CFDefinition cfDef = cfm.getCfDef();
-
             VariableSpecifications names = getBoundsVariables();
 
             // Select clause
@@ -11,11 +9,11 @@
                 throw new InvalidRequestException("Only COUNT(*) and COUNT(1) operations are currently supported.");
 
             Selection selection = selectClause.isEmpty()
-                                ? Selection.wildcard(cfDef)
-                                : Selection.fromSelectors(cfDef, selectClause);
+                                ? Selection.wildcard(cfm)
+                                : Selection.fromSelectors(cfm, selectClause);
 
             if (parameters.isDistinct)
-                validateDistinctSelection(selection.getColumnsList(), cfDef.keys.values());
+                validateDistinctSelection(selection.getColumnsList(), cfm.partitionKeyColumns());
 
             Term prepLimit = null;
             if (limit != null)
@@ -24,7 +22,7 @@
                 prepLimit.collectMarkerSpecification(names);
             }
 
-            SelectStatement stmt = new SelectStatement(cfDef, names.size(), parameters, selection, prepLimit);
+            SelectStatement stmt = new SelectStatement(cfm, names.size(), parameters, selection, prepLimit);
 
             /*
              * WHERE clause. For a given entity, rules are:
@@ -38,8 +36,8 @@
             boolean hasQueriableClusteringColumnIndex = false;
             for (Relation rel : whereClause)
             {
-                CFDefinition.Name name = cfDef.get(rel.getEntity());
-                if (name == null)
+                ColumnDefinition def = cfm.getColumnDefinition(rel.getEntity());
+                if (def == null)
                 {
                     if (containsAlias(rel.getEntity()))
                         throw new InvalidRequestException(String.format("Aliases aren't allowed in where clause ('%s')", rel));
@@ -47,32 +45,31 @@
                         throw new InvalidRequestException(String.format("Undefined name %s in where clause ('%s')", rel.getEntity(), rel));
                 }
 
-                ColumnDefinition def = cfDef.cfm.getColumnDefinition(name.name.key);
-                stmt.restrictedNames.add(name);
+                stmt.restrictedColumns.add(def);
                 if (def.isIndexed() && rel.operator() == Relation.Type.EQ)
                 {
                     hasQueriableIndex = true;
-                    if (name.kind == CFDefinition.Name.Kind.COLUMN_ALIAS)
+                    if (def.kind == ColumnDefinition.Kind.CLUSTERING_COLUMN)
                         hasQueriableClusteringColumnIndex = true;
                 }
 
-                switch (name.kind)
+                switch (def.kind)
                 {
-                    case KEY_ALIAS:
-                        stmt.keyRestrictions[name.position] = updateRestriction(name, stmt.keyRestrictions[name.position], rel, names);
+                    case PARTITION_KEY:
+                        stmt.keyRestrictions[def.position()] = updateRestriction(def, stmt.keyRestrictions[def.position()], rel, names);
                         break;
-                    case COLUMN_ALIAS:
-                        stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel, names);
+                    case CLUSTERING_COLUMN:
+                        stmt.columnRestrictions[def.position()] = updateRestriction(def, stmt.columnRestrictions[def.position()], rel, names);
                         break;
-                    case VALUE_ALIAS:
-                        throw new InvalidRequestException(String.format("Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", name.name));
-                    case COLUMN_METADATA:
+                    case COMPACT_VALUE:
+                        throw new InvalidRequestException(String.format("Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", def.name));
+                    case REGULAR:
                         // We only all IN on the row key and last clustering key so far, never on non-PK columns, and this even if there's an index
-                        Restriction r = updateRestriction(name, stmt.metadataRestrictions.get(name), rel, names);
+                        Restriction r = updateRestriction(def, stmt.metadataRestrictions.get(def), rel, names);
                         if (r.isIN() && !((Restriction.IN)r).canHaveOnlyOneValue())
                             // Note: for backward compatibility reason, we conside a IN of 1 value the same as a EQ, so we let that slide.
-                            throw new InvalidRequestException(String.format("IN predicates on non-primary-key columns (%s) is not yet supported", name));
-                        stmt.metadataRestrictions.put(name, r);
+                            throw new InvalidRequestException(String.format("IN predicates on non-primary-key columns (%s) is not yet supported", def.name));
+                        stmt.metadataRestrictions.put(def.name, r);
                         break;
                 }
             }
@@ -88,12 +85,12 @@
             // If a component of the partition key is restricted by a relation, all preceding
             // components must have a EQ. Only the last partition key component can be in IN relation.
             boolean canRestrictFurtherComponents = true;
-            CFDefinition.Name previous = null;
+            ColumnDefinition previous = null;
             stmt.keyIsInRelation = false;
-            Iterator<CFDefinition.Name> iter = cfDef.keys.values().iterator();
+            Iterator<ColumnDefinition> iter = cfm.partitionKeyColumns().iterator();
             for (int i = 0; i < stmt.keyRestrictions.length; i++)
             {
-                CFDefinition.Name cname = iter.next();
+                ColumnDefinition cdef = iter.next();
                 Restriction restriction = stmt.keyRestrictions[i];
 
                 if (restriction == null)
@@ -110,7 +107,7 @@
                             stmt.isKeyRange = true;
                             break;
                         }
-                        throw new InvalidRequestException(String.format("Partition key part %s must be restricted since preceding part is", cname));
+                        throw new InvalidRequestException(String.format("Partition key part %s must be restricted since preceding part is", cdef.name));
                     }
 
                     stmt.isKeyRange = true;
@@ -123,7 +120,7 @@
                         stmt.usesSecondaryIndexing = true;
                         break;
                     }
-                    throw new InvalidRequestException(String.format("partition key part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cname, previous));
+                    throw new InvalidRequestException(String.format("partition key part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cdef.name, previous));
                 }
                 else if (restriction.isOnToken())
                 {
@@ -141,7 +138,7 @@
                     {
                         // We only support IN for the last name so far
                         if (i != stmt.keyRestrictions.length - 1)
-                            throw new InvalidRequestException(String.format("Partition KEY part %s cannot be restricted by IN relation (only the last part of the partition key can)", cname));
+                            throw new InvalidRequestException(String.format("Partition KEY part %s cannot be restricted by IN relation (only the last part of the partition key can)", cdef.name));
                         stmt.keyIsInRelation = true;
                     }
                 }
@@ -151,23 +148,23 @@
                     // Note: In theory we could allow it for 2ndary index queries with ALLOW FILTERING, but that would probably require some special casing
                     throw new InvalidRequestException("Only EQ and IN relation are supported on the partition key (unless you use the token() function)");
                 }
-                previous = cname;
+                previous = cdef;
             }
 
             // All (or none) of the partition key columns have been specified;
             // hence there is no need to turn these restrictions into index expressions.
             if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedNames.removeAll(cfDef.keys.values());
+                stmt.restrictedColumns.removeAll(cfm.partitionKeyColumns());
 
             // If a clustering key column is restricted by a non-EQ relation, all preceding
             // columns must have a EQ, and all following must have no restriction. Unless
             // the column is indexed that is.
             canRestrictFurtherComponents = true;
             previous = null;
-            iter = cfDef.columns.values().iterator();
+            iter = cfm.clusteringColumns().iterator();
             for (int i = 0; i < stmt.columnRestrictions.length; i++)
             {
-                CFDefinition.Name cname = iter.next();
+                ColumnDefinition cdef = iter.next();
                 Restriction restriction = stmt.columnRestrictions[i];
 
                 if (restriction == null)
@@ -181,7 +178,7 @@
                         stmt.usesSecondaryIndexing = true; // handle gaps and non-keyrange cases.
                         break;
                     }
-                    throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cname, previous));
+                    throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cdef.name, previous));
                 }
                 else if (restriction.isSlice())
                 {
@@ -189,7 +186,7 @@
                     Restriction.Slice slice = (Restriction.Slice)restriction;
                     // For non-composite slices, we don't support internally the difference between exclusive and
                     // inclusive bounds, so we deal with it manually.
-                    if (!cfDef.isComposite && (!slice.isInclusive(Bound.START) || !slice.isInclusive(Bound.END)))
+                    if (!cfm.hasCompositeComparator() && (!slice.isInclusive(Bound.START) || !slice.isInclusive(Bound.END)))
                         stmt.sliceRestriction = slice;
                 }
                 else if (restriction.isIN())
@@ -197,12 +194,12 @@
                     // We only support IN for the last name and for compact storage so far
                     // TODO: #3885 allows us to extend to non compact as well, but that remains to be done
                     if (i != stmt.columnRestrictions.length - 1)
-                        throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted by IN relation", cname));
+                        throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted by IN relation", cdef.name));
                     else if (stmt.selectACollection())
-                        throw new InvalidRequestException(String.format("Cannot restrict PRIMARY KEY part %s by IN relation as a collection is selected by the query", cname));
+                        throw new InvalidRequestException(String.format("Cannot restrict PRIMARY KEY part %s by IN relation as a collection is selected by the query", cdef.name));
                 }
 
-                previous = cname;
+                previous = cdef;
             }
 
             // Covers indexes on the first clustering column (among others).
@@ -210,7 +207,7 @@
                 stmt.usesSecondaryIndexing = true;
 
             if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedNames.removeAll(cfDef.columns.values());
+                stmt.restrictedColumns.removeAll(cfm.clusteringColumns());
 
             // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
             // there is restrictions not covered by the PK.
@@ -237,11 +234,11 @@
                 // queried automatically, and then removing it from the resultSet afterwards if needed)
                 if (stmt.keyIsInRelation)
                 {
-                    stmt.orderingIndexes = new HashMap<CFDefinition.Name, Integer>();
+                    stmt.orderingIndexes = new HashMap<ColumnDefinition, Integer>();
                     for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
                     {
-                        final CFDefinition.Name name = cfDef.get(column);
-                        if (name == null)
+                        final ColumnDefinition def = cfm.getColumnDefinition(column);
+                        if (def == null)
                         {
                             if (containsAlias(column))
                                 throw new InvalidRequestException(String.format("Aliases are not allowed in order by clause ('%s')", column));
@@ -251,13 +248,14 @@
 
                         if (selectClause.isEmpty()) // wildcard
                         {
-                            stmt.orderingIndexes.put(name, Iterables.indexOf(cfDef, new Predicate<CFDefinition.Name>()
-                                                                                    {
-                                                                                        public boolean apply(CFDefinition.Name n)
-                                                                                        {
-                                                                                            return name.equals(n);
-                                                                                        }
-                                                                                    }));
+                            stmt.orderingIndexes.put(def, Iterators.indexOf(cfm.allColumnsInSelectOrder(),
+                                                                            new Predicate<ColumnDefinition>()
+                                                                            {
+                                                                                public boolean apply(ColumnDefinition n)
+                                                                                {
+                                                                                    return def.equals(n);
+                                                                                }
+                                                                            }));
                         }
                         else
                         {
@@ -265,9 +263,9 @@
                             for (int i = 0; i < selectClause.size(); i++)
                             {
                                 RawSelector selector = selectClause.get(i);
-                                if (name.name.equals(selector.selectable))
+                                if (def.name.equals(selector.selectable))
                                 {
-                                    stmt.orderingIndexes.put(name, i);
+                                    stmt.orderingIndexes.put(def, i);
                                     hasColumn = true;
                                     break;
                                 }
@@ -279,15 +277,15 @@
                     }
                 }
 
-                Boolean[] reversedMap = new Boolean[cfDef.columns.size()];
+                Boolean[] reversedMap = new Boolean[cfm.clusteringColumns().size()];
                 int i = 0;
                 for (Map.Entry<ColumnIdentifier, Boolean> entry : stmt.parameters.orderings.entrySet())
                 {
                     ColumnIdentifier column = entry.getKey();
                     boolean reversed = entry.getValue();
 
-                    CFDefinition.Name name = cfDef.get(column);
-                    if (name == null)
+                    ColumnDefinition def = cfm.getColumnDefinition(column);
+                    if (def == null)
                     {
                         if (containsAlias(column))
                             throw new InvalidRequestException(String.format("Aliases are not allowed in order by clause ('%s')", column));
@@ -295,13 +293,13 @@
                             throw new InvalidRequestException(String.format("Order by on unknown column %s", column));
                     }
 
-                    if (name.kind != CFDefinition.Name.Kind.COLUMN_ALIAS)
+                    if (def.kind != ColumnDefinition.Kind.CLUSTERING_COLUMN)
                         throw new InvalidRequestException(String.format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got %s", column));
 
-                    if (i++ != name.position)
+                    if (i++ != def.position())
                         throw new InvalidRequestException(String.format("Order by currently only support the ordering of columns following their declared order in the PRIMARY KEY"));
 
-                    reversedMap[name.position] = (reversed != isReversedType(name));
+                    reversedMap[def.position()] = (reversed != isReversedType(def));
                 }
 
                 // Check that all boolean in reversedMap, if set, agrees
@@ -330,7 +328,7 @@
                 // We will potentially filter data if either:
                 //  - Have more than one IndexExpression
                 //  - Have no index expression and the column filter is not the identity
-                if (stmt.restrictedNames.size() > 1 || (stmt.restrictedNames.isEmpty() && !stmt.columnFilterIsIdentity()))
+                if (stmt.restrictedColumns.size() > 1 || (stmt.restrictedColumns.isEmpty() && !stmt.columnFilterIsIdentity()))
                     throw new InvalidRequestException("Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. "
                                                     + "If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING");
             }

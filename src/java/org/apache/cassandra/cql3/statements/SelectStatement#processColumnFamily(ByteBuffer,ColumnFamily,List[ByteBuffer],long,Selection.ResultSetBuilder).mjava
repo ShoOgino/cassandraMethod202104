@@ -2,8 +2,8 @@
     void processColumnFamily(ByteBuffer key, ColumnFamily cf, List<ByteBuffer> variables, long now, Selection.ResultSetBuilder result)
     throws InvalidRequestException
     {
-        ByteBuffer[] keyComponents = cfDef.hasCompositeKey
-                                   ? ((CompositeType)cfDef.cfm.getKeyValidator()).split(key)
+        ByteBuffer[] keyComponents = cfm.getKeyValidator() instanceof CompositeType
+                                   ? ((CompositeType)cfm.getKeyValidator()).split(key)
                                    : new ByteBuffer[]{ key };
 
         if (parameters.isDistinct)
@@ -12,11 +12,11 @@
             {
                 result.newRow();
                 // selection.getColumnsList() will contain only the partition key components - all of them.
-                for (CFDefinition.Name name : selection.getColumnsList())
-                    result.add(keyComponents[name.position]);
+                for (ColumnDefinition def : selection.getColumnsList())
+                    result.add(keyComponents[def.position()]);
             }
         }
-        else if (cfDef.isCompact)
+        else if (cfm.isDense())
         {
             // One cqlRow per column
             for (Column c : columnsInOrder(cf, variables))
@@ -25,9 +25,9 @@
                     continue;
 
                 ByteBuffer[] components = null;
-                if (cfDef.isComposite)
+                if (cfm.hasCompositeComparator())
                 {
-                    components = ((CompositeType)cfDef.cfm.comparator).split(c.name());
+                    components = ((CompositeType)cfm.comparator).split(c.name());
                 }
                 else if (sliceRestriction != null)
                 {
@@ -40,23 +40,23 @@
 
                 result.newRow();
                 // Respect selection order
-                for (CFDefinition.Name name : selection.getColumnsList())
+                for (ColumnDefinition def : selection.getColumnsList())
                 {
-                    switch (name.kind)
+                    switch (def.kind)
                     {
-                        case KEY_ALIAS:
-                            result.add(keyComponents[name.position]);
+                        case PARTITION_KEY:
+                            result.add(keyComponents[def.position()]);
                             break;
-                        case COLUMN_ALIAS:
-                            ByteBuffer val = cfDef.isComposite
-                                           ? (name.position < components.length ? components[name.position] : null)
+                        case CLUSTERING_COLUMN:
+                            ByteBuffer val = cfm.hasCompositeComparator()
+                                           ? (def.position() < components.length ? components[def.position()] : null)
                                            : c.name();
                             result.add(val);
                             break;
-                        case VALUE_ALIAS:
+                        case COMPACT_VALUE:
                             result.add(c);
                             break;
-                        case COLUMN_METADATA:
+                        case REGULAR:
                             // This should not happen for compact CF
                             throw new AssertionError();
                         default:
@@ -65,12 +65,12 @@
                 }
             }
         }
-        else if (cfDef.isComposite)
+        else if (cfm.hasCompositeComparator())
         {
             // Sparse case: group column in cqlRow when composite prefix is equal
-            CompositeType composite = (CompositeType)cfDef.cfm.comparator;
+            CompositeType composite = (CompositeType)cfm.comparator;
 
-            ColumnGroupMap.Builder builder = new ColumnGroupMap.Builder(composite, cfDef.hasCollections, now);
+            ColumnGroupMap.Builder builder = new ColumnGroupMap.Builder(composite, cfm.hasCollections(), now);
 
             for (Column c : cf)
             {
@@ -90,12 +90,12 @@
 
             // Static case: One cqlRow for all columns
             result.newRow();
-            for (CFDefinition.Name name : selection.getColumnsList())
+            for (ColumnDefinition def : selection.getColumnsList())
             {
-                if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS)
-                    result.add(keyComponents[name.position]);
+                if (def.kind == ColumnDefinition.Kind.PARTITION_KEY)
+                    result.add(keyComponents[def.position()]);
                 else
-                    result.add(cf.getColumn(name.name.key));
+                    result.add(cf.getColumn(def.name.bytes));
             }
         }
     }

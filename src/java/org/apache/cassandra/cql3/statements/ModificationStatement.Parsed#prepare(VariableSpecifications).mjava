@@ -1,12 +1,11 @@
         public ModificationStatement prepare(VariableSpecifications boundNames) throws InvalidRequestException
         {
             CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
-            CFDefinition cfDef = metadata.getCfDef();
 
             Attributes preparedAttributes = attrs.prepare(keyspace(), columnFamily());
             preparedAttributes.collectMarkerSpecification(boundNames);
 
-            ModificationStatement stmt = prepareInternal(cfDef, boundNames, preparedAttributes);
+            ModificationStatement stmt = prepareInternal(metadata, boundNames, preparedAttributes);
 
             if (ifNotExists || (conditions != null && !conditions.isEmpty()))
             {
@@ -27,8 +26,8 @@
                 {
                     for (Pair<ColumnIdentifier, Operation.RawUpdate> entry : conditions)
                     {
-                        CFDefinition.Name name = cfDef.get(entry.left);
-                        if (name == null)
+                        ColumnDefinition def = metadata.getColumnDefinition(entry.left);
+                        if (def == null)
                             throw new InvalidRequestException(String.format("Unknown identifier %s", entry.left));
 
                         /*
@@ -37,21 +36,21 @@
                          * now, we just refuse lists, which also save use from having to bother about the read that some
                          * list operation involve.
                          */
-                        if (name.type instanceof ListType)
-                            throw new InvalidRequestException(String.format("List operation (%s) are not allowed in conditional updates", name));
+                        if (def.type instanceof ListType)
+                            throw new InvalidRequestException(String.format("List operation (%s) are not allowed in conditional updates", def.name));
 
-                        Operation condition = entry.right.prepare(name);
+                        Operation condition = entry.right.prepare(def);
                         assert !condition.requiresRead();
 
                         condition.collectMarkerSpecification(boundNames);
 
-                        switch (name.kind)
+                        switch (def.kind)
                         {
-                            case KEY_ALIAS:
-                            case COLUMN_ALIAS:
+                            case PARTITION_KEY:
+                            case CLUSTERING_COLUMN:
                                 throw new InvalidRequestException(String.format("PRIMARY KEY part %s found in SET part", entry.left));
-                            case VALUE_ALIAS:
-                            case COLUMN_METADATA:
+                            case COMPACT_VALUE:
+                            case REGULAR:
                                 stmt.addCondition(condition);
                                 break;
                         }

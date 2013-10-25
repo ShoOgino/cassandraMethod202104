@@ -1,13 +1,42 @@
     public CFMetaData rebuild()
     {
-        /*
-         * TODO: There is definitively some repetition between the CQL3  metadata stored in this
-         * object (partitionKeyColumns, ...) and the one stored in CFDefinition.
-         * Ultimately, we should probably merge both. However, there is enough details to fix that
-         * it's worth doing that in a separate issue.
-         */
-        rebuildCQL3Metadata();
-        cqlCfDef = new CFDefinition(this);
+        List<ColumnDefinition> pkCols = nullInitializedList(keyValidator.componentsCount());
+        boolean isDense = isDense(comparator, allColumns());
+        int nbCkCols = isDense
+                     ? comparator.componentsCount()
+                     : comparator.componentsCount() - (hasCollections() ? 2 : 1);
+        List<ColumnDefinition> ckCols = nullInitializedList(nbCkCols);
+        // We keep things sorted to get consistent/predicatable order in select queries
+        SortedSet<ColumnDefinition> regCols = new TreeSet<ColumnDefinition>(regularColumnComparator);
+        ColumnDefinition compactCol = null;
+
+        for (ColumnDefinition def : allColumns())
+        {
+            switch (def.kind)
+            {
+                case PARTITION_KEY:
+                    assert !(def.isOnAllComponents() && keyValidator instanceof CompositeType);
+                    pkCols.set(def.position(), def);
+                    break;
+                case CLUSTERING_COLUMN:
+                    assert !(def.isOnAllComponents() && comparator instanceof CompositeType);
+                    ckCols.set(def.position(), def);
+                    break;
+                case REGULAR:
+                    regCols.add(def);
+                    break;
+                case COMPACT_VALUE:
+                    assert compactCol == null : "There shouldn't be more than one compact value defined: got " + compactCol + " and " + def;
+                    compactCol = def;
+                    break;
+            }
+        }
+
+        // Now actually assign the correct value. This is not atomic, but then again, updating CFMetaData is never atomic anyway.
+        partitionKeyColumns = addDefaultKeyAliases(pkCols);
+        clusteringColumns = addDefaultColumnAliases(ckCols);
+        regularColumns = regCols;
+        compactValueColumn = addDefaultValueAlias(compactCol, isDense);
         return this;
     }
 

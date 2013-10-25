@@ -1,8 +1,6 @@
     public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, ColumnNameBuilder builder, UpdateParameters params)
     throws InvalidRequestException
     {
-        CFDefinition cfDef = cfm.getCfDef();
-
         // Inserting the CQL row marker (see #4361)
         // We always need to insert a marker, because of the following situation:
         //   CREATE TABLE t ( k int PRIMARY KEY, c text );
@@ -14,7 +12,7 @@
         // 'DELETE FROM t WHERE k = 1' does remove the row entirely)
         //
         // We never insert markers for Super CF as this would confuse the thrift side.
-        if (cfDef.isComposite && !cfDef.isCompact && !cfm.isSuper())
+        if (cfm.hasCompositeComparator() && !cfm.isDense() && !cfm.isSuper())
         {
             ByteBuffer name = builder.copy().add(ByteBufferUtil.EMPTY_BYTE_BUFFER).build();
             cf.addColumn(params.makeColumn(name, ByteBufferUtil.EMPTY_BYTE_BUFFER));
@@ -22,23 +20,24 @@
 
         List<Operation> updates = getOperations();
 
-        if (cfDef.isCompact)
+        if (cfm.isDense())
         {
             if (builder.componentCount() == 0)
-                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfDef.columns.values().iterator().next()));
+                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfm.clusteringColumns().iterator().next()));
 
-            if (cfDef.value == null)
+            // An empty name for the compact value is what we use to recognize the case where there is not column
+            // outside the PK, see CreateStatement.
+            if (!cfm.compactValueColumn().name.bytes.hasRemaining())
             {
-                // compact + no compact value implies there is no column outside the PK. So no operation could
-                // have passed through validation
+                // There is no column outside the PK. So no operation could have passed through validation
                 assert updates.isEmpty();
                 setToEmptyOperation.execute(key, cf, builder.copy(), params);
             }
             else
             {
-                // compact means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
+                // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
                 if (updates.isEmpty())
-                    throw new InvalidRequestException(String.format("Column %s is mandatory for this COMPACT STORAGE table", cfDef.value));
+                    throw new InvalidRequestException(String.format("Column %s is mandatory for this COMPACT STORAGE table", cfm.compactValueColumn().name));
 
                 for (Operation update : updates)
                     update.execute(key, cf, builder.copy(), params);
