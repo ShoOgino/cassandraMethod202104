@@ -1,0 +1,51 @@
+    /**
+     * Removes as many cold sstables as possible while retaining at least 1-coldReadsToOmit of the total reads/sec
+     * across all sstables
+     * @param sstables all sstables to consider
+     * @param coldReadsToOmit the proportion of total reads/sec that will be omitted (0=omit nothing, 1=omit everything)
+     * @return a list of sstables with the coldest sstables excluded until the reads they represent reaches coldReadsToOmit
+     */
+    @VisibleForTesting
+    static List<SSTableReader> filterColdSSTables(List<SSTableReader> sstables, double coldReadsToOmit)
+    {
+        // sort the sstables by hotness (coldest-first), breaking ties with size on disk (mainly for system tables and cold tables)
+        Collections.sort(sstables, new Comparator<SSTableReader>()
+        {
+            public int compare(SSTableReader o1, SSTableReader o2)
+            {
+                int comparison = Double.compare(hotness(o1), hotness(o2));
+                if (comparison != 0)
+                    return comparison;
+
+                return Long.compare(o1.bytesOnDisk(), o2.bytesOnDisk());
+            }
+        });
+
+        // calculate the total reads/sec across all sstables
+        double totalReads = 0.0;
+        for (SSTableReader sstr : sstables)
+            if (sstr.readMeter != null)
+                totalReads += sstr.readMeter.twoHourRate();
+
+        // if this is a system table with no read meters or we don't have any read rates yet, just return them all
+        if (totalReads == 0.0)
+            return sstables;
+
+        // iteratively ignore the coldest sstables until ignoring one more would put us over the coldReadsToOmit threshold
+        double maxColdReads = coldReadsToOmit * totalReads;
+
+        double totalColdReads = 0.0;
+        int cutoffIndex = 0;
+        while (cutoffIndex < sstables.size())
+        {
+            double reads = sstables.get(cutoffIndex).readMeter.twoHourRate();
+            if (totalColdReads + reads > maxColdReads)
+                break;
+
+            totalColdReads += reads;
+            cutoffIndex++;
+        }
+
+        return sstables.subList(cutoffIndex, sstables.size());
+    }
+
