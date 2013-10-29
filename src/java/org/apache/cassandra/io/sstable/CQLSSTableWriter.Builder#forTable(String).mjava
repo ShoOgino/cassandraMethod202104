@@ -1,0 +1,37 @@
+        /**
+         * The schema (CREATE TABLE statement) for the table for which sstable are to be created.
+         * <p>
+         * Please note that the provided CREATE TABLE statement <b>must</b> use a fully-qualified
+         * table name, one that include the keyspace name.
+         * <p>
+         * This is a mandatory option.
+         *
+         * @param schema the schema of the table for which sstables are to be created.
+         * @return this builder.
+         *
+         * @throws IllegalArgumentException if {@code schema} is not a valid CREATE TABLE statement
+         * or does not have a fully-qualified table name.
+         */
+        public Builder forTable(String schema)
+        {
+            try
+            {
+                this.schema = getStatement(schema, CreateTableStatement.class, "CREATE TABLE").left.getCFMetaData().rebuild();
+
+                // We need to register the keyspace/table metadata through Schema, otherwise we won't be able to properly
+                // build the insert statement in using().
+                KSMetaData ksm = KSMetaData.newKeyspace(this.schema.ksName,
+                                                        AbstractReplicationStrategy.getClass("org.apache.cassandra.locator.SimpleStrategy"),
+                                                        ImmutableMap.of("replication_factor", "1"),
+                                                        true,
+                                                        Collections.singleton(this.schema));
+
+                Schema.instance.load(ksm);
+                return this;
+            }
+            catch (RequestValidationException e)
+            {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+        }
+
