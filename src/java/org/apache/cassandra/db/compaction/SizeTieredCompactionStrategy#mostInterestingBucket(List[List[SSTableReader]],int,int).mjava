@@ -1,31 +1,34 @@
+    /**
+     * @param buckets list of buckets from which to return the most interesting, where "interesting" is the total hotness for reads
+     * @param minThreshold minimum number of sstables in a bucket to qualify as interesting
+     * @param maxThreshold maximum number of sstables to compact at once (the returned bucket will be trimmed down to this)
+     * @return a bucket (list) of sstables to compact
+     */
     public static List<SSTableReader> mostInterestingBucket(List<List<SSTableReader>> buckets, int minThreshold, int maxThreshold)
     {
-        // skip buckets containing less than minThreshold sstables, and limit other buckets to maxThreshold entries
-        List<List<SSTableReader>> prunedBuckets = new ArrayList<List<SSTableReader>>();
+        // skip buckets containing less than minThreshold sstables, and limit other buckets to maxThreshold sstables
+        final List<Pair<List<SSTableReader>, Double>> prunedBucketsAndHotness = new ArrayList<>(buckets.size());
         for (List<SSTableReader> bucket : buckets)
         {
-            if (bucket.size() < minThreshold)
-                continue;
-
-            Collections.sort(bucket, new Comparator<SSTableReader>()
-            {
-                public int compare(SSTableReader o1, SSTableReader o2)
-                {
-                    return o1.descriptor.generation - o2.descriptor.generation;
-                }
-            });
-            List<SSTableReader> prunedBucket = bucket.subList(0, Math.min(bucket.size(), maxThreshold));
-            prunedBuckets.add(prunedBucket);
+            Pair<List<SSTableReader>, Double> bucketAndHotness = trimToThresholdWithHotness(bucket, maxThreshold);
+            if (bucketAndHotness != null && bucketAndHotness.left.size() >= minThreshold)
+                prunedBucketsAndHotness.add(bucketAndHotness);
         }
-        if (prunedBuckets.isEmpty())
+        if (prunedBucketsAndHotness.isEmpty())
             return Collections.emptyList();
 
-        // prefer compacting buckets with smallest average size; that will yield the fastest improvement for read performance
-        return Collections.min(prunedBuckets, new Comparator<List<SSTableReader>>()
+        // prefer compacting the hottest bucket
+        Pair<List<SSTableReader>, Double> hottest = Collections.max(prunedBucketsAndHotness, new Comparator<Pair<List<SSTableReader>, Double>>()
         {
-            public int compare(List<SSTableReader> o1, List<SSTableReader> o2)
+            public int compare(Pair<List<SSTableReader>, Double> o1, Pair<List<SSTableReader>, Double> o2)
             {
-                return Longs.compare(avgSize(o1), avgSize(o2));
+                int comparison = Double.compare(o1.right, o2.right);
+                if (comparison != 0)
+                    return comparison;
+
+                // break ties by compacting the smallest sstables first (this will probably only happen for
+                // system tables and new/unread sstables)
+                return Long.compare(avgSize(o1.left), avgSize(o2.left));
             }
 
             private long avgSize(List<SSTableReader> sstables)
@@ -36,5 +39,7 @@
                 return n / sstables.size();
             }
         });
+
+        return hottest.left;
     }
 
