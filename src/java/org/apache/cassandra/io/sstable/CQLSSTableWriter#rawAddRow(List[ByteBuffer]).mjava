@@ -1,0 +1,34 @@
+    /**
+     * Adds a new row to the writer given already serialized values.
+     * <p>
+     * This is a shortcut for {@code rawAddRow(Arrays.asList(values))}.
+     *
+     * @param values the row values (corresponding to the bind variables of the
+     * insertion statement used when creating by this writer) as binary.
+     * @return this writer.
+     */
+    public CQLSSTableWriter rawAddRow(List<ByteBuffer> values)
+    throws InvalidRequestException, IOException
+    {
+        if (values.size() != boundNames.size())
+            throw new InvalidRequestException(String.format("Invalid number of arguments, expecting %d values but got %d", boundNames.size(), values.size()));
+
+        List<ByteBuffer> keys = insert.buildPartitionKeyNames(values);
+        ColumnNameBuilder clusteringPrefix = insert.createClusteringPrefixBuilder(values);
+
+        long now = System.currentTimeMillis() * 1000;
+        UpdateParameters params = new UpdateParameters(insert.cfm,
+                                                       values,
+                                                       insert.getTimestamp(now, values),
+                                                       insert.getTimeToLive(values),
+                                                       Collections.<ByteBuffer, ColumnGroupMap>emptyMap());
+
+        for (ByteBuffer key: keys)
+        {
+            if (writer.currentKey() == null || !key.equals(writer.currentKey().key))
+                writer.newRow(key);
+            insert.addUpdateForKey(writer.currentColumnFamily(), key, clusteringPrefix, params);
+        }
+        return this;
+    }
+
