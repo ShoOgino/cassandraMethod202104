@@ -35,29 +35,28 @@
             if (isCQL3Table)
             {
                 // CQL3 table don't support having only part of their composite column names set
-                CompositeType composite = (CompositeType)comparator;
-                ByteBuffer[] components = composite.split(name);
-                int minComponents = composite.types.size() - (metadata.hasCollections() ? 1 : 0);
-                if (components.length < minComponents)
+                Composite composite = metadata.comparator.fromByteBuffer(name);
+
+                int minComponents = metadata.comparator.clusteringPrefixSize() + 1;
+                if (composite.size() < minComponents)
                     throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("Not enough components (found %d but %d expected) for column name since %s is a CQL3 table",
-                                                                                                    components.length, minComponents, metadata.cfName));
+                                                                                                    composite.size(), minComponents, metadata.cfName));
 
                 // Furthermore, the column name must be a declared one.
-                int columnIndex = composite.types.size() - (metadata.hasCollections() ? 2 : 1);
-                ByteBuffer CQL3ColumnName = components[columnIndex];
+                int columnIndex = metadata.comparator.clusteringPrefixSize();
+                ByteBuffer CQL3ColumnName = composite.get(columnIndex);
                 if (!CQL3ColumnName.hasRemaining())
                     continue; // Row marker, ok
 
-                ColumnIdentifier columnId = new ColumnIdentifier(CQL3ColumnName, composite.types.get(columnIndex));
+                ColumnIdentifier columnId = new ColumnIdentifier(CQL3ColumnName, metadata.comparator.subtype(columnIndex));
                 if (metadata.getColumnDefinition(columnId) == null)
                     throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("Invalid cell for CQL3 table %s. The CQL3 column component (%s) does not correspond to a defined CQL3 column",
                                                                                                     metadata.cfName, columnId));
 
                 // On top of that, if we have a collection component, he (CQL3) column must be a collection
-                if (metadata.hasCollections() && components.length == composite.types.size())
+                if (metadata.comparator.hasCollections() && composite.size() == metadata.comparator.size())
                 {
-                    assert components.length >= 2;
-                    ColumnToCollectionType collectionType = (ColumnToCollectionType)composite.types.get(composite.types.size() - 1);
+                    ColumnToCollectionType collectionType = metadata.comparator.collectionType();
                     if (!collectionType.defined.containsKey(CQL3ColumnName))
                         throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("Invalid collection component, %s is not a collection", UTF8Type.instance.getString(CQL3ColumnName)));
                 }

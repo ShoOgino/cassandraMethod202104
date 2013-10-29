@@ -21,15 +21,15 @@
         ByteBuffer startKey = range.left instanceof DecoratedKey ? ((DecoratedKey)range.left).key : ByteBufferUtil.EMPTY_BYTE_BUFFER;
         ByteBuffer endKey = range.right instanceof DecoratedKey ? ((DecoratedKey)range.right).key : ByteBufferUtil.EMPTY_BYTE_BUFFER;
 
-        final CompositeType baseComparator = (CompositeType)baseCfs.getComparator();
-        final CompositeType indexComparator = (CompositeType)index.getIndexCfs().getComparator();
+        final CellNameType baseComparator = baseCfs.getComparator();
+        final CellNameType indexComparator = index.getIndexCfs().getComparator();
 
-        final ByteBuffer startPrefix = makePrefix(index, startKey, filter, true);
-        final ByteBuffer endPrefix = makePrefix(index, endKey, filter, false);
+        final Composite startPrefix = makePrefix(index, startKey, filter, true);
+        final Composite endPrefix = makePrefix(index, endKey, filter, false);
 
         return new ColumnFamilyStore.AbstractScanIterator()
         {
-            private ByteBuffer lastSeenPrefix = startPrefix;
+            private Composite lastSeenPrefix = startPrefix;
             private Deque<Column> indexColumns;
             private int columnsRead = Integer.MAX_VALUE;
             private int limit = filter.currentLimit();
@@ -62,7 +62,7 @@
                  */
                 DecoratedKey currentKey = null;
                 ColumnFamily data = null;
-                ByteBuffer previousPrefix = null;
+                Composite previousPrefix = null;
 
                 while (true)
                 {
@@ -156,7 +156,7 @@
                         }
 
                         // Check if this entry cannot be a hit due to the original column filter
-                        ByteBuffer start = entry.indexedEntryStart();
+                        Composite start = entry.indexedEntryPrefix;
                         if (!filter.columnFilter(dk.key).maySelectPrefix(baseComparator, start))
                             continue;
 
@@ -175,7 +175,7 @@
                         // We always query the whole CQL3 row. In the case where the original filter was a name filter this might be
                         // slightly wasteful, but this probably doesn't matter in practice and it simplify things.
                         SliceQueryFilter dataFilter = new SliceQueryFilter(start,
-                                                                           entry.indexedEntryEnd(),
+                                                                           entry.indexedEntryPrefix.end(),
                                                                            false,
                                                                            Integer.MAX_VALUE,
                                                                            baseCfs.metadata.clusteringColumns().size());
@@ -194,7 +194,7 @@
                         if (entry.indexedEntryCollectionKey != null)
                             previousPrefix = start;
 
-                        if (!filter.isSatisfiedBy(dk, newData, entry.indexedEntryNameBuilder, entry.indexedEntryCollectionKey))
+                        if (!filter.isSatisfiedBy(dk, newData, entry.indexedEntryPrefix, entry.indexedEntryCollectionKey))
                             continue;
 
                         if (data == null)

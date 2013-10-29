@@ -22,9 +22,8 @@
             if (file == null)
                 file = originalInput == null ? sstable.getFileDataInput(positionToSeek) : originalInput;
 
-            // Give a bogus atom count since we'll deserialize as long as we're
-            // within the index block but we don't know how much atom is there
-            Iterator<OnDiskAtom> atomIterator = emptyColumnFamily.metadata().getOnDiskIterator(file, Integer.MAX_VALUE, sstable.descriptor.version);
+            AtomDeserializer deserializer = emptyColumnFamily.metadata().getOnDiskDeserializer(file, sstable.descriptor.version);
+
             file.seek(positionToSeek);
             FileMark mark = file.mark();
 
@@ -32,63 +31,65 @@
             boolean inSlice = false;
 
             // scan from index start
-            OnDiskAtom column = null;
-            while (file.bytesPastMark(mark) < currentIndex.width || column != null)
+            while (file.bytesPastMark(mark) < currentIndex.width || deserializer.hasUnprocessed())
             {
-                // Only fetch a new column if we haven't dealt with the previous one.
-                if (column == null)
-                    column = atomIterator.next();
-
                 // col is before slice
                 // (If in slice, don't bother checking that until we change slice)
-                if (!inSlice && isColumnBeforeSliceStart(column))
+                Composite start = currentStart();
+                if (!inSlice && !start.isEmpty() && deserializer.compareNextTo(start) < 0)
                 {
                     if (reversed)
                     {
                         // the next slice select columns that are before the current one, so it may
                         // match this column, so keep it around.
-                        prefetched.addFirst(column);
+                        prefetched.addFirst(deserializer.readNext());
                     }
-                    column = null;
+                    else
+                    {
+                        deserializer.skipNext();
+                    }
                 }
                 // col is within slice
-                else if (isColumnBeforeSliceFinish(column))
-                {
-                    inSlice = true;
-                    addColumn(column);
-                    column = null;
-                }
-                // col is after slice.
                 else
                 {
-                    // When reading forward, if we hit a column that sorts after the current slice, it means we're done with this slice.
-                    // For reversed, this may either mean that we're done with the current slice, or that we need to read the previous
-                    // index block. However, we can be sure that we are in the first case though (the current slice is done) if the first
-                    // columns of the block were not part of the current slice, i.e. if we have columns in prefetched.
-                    if (reversed && prefetched.isEmpty())
-                        break;
-
-                    if (!setNextSlice())
-                        break;
-
-                    inSlice = false;
-
-                    // The next index block now corresponds to the first block that may have columns for the newly set slice.
-                    // So if it's different from the current block, we're done with this block. And in that case, we know
-                    // that our prefetched columns won't match.
-                    if (nextIndexIdx != lastDeserializedBlock)
+                    Composite finish = currentFinish();
+                    if (finish.isEmpty() || deserializer.compareNextTo(finish) <= 0)
                     {
-                        if (reversed)
-                            prefetched.clear();
-                        break;
+                        inSlice = true;
+                        addColumn(deserializer.readNext());
                     }
+                    // col is after slice.
+                    else
+                    {
+                        // When reading forward, if we hit a column that sorts after the current slice, it means we're done with this slice.
+                        // For reversed, this may either mean that we're done with the current slice, or that we need to read the previous
+                        // index block. However, we can be sure that we are in the first case though (the current slice is done) if the first
+                        // columns of the block were not part of the current slice, i.e. if we have columns in prefetched.
+                        if (reversed && prefetched.isEmpty())
+                            break;
 
-                    // Even if the next slice may have column in this blocks, if we're reversed, those columns have been
-                    // prefetched and we're done with that block
-                    if (reversed)
-                        break;
+                        if (!setNextSlice())
+                            break;
 
-                    // otherwise, we will deal with that column at the next iteration
+                        inSlice = false;
+
+                        // The next index block now corresponds to the first block that may have columns for the newly set slice.
+                        // So if it's different from the current block, we're done with this block. And in that case, we know
+                        // that our prefetched columns won't match.
+                        if (nextIndexIdx != lastDeserializedBlock)
+                        {
+                            if (reversed)
+                                prefetched.clear();
+                            break;
+                        }
+
+                        // Even if the next slice may have column in this blocks, if we're reversed, those columns have been
+                        // prefetched and we're done with that block
+                        if (reversed)
+                            break;
+
+                        // otherwise, we will deal with that column at the next iteration
+                    }
                 }
             }
             return true;

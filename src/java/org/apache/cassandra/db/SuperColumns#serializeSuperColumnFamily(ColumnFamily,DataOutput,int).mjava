@@ -10,23 +10,25 @@
          *   subcolumns range deletions).
          */
         DeletionInfo delInfo = scf.deletionInfo();
-        Map<ByteBuffer, List<Column>> scMap = groupSuperColumns(scf);
+        Map<CellName, List<Column>> scMap = groupSuperColumns(scf);
 
         // Actually Serialize
-        DeletionInfo.serializer().serialize(new DeletionInfo(delInfo.getTopLevelDeletion()), out, version);
+        scf.getComparator().deletionInfoSerializer().serialize(new DeletionInfo(delInfo.getTopLevelDeletion()), out, version);
         out.writeInt(scMap.size());
 
-        for (Map.Entry<ByteBuffer, List<Column>> entry : scMap.entrySet())
+        CellNameType subComparator = subType(scf.getComparator());
+        for (Map.Entry<CellName, List<Column>> entry : scMap.entrySet())
         {
-            ByteBufferUtil.writeWithShortLength(entry.getKey(), out);
+            scf.getComparator().cellSerializer().serialize(entry.getKey(), out);
 
             DeletionTime delTime = delInfo.rangeCovering(entry.getKey());
             DeletionInfo scDelInfo = delTime == null ? DeletionInfo.live() : new DeletionInfo(delTime);
             DeletionTime.serializer.serialize(scDelInfo.getTopLevelDeletion(), out);
 
             out.writeInt(entry.getValue().size());
+            ColumnSerializer serializer = subComparator.columnSerializer();
             for (Column subColumn : entry.getValue())
-                Column.serializer.serialize(subColumn, out);
+                serializer.serialize(subColumn, out);
         }
     }
 

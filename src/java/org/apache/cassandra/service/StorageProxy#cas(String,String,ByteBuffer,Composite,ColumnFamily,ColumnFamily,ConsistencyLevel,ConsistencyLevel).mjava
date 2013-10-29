@@ -1,0 +1,119 @@
+    /**
+     * Apply @param updates if and only if the current values in the row for @param key
+     * match the ones given by @param expected.  The algorithm is "raw" Paxos: that is, Paxos
+     * minus leader election -- any node in the cluster may propose changes for any row,
+     * which (that is, the row) is the unit of values being proposed, not single columns.
+     *
+     * The Paxos cohort is only the replicas for the given key, not the entire cluster.
+     * So we expect performance to be reasonable, but CAS is still intended to be used
+     * "when you really need it," not for all your updates.
+     *
+     * There are three phases to Paxos:
+     *  1. Prepare: the coordinator generates a ballot (timeUUID in our case) and asks replicas to (a) promise
+     *     not to accept updates from older ballots and (b) tell us about the most recent update it has already
+     *     accepted.
+     *  2. Accept: if a majority of replicas reply, the coordinator asks replicas to accept the value of the
+     *     highest proposal ballot it heard about, or a new value if no in-progress proposals were reported.
+     *  3. Commit (Learn): if a majority of replicas acknowledge the accept request, we can commit the new
+     *     value.
+     *
+     *  Commit procedure is not covered in "Paxos Made Simple," and only briefly mentioned in "Paxos Made Live,"
+     *  so here is our approach:
+     *   3a. The coordinator sends a commit message to all replicas with the ballot and value.
+     *   3b. Because of 1-2, this will be the highest-seen commit ballot.  The replicas will note that,
+     *       and send it with subsequent promise replies.  This allows us to discard acceptance records
+     *       for successfully committed replicas, without allowing incomplete proposals to commit erroneously
+     *       later on.
+     *
+     *  Note that since we are performing a CAS rather than a simple update, we perform a read (of committed
+     *  values) between the prepare and accept phases.  This gives us a slightly longer window for another
+     *  coordinator to come along and trump our own promise with a newer one but is otherwise safe.
+     *
+     * @param keyspaceName the keyspace for the CAS
+     * @param cfName the column family for the CAS
+     * @param key the row key for the row to CAS
+     * @param prefix a column name prefix that selects the CQL3 row to check if {@code expected} is null. If {@code expected}
+     * is not null, this is ignored. If {@code expected} is null and this is null, the full row existing is checked (by querying
+     * the first live column of the row).
+     * @param expected the expected column values. This can be null to check for existence (see {@code prefix}).
+     * @param updates the value to insert if {@code expected matches the current values}.
+     * @param consistencyForPaxos the consistency for the paxos prepare and propose round. This can only be either SERIAL or LOCAL_SERIAL.
+     * @param consistencyForCommit the consistency for write done during the commit phase. This can be anything, except SERIAL or LOCAL_SERIAL.
+     *
+     * @return null if the operation succeeds in updating the row, or the current values for the columns contained in
+     * expected (since, if the CAS doesn't succeed, it means the current value do not match the one in expected). If
+     * expected == null and the CAS is unsuccessfull, the first live column of the CF is returned.
+     */
+    public static ColumnFamily cas(String keyspaceName,
+                                   String cfName,
+                                   ByteBuffer key,
+                                   Composite prefix,
+                                   ColumnFamily expected,
+                                   ColumnFamily updates,
+                                   ConsistencyLevel consistencyForPaxos,
+                                   ConsistencyLevel consistencyForCommit)
+    throws UnavailableException, IsBootstrappingException, ReadTimeoutException, WriteTimeoutException, InvalidRequestException
+    {
+        consistencyForPaxos.validateForCas();
+        consistencyForCommit.validateForCasCommit(keyspaceName);
+
+        CFMetaData metadata = Schema.instance.getCFMetaData(keyspaceName, cfName);
+
+        long start = System.nanoTime();
+        long timeout = TimeUnit.MILLISECONDS.toNanos(DatabaseDescriptor.getCasContentionTimeout());
+        while (System.nanoTime() - start < timeout)
+        {
+            // for simplicity, we'll do a single liveness check at the start of each attempt
+            Pair<List<InetAddress>, Integer> p = getPaxosParticipants(keyspaceName, key, consistencyForPaxos);
+            List<InetAddress> liveEndpoints = p.left;
+            int requiredParticipants = p.right;
+
+            UUID ballot = beginAndRepairPaxos(start, key, metadata, liveEndpoints, requiredParticipants, consistencyForPaxos);
+
+            // read the current value and compare with expected
+            Tracing.trace("Reading existing values for CAS precondition");
+            long timestamp = System.currentTimeMillis();
+            ReadCommand readCommand;
+            if (expected == null || expected.isEmpty())
+            {
+                SliceQueryFilter filter = prefix == null
+                                        ? new SliceQueryFilter(ColumnSlice.ALL_COLUMNS_ARRAY, false, 1)
+                                        : new SliceQueryFilter(prefix.slice(), false, 1, prefix.size());
+                readCommand = new SliceFromReadCommand(keyspaceName, key, cfName, timestamp, filter);
+            }
+            else
+            {
+                assert !expected.isEmpty();
+                readCommand = new SliceByNamesReadCommand(keyspaceName, key, cfName, timestamp, new NamesQueryFilter(ImmutableSortedSet.copyOf(metadata.comparator, expected.getColumnNames())));
+            }
+            List<Row> rows = read(Arrays.asList(readCommand), ConsistencyLevel.QUORUM);
+            ColumnFamily current = rows.get(0).cf;
+            if (!casApplies(expected, current))
+            {
+                Tracing.trace("CAS precondition {} does not match current values {}", expected, current);
+                // We should not return null as this means success
+                return current == null ? EmptyColumns.factory.create(metadata) : current;
+            }
+
+            // finish the paxos round w/ the desired updates
+            // TODO turn null updates into delete?
+            Commit proposal = Commit.newProposal(key, ballot, updates);
+            Tracing.trace("CAS precondition is met; proposing client-requested updates for {}", ballot);
+            if (proposePaxos(proposal, liveEndpoints, requiredParticipants, true))
+            {
+                if (consistencyForCommit == ConsistencyLevel.ANY)
+                    sendCommit(proposal, liveEndpoints);
+                else
+                    commitPaxos(proposal, consistencyForCommit);
+                Tracing.trace("CAS successful");
+                return null;
+            }
+
+            Tracing.trace("Paxos proposal not accepted (pre-empted by a higher ballot)");
+            Uninterruptibles.sleepUninterruptibly(FBUtilities.threadLocalRandom().nextInt(100), TimeUnit.MILLISECONDS);
+            // continue to retry
+        }
+
+        throw new WriteTimeoutException(WriteType.CAS, consistencyForPaxos, -1, -1);
+    }
+

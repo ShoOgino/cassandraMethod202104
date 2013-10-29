@@ -13,7 +13,21 @@
         for (Object c : row)
         {
             JsonColumn col = new JsonColumn<List>((List) c, cfm, oldSCFormat, (superName != null));
-            ByteBuffer cname = superName == null ? col.getName() : CompositeType.build(superName, col.getName());
+            if (col.isRangeTombstone())
+            {
+                Composite start = superName == null
+                                ? cfm.comparator.fromByteBuffer(col.getName())
+                                : cfm.comparator.make(superName, col.getName());
+                Composite end = superName == null
+                              ? cfm.comparator.fromByteBuffer(col.getValue())
+                              : cfm.comparator.make(superName, col.getValue());
+                cfamily.addAtom(new RangeTombstone(start, end, col.timestamp, col.localExpirationTime));
+                continue;
+            }
+
+            CellName cname = superName == null
+                           ? cfm.comparator.cellFromByteBuffer(col.getName())
+                           : cfm.comparator.makeCellName(superName, col.getName());
 
             if (col.isExpiring())
             {
@@ -29,13 +43,15 @@
             }
             else if (col.isRangeTombstone())
             {
-                ByteBuffer end = superName == null ? col.getValue() : CompositeType.build(superName, col.getValue());
+                CellName end = superName == null
+                             ? cfm.comparator.cellFromByteBuffer(col.getValue())
+                             : cfm.comparator.makeCellName(superName, col.getValue());
                 cfamily.addAtom(new RangeTombstone(cname, end, col.timestamp, col.localExpirationTime));
             }
             // cql3 row marker, see CASSANDRA-5852
-            else if (!cname.hasRemaining())
+            else if (cname.isEmpty())
             {
-                cfamily.addColumn(ByteBuffer.wrap(new byte[3]), col.getValue(), col.timestamp);
+                cfamily.addColumn(cfm.comparator.rowMarker(Composites.EMPTY), col.getValue(), col.timestamp);
             }
             else
             {

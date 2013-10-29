@@ -186,7 +186,7 @@
                     Restriction.Slice slice = (Restriction.Slice)restriction;
                     // For non-composite slices, we don't support internally the difference between exclusive and
                     // inclusive bounds, so we deal with it manually.
-                    if (!cfm.hasCompositeComparator() && (!slice.isInclusive(Bound.START) || !slice.isInclusive(Bound.END)))
+                    if (!cfm.comparator.isCompound() && (!slice.isInclusive(Bound.START) || !slice.isInclusive(Bound.END)))
                         stmt.sliceRestriction = slice;
                 }
                 else if (restriction.isIN())
@@ -197,6 +197,7 @@
                         throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted by IN relation", cdef.name));
                     else if (stmt.selectACollection())
                         throw new InvalidRequestException(String.format("Cannot restrict PRIMARY KEY part %s by IN relation as a collection is selected by the query", cdef.name));
+                    stmt.lastClusteringIsIn = true;
                 }
 
                 previous = cdef;
@@ -234,7 +235,7 @@
                 // queried automatically, and then removing it from the resultSet afterwards if needed)
                 if (stmt.keyIsInRelation)
                 {
-                    stmt.orderingIndexes = new HashMap<ColumnDefinition, Integer>();
+                    stmt.orderingIndexes = new HashMap<ColumnIdentifier, Integer>();
                     for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
                     {
                         final ColumnDefinition def = cfm.getColumnDefinition(column);
@@ -248,14 +249,7 @@
 
                         if (selectClause.isEmpty()) // wildcard
                         {
-                            stmt.orderingIndexes.put(def, Iterators.indexOf(cfm.allColumnsInSelectOrder(),
-                                                                            new Predicate<ColumnDefinition>()
-                                                                            {
-                                                                                public boolean apply(ColumnDefinition n)
-                                                                                {
-                                                                                    return def.equals(n);
-                                                                                }
-                                                                            }));
+                            stmt.orderingIndexes.put(def.name, indexOf(def, cfm.allColumnsInSelectOrder()));
                         }
                         else
                         {
@@ -265,7 +259,7 @@
                                 RawSelector selector = selectClause.get(i);
                                 if (def.name.equals(selector.selectable))
                                 {
-                                    stmt.orderingIndexes.put(def, i);
+                                    stmt.orderingIndexes.put(def.name, i);
                                     hasColumn = true;
                                     break;
                                 }
@@ -320,6 +314,16 @@
                 }
                 assert isReversed != null;
                 stmt.isReversed = isReversed;
+            }
+
+            if (stmt.lastClusteringIsIn)
+            {
+                // This means we'll have to do post-query reordering, so update the orderingIndexes
+                if (stmt.orderingIndexes == null)
+                    stmt.orderingIndexes = new HashMap<ColumnIdentifier, Integer>();
+
+                ColumnDefinition last = cfm.clusteringColumns().get(cfm.clusteringColumns().size() - 1);
+                stmt.orderingIndexes.put(last.name, indexOf(last, stmt.selection.getColumnsList().iterator()));
             }
 
             // Make sure this queries is allowed (note: non key range non indexed cannot involve filtering underneath)

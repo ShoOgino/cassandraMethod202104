@@ -1,12 +1,12 @@
-    private SortedSet<ByteBuffer> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
+    private SortedSet<CellName> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
     {
         assert !isColumnRange();
 
-        ColumnNameBuilder builder = cfm.getColumnNameBuilder();
+        CBuilder builder = cfm.comparator.prefixBuilder();
         Iterator<ColumnDefinition> idIter = cfm.clusteringColumns().iterator();
         for (Restriction r : columnRestrictions)
         {
-            ColumnIdentifier id = idIter.next().name;
+            ColumnDefinition def = idIter.next();
             assert r != null && !r.isSlice();
 
             List<ByteBuffer> values = r.values(variables);
@@ -14,7 +14,7 @@
             {
                 ByteBuffer val = values.get(0);
                 if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", id));
+                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
                 builder.add(val);
             }
             else
@@ -24,24 +24,21 @@
                 // for each value of the IN, creates all the columns corresponding to the selection.
                 if (values.isEmpty())
                     return null;
-                SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfm.comparator);
+                SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
                 Iterator<ByteBuffer> iter = values.iterator();
                 while (iter.hasNext())
                 {
                     ByteBuffer val = iter.next();
-                    ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
                     if (val == null)
-                        throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", id));
-                    b.add(val);
-                    if (cfm.isDense())
-                        columns.add(b.build());
-                    else
-                        columns.addAll(addSelectedColumns(b));
+                        throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
+
+                    Composite prefix = builder.buildWith(val);
+                    columns.addAll(addSelectedColumns(prefix));
                 }
                 return columns;
             }
         }
 
-        return addSelectedColumns(builder);
+        return addSelectedColumns(builder.build());
     }
 

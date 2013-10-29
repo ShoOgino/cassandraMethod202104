@@ -1,0 +1,74 @@
+    protected AbstractCellNameType()
+    {
+        columnComparator = new Comparator<Column>()
+        {
+            public int compare(Column c1, Column c2)
+            {
+                return AbstractCellNameType.this.compare(c1.name(), c2.name());
+            }
+        };
+        columnReverseComparator = new Comparator<Column>()
+        {
+            public int compare(Column c1, Column c2)
+            {
+                return AbstractCellNameType.this.compare(c2.name(), c1.name());
+            }
+        };
+        onDiskAtomComparator = new Comparator<OnDiskAtom>()
+        {
+            public int compare(OnDiskAtom c1, OnDiskAtom c2)
+            {
+                int comp = AbstractCellNameType.this.compare(c1.name(), c2.name());
+                if (comp != 0)
+                    return comp;
+
+                if (c1 instanceof RangeTombstone)
+                {
+                    if (c2 instanceof RangeTombstone)
+                    {
+                        RangeTombstone t1 = (RangeTombstone)c1;
+                        RangeTombstone t2 = (RangeTombstone)c2;
+                        int comp2 = AbstractCellNameType.this.compare(t1.max, t2.max);
+                        return comp2 == 0 ? t1.data.compareTo(t2.data) : comp2;
+                    }
+                    else
+                    {
+                        return -1;
+                    }
+                }
+                else
+                {
+                    return c2 instanceof RangeTombstone ? 1 : 0;
+                }
+            }
+        };
+
+        // A trivial wrapped over the composite serializer
+        cellSerializer = new ISerializer<CellName>()
+        {
+            public void serialize(CellName c, DataOutput out) throws IOException
+            {
+                serializer().serialize(c, out);
+            }
+
+            public CellName deserialize(DataInput in) throws IOException
+            {
+                Composite ct = serializer().deserialize(in);
+                if (ct.isEmpty())
+                    throw ColumnSerializer.CorruptColumnException.create(in, ByteBufferUtil.EMPTY_BYTE_BUFFER);
+
+                assert ct instanceof CellName : ct;
+                return (CellName)ct;
+            }
+
+            public long serializedSize(CellName c, TypeSizes type)
+            {
+                return serializer().serializedSize(c, type);
+            }
+        };
+        columnSerializer = new ColumnSerializer(this);
+        onDiskAtomSerializer = new OnDiskAtom.Serializer(this);
+        namesQueryFilterSerializer = new NamesQueryFilter.Serializer(this);
+        diskAtomFilterSerializer = new IDiskAtomFilter.Serializer(this);
+    }
+

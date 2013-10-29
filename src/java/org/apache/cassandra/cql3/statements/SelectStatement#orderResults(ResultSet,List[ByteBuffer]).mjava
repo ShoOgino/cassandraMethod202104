@@ -1,0 +1,44 @@
+    /**
+     * Orders results when multiple keys are selected (using IN)
+     */
+    private void orderResults(ResultSet cqlRows, List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        if (cqlRows.size() == 0)
+            return;
+
+        /*
+         * We need to do post-query ordering in 2 cases:
+         *   1) if the last clustering key is restricted by a IN.
+         *   2) if the row key is restricted by a IN and there is some ORDER BY values
+         */
+        if (!(lastClusteringIsIn || (keyIsInRelation && parameters.orderings.size() > 0)))
+            return;
+
+        assert orderingIndexes != null;
+
+        List<Integer> idToSort = new ArrayList<Integer>();
+        List<Comparator<ByteBuffer>> sorters = new ArrayList<Comparator<ByteBuffer>>();
+
+        // If the restriction for the last clustering key is an IN, respect requested order
+        if (lastClusteringIsIn)
+        {
+            List<ColumnDefinition> cc = cfm.clusteringColumns();
+            idToSort.add(orderingIndexes.get(cc.get(cc.size() - 1).name));
+            Restriction last = columnRestrictions[columnRestrictions.length - 1];
+            sorters.add(makeComparatorFor(last.values(variables)));
+        }
+
+        // Then add the order by
+        for (ColumnIdentifier identifier : parameters.orderings.keySet())
+        {
+            ColumnDefinition orderingColumn = cfm.getColumnDefinition(identifier);
+            idToSort.add(orderingIndexes.get(orderingColumn.name));
+            sorters.add(orderingColumn.type);
+        }
+
+        Comparator<List<ByteBuffer>> comparator = idToSort.size() == 1
+                                                ? new SingleColumnComparator(idToSort.get(0), sorters.get(0))
+                                                : new CompositeComparator(sorters, idToSort);
+        Collections.sort(cqlRows.rows, comparator);
+    }
+
