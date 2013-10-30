@@ -5,17 +5,30 @@
         this.controller = controller;
         indexer = controller.cfs.indexManager.updaterFor(key);
 
-        maxDelTimestamp = Long.MIN_VALUE;
+        ColumnFamily rawCf = null;
+        maxTombstoneTimestamp = Long.MIN_VALUE;
         for (OnDiskAtomIterator row : rows)
         {
             ColumnFamily cf = row.getColumnFamily();
-            maxDelTimestamp = Math.max(maxDelTimestamp, cf.deletionInfo().maxTimestamp());
+            maxTombstoneTimestamp = Math.max(maxTombstoneTimestamp, cf.deletionInfo().maxTimestamp());
 
-            if (emptyColumnFamily == null)
-                emptyColumnFamily = cf;
+            if (rawCf == null)
+                rawCf = cf;
             else
-                emptyColumnFamily.delete(cf);
+                rawCf.delete(cf);
         }
-        this.shouldPurge = controller.shouldPurge(key, maxDelTimestamp);
+
+        // Don't pass maxTombstoneTimestamp to shouldPurge since we might well have cells with
+        // tombstones newer than the row-level tombstones we've seen -- but we won't know that
+        // until we iterate over them.  By passing MAX_VALUE we will only purge if there are
+        // no other versions of this row present.
+        this.shouldPurge = controller.shouldPurge(key, Long.MAX_VALUE);
+
+        // even if we can't delete all the tombstones allowed by gcBefore, we should still call removeDeleted
+        // to get rid of redundant row-level and range tombstones
+        assert rawCf != null;
+        int overriddenGcBefore = shouldPurge ? controller.gcBefore : Integer.MIN_VALUE;
+        ColumnFamily purgedCf = ColumnFamilyStore.removeDeleted(rawCf, overriddenGcBefore);
+        emptyColumnFamily = purgedCf == null ? ArrayBackedSortedColumns.factory.create(controller.cfs.metadata) : purgedCf;
     }
 
