@@ -1,0 +1,41 @@
+    @Test
+    public void testOpeningSSTable() throws Exception
+    {
+        String ks = "Keyspace1";
+        String cf = "Standard1";
+
+        // clear and create just one sstable for this test
+        Keyspace keyspace = Keyspace.open(ks);
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore(cf);
+        store.clearUnsafe();
+        store.disableAutoCompaction();
+
+        DecoratedKey firstKey = null, lastKey = null;
+        long timestamp = System.currentTimeMillis();
+        for (int i = 0; i < store.metadata.getIndexInterval(); i++)
+        {
+            DecoratedKey key = Util.dk(String.valueOf(i));
+            if (firstKey == null)
+                firstKey = key;
+            if (lastKey == null)
+                lastKey = key;
+            if (store.metadata.getKeyValidator().compare(lastKey.key, key.key) < 0)
+                lastKey = key;
+            RowMutation rm = new RowMutation(ks, key.key);
+            rm.add(cf, ByteBufferUtil.bytes("col"),
+                   ByteBufferUtil.EMPTY_BYTE_BUFFER, timestamp);
+            rm.apply();
+        }
+        store.forceBlockingFlush();
+
+        SSTableReader sstable = store.getSSTables().iterator().next();
+        Descriptor desc = sstable.descriptor;
+
+        // test to see if sstable can be opened as expected
+        SSTableReader target = SSTableReader.open(desc);
+        Assert.assertEquals(target.getKeySampleSize(), 1);
+        Assert.assertArrayEquals(ByteBufferUtil.getArray(firstKey.key), target.getKeySample(0));
+        assert target.first.equals(firstKey);
+        assert target.last.equals(lastKey);
+    }
+

@@ -1,0 +1,34 @@
+    @Test
+    public void testGetPositionsForRangesWithKeyCache() throws IOException, ExecutionException, InterruptedException
+    {
+        Keyspace keyspace = Keyspace.open("Keyspace1");
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore("Standard2");
+        CacheService.instance.keyCache.setCapacity(100);
+
+        // insert data and compact to a single sstable
+        CompactionManager.instance.disableAutoCompaction();
+        for (int j = 0; j < 10; j++)
+        {
+            ByteBuffer key = ByteBufferUtil.bytes(String.valueOf(j));
+            RowMutation rm = new RowMutation("Keyspace1", key);
+            rm.add("Standard2", ByteBufferUtil.bytes("0"), ByteBufferUtil.EMPTY_BYTE_BUFFER, j);
+            rm.apply();
+        }
+        store.forceBlockingFlush();
+        CompactionManager.instance.performMaximal(store);
+
+        SSTableReader sstable = store.getSSTables().iterator().next();
+        long p2 = sstable.getPosition(k(2), SSTableReader.Operator.EQ).position;
+        long p3 = sstable.getPosition(k(3), SSTableReader.Operator.EQ).position;
+        long p6 = sstable.getPosition(k(6), SSTableReader.Operator.EQ).position;
+        long p7 = sstable.getPosition(k(7), SSTableReader.Operator.EQ).position;
+
+        Pair<Long, Long> p = sstable.getPositionsForRanges(makeRanges(t(2), t(6))).iterator().next();
+
+        // range are start exclusive so we should start at 3
+        assert p.left == p3;
+
+        // to capture 6 we have to stop at the start of 7
+        assert p.right == p7;
+    }
+
