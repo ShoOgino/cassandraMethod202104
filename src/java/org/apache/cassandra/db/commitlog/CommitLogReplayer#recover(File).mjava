@@ -1,5 +1,6 @@
     public void recover(File file) throws IOException
     {
+        final ReplayFilter replayFilter = ReplayFilter.create();
         logger.info("Replaying {}", file.getPath());
         CommitLogDescriptor desc = CommitLogDescriptor.fromFileName(file.getName());
         final long segment = desc.id;
@@ -83,7 +84,7 @@
 
                 /* deserialize the commit log entry */
                 FastByteArrayInputStream bufIn = new FastByteArrayInputStream(buffer, 0, serializedSize);
-                RowMutation rm;
+                final RowMutation rm;
                 try
                 {
                     // assuming version here. We've gone to lengths to make sure what gets written to the CL is in
@@ -130,36 +131,36 @@
                     logger.debug("replaying mutation for {}.{}: {}", rm.getKeyspaceName(), ByteBufferUtil.bytesToHex(rm.key()), "{" + StringUtils.join(rm.getColumnFamilies().iterator(), ", ") + "}");
 
                 final long entryLocation = reader.getFilePointer();
-                final RowMutation frm = rm;
                 Runnable runnable = new WrappedRunnable()
                 {
                     public void runMayThrow() throws IOException
                     {
-                        if (Schema.instance.getKSMetaData(frm.getKeyspaceName()) == null)
+                        if (Schema.instance.getKSMetaData(rm.getKeyspaceName()) == null)
                             return;
-                        if (pointInTimeExceeded(frm))
+                        if (pointInTimeExceeded(rm))
                             return;
 
-                        final Keyspace keyspace = Keyspace.open(frm.getKeyspaceName());
+                        final Keyspace keyspace = Keyspace.open(rm.getKeyspaceName());
 
-                        // Rebuild the row mutation, omitting column families that 
-                        // a) have already been flushed,
-                        // b) are part of a cf that was dropped. Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
+                        // Rebuild the row mutation, omitting column families that
+                        //    a) the user has requested that we ignore,
+                        //    b) have already been flushed,
+                        // or c) are part of a cf that was dropped.
+                        // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
                         RowMutation newRm = null;
-                        for (ColumnFamily columnFamily : frm.getColumnFamilies())
+                        for (ColumnFamily columnFamily : replayFilter.filter(rm))
                         {
                             if (Schema.instance.getCF(columnFamily.id()) == null)
-                                // null means the cf has been dropped
-                                continue;
+                                continue; // dropped
 
                             ReplayPosition rp = cfPositions.get(columnFamily.id());
 
-                            // replay if current segment is newer than last flushed one or, 
+                            // replay if current segment is newer than last flushed one or,
                             // if it is the last known segment, if we are after the replay position
                             if (segment > rp.segment || (segment == rp.segment && entryLocation > rp.position))
                             {
                                 if (newRm == null)
-                                    newRm = new RowMutation(frm.getKeyspaceName(), frm.key());
+                                    newRm = new RowMutation(rm.getKeyspaceName(), rm.key());
                                 newRm.add(columnFamily);
                                 replayedCount.incrementAndGet();
                             }
