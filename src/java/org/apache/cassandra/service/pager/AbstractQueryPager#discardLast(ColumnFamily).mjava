@@ -1,20 +1,9 @@
     private ColumnFamily discardLast(ColumnFamily cf)
     {
-        ColumnFamily copy = cf.cloneMeShallow();
-        // Redoing the counting like that is not extremely efficient, but
-        // discardLast is only called in case of a race between paging and
-        // a deletion, which is pretty unlikely, so probably not a big deal
-        int liveCount = columnCounter().countAll(cf).live();
-
-        ColumnCounter counter = columnCounter();
-        DeletionInfo.InOrderTester tester = cf.inOrderDeletionTester();
-        // Discard the first live
-        for (Column c : cf)
-        {
-            counter.count(c, tester);
-            if (counter.live() < liveCount)
-                copy.addColumn(c);
-        }
-        return copy;
+        boolean isReversed = isReversed();
+        DeletionInfo.InOrderTester tester = cf.deletionInfo().inOrderTester(isReversed);
+        return isReversed
+             ? discardHead(cf, cf.reverseIterator(), tester)
+             : discardTail(cf, cf.iterator(), tester);
     }
 
