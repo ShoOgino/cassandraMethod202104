@@ -1,40 +1,54 @@
     public void run()
     {
+        // keeping list (batch) size small for now; that way we don't have an unbounded array (that we never resize)
+        final List<QueuedMessage> drainedMessages = new ArrayList<>(128);
+        outer:
         while (true)
         {
-            QueuedMessage qm = active.poll();
-            if (qm == null)
+            if (backlog.drainTo(drainedMessages, drainedMessages.size()) == 0)
             {
-                // exhausted the active queue.  switch to backlog, once there's something to process there
                 try
                 {
-                    qm = backlog.take();
+                    drainedMessages.add(backlog.take());
                 }
                 catch (InterruptedException e)
                 {
                     throw new AssertionError(e);
                 }
 
-                BlockingQueue<QueuedMessage> tmp = backlog;
-                backlog = active;
-                active = tmp;
             }
+            currentMsgBufferCount = drainedMessages.size();
 
-            MessageOut<?> m = qm.message;
-            if (m == CLOSE_SENTINEL)
+            int count = drainedMessages.size();
+            for (QueuedMessage qm : drainedMessages)
             {
-                disconnect();
-                if (isStopped)
-                    break;
-                continue;
+                try
+                {
+                    MessageOut<?> m = qm.message;
+                    if (m == CLOSE_SENTINEL)
+                    {
+                        disconnect();
+                        if (isStopped)
+                            break outer;
+                        continue;
+                    }
+                    if (qm.timestamp < System.currentTimeMillis() - m.getTimeout())
+                        dropped.incrementAndGet();
+                    else if (socket != null || connect())
+                        writeConnected(qm, count == 1 && backlog.size() == 0);
+                    else
+                        // clear out the queue, else gossip messages back up.
+                        backlog.clear();
+                }
+                catch (Exception e)
+                {
+                    // really shouldn't get here, as exception handling in writeConnected() is reasonably robust
+                    // but we want to catch anything bad we don't drop the messages in the current batch
+                    logger.error("error processing a message intended for {}", poolReference.endPoint(), e);
+                }
+                currentMsgBufferCount = --count;
             }
-            if (qm.timestamp < System.currentTimeMillis() - m.getTimeout())
-                dropped.incrementAndGet();
-            else if (socket != null || connect())
-                writeConnected(qm);
-            else
-                // clear out the queue, else gossip messages back up.
-                active.clear();
+            drainedMessages.clear();
         }
     }
 
