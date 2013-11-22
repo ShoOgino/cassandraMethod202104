@@ -5,19 +5,27 @@
      */
     public void releaseReference()
     {
-        if (references.decrementAndGet() == 0 && isCompacted.get())
+        if (references.decrementAndGet() == 0)
         {
-            /**
-             * Make OS a favour and suggest (using fadvice call) that we
-             * don't want to see pages of this SSTable in memory anymore.
-             *
-             * NOTE: We can't use madvice in java because it requires address of
-             * the mapping, so instead we always open a file and run fadvice(fd, 0, 0) on it
-             */
-            dropPageCache();
-
             FileUtils.closeQuietly(this);
-            deletingTask.schedule();
+
+            // if this SSTR instance was replaced by another with a different index summary, let the new instance
+            // handle clearing the page cache and deleting the files
+            if (isCompacted.get())
+            {
+                assert !isReplaced.get();
+
+                /**
+                 * Do the OS a favour and suggest (using fadvice call) that we
+                 * don't want to see pages of this SSTable in memory anymore.
+                 *
+                 * NOTE: We can't use madvice in java because it requires the address of
+                 * the mapping, so instead we always open a file and run fadvice(fd, 0, 0) on it
+                 */
+                dropPageCache();
+
+                deletingTask.schedule();
+            }
         }
         assert references.get() >= 0 : "Reference counter " +  references.get() + " for " + dfile.path;
     }

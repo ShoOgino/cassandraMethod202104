@@ -1,0 +1,65 @@
+    /**
+     * Downsamples an existing index summary to a new sampling level.
+     * @param existing an existing IndexSummary
+     * @param newSamplingLevel the target level for the new IndexSummary.  This must be less than the current sampling
+     *                         level for `existing`.
+     * @param partitioner the partitioner used for the index summary
+     * @return a new IndexSummary
+     */
+    public static IndexSummary downsample(IndexSummary existing, int newSamplingLevel, IPartitioner partitioner)
+    {
+        // To downsample the old index summary, we'll go through (potentially) several rounds of downsampling.
+        // Conceptually, each round starts at position X and then removes every Nth item.  The value of X follows
+        // a particular pattern to evenly space out the items that we remove.  The value of N decreases by one each
+        // round.
+
+        int currentSamplingLevel = existing.getSamplingLevel();
+        assert currentSamplingLevel > newSamplingLevel;
+
+        // calculate starting indexes for downsampling rounds
+        int[] startPoints = Downsampling.getStartPoints(currentSamplingLevel, newSamplingLevel);
+
+        // calculate new off-heap size
+        int removedKeyCount = 0;
+        long newOffHeapSize = existing.getOffHeapSize();
+        for (int start : startPoints)
+        {
+            for (int j = start; j < existing.size(); j += currentSamplingLevel)
+            {
+                removedKeyCount++;
+                newOffHeapSize -= existing.getEntry(j).length;
+            }
+        }
+
+        int newKeyCount = existing.size() - removedKeyCount;
+
+        // Subtract (removedKeyCount * 4) from the new size to account for fewer entries in the first section, which
+        // stores the position of the actual entries in the summary.
+        Memory memory = Memory.allocate(newOffHeapSize - (removedKeyCount * 4));
+
+        // Copy old entries to our new Memory.
+        int idxPosition = 0;
+        int keyPosition = newKeyCount * 4;
+        outer:
+        for (int oldSummaryIndex = 0; oldSummaryIndex < existing.size(); oldSummaryIndex++)
+        {
+            // to determine if we can skip this entry, go through the starting points for our downsampling rounds
+            // and see if the entry's index is covered by that round
+            for (int start : startPoints)
+            {
+                if ((oldSummaryIndex - start) % currentSamplingLevel == 0)
+                    continue outer;
+            }
+
+            // write the position of the actual entry in the index summary (4 bytes)
+            memory.setInt(idxPosition, keyPosition);
+            idxPosition += TypeSizes.NATIVE.sizeof(keyPosition);
+
+            // write the entry itself
+            byte[] entry = existing.getEntry(oldSummaryIndex);
+            memory.setBytes(keyPosition, entry, 0, entry.length);
+            keyPosition += entry.length;
+        }
+        return new IndexSummary(partitioner, memory, newKeyCount, existing.getMaxNumberOfEntries(), existing.getIndexInterval(), newSamplingLevel);
+    }
+
