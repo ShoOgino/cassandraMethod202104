@@ -1,5 +1,5 @@
     /*
-     This is complicated because we need to preserve deleted columns, supercolumns, and columnfamilies
+     This is complicated because we need to preserve deleted columns and columnfamilies
      until they have been deleted for at least GC_GRACE_IN_SECONDS.  But, we do not need to preserve
      their contents; just the object itself as a "tombstone" that can be used to repair other
      replicas that do not know about the deletion.
@@ -11,7 +11,23 @@
             return null;
         }
 
-        removeDeletedColumnsOnly(cf, gcBefore, indexer);
+        Iterator<Column> iter = cf.iterator();
+        DeletionInfo.InOrderTester tester = cf.inOrderDeletionTester();
+        boolean hasDroppedColumns = !cf.metadata.getDroppedColumns().isEmpty();
+        while (iter.hasNext())
+        {
+            Column c = iter.next();
+            // remove columns if
+            // (a) the column itself is gcable or
+            // (b) the column is shadowed by a CF tombstone
+            // (c) the column has been dropped from the CF schema (CQL3 tables only)
+            if (c.getLocalDeletionTime() < gcBefore || tester.isDeleted(c) || (hasDroppedColumns && isDroppedColumn(c, cf.metadata())))
+            {
+                iter.remove();
+                indexer.remove(c);
+            }
+        }
+
         return removeDeletedCF(cf, gcBefore);
     }
 
