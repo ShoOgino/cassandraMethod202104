@@ -3,12 +3,15 @@
      *
      * @param keyspaceName keyspace to repair
      * @param toRepair token to repair
-     * @param isLocal need to use only nodes from local datacenter
+     * @param dataCenters the data centers to involve in the repair
      *
      * @return neighbors with whom we share the provided range
      */
-    public static Set<InetAddress> getNeighbors(String keyspaceName, Range<Token> toRepair, boolean isLocal)
+    public static Set<InetAddress> getNeighbors(String keyspaceName, Range<Token> toRepair, Collection<String> dataCenters)
     {
+        if (dataCenters != null && !dataCenters.contains(DatabaseDescriptor.getLocalDataCenter()))
+            throw new IllegalArgumentException("The local data center must be part of the repair");
+
         StorageService ss = StorageService.instance;
         Map<Range<Token>, List<InetAddress>> replicaSets = ss.getRangeToAddressMap(keyspaceName);
         Range<Token> rangeSuperSet = null;
@@ -30,11 +33,18 @@
         Set<InetAddress> neighbors = new HashSet<>(replicaSets.get(rangeSuperSet));
         neighbors.remove(FBUtilities.getBroadcastAddress());
 
-        if (isLocal)
+        if (dataCenters != null)
         {
             TokenMetadata.Topology topology = ss.getTokenMetadata().cloneOnlyTokenMap().getTopology();
-            Set<InetAddress> localEndpoints = Sets.newHashSet(topology.getDatacenterEndpoints().get(DatabaseDescriptor.getLocalDataCenter()));
-            return Sets.intersection(neighbors, localEndpoints);
+            Set<InetAddress> dcEndpoints = Sets.newHashSet();
+            Multimap<String,InetAddress> dcEndpointsMap = topology.getDatacenterEndpoints();
+            for (String dc : dataCenters)
+            {
+                Collection<InetAddress> c = dcEndpointsMap.get(dc);
+                if (c != null)
+                   dcEndpoints.addAll(c);
+            }
+            return Sets.intersection(neighbors, dcEndpoints);
         }
 
         return neighbors;
