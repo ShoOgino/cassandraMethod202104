@@ -1,0 +1,36 @@
+    /**
+     * Switch to a new segment, regardless of how much is left in the current one.
+     *
+     * Flushes any dirty CFs for this segment and any older segments, and then recycles
+     * the segments
+     */
+    void forceRecycleAll()
+    {
+        CommitLogSegment last = allocatingFrom;
+        last.discardUnusedTail();
+        List<CommitLogSegment> segmentsToRecycle = new ArrayList<>(activeSegments);
+        advanceAllocatingFrom(last);
+
+        // flush and wait for all CFs that are dirty in segments up-to and including 'last'
+        Future<?> future = flushDataFrom(segmentsToRecycle);
+        try
+        {
+            future.get();
+
+            // now recycle segments that are unused, as we may not have triggered a discardCompletedSegments()
+            // if the previous active segment was the only one to recycle (since an active segment isn't
+            // necessarily dirty, and we only call dCS after a flush).
+            for (CommitLogSegment segment : activeSegments)
+                if (segment.isUnused())
+                    recycleSegment(segment);
+
+            CommitLogSegment first;
+            assert (first = activeSegments.peek()) == null || first.id > last.id;
+        }
+        catch (Throwable t)
+        {
+            // for now just log the error and return false, indicating that we failed
+            logger.error("Failed waiting for a forced recycle of in-use commit log segments", t);
+        }
+    }
+

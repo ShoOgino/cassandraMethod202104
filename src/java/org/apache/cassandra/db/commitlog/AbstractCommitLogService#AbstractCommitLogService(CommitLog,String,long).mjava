@@ -1,0 +1,67 @@
+    /**
+     * CommitLogService provides a fsync service for Allocations, fulfilling either the
+     * Batch or Periodic contract.
+     *
+     * Subclasses may be notified when a sync finishes by using the syncComplete WaitQueue.
+     */
+    AbstractCommitLogService(final CommitLog commitLog, final String name, final long pollIntervalMillis)
+    {
+        if (pollIntervalMillis < 1)
+            throw new IllegalArgumentException(String.format("Commit log flush interval must be positive: %dms", pollIntervalMillis));
+
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                boolean run = true;
+                while (run)
+                {
+                    try
+                    {
+                        // always run once after shutdown signalled
+                        run = !shutdown;
+
+                        // sync and signal
+                        long syncStarted = System.currentTimeMillis();
+                        commitLog.sync(shutdown);
+                        lastSyncedAt = syncStarted;
+                        syncComplete.signalAll();
+
+                        // sleep any time we have left before the next one is due
+                        long sleep = syncStarted + pollIntervalMillis - System.currentTimeMillis();
+                        if (sleep < 0)
+                        {
+                            logger.warn(String.format("Commit log sync took longer than sync interval (by %.2fs), indicating it is a bottleneck", sleep / -1000d));
+                            // don't sleep, as we probably have work to do
+                            continue;
+                        }
+                        try
+                        {
+                            haveWork.tryAcquire(sleep, TimeUnit.MILLISECONDS);
+                        }
+                        catch (InterruptedException e)
+                        {
+                            throw new AssertionError();
+                        }
+                    }
+                    catch (Throwable t)
+                    {
+                        logger.error("Commit log sync failed", t);
+                        // sleep for full poll-interval after an error, so we don't spam the log file
+                        try
+                        {
+                            haveWork.tryAcquire(pollIntervalMillis, TimeUnit.MILLISECONDS);
+                        }
+                        catch (InterruptedException e)
+                        {
+                            throw new AssertionError();
+                        }
+                    }
+                }
+            }
+        };
+
+        thread = new Thread(runnable, name);
+        thread.start();
+    }
+

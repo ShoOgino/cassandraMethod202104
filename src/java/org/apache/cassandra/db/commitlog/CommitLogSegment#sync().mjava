@@ -1,19 +1,74 @@
     /**
      * Forces a disk flush for this segment file.
      */
-    public void sync()
+    synchronized void sync()
     {
-        if (needsSync)
+        try
         {
-            try
+            // check we have more work to do
+            if (allocatePosition.get() <= lastSyncedOffset + SYNC_MARKER_SIZE)
+                return;
+
+            // allocate a new sync marker; this is both necessary in itself, but also serves to demarcate
+            // the point at which we can safely consider records to have been completely written to
+            int nextMarker;
+            nextMarker = allocate(SYNC_MARKER_SIZE);
+            boolean close = false;
+            if (nextMarker < 0)
             {
-                buffer.force();
+                // ensure no more of this CLS is writeable, and mark ourselves for closing
+                discardUnusedTail();
+                close = true;
+
+                if (discardedTailFrom < buffer.capacity() - SYNC_MARKER_SIZE)
+                {
+                    // if there's room in the discard section to write an empty header, use that as the nextMarker
+                    nextMarker = discardedTailFrom;
+                }
+                else
+                {
+                    // not enough space left in the buffer, so mark the next sync marker as the EOF position
+                    nextMarker = buffer.capacity();
+                }
             }
-            catch (Exception e) // MappedByteBuffer.force() does not declare IOException but can actually throw it
+
+            // swap the append lock
+            AppendLock curAppendLock = appendLock.get();
+            appendLock.set(new AppendLock());
+            curAppendLock.expireAndWaitForCompletion();
+
+            // write previous sync marker to point to next sync marker
+            // we don't chain the crcs here to ensure this method is idempotent if it fails
+            int offset = lastSyncedOffset;
+            final PureJavaCrc32 crc = new PureJavaCrc32();
+            crc.update((int) (id & 0xFFFFFFFFL));
+            crc.update((int) (id >>> 32));
+            crc.update(offset);
+            buffer.putInt(offset, nextMarker);
+            buffer.putLong(offset + 4, crc.getValue());
+
+            // zero out the next sync marker so replayer can cleanly exit
+            if (nextMarker < buffer.capacity())
             {
-                throw new FSWriteError(e, getPath());
+                buffer.putInt(nextMarker, 0);
+                buffer.putLong(nextMarker + 4, 0);
             }
-            needsSync = false;
+
+            // actually perform the sync and signal those waiting for it
+            buffer.force();
+            syncComplete.signalAll();
+
+            if (close)
+            {
+                close();
+                nextMarker = buffer.capacity();
+            }
+
+            lastSyncedOffset = nextMarker;
+        }
+        catch (Exception e) // MappedByteBuffer.force() does not declare IOException but can actually throw it
+        {
+            throw new FSWriteError(e, getPath());
         }
     }
 

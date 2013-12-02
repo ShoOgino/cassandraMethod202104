@@ -1,0 +1,64 @@
+    /**
+     * Fetches a new segment from the queue, creating a new one if necessary, and activates it
+     */
+    private void advanceAllocatingFrom(CommitLogSegment old)
+    {
+        while (true)
+        {
+            Iterator<CommitLogSegment> iter = availableSegments.iterator();
+            if (iter.hasNext())
+            {
+                CommitLogSegment next;
+                if (!allocatingFromUpdater.compareAndSet(this, old, next = iter.next()))
+                    // failed to swap so we should already be able to continue
+                    return;
+
+                iter.remove();
+                activeSegments.add(next);
+
+                if (availableSegments.isEmpty())
+                {
+                    // if we've emptied the queue of available segments, trigger the manager to maybe add another
+                    wakeManager();
+                }
+
+                if (old != null)
+                {
+                    // Now we can run the user defined command just after switching to the new commit log.
+                    // (Do this here instead of in the recycle call so we can get a head start on the archive.)
+                    CommitLog.instance.archiver.maybeArchive(old.getPath(), old.getName());
+                }
+
+                // ensure we don't continue to use the old file; not strictly necessary, but cleaner to enforce it
+                if (old != null)
+                    old.discardUnusedTail();
+
+                // request that the CL be synced out-of-band, as we've finished a segment
+                CommitLog.instance.requestExtraSync();
+                return;
+            }
+
+            // no more segments, so register to receive a signal when not empty
+            WaitQueue.Signal signal = hasAvailableSegments.register();
+
+            // trigger the management thread; this must occur after registering
+            // the signal to ensure we are woken by any new segment creation
+            wakeManager();
+
+            // check if the queue has already been added to before waiting on the signal, to catch modifications
+            // that happened prior to registering the signal
+            if (availableSegments.isEmpty())
+            {
+                // check to see if we've been beaten to it
+                if (allocatingFrom != old)
+                    return;
+
+                // can only reach here if the queue hasn't been inserted into
+                // before we registered the signal, as we only remove items from the queue
+                // after updating allocatingFrom. Can safely block until we are signalled
+                // by the allocator that new segments have been published
+                signal.awaitUninterruptibly();
+            }
+        }
+    }
+

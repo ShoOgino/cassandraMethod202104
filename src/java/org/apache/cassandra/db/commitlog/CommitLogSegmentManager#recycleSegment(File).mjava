@@ -1,0 +1,29 @@
+    /**
+     * Differs from the above because it can work on any file instead of just existing
+     * commit log segments managed by this manager.
+     *
+     * @param file segment file that is no longer in use.
+     */
+    void recycleSegment(final File file)
+    {
+        if (isCapExceeded()
+            || CommitLogDescriptor.fromFileName(file.getName()).getMessagingVersion() != MessagingService.current_version)
+        {
+            // (don't decrease managed size, since this was never a "live" segment)
+            logger.debug("(Unopened) segment {} is no longer needed and will be deleted now", file);
+            FileUtils.deleteWithConfirm(file);
+            return;
+        }
+
+        logger.debug("Recycling {}", file);
+        // this wasn't previously a live segment, so add it to the managed size when we make it live
+        size.addAndGet(DatabaseDescriptor.getCommitLogSegmentSize());
+        segmentManagementTasks.add(new Callable<CommitLogSegment>()
+        {
+            public CommitLogSegment call()
+            {
+                return new CommitLogSegment(file.getPath());
+            }
+        });
+    }
+
