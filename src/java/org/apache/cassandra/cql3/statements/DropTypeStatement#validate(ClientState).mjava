@@ -1,6 +1,10 @@
     public void validate(ClientState state) throws RequestValidationException
     {
-        UserType old = Schema.instance.userTypes.getType(name);
+        KSMetaData ksm = Schema.instance.getKSMetaData(name.getKeyspace());
+        if (ksm == null)
+            throw new InvalidRequestException(String.format("Cannot drop type in unknown keyspace %s", name.getKeyspace()));
+
+        UserType old = ksm.userTypes.getType(name.getUserTypeName());
         if (old == null)
         {
             if (ifExists)
@@ -15,18 +19,21 @@
         // We have two places to check: 1) other user type that can nest the one
         // we drop and 2) existing tables referencing the type (maybe in a nested
         // way).
-        for (UserType ut : Schema.instance.userTypes.getAllTypes().values())
-        {
-            if (ut.name.equals(name.bytes))
-                continue;
-            if (isUsedBy(ut))
-                throw new InvalidRequestException(String.format("Cannot drop user type %s as it is still used by user type %s", name, ut.asCQL3Type()));
-        }
 
-        for (KSMetaData ksm : Schema.instance.getKeyspaceDefinitions())
-            for (CFMetaData cfm : ksm.cfMetaData().values())
+        for (KSMetaData ksm2 : Schema.instance.getKeyspaceDefinitions())
+        {
+            for (UserType ut : ksm2.userTypes.getAllTypes().values())
+            {
+                if (ut.keyspace.equals(name.getKeyspace()) && ut.name.equals(name.getUserTypeName()))
+                    continue;
+                if (isUsedBy(ut))
+                    throw new InvalidRequestException(String.format("Cannot drop user type %s as it is still used by user type %s", name, ut.asCQL3Type()));
+            }
+
+            for (CFMetaData cfm : ksm2.cfMetaData().values())
                 for (ColumnDefinition def : cfm.allColumns())
                     if (isUsedBy(def.type))
                         throw new InvalidRequestException(String.format("Cannot drop user type %s as it is still used by table %s.%s", name, cfm.ksName, cfm.cfName));
+        }
     }
 

@@ -1,0 +1,48 @@
+    private static void mergeTypes(Map<DecoratedKey, ColumnFamily> old, Map<DecoratedKey, ColumnFamily> updated)
+    {
+        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(old, updated);
+
+        // New keyspace with types
+        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
+        {
+            ColumnFamily cfTypes = entry.getValue();
+            if (cfTypes.getColumnCount() == 0)
+                continue;
+
+            for (UserType ut : UTMetaData.fromSchema(new Row(entry.getKey(), cfTypes)).values())
+                addType(ut);
+        }
+
+        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> modifiedEntry : diff.entriesDiffering().entrySet())
+        {
+            DecoratedKey keyspace = modifiedEntry.getKey();
+            ColumnFamily prevCFTypes = modifiedEntry.getValue().leftValue(); // state before external modification
+            ColumnFamily newCFTypes = modifiedEntry.getValue().rightValue(); // updated state
+
+            if (prevCFTypes.getColumnCount() == 0) // whole keyspace was deleted and now it's re-created
+            {
+                for (UserType ut : UTMetaData.fromSchema(new Row(keyspace, newCFTypes)).values())
+                    addType(ut);
+            }
+            else if (newCFTypes.getColumnCount() == 0) // whole keyspace is deleted
+            {
+                for (UserType ut : UTMetaData.fromSchema(new Row(keyspace, prevCFTypes)).values())
+                    dropType(ut);
+            }
+            else // has modifications in the types, need to perform nested diff to determine what was really changed
+            {
+                MapDifference<ByteBuffer, UserType> typesDiff = Maps.difference(UTMetaData.fromSchema(new Row(keyspace, prevCFTypes)),
+                                                                                UTMetaData.fromSchema(new Row(keyspace, newCFTypes)));
+
+                for (UserType type : typesDiff.entriesOnlyOnRight().values())
+                    addType(type);
+
+                for (UserType type : typesDiff.entriesOnlyOnLeft().values())
+                    dropType(type);
+
+                for (MapDifference.ValueDifference<UserType> tdiff : typesDiff.entriesDiffering().values())
+                    addType(tdiff.rightValue()); // use the most recent value
+            }
+        }
+    }
+

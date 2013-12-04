@@ -1,0 +1,68 @@
+    // Update the provided type were all instance of a given userType is replaced by a new version
+    // Note that this methods reaches inside other UserType, CompositeType and CollectionType.
+    private static AbstractType<?> updateWith(AbstractType<?> type, String keyspace, ByteBuffer toReplace, UserType updated)
+    {
+        if (type instanceof UserType)
+        {
+            UserType ut = (UserType)type;
+
+            // If it's directly the type we've updated, then just use the new one.
+            if (keyspace.equals(ut.keyspace) && toReplace.equals(ut.name))
+                return updated;
+
+            // Otherwise, check for nesting
+            List<AbstractType<?>> updatedTypes = updateTypes(ut.types, keyspace, toReplace, updated);
+            return updatedTypes == null ? null : new UserType(ut.keyspace, ut.name, new ArrayList<>(ut.columnNames), updatedTypes);
+        }
+        else if (type instanceof CompositeType)
+        {
+            CompositeType ct = (CompositeType)type;
+            List<AbstractType<?>> updatedTypes = updateTypes(ct.types, keyspace, toReplace, updated);
+            return updatedTypes == null ? null : CompositeType.getInstance(updatedTypes);
+        }
+        else if (type instanceof ColumnToCollectionType)
+        {
+            ColumnToCollectionType ctct = (ColumnToCollectionType)type;
+            Map<ByteBuffer, CollectionType> updatedTypes = null;
+            for (Map.Entry<ByteBuffer, CollectionType> entry : ctct.defined.entrySet())
+            {
+                AbstractType<?> t = updateWith(entry.getValue(), keyspace, toReplace, updated);
+                if (t == null)
+                    continue;
+
+                if (updatedTypes == null)
+                    updatedTypes = new HashMap<>(ctct.defined);
+
+                updatedTypes.put(entry.getKey(), (CollectionType)t);
+            }
+            return updatedTypes == null ? null : ColumnToCollectionType.getInstance(updatedTypes);
+        }
+        else if (type instanceof CollectionType)
+        {
+            if (type instanceof ListType)
+            {
+                AbstractType<?> t = updateWith(((ListType)type).elements, keyspace, toReplace, updated);
+                return t == null ? null : ListType.getInstance(t);
+            }
+            else if (type instanceof SetType)
+            {
+                AbstractType<?> t = updateWith(((SetType)type).elements, keyspace, toReplace, updated);
+                return t == null ? null : SetType.getInstance(t);
+            }
+            else
+            {
+                assert type instanceof MapType;
+                MapType mt = (MapType)type;
+                AbstractType<?> k = updateWith(mt.keys, keyspace, toReplace, updated);
+                AbstractType<?> v = updateWith(mt.values, keyspace, toReplace, updated);
+                if (k == null && v == null)
+                    return null;
+                return MapType.getInstance(k == null ? mt.keys : k, v == null ? mt.values : v);
+            }
+        }
+        else
+        {
+            return null;
+        }
+    }
+
