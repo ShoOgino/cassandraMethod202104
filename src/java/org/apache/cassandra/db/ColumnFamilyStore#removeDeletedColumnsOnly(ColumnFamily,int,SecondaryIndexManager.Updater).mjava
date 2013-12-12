@@ -1,0 +1,27 @@
+    /**
+     * Removes only per-cell tombstones, cells that are shadowed by a row-level or range tombstone, or
+     * columns that have been dropped from the schema (for CQL3 tables only).
+     * @return the updated ColumnFamily
+     */
+    public static ColumnFamily removeDeletedColumnsOnly(ColumnFamily cf, int gcBefore, SecondaryIndexManager.Updater indexer)
+    {
+        Iterator<Column> iter = cf.iterator();
+        DeletionInfo.InOrderTester tester = cf.inOrderDeletionTester();
+        boolean hasDroppedColumns = !cf.metadata.getDroppedColumns().isEmpty();
+        while (iter.hasNext())
+        {
+            Column c = iter.next();
+            // remove columns if
+            // (a) the column itself is gcable or
+            // (b) the column is shadowed by a CF tombstone
+            // (c) the column has been dropped from the CF schema (CQL3 tables only)
+            if (c.getLocalDeletionTime() < gcBefore || tester.isDeleted(c) || (hasDroppedColumns && isDroppedColumn(c, cf.metadata())))
+            {
+                iter.remove();
+                indexer.remove(c);
+            }
+        }
+
+        return cf;
+    }
+
