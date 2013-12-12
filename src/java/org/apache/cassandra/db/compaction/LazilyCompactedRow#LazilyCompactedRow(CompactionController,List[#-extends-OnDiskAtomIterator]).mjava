@@ -5,17 +5,15 @@
         this.controller = controller;
         indexer = controller.cfs.indexManager.updaterFor(key);
 
-        ColumnFamily rawCf = null;
+        // Combine top-level tombstones, keeping the one with the highest markedForDeleteAt timestamp.  This may be
+        // purged (depending on gcBefore), but we need to remember it to properly delete columns during the merge
+        deletionInfo = DeletionInfo.live();
         maxTombstoneTimestamp = Long.MIN_VALUE;
         for (OnDiskAtomIterator row : rows)
         {
-            ColumnFamily cf = row.getColumnFamily();
-            maxTombstoneTimestamp = Math.max(maxTombstoneTimestamp, cf.deletionInfo().maxTimestamp());
-
-            if (rawCf == null)
-                rawCf = cf;
-            else
-                rawCf.delete(cf);
+            DeletionInfo delInfo = row.getColumnFamily().deletionInfo();
+            maxTombstoneTimestamp = Math.max(maxTombstoneTimestamp, delInfo.maxTimestamp());
+            deletionInfo = deletionInfo.add(delInfo);
         }
 
         // Don't pass maxTombstoneTimestamp to shouldPurge since we might well have cells with
@@ -24,11 +22,9 @@
         // no other versions of this row present.
         this.shouldPurge = controller.shouldPurge(key, Long.MAX_VALUE);
 
-        // even if we can't delete all the tombstones allowed by gcBefore, we should still call removeDeleted
-        // to get rid of redundant row-level and range tombstones
-        assert rawCf != null;
-        int overriddenGcBefore = shouldPurge ? controller.gcBefore : Integer.MIN_VALUE;
-        ColumnFamily purgedCf = ColumnFamilyStore.removeDeleted(rawCf, overriddenGcBefore);
-        emptyColumnFamily = purgedCf == null ? ArrayBackedSortedColumns.factory.create(controller.cfs.metadata) : purgedCf;
+        emptyColumnFamily = ArrayBackedSortedColumns.factory.create(controller.cfs.metadata);
+        emptyColumnFamily.setDeletionInfo(deletionInfo.copy());
+        if (shouldPurge)
+            emptyColumnFamily.purgeTombstones(controller.gcBefore);
     }
 

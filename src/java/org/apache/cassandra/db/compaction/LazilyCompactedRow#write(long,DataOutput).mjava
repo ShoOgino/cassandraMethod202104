@@ -7,14 +7,10 @@
         {
             indexBuilder = new ColumnIndex.Builder(emptyColumnFamily, key.key, out);
             columnsIndex = indexBuilder.buildForCompaction(iterator());
-            if (columnsIndex.columnsIndex.isEmpty())
-            {
-                boolean cfIrrelevant = shouldPurge
-                                       ? ColumnFamilyStore.removeDeletedCF(emptyColumnFamily, controller.gcBefore) == null
-                                       : !emptyColumnFamily.isMarkedForDelete(); // tombstones are relevant
-                if (cfIrrelevant)
-                    return null;
-            }
+
+            // if there aren't any columns or tombstones, return null
+            if (columnsIndex.columnsIndex.isEmpty() && !emptyColumnFamily.isMarkedForDelete())
+                return null;
         }
         catch (IOException e)
         {
@@ -32,7 +28,9 @@
         );
         reducer = null;
 
+        // in case no columns were ever written, we may still need to write an empty header with a top-level tombstone
         indexBuilder.maybeWriteEmptyRowHeader();
+
         out.writeShort(SSTableWriter.END_OF_ROW);
 
         close();
