@@ -7,17 +7,21 @@
 
         // Combine top-level tombstones, keeping the one with the highest markedForDeleteAt timestamp.  This may be
         // purged (depending on gcBefore), but we need to remember it to properly delete columns during the merge
-        deletionInfo = DeletionInfo.live();
+        maxRowTombstone = DeletionTime.LIVE;
         for (OnDiskAtomIterator row : rows)
-            deletionInfo = deletionInfo.add(row.getColumnFamily().deletionInfo());
+        {
+            DeletionTime rowTombstone = row.getColumnFamily().deletionInfo().getTopLevelDeletion();
+            if (maxRowTombstone.compareTo(rowTombstone) < 0)
+                maxRowTombstone = rowTombstone;
+        }
 
         // tombstones with a localDeletionTime before this can be purged.  This is the minimum timestamp for any sstable
         // containing `key` outside of the set of sstables involved in this compaction.
         maxPurgeableTimestamp = controller.maxPurgeableTimestamp(key);
 
-        emptyColumnFamily = ArrayBackedSortedColumns.factory.create(controller.cfs.metadata);
-        emptyColumnFamily.setDeletionInfo(deletionInfo.copy());
-        if (deletionInfo.maxTimestamp() < maxPurgeableTimestamp)
+        emptyColumnFamily = EmptyColumns.factory.create(controller.cfs.metadata);
+        emptyColumnFamily.delete(maxRowTombstone);
+        if (maxRowTombstone.markedForDeleteAt < maxPurgeableTimestamp)
             emptyColumnFamily.purgeTombstones(controller.gcBefore);
 
         reducer = new Reducer();
