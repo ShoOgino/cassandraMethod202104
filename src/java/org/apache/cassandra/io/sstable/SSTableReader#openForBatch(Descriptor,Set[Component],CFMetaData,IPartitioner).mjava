@@ -1,24 +1,54 @@
+    /**
+     * Open SSTable reader to be used in batch mode(such as sstableloader).
+     *
+     * @param descriptor
+     * @param components
+     * @param metadata
+     * @param partitioner
+     * @return opened SSTableReader
+     * @throws IOException
+     */
     public static SSTableReader openForBatch(Descriptor descriptor, Set<Component> components, CFMetaData metadata, IPartitioner partitioner) throws IOException
     {
-        SSTableMetadata sstableMetadata = openMetadata(descriptor, components, partitioner);
+        // Minimum components without which we can't do anything
+        assert components.contains(Component.DATA) : "Data component is missing for sstable" + descriptor;
+        assert components.contains(Component.PRIMARY_INDEX) : "Primary index component is missing for sstable " + descriptor;
+
+        Map<MetadataType, MetadataComponent> sstableMetadata = descriptor.getMetadataSerializer().deserialize(descriptor,
+                                                                                                               EnumSet.of(MetadataType.VALIDATION, MetadataType.STATS));
+        ValidationMetadata validationMetadata = (ValidationMetadata) sstableMetadata.get(MetadataType.VALIDATION);
+        StatsMetadata statsMetadata = (StatsMetadata) sstableMetadata.get(MetadataType.STATS);
+
+        // Check if sstable is created using same partitioner.
+        // Partitioner can be null, which indicates older version of sstable or no stats available.
+        // In that case, we skip the check.
+        String partitionerName = partitioner.getClass().getCanonicalName();
+        if (validationMetadata != null && !partitionerName.equals(validationMetadata.partitioner))
+        {
+            logger.error(String.format("Cannot open %s; partitioner %s does not match system partitioner %s.  Note that the default partitioner starting with Cassandra 1.2 is Murmur3Partitioner, so you will need to edit that to match your old partitioner if upgrading.",
+                                              descriptor, validationMetadata.partitioner, partitionerName));
+            System.exit(1);
+        }
+
+        logger.info("Opening {} ({} bytes)", descriptor, new File(descriptor.filenameFor(Component.DATA)).length());
         SSTableReader sstable = new SSTableReader(descriptor,
                                                   components,
                                                   metadata,
                                                   partitioner,
                                                   System.currentTimeMillis(),
-                                                  sstableMetadata);
+                                                  statsMetadata);
 
         // special implementation of load to use non-pooled SegmentedFile builders
         SegmentedFile.Builder ibuilder = new BufferedSegmentedFile.Builder();
         SegmentedFile.Builder dbuilder = sstable.compression
                                        ? new CompressedSegmentedFile.Builder()
                                        : new BufferedSegmentedFile.Builder();
-        if (!sstable.loadSummary(ibuilder, dbuilder, sstable.metadata))
+        if (!sstable.loadSummary(ibuilder, dbuilder))
             sstable.buildSummary(false, ibuilder, dbuilder, false, Downsampling.BASE_SAMPLING_LEVEL);
         sstable.ifile = ibuilder.complete(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX));
         sstable.dfile = dbuilder.complete(sstable.descriptor.filenameFor(Component.DATA));
-
         sstable.bf = FilterFactory.AlwaysPresent;
+
         return sstable;
     }
 
