@@ -1,19 +1,32 @@
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
+     *
+     * This uses a cached copy that is invalided when the ring changes, so in the common case
+     * no extra locking is required.
      */
     public TokenMetadata cloneOnlyTokenMap()
     {
-        lock.readLock().lock();
-        try
+        TokenMetadata tm = cachedTokenMap.get();
+        if (tm != null)
+            return tm;
+
+        // synchronize is to prevent thundering herd (CASSANDRA-6345); lock.readLock is for correctness vs updates to our internals
+        synchronized (this)
         {
-            return new TokenMetadata(SortedBiMultiValMap.<Token, InetAddress>create(tokenToEndpointMap, null, inetaddressCmp),
-                                     HashBiMap.create(endpointToHostIdMap),
-                                     new Topology(topology));
-        }
-        finally
-        {
-            lock.readLock().unlock();
+            lock.readLock().lock();
+            try
+            {
+                tm = new TokenMetadata(SortedBiMultiValMap.<Token, InetAddress>create(tokenToEndpointMap, null, inetaddressCmp),
+                                       HashBiMap.create(endpointToHostIdMap),
+                                       new Topology(topology));
+                cachedTokenMap.set(tm);
+                return tm;
+            }
+            finally
+            {
+                lock.readLock().unlock();
+            }
         }
     }
 
