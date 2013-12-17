@@ -1,0 +1,28 @@
+        long addColumn(Cell cell, Allocator allocator, SecondaryIndexManager.Updater indexer)
+        {
+            CellName name = cell.name();
+            while (true)
+            {
+                Cell oldCell = map.putIfAbsent(name, cell);
+                if (oldCell == null)
+                {
+                    indexer.insert(cell);
+                    return cell.dataSize();
+                }
+
+                Cell reconciledCell = cell.reconcile(oldCell, allocator);
+                if (map.replace(name, oldCell, reconciledCell))
+                {
+                    // for memtable updates we only care about oldcolumn, reconciledcolumn, but when compacting
+                    // we need to make sure we update indexes no matter the order we merge
+                    if (reconciledCell == cell)
+                        indexer.update(oldCell, reconciledCell);
+                    else
+                        indexer.update(cell, reconciledCell);
+                    return reconciledCell.dataSize() - oldCell.dataSize();
+                }
+                // We failed to replace cell due to a concurrent update or a concurrent removal. Keep trying.
+                // (Currently, concurrent removal should not happen (only updates), but let us support that anyway.)
+            }
+        }
+
