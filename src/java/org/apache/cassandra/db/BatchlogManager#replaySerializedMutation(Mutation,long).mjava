@@ -1,0 +1,28 @@
+    /*
+     * We try to deliver the mutations to the replicas ourselves if they are alive and only resort to writing hints
+     * when a replica is down or a write request times out.
+     */
+    private void replaySerializedMutation(Mutation mutation, long writtenAt)
+    {
+        int ttl = calculateHintTTL(mutation, writtenAt);
+        if (ttl <= 0)
+            return; // the mutation isn't safe to replay.
+
+        Set<InetAddress> liveEndpoints = new HashSet<InetAddress>();
+        String ks = mutation.getKeyspaceName();
+        Token<?> tk = StorageService.getPartitioner().getToken(mutation.key());
+        for (InetAddress endpoint : Iterables.concat(StorageService.instance.getNaturalEndpoints(ks, tk),
+                                                     StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, ks)))
+        {
+            if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+                mutation.apply();
+            else if (FailureDetector.instance.isAlive(endpoint))
+                liveEndpoints.add(endpoint); // will try delivering directly instead of writing a hint.
+            else
+                StorageProxy.writeHintForMutation(mutation, ttl, endpoint);
+        }
+
+        if (!liveEndpoints.isEmpty())
+            attemptDirectDelivery(mutation, writtenAt, liveEndpoints);
+    }
+

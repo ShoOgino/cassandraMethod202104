@@ -1,0 +1,41 @@
+    /**
+     * This method appends a row to the global CommitLog, then updates memtables and indexes.
+     *
+     * @param mutation       the row to write.  Must not be modified after calling apply, since commitlog append
+     *                       may happen concurrently, depending on the CL Executor type.
+     * @param writeCommitLog false to disable commitlog append entirely
+     * @param updateIndexes  false to disable index updates (used by CollationController "defragmenting")
+     */
+    public void apply(Mutation mutation, boolean writeCommitLog, boolean updateIndexes)
+    {
+        // write the mutation to the commitlog and memtables
+        Tracing.trace("Acquiring switchLock read lock");
+        switchLock.readLock().lock();
+        try
+        {
+            if (writeCommitLog)
+            {
+                Tracing.trace("Appending to commitlog");
+                CommitLog.instance.add(mutation);
+            }
+
+            DecoratedKey key = StorageService.getPartitioner().decorateKey(mutation.key());
+            for (ColumnFamily cf : mutation.getColumnFamilies())
+            {
+                ColumnFamilyStore cfs = columnFamilyStores.get(cf.id());
+                if (cfs == null)
+                {
+                    logger.error("Attempting to mutate non-existant column family {}", cf.id());
+                    continue;
+                }
+
+                Tracing.trace("Adding to {} memtable", cf.metadata().cfName);
+                cfs.apply(key, cf, updateIndexes ? cfs.indexManager.updaterFor(key, cf) : SecondaryIndexManager.nullUpdater);
+            }
+        }
+        finally
+        {
+            switchLock.readLock().unlock();
+        }
+    }
+

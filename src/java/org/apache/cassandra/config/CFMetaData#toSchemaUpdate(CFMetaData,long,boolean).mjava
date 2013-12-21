@@ -7,11 +7,11 @@
      *
      * @return Difference between attributes in form of schema mutation
      */
-    public RowMutation toSchemaUpdate(CFMetaData newState, long modificationTimestamp, boolean fromThrift)
+    public Mutation toSchemaUpdate(CFMetaData newState, long modificationTimestamp, boolean fromThrift)
     {
-        RowMutation rm = new RowMutation(Keyspace.SYSTEM_KS, SystemKeyspace.getSchemaKSKey(ksName));
+        Mutation mutation = new Mutation(Keyspace.SYSTEM_KS, SystemKeyspace.getSchemaKSKey(ksName));
 
-        newState.toSchemaNoColumnsNoTriggers(rm, modificationTimestamp);
+        newState.toSchemaNoColumnsNoTriggers(mutation, modificationTimestamp);
 
         MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(columnMetadata, newState.columnMetadata);
 
@@ -23,30 +23,30 @@
             if (fromThrift && cd.kind != ColumnDefinition.Kind.REGULAR)
                 continue;
 
-            cd.deleteFromSchema(rm, modificationTimestamp);
+            cd.deleteFromSchema(mutation, modificationTimestamp);
         }
 
         // newly added columns
         for (ColumnDefinition cd : columnDiff.entriesOnlyOnRight().values())
-            cd.toSchema(rm, modificationTimestamp);
+            cd.toSchema(mutation, modificationTimestamp);
 
         // old columns with updated attributes
         for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
         {
             ColumnDefinition cd = newState.columnMetadata.get(name);
-            cd.toSchema(rm, modificationTimestamp);
+            cd.toSchema(mutation, modificationTimestamp);
         }
 
         MapDifference<String, TriggerDefinition> triggerDiff = Maps.difference(triggers, newState.triggers);
 
         // dropped triggers
         for (TriggerDefinition td : triggerDiff.entriesOnlyOnLeft().values())
-            td.deleteFromSchema(rm, cfName, modificationTimestamp);
+            td.deleteFromSchema(mutation, cfName, modificationTimestamp);
 
         // newly created triggers
         for (TriggerDefinition td : triggerDiff.entriesOnlyOnRight().values())
-            td.toSchema(rm, cfName, modificationTimestamp);
+            td.toSchema(mutation, cfName, modificationTimestamp);
 
-        return rm;
+        return mutation;
     }
 
