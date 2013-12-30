@@ -1,39 +1,28 @@
         void print() throws UnknownHostException
         {
-            Map<InetAddress, Float> ownerships;
+            SetHostStat ownerships;
             boolean hasEffectiveOwns = false, isTokenPerNode = true;
 
             try
             {
-                ownerships = probe.effectiveOwnership(kSpace);
+                ownerships = new SetHostStat(probe.effectiveOwnership(kSpace));
                 hasEffectiveOwns = true;
             }
             catch (IllegalStateException e)
             {
-                ownerships = probe.getOwnership();
+                ownerships = new SetHostStat(probe.getOwnership());
             }
 
             // More tokens then nodes (aka vnodes)?
             if (new HashSet<String>(tokensToEndpoints.values()).size() < tokensToEndpoints.keySet().size())
                 isTokenPerNode = false;
 
-            maxAddressLength = 0;
-            for (Map.Entry<String, Map<InetAddress, Float>> dc : getOwnershipByDc(ownerships).entrySet())
-            {
-                int dcMaxAddressLength = Collections.max(dc.getValue().keySet(), new Comparator<InetAddress>() {
-                    @Override
-                    public int compare(InetAddress first, InetAddress second)
-                    {
-                        return ((Integer)first.getHostAddress().length()).compareTo((Integer)second.getHostAddress().length());
-                    }
-                }).getHostAddress().length();
+            Map<String, SetHostStat> dcs = getOwnershipByDc(ownerships);
 
-                if(dcMaxAddressLength > maxAddressLength)
-                    maxAddressLength = dcMaxAddressLength;
-            }
+            findMaxAddressLength(dcs);
 
             // Datacenters
-            for (Map.Entry<String, Map<InetAddress, Float>> dc : getOwnershipByDc(ownerships).entrySet())
+            for (Map.Entry<String, SetHostStat> dc : dcs.entrySet())
             {
                 String dcHeader = String.format("Datacenter: %s%n", dc.getKey());
                 outs.printf(dcHeader);
@@ -44,12 +33,8 @@
                 printNodesHeader(hasEffectiveOwns, isTokenPerNode);
 
                 // Nodes
-                for (Map.Entry<InetAddress, Float> entry : dc.getValue().entrySet())
-                    printNode(entry.getKey().getHostAddress(),
-                              entry.getValue(),
-                              ownerships,
-                              hasEffectiveOwns,
-                              isTokenPerNode);
+                for (HostStat entry : dc.getValue())
+                    printNode(entry, hasEffectiveOwns, isTokenPerNode);
             }
         }
 
