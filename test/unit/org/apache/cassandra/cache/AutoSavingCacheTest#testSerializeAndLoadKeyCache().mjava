@@ -1,0 +1,33 @@
+    @Test
+    public void testSerializeAndLoadKeyCache() throws Exception
+    {
+        ColumnFamilyStore cfs = Keyspace.open("Keyspace1").getColumnFamilyStore("Standard1");
+        for (int i = 0; i < 2; i++)
+        {
+            Mutation rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("key1"));
+            rm.add("Standard1", Util.cellname("c1"), ByteBufferUtil.bytes(i), 0);
+            rm.apply();
+            cfs.forceBlockingFlush();
+        }
+
+        assert cfs.getSSTables().size() == 2;
+
+        // preheat key cache
+        for (SSTableReader sstable : cfs.getSSTables())
+            sstable.getPosition(Util.dk("key1"), SSTableReader.Operator.EQ);
+
+        AutoSavingCache<KeyCacheKey, RowIndexEntry> keyCache = CacheService.instance.keyCache;
+
+        // serialize to file
+        keyCache.submitWrite(keyCache.size()).get();
+        keyCache.clear();
+
+        assert keyCache.size() == 0;
+
+        // then load saved
+        keyCache.loadSaved(cfs);
+        assert keyCache.size() == 2;
+        for (SSTableReader sstable : cfs.getSSTables())
+            assert keyCache.get(new KeyCacheKey(cfs.metadata.cfId, sstable.descriptor, ByteBufferUtil.bytes("key1"))) != null;
+    }
+

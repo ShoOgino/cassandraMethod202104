@@ -1,0 +1,59 @@
+    /**
+     * Create Directories of given ColumnFamily.
+     * SSTable directories are created under data_directories defined in cassandra.yaml if not exist at this time.
+     *
+     * @param metadata metadata of ColumnFamily
+     */
+    public Directories(CFMetaData metadata)
+    {
+        this.metadata = metadata;
+        this.sstableDirectories = new File[dataFileLocations.length];
+
+        // Determine SSTable directories
+        // If upgraded from version less than 2.1, use directories already exist.
+        for (int i = 0; i < dataFileLocations.length; ++i)
+        {
+            // check if old SSTable directory exists
+            sstableDirectories[i] = new File(dataFileLocations[i].location, join(metadata.ksName, metadata.cfName));
+        }
+        boolean olderDirectoryExists = Iterables.any(Arrays.asList(sstableDirectories), new Predicate<File>()
+        {
+            public boolean apply(File file)
+            {
+                return file.exists();
+            }
+        });
+        if (olderDirectoryExists)
+            return;
+
+        // create directory name
+        String directoryName;
+        String cfId = ByteBufferUtil.bytesToHex(ByteBufferUtil.bytes(metadata.cfId));
+        int idx = metadata.cfName.indexOf(SECONDARY_INDEX_NAME_SEPARATOR);
+        if (idx > 0)
+            // secondary index, goes in the same directory than the base cf
+            directoryName = metadata.cfName.substring(0, idx) + "-" + cfId;
+        else
+            directoryName = metadata.cfName + "-" + cfId;
+
+        for (int i = 0; i < dataFileLocations.length; ++i)
+            sstableDirectories[i] = new File(dataFileLocations[i].location, join(metadata.ksName, directoryName));
+
+        if (!StorageService.instance.isClientMode())
+        {
+            for (File dir : sstableDirectories)
+            {
+                try
+                {
+                    FileUtils.createDirectory(dir);
+                }
+                catch (FSError e)
+                {
+                    // don't just let the default exception handler do this, we need the create loop to continue
+                    logger.error("Failed to create {} directory", dir);
+                    FileUtils.handleFSError(e);
+                }
+            }
+        }
+    }
+
