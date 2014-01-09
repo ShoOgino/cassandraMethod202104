@@ -1,0 +1,51 @@
+    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, ColumnNameBuilder builder, UpdateParameters params)
+    throws InvalidRequestException
+    {
+        CFDefinition cfDef = cfm.getCfDef();
+        List<Operation> deletions = getOperations();
+
+        boolean fullKey = builder.componentCount() == cfDef.clusteringColumnsCount();
+        boolean isRange = cfDef.isCompact ? !fullKey : (!fullKey || deletions.isEmpty());
+
+        if (!deletions.isEmpty() && isRange)
+        {
+            // We only get there if we have at least one non-static columns selected, as otherwise the builder will be
+            // the "static" builder and isRange will be false. But we may still have static columns, so pick the first
+            // non static one for the error message so it's not confusing
+            for (Operation deletion : deletions)
+                if (cfm.getCfDef().get(deletion.columnName).kind != CFDefinition.Name.Kind.STATIC)
+                    throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s since %s specified", getFirstEmptyKey(), deletion.columnName));
+            throw new AssertionError();
+        }
+
+        if (deletions.isEmpty() && builder.componentCount() == 0)
+        {
+            // No columns specified, delete the row
+            cf.delete(new DeletionInfo(params.timestamp, params.localDeletionTime));
+        }
+        else
+        {
+            if (isRange)
+            {
+                assert deletions.isEmpty();
+                ByteBuffer start = builder.build();
+                ByteBuffer end = builder.buildAsEndOfRange();
+                cf.addAtom(params.makeRangeTombstone(start, end));
+            }
+            else
+            {
+                // Delete specific columns
+                if (cfDef.isCompact)
+                {
+                    ByteBuffer columnName = builder.build();
+                    cf.addColumn(params.makeTombstone(columnName));
+                }
+                else
+                {
+                    for (Operation deletion : deletions)
+                        deletion.execute(key, cf, builder.copy(), params);
+                }
+            }
+        }
+    }
+

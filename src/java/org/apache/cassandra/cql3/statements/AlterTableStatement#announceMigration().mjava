@@ -9,7 +9,11 @@
         {
             case ADD:
                 if (cfDef.isCompact)
-                    throw new InvalidRequestException("Cannot add new column to a compact CF");
+                    throw new InvalidRequestException("Cannot add new column to a COMPACT STORAGE table");
+
+                if (isStatic && !cfDef.isComposite)
+                    throw new InvalidRequestException("Static columns are not allowed in COMPACT STORAGE tables");
+
                 if (name != null)
                 {
                     switch (name.kind)
@@ -17,7 +21,7 @@
                         case KEY_ALIAS:
                         case COLUMN_ALIAS:
                             throw new InvalidRequestException(String.format("Invalid column name %s because it conflicts with a PRIMARY KEY part", columnName));
-                        case COLUMN_METADATA:
+                        default:
                             throw new InvalidRequestException(String.format("Invalid column name %s because it conflicts with an existing column", columnName));
                     }
                 }
@@ -47,7 +51,9 @@
                 Integer componentIndex = cfDef.isComposite
                                        ? ((CompositeType)meta.comparator).types.size() - (cfDef.hasCollections ? 2 : 1)
                                        : null;
-                cfm.addColumnDefinition(ColumnDefinition.regularDef(columnName.key, type, componentIndex));
+                cfm.addColumnDefinition(isStatic
+                                        ? ColumnDefinition.staticDef(columnName.key, type, componentIndex)
+                                        : ColumnDefinition.regularDef(columnName.key, type, componentIndex));
                 break;
 
             case ALTER:
@@ -108,6 +114,7 @@
                         cfm.defaultValidator(validator.getType());
                         break;
                     case COLUMN_METADATA:
+                    case STATIC:
                         ColumnDefinition column = cfm.getColumnDefinition(columnName.key);
                         // Thrift allows to change a column validator so CFMetaData.validateCompatibility will let it slide
                         // if we change to an incompatible type (contrarily to the comparator case). But we don't want to
@@ -126,10 +133,8 @@
                 break;
 
             case DROP:
-                if (cfDef.isCompact)
-                    throw new InvalidRequestException("Cannot drop columns from a compact CF");
-                if (!cfDef.isComposite)
-                    throw new InvalidRequestException("Cannot drop columns from a non-CQL3 CF");
+                if (cfDef.isCompact || !cfDef.isComposite)
+                    throw new InvalidRequestException("Cannot drop columns from a COMPACT STORAGE table");
                 if (name == null)
                     throw new InvalidRequestException(String.format("Column %s was not found in table %s", columnName, columnFamily()));
 
@@ -139,8 +144,9 @@
                     case COLUMN_ALIAS:
                         throw new InvalidRequestException(String.format("Cannot drop PRIMARY KEY part %s", columnName));
                     case COLUMN_METADATA:
+                    case STATIC:
                         ColumnDefinition toDelete = null;
-                        for (ColumnDefinition columnDef : cfm.regularColumns())
+                        for (ColumnDefinition columnDef : cfm.regularAndStaticColumns())
                         {
                             if (columnDef.name.equals(columnName.key))
                                 toDelete = columnDef;
