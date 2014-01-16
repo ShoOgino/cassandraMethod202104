@@ -7,6 +7,8 @@
 
         ByteBuffer context;
 
+        Allocator allocator = HeapAllocator.instance;
+
         // tombstone + tombstone
         left  = new DeletedColumn(ByteBufferUtil.bytes("x"), 1, 1L);
         right = new DeletedColumn(ByteBufferUtil.bytes("x"), 2, 2L);
@@ -71,20 +73,20 @@
         assert ((CounterColumn)reconciled).timestampOfLastDelete() == right.getMarkedForDeleteAt();
 
         // live < live last delete
-        left  = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 2L, 3L, false), 1L, Long.MIN_VALUE);
-        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 1L, 1L, false), 4L, 3L);
+        left  = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L, allocator), 1L, Long.MIN_VALUE);
+        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L, allocator), 4L, 3L);
 
         assert left.reconcile(right) == right;
 
         // live last delete > live
-        left  = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 2L, 3L, false), 6L, 5L);
-        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 1L, 1L, false), 4L, 3L);
+        left  = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L, allocator), 6L, 5L);
+        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L, allocator), 4L, 3L);
 
         assert left.reconcile(right) == left;
 
         // live + live
-        left = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 1L, 1L, false), 4L, Long.MIN_VALUE);
-        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(1), 2L, 3L, false), 1L, Long.MIN_VALUE);
+        left = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L, allocator), 4L, Long.MIN_VALUE);
+        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L, allocator), 1L, Long.MIN_VALUE);
 
         reconciled = left.reconcile(right);
         assert reconciled.name().equals(left.name());
@@ -92,7 +94,7 @@
         assert reconciled.timestamp() == 4L;
 
         left = reconciled;
-        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(2), 1L, 5L, false), 2L, Long.MIN_VALUE);
+        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(2), 1L, 5L, allocator), 2L, Long.MIN_VALUE);
 
         reconciled = left.reconcile(right);
         assert reconciled.name().equals(left.name());
@@ -100,7 +102,7 @@
         assert reconciled.timestamp() == 4L;
 
         left = reconciled;
-        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.create(CounterId.fromInt(2), 2L, 2L, false), 6L, Long.MIN_VALUE);
+        right = new CounterColumn(ByteBufferUtil.bytes("x"), cc.createRemote(CounterId.fromInt(2), 2L, 2L, allocator), 6L, Long.MIN_VALUE);
 
         reconciled = left.reconcile(right);
         assert reconciled.name().equals(left.name());
@@ -111,13 +113,13 @@
         int hd = 2; // header
         assert hd + 2 * stepLength == context.remaining();
 
-        assert Util.equalsCounterId(CounterId.fromInt(1), context, hd + 0 * stepLength);
-        assert 2L == context.getLong(hd + 0*stepLength + idLength);
-        assert 3L == context.getLong(hd + 0*stepLength + idLength + clockLength);
+        assert Util.equalsCounterId(CounterId.fromInt(1), context, hd);
+        assert 2L == context.getLong(hd + idLength);
+        assert 3L == context.getLong(hd + idLength + clockLength);
 
-        assert Util.equalsCounterId(CounterId.fromInt(2), context, hd + 1 * stepLength);
-        assert 2L == context.getLong(hd + 1*stepLength + idLength);
-        assert 2L == context.getLong(hd + 1*stepLength + idLength + clockLength);
+        assert Util.equalsCounterId(CounterId.fromInt(2), context, hd + stepLength);
+        assert 2L == context.getLong(hd + stepLength + idLength);
+        assert 2L == context.getLong(hd + stepLength + idLength + clockLength);
 
         assert ((CounterColumn)reconciled).timestampOfLastDelete() == Long.MIN_VALUE;
     }

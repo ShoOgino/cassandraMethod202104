@@ -1,0 +1,21 @@
+    public static ColumnFamily removeDeleted(DecoratedKey key, CompactionController controller, ColumnFamily cf)
+    {
+        assert key != null;
+        assert controller != null;
+        assert cf != null;
+
+        // avoid calling shouldPurge unless we actually need to: it can be very expensive if LCS
+        // gets behind and has hundreds of overlapping L0 sstables.  Essentially, this method is an
+        // ugly refactor of removeDeleted(controller.shouldPurge(key), controller, cf),
+        // taking this into account.
+        Boolean shouldPurge = null;
+
+        if (cf.hasIrrelevantData(controller.gcBefore))
+            shouldPurge = controller.shouldPurge(key, cf.maxTimestamp());
+
+        // We should only gc tombstone if shouldPurge == true. But otherwise,
+        // it is still ok to collect column that shadowed by their (deleted)
+        // container, which removeDeleted(cf, Integer.MAX_VALUE) will do
+        return ColumnFamilyStore.removeDeleted(cf, shouldPurge != null && shouldPurge ? controller.gcBefore : Integer.MIN_VALUE);
+    }
+
