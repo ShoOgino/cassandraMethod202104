@@ -1,4 +1,5 @@
-    private void replayAllFailedBatches() throws ExecutionException, InterruptedException
+    @VisibleForTesting
+    void replayAllFailedBatches() throws ExecutionException, InterruptedException
     {
         if (!isReplaying.compareAndSet(false, true))
             return;
@@ -12,9 +13,25 @@
 
         try
         {
-            for (UntypedResultSet.Row row : process("SELECT id, written_at FROM %s.%s", Keyspace.SYSTEM_KS, SystemKeyspace.BATCHLOG_CF))
-                if (System.currentTimeMillis() > row.getLong("written_at") + TIMEOUT)
-                    replayBatch(row.getUUID("id"), rateLimiter);
+            UntypedResultSet page = process("SELECT id, data, written_at FROM %s.%s LIMIT %d",
+                                            Keyspace.SYSTEM_KS,
+                                            SystemKeyspace.BATCHLOG_CF,
+                                            PAGE_SIZE);
+
+            while (!page.isEmpty())
+            {
+                UUID id = processBatchlogPage(page, rateLimiter);
+
+                if (page.size() < PAGE_SIZE)
+                    break; // we've exhausted the batchlog, next query would be empty.
+
+                page = process("SELECT id, data, written_at FROM %s.%s WHERE token(id) > token(%s) LIMIT %d",
+                               Keyspace.SYSTEM_KS,
+                               SystemKeyspace.BATCHLOG_CF,
+                               id,
+                               PAGE_SIZE);
+            }
+
             cleanup();
         }
         finally

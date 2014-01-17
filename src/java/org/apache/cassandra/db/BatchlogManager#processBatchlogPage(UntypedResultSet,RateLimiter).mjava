@@ -1,0 +1,17 @@
+    // returns the UUID of the last seen batch
+    private UUID processBatchlogPage(UntypedResultSet page, RateLimiter rateLimiter)
+    {
+        UUID id = null;
+        for (UntypedResultSet.Row row : page)
+        {
+            id = row.getUUID("id");
+            long writtenAt = row.getLong("written_at");
+            // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
+            long timeout = DatabaseDescriptor.getWriteRpcTimeout() * 2; // enough time for the actual write + BM removal mutation
+            if (System.currentTimeMillis() < writtenAt + timeout)
+                continue; // not ready to replay yet, might still get a deletion.
+            replayBatch(id, row.getBytes("data"), writtenAt, rateLimiter);
+        }
+        return id;
+    }
+
