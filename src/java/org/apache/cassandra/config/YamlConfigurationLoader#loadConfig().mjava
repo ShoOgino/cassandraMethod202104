@@ -1,19 +1,22 @@
     public Config loadConfig() throws ConfigurationException
     {
-        InputStream input = null;
         try
         {
             URL url = getStorageConfigURL();
             logger.info("Loading settings from {}", url);
-            try
+            byte[] configBytes;
+            try (InputStream is = url.openStream())
             {
-                input = url.openStream();
+                configBytes = ByteStreams.toByteArray(is);
             }
             catch (IOException e)
             {
                 // getStorageConfigURL should have ruled this out
                 throw new AssertionError(e);
             }
+            
+            logConfig(configBytes);
+            
             org.yaml.snakeyaml.constructor.Constructor constructor = new org.yaml.snakeyaml.constructor.Constructor(Config.class);
             TypeDescription seedDesc = new TypeDescription(SeedProviderDef.class);
             seedDesc.putMapPropertyType("parameters", String.class, String.class);
@@ -21,17 +24,13 @@
             MissingPropertiesChecker propertiesChecker = new MissingPropertiesChecker();
             constructor.setPropertyUtils(propertiesChecker);
             Yaml yaml = new Yaml(constructor);
-            Config result = yaml.loadAs(input, Config.class);
+            Config result = yaml.loadAs(new ByteArrayInputStream(configBytes), Config.class);
             propertiesChecker.check();
             return result;
         }
         catch (YAMLException e)
         {
             throw new ConfigurationException("Invalid yaml", e);
-        }
-        finally
-        {
-            FileUtils.closeQuietly(input);
         }
     }
 
