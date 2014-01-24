@@ -5,34 +5,22 @@
     {
         return new DroppableRunnable(MessagingService.Verb.COUNTER_MUTATION)
         {
-            public void runMayThrow()
+            public void runMayThrow() throws OverloadedException, WriteTimeoutException
             {
                 IMutation processed = SinkManager.processWriteRequest(mutation);
                 if (processed == null)
                     return;
 
                 assert processed instanceof CounterMutation;
-                final CounterMutation cm = (CounterMutation) processed;
+                CounterMutation cm = (CounterMutation) processed;
 
-                // apply mutation
-                cm.apply();
+                Mutation result = cm.apply();
                 responseHandler.response(null);
 
-                // then send to replicas, if any
-                final Set<InetAddress> remotes = Sets.difference(ImmutableSet.copyOf(targets), ImmutableSet.of(FBUtilities.getBroadcastAddress()));
-                if (!remotes.isEmpty() && cm.shouldReplicateOnWrite())
-                {
-                    // We do the replication on another stage because it involves a read (see CM.makeReplicationMutation)
-                    // and we want to avoid blocking too much the MUTATION stage
-                    StageManager.getStage(Stage.REPLICATE_ON_WRITE).execute(new DroppableRunnable(MessagingService.Verb.READ)
-                    {
-                        public void runMayThrow() throws OverloadedException
-                        {
-                            // send mutation to other replica
-                            sendToHintedEndpoints(cm.makeReplicationMutation(), remotes, responseHandler, localDataCenter);
-                        }
-                    });
-                }
+                Set<InetAddress> remotes = Sets.difference(ImmutableSet.copyOf(targets),
+                                                           ImmutableSet.of(FBUtilities.getBroadcastAddress()));
+                if (!remotes.isEmpty())
+                    sendToHintedEndpoints(result, remotes, responseHandler, localDataCenter);
             }
         };
     }
