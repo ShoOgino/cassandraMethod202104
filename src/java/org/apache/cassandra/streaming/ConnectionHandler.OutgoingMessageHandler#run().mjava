@@ -1,29 +1,32 @@
         public void run()
         {
-            StreamMessage next;
-            while (!isClosed())
+            try
             {
-                try
+                WritableByteChannel out = getWriteChannel(socket);
+
+                StreamMessage next;
+                while (!isClosed())
                 {
                     if ((next = messageQueue.poll(1, TimeUnit.SECONDS)) != null)
                     {
                         logger.debug("[Stream #{}] Sending {}", session.planId(), next);
-                        sendMessage(next);
+                        sendMessage(out, next);
                         if (next.type == StreamMessage.Type.SESSION_FAILED)
                             close();
                     }
                 }
-                catch (InterruptedException e)
-                {
-                    throw new AssertionError(e);
-                }
-            }
 
-            try
-            {
                 // Sends the last messages on the queue
                 while ((next = messageQueue.poll()) != null)
-                    sendMessage(next);
+                    sendMessage(out, next);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+            catch (IOException e)
+            {
+                session.onError(e);
             }
             finally
             {
