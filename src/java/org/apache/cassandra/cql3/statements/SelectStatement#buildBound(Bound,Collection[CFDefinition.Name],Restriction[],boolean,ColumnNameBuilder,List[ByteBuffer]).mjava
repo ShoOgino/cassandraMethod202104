@@ -10,14 +10,16 @@
         // to the component comparator but not to the end-of-component itself),
         // it only depends on whether the slice is reversed
         Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
-        for (CFDefinition.Name name : names)
+        for (Iterator<CFDefinition.Name> iter = names.iterator(); iter.hasNext();)
         {
+            CFDefinition.Name name = iter.next();
+
             // In a restriction, we always have Bound.START < Bound.END for the "base" comparator.
             // So if we're doing a reverse slice, we must inverse the bounds when giving them as start and end of the slice filter.
             // But if the actual comparator itself is reversed, we must inversed the bounds too.
             Bound b = isReversed == isReversedType(name) ? bound : Bound.reverse(bound);
             Restriction r = restrictions[name.position];
-            if (r == null || (r.isSlice() && !((Restriction.Slice)r).hasBound(b)))
+            if (isNullRestriction(r, b))
             {
                 // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
                 // For composites, if there was preceding component and we're computing the end, we must change the last component
@@ -29,12 +31,21 @@
 
             if (r.isSlice())
             {
-                Restriction.Slice slice = (Restriction.Slice)r;
-                assert slice.hasBound(b);
-                ByteBuffer val = slice.bound(b, variables);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", name));
-                return Collections.singletonList(builder.add(val, slice.getRelation(eocBound, b)).build());
+                builder.add(getSliceValue(name, r, b, variables));
+                Relation.Type relType = ((Restriction.Slice)r).getRelation(eocBound, b);
+
+                // We can have more non null restriction if the "scalar" notation was used for the bound (#4851).
+                // In that case, we need to add them all, and end the cell name with the correct end-of-component.
+                while (iter.hasNext())
+                {
+                    name = iter.next();
+                    r = restrictions[name.position];
+                    if (isNullRestriction(r, b))
+                        break;
+
+                    builder.add(getSliceValue(name, r, b, variables));
+                }
+                return Collections.singletonList(builder.buildForRelation(relType));
             }
             else
             {
