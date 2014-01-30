@@ -1,0 +1,36 @@
+        public void run()
+        {
+            float largestRatio = 0f;
+            Memtable largest = null;
+            for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
+            {
+                // we take a reference to the current main memtable for the CF prior to snapping its ownership ratios
+                // to ensure we have some ordering guarantee for performing the switchMemtableIf(), i.e. we will only
+                // swap if the memtables we are measuring here haven't already been swapped by the time we try to swap them
+                Memtable current = cfs.getDataTracker().getView().getCurrentMemtable();
+
+                // find the total ownership ratio for the memtable and all SecondaryIndexes owned by this CF,
+                // both on- and off-heap, and select the largest of the two ratios to weight this CF
+                float onHeap = 0f;
+                onHeap += current.getAllocator().ownershipRatio();
+
+                for (SecondaryIndex index : cfs.indexManager.getIndexes())
+                {
+                    if (index.getOnHeapAllocator() != null)
+                        onHeap += index.getOnHeapAllocator().ownershipRatio();
+                }
+
+                if (onHeap > largestRatio)
+                {
+                    largest = current;
+                    largestRatio = onHeap;
+                }
+            }
+
+            if (largest != null)
+            {
+                largest.cfs.switchMemtableIfCurrent(largest);
+                logger.info("Reclaiming {} of {} retained memtable bytes", largest.getAllocator().reclaiming(), Memtable.memoryPool.used());
+            }
+        }
+

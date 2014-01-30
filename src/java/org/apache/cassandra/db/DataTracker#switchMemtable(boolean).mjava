@@ -1,0 +1,27 @@
+    /**
+     * Switch the current memtable. This atomically appends a new memtable to the end of the list of active memtables,
+     * returning the previously last memtable. It leaves the previous Memtable in the list of live memtables until
+     * discarding(memtable) is called. These two methods must be synchronized/paired, i.e. m = switchMemtable
+     * must be followed by discarding(m), they cannot be interleaved.
+     *
+     * @return the previously active memtable
+     */
+    public Memtable switchMemtable(boolean truncating)
+    {
+        Memtable newMemtable = new Memtable(cfstore);
+        Memtable toFlushMemtable;
+        View currentView, newView;
+        do
+        {
+            currentView = view.get();
+            toFlushMemtable = currentView.getCurrentMemtable();
+            newView = currentView.switchMemtable(newMemtable);
+        }
+        while (!view.compareAndSet(currentView, newView));
+
+        if (truncating)
+            notifyRenewed(newMemtable);
+
+        return toFlushMemtable;
+    }
+

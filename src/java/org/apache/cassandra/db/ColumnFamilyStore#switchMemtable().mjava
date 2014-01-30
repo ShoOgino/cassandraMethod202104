@@ -1,0 +1,20 @@
+    /*
+     * switchMemtable puts Memtable.getSortedContents on the writer executor.  When the write is complete,
+     * we turn the writer into an SSTableReader and add it to ssTables where it is available for reads.
+     * This method does not block except for synchronizing on DataTracker, but the Future it returns will
+     * not complete until the Memtable (and all prior Memtables) have been successfully flushed, and the CL
+     * marked clean up to the position owned by the Memtable.
+     */
+    public ListenableFuture<?> switchMemtable()
+    {
+        logger.info("Enqueuing flush of {}", name);
+        synchronized (data)
+        {
+            Flush flush = new Flush(false);
+            flushExecutor.execute(flush);
+            ListenableFutureTask<?> task = ListenableFutureTask.create(flush.postFlush, null);
+            postFlushExecutor.submit(task);
+            return task;
+        }
+    }
+

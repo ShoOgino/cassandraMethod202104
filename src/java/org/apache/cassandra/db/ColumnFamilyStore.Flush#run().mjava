@@ -1,0 +1,42 @@
+        public void run()
+        {
+            // mark writes older than the barrier as blocking progress, permitting them to exceed our memory limit
+            // if they are stuck waiting on it, then wait for them all to complete
+            writeBarrier.markBlocking();
+            writeBarrier.await();
+
+            // mark all memtables as flushing, removing them from the live memtable list, and
+            // remove any memtables that are already clean from the set we need to flush
+            Iterator<Memtable> iter = memtables.iterator();
+            while (iter.hasNext())
+            {
+                Memtable memtable = iter.next();
+                memtable.cfs.data.markFlushing(memtable);
+                if (memtable.isClean() || truncate)
+                {
+                    memtable.cfs.replaceFlushed(memtable, null);
+                    memtable.setDiscarded();
+                    iter.remove();
+                }
+            }
+
+            if (memtables.isEmpty())
+            {
+                postFlush.latch.countDown();
+                return;
+            }
+
+            metric.memtableSwitchCount.inc();
+
+            for (final Memtable memtable : memtables)
+            {
+                // flush the memtable
+                MoreExecutors.sameThreadExecutor().execute(memtable.flushRunnable());
+                memtable.setDiscarded();
+            }
+
+            // signal the post-flush we've done our work
+            postFlush.lastReplayPosition = memtables.get(0).getLastReplayPosition();
+            postFlush.latch.countDown();
+        }
+

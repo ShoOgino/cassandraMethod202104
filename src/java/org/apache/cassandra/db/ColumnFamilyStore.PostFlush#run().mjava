@@ -1,0 +1,42 @@
+        public void run()
+        {
+            writeBarrier.await();
+
+            /**
+             * we can flush 2is as soon as the barrier completes, as they will be consistent with (or ahead of) the
+             * flushed memtables and CL position, which is as good as we can guarantee.
+             * TODO: SecondaryIndex should support setBarrier(), so custom implementations can co-ordinate exactly
+             * with CL as we do with memtables/CFS-backed SecondaryIndexes.
+             */
+
+            if (flushSecondaryIndexes)
+            {
+                for (SecondaryIndex index : indexManager.getIndexesNotBackedByCfs())
+                {
+                    // flush any non-cfs backed indexes
+                    logger.info("Flushing SecondaryIndex {}", index);
+                    index.forceBlockingFlush();
+                }
+            }
+
+            try
+            {
+                // we wait on the latch for the lastReplayPosition to be set, and so that waiters
+                // on this task can rely on all prior flushes being complete
+                latch.await();
+            }
+            catch (InterruptedException e)
+            {
+                throw new IllegalStateException();
+            }
+
+            // must check lastReplayPosition != null because Flush may find that all memtables are clean
+            // and so not set a lastReplayPosition
+            if (lastReplayPosition != null)
+            {
+                CommitLog.instance.discardCompletedSegments(metadata.cfId, lastReplayPosition);
+            }
+
+            metric.pendingFlushes.dec();
+        }
+

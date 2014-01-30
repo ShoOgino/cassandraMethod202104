@@ -20,6 +20,9 @@
                 discardUnusedTail();
                 close = true;
 
+                // wait for modifications guards both discardedTailFrom, and any outstanding appends
+                waitForModifications();
+
                 if (discardedTailFrom < buffer.capacity() - SYNC_MARKER_SIZE)
                 {
                     // if there's room in the discard section to write an empty header, use that as the nextMarker
@@ -31,11 +34,12 @@
                     nextMarker = buffer.capacity();
                 }
             }
+            else
+            {
+                waitForModifications();
+            }
 
-            // swap the append lock
-            AppendLock curAppendLock = appendLock.get();
-            appendLock.set(new AppendLock());
-            curAppendLock.expireAndWaitForCompletion();
+            assert nextMarker > lastSyncedOffset;
 
             // write previous sync marker to point to next sync marker
             // we don't chain the crcs here to ensure this method is idempotent if it fails

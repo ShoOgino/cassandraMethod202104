@@ -8,11 +8,11 @@
         if (logger.isDebugEnabled())
             logger.debug("Indexing row {} ", cfs.metadata.getKeyValidator().getString(key.key));
 
-        Collection<SecondaryIndex> indexes = cfs.indexManager.getIndexesByNames(idxNames);
-
-        switchLock.readLock().lock();
+        final OpOrder.Group opGroup = cfs.keyspace.writeOrder.start();
         try
         {
+            Collection<SecondaryIndex> indexes = cfs.indexManager.getIndexesByNames(idxNames);
+
             Iterator<ColumnFamily> pager = QueryPagers.pageRowLocally(cfs, key.key, DEFAULT_PAGE_SIZE);
             while (pager.hasNext())
             {
@@ -23,12 +23,12 @@
                     if (cfs.indexManager.indexes(cell.name(), indexes))
                         cf2.addColumn(cell);
                 }
-                cfs.indexManager.indexRow(key.key, cf2);
+                cfs.indexManager.indexRow(key.key, cf2, opGroup);
             }
         }
         finally
         {
-            switchLock.readLock().unlock();
+            opGroup.finishOne();
         }
     }
 

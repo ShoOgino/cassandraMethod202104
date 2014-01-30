@@ -1,0 +1,35 @@
+    @Override
+    public Cell reconcile(Cell cell, AbstractAllocator allocator)
+    {
+        // live + tombstone: track last tombstone
+        if (cell.isMarkedForDelete(Long.MIN_VALUE)) // cannot be an expired cell, so the current time is irrelevant
+        {
+            // live < tombstone
+            if (timestamp() < cell.timestamp())
+            {
+                return cell;
+            }
+            // live last delete >= tombstone
+            if (timestampOfLastDelete() >= cell.timestamp())
+            {
+                return this;
+            }
+            // live last delete < tombstone
+            return new CounterCell(name(), value(), timestamp(), cell.timestamp());
+        }
+
+        assert cell instanceof CounterCell : "Wrong class type: " + cell.getClass();
+
+        // live < live last delete
+        if (timestamp() < ((CounterCell) cell).timestampOfLastDelete())
+            return cell;
+        // live last delete > live
+        if (timestampOfLastDelete() > cell.timestamp())
+            return this;
+        // live + live: merge clocks; update value
+        return new CounterCell(name(),
+                               contextManager.merge(value(), cell.value(), allocator),
+                               Math.max(timestamp(), cell.timestamp()),
+                               Math.max(timestampOfLastDelete(), ((CounterCell) cell).timestampOfLastDelete()));
+    }
+

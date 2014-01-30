@@ -8,14 +8,23 @@
             {
                 protected void runMayThrow() throws Exception
                 {
-                    if (getMemtableThreadSafe().isExpired())
+                    synchronized (data)
                     {
-                        // if memtable is already expired but didn't flush because it's empty,
-                        // then schedule another flush.
-                        if (isClean())
-                            scheduleFlush();
-                        else
-                            forceFlush(); // scheduleFlush() will be called by the constructor of the new memtable.
+                        Memtable current = data.getView().getCurrentMemtable();
+                        // if we're not expired, we've been hit by a scheduled flush for an already flushed memtable, so ignore
+                        if (current.isExpired())
+                        {
+                            if (current.isClean())
+                            {
+                                // if we're still clean, instead of swapping just reschedule a flush for later
+                                scheduleFlush();
+                            }
+                            else
+                            {
+                                // we'll be rescheduled by the constructor of the Memtable.
+                                forceFlush();
+                            }
+                        }
                     }
                 }
             };

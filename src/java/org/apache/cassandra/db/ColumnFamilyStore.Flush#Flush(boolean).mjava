@@ -1,0 +1,34 @@
+        private Flush(boolean truncate)
+        {
+            // if true, we won't flush, we'll just wait for any outstanding writes, switch the memtable, and discard
+            this.truncate = truncate;
+
+            metric.pendingFlushes.inc();
+            /**
+             * To ensure correctness of switch without blocking writes, run() needs to wait for all write operations
+             * started prior to the switch to complete. We do this by creating a Barrier on the writeOrdering
+             * that all write operations register themselves with, and assigning this barrier to the memtables,
+             * after which we *.issue()* the barrier. This barrier is used to direct write operations started prior
+             * to the barrier.issue() into the memtable we have switched out, and any started after to its replacement.
+             * In doing so it also tells the write operations to update the lastReplayPosition of the memtable, so
+             * that we know the CL position we are dirty to, which can be marked clean when we complete.
+             */
+            writeBarrier = keyspace.writeOrder.newBarrier();
+            memtables = new ArrayList<>();
+
+            // submit flushes for the memtable for any indexed sub-cfses, and our own
+            final ReplayPosition minReplayPosition = CommitLog.instance.getContext();
+            for (ColumnFamilyStore cfs : concatWithIndexes())
+            {
+                // switch all memtables, regardless of their dirty status, setting the barrier
+                // so that we can reach a coordinated decision about cleanliness once they
+                // are no longer possible to be modified
+                Memtable mt = cfs.data.switchMemtable(truncate);
+                mt.setDiscarding(writeBarrier, minReplayPosition);
+                memtables.add(mt);
+            }
+
+            writeBarrier.issue();
+            postFlush = new PostFlush(!truncate, writeBarrier);
+        }
+
