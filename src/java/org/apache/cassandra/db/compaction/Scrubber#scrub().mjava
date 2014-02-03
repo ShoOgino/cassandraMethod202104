@@ -66,7 +66,9 @@
                 if (!sstable.descriptor.version.hasRowSizeAndColumnCount)
                 {
                     dataSize = dataSizeFromIndex;
-                    outputHandler.debug(String.format("row %s is %s bytes", ByteBufferUtil.bytesToHex(key.key), dataSize));
+                    // avoid an NPE if key is null
+                    String keyName = key == null ? "(unreadable key)" : ByteBufferUtil.bytesToHex(key.key);
+                    outputHandler.debug(String.format("row %s is %s bytes", keyName, dataSize));
                 }
                 else
                 {
@@ -103,7 +105,7 @@
                 catch (Throwable th)
                 {
                     throwIfFatal(th);
-                    outputHandler.warn("Non-fatal error reading row (stacktrace follows)", th);
+                    outputHandler.warn("Error reading row (stacktrace follows):", th);
                     writer.resetAndTruncate();
 
                     if (currentIndexKey != null
@@ -131,9 +133,7 @@
                         catch (Throwable th2)
                         {
                             throwIfFatal(th2);
-                            // Skipping rows is dangerous for counters (see CASSANDRA-2759)
-                            if (isCommutative)
-                                throw new IOError(th2);
+                            throwIfCommutative(key, th2);
 
                             outputHandler.warn("Retry failed too. Skipping to next row (retry's stacktrace follows)", th2);
                             writer.resetAndTruncate();
@@ -143,11 +143,9 @@
                     }
                     else
                     {
-                        // Skipping rows is dangerous for counters (see CASSANDRA-2759)
-                        if (isCommutative)
-                            throw new IOError(th);
+                        throwIfCommutative(key, th);
 
-                        outputHandler.warn("Row at " + dataStart + " is unreadable; skipping to next");
+                        outputHandler.warn("Row starting at position " + dataStart + " is unreadable; skipping to next");
                         if (currentIndexKey != null)
                             dataFile.seek(nextRowPositionFromIndex);
                         badRows++;
