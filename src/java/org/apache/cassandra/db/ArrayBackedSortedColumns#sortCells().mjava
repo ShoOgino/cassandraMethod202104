@@ -1,0 +1,49 @@
+    private void sortCells()
+    {
+        Comparator<Cell> comparator = reversed
+                                    ? getComparator().columnReverseComparator()
+                                    : getComparator().columnComparator();
+
+        // Sort the unsorted segment - will still potentially contain duplicate (non-reconciled) cells
+        Arrays.sort(cells, sortedSize, size, comparator);
+
+        // Determine the merge start position for that segment
+        int pos = binarySearch(0, sortedSize, cells[sortedSize].name, internalComparator());
+        if (pos < 0)
+            pos = -pos - 1;
+
+        // Copy [pos, lastSortedCellIndex] cells into a separate array
+        Cell[] leftCopy = pos == sortedSize
+                        ? EMPTY_ARRAY
+                        : Arrays.copyOfRange(cells, pos, sortedSize);
+
+        // Store the beginning (inclusive) and the end (exclusive) indexes of the right segment
+        int rightStart = sortedSize;
+        int rightEnd = size;
+
+        // 'Trim' the size to what's left without the leftCopy
+        size = sortedSize = pos;
+
+        // Merge the cells from both segments. When adding from the left segment we can rely on it not having any
+        // duplicate cells, and thus omit the comparison with the previously entered cell - we'll never need to reconcile.
+        int l = 0, r = rightStart;
+        while (l < leftCopy.length && r < rightEnd)
+        {
+            int cmp = comparator.compare(leftCopy[l], cells[r]);
+            if (cmp < 0)
+                internalAppend(leftCopy[l++]);
+            else if (cmp == 0)
+                internalAppend(leftCopy[l++].reconcile(cells[r++]));
+            else
+                internalAppendOrReconcile(cells[r++]);
+        }
+        while (l < leftCopy.length)
+            internalAppend(leftCopy[l++]);
+        while (r < rightEnd)
+            internalAppendOrReconcile(cells[r++]);
+
+        // Nullify the remainder of the array (in case we had duplicate cells that got reconciled)
+        for (int i = size; i < rightEnd; i++)
+            cells[i] = null;
+    }
+
