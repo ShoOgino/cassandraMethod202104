@@ -1,0 +1,40 @@
+    @Test
+    public void testChangeMaxIndexInterval() throws IOException
+    {
+        String ksname = "Keyspace1";
+        String cfname = "StandardLowIndexInterval"; // index interval of 8, no key caching
+        Keyspace keyspace = Keyspace.open(ksname);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        int numSSTables = 1;
+        int numRows = 256;
+        createSSTables(ksname, cfname, numSSTables, numRows);
+
+        List<SSTableReader> sstables = new ArrayList<>(cfs.getSSTables());
+        for (SSTableReader sstable : sstables)
+            sstable.readMeter = new RestorableMeter(100.0, 100.0);
+
+        IndexSummaryManager.redistributeSummaries(Collections.EMPTY_LIST, sstables, 1);
+        sstables = new ArrayList<>(cfs.getSSTables());
+        for (SSTableReader sstable : sstables)
+            assertEquals(cfs.metadata.getMaxIndexInterval(), sstable.getEffectiveIndexInterval(), 0.01);
+
+        // halve the max_index_interval
+        cfs.metadata.maxIndexInterval(cfs.metadata.getMaxIndexInterval() / 2);
+        IndexSummaryManager.redistributeSummaries(Collections.EMPTY_LIST, sstables, 1);
+        sstables = new ArrayList<>(cfs.getSSTables());
+        for (SSTableReader sstable : sstables)
+        {
+            assertEquals(cfs.metadata.getMaxIndexInterval(), sstable.getEffectiveIndexInterval(), 0.01);
+            assertEquals(numRows / cfs.metadata.getMaxIndexInterval(), sstable.getIndexSummarySize());
+        }
+
+        // return max_index_interval to its original value
+        cfs.metadata.maxIndexInterval(cfs.metadata.getMaxIndexInterval() * 2);
+        IndexSummaryManager.redistributeSummaries(Collections.EMPTY_LIST, sstables, 1);
+        for (SSTableReader sstable : cfs.getSSTables())
+        {
+            assertEquals(cfs.metadata.getMaxIndexInterval(), sstable.getEffectiveIndexInterval(), 0.01);
+            assertEquals(numRows / cfs.metadata.getMaxIndexInterval(), sstable.getIndexSummarySize());
+        }
+    }
+
