@@ -7,52 +7,52 @@
     public Directories(CFMetaData metadata)
     {
         this.metadata = metadata;
-        this.sstableDirectories = new File[dataFileLocations.length];
+        if (StorageService.instance.isClientMode())
+        {
+            dataPaths = null;
+            flushPath = null;
+            return;
+        }
 
-        // Determine SSTable directories
-        // If upgraded from version less than 2.1, use directories already exist.
-        for (int i = 0; i < dataFileLocations.length; ++i)
+        String cfId = ByteBufferUtil.bytesToHex(ByteBufferUtil.bytes(metadata.cfId));
+        int idx = metadata.cfName.indexOf(SECONDARY_INDEX_NAME_SEPARATOR);
+        // secondary indicies go in the same directory as the base cf
+        String directoryName = idx > 0 ? metadata.cfName.substring(0, idx) + "-" + cfId : metadata.cfName + "-" + cfId;
+
+        this.dataPaths = new File[dataDirectories.length];
+        // If upgraded from version less than 2.1, use existing directories
+        for (int i = 0; i < dataDirectories.length; ++i)
         {
             // check if old SSTable directory exists
-            sstableDirectories[i] = new File(dataFileLocations[i].location, join(metadata.ksName, metadata.cfName));
+            dataPaths[i] = new File(dataDirectories[i].location, join(metadata.ksName, this.metadata.cfName));
         }
-        boolean olderDirectoryExists = Iterables.any(Arrays.asList(sstableDirectories), new Predicate<File>()
+        boolean olderDirectoryExists = Iterables.any(Arrays.asList(dataPaths), new Predicate<File>()
         {
             public boolean apply(File file)
             {
                 return file.exists();
             }
         });
-        if (olderDirectoryExists)
-            return;
-
-        // create directory name
-        String directoryName;
-        String cfId = ByteBufferUtil.bytesToHex(ByteBufferUtil.bytes(metadata.cfId));
-        int idx = metadata.cfName.indexOf(SECONDARY_INDEX_NAME_SEPARATOR);
-        if (idx > 0)
-            // secondary index, goes in the same directory than the base cf
-            directoryName = metadata.cfName.substring(0, idx) + "-" + cfId;
-        else
-            directoryName = metadata.cfName + "-" + cfId;
-
-        for (int i = 0; i < dataFileLocations.length; ++i)
-            sstableDirectories[i] = new File(dataFileLocations[i].location, join(metadata.ksName, directoryName));
-
-        if (!StorageService.instance.isClientMode())
+        if (!olderDirectoryExists)
         {
-            for (File dir : sstableDirectories)
+            // use 2.1-style path names
+            for (int i = 0; i < dataDirectories.length; ++i)
+                dataPaths[i] = new File(dataDirectories[i].location, join(metadata.ksName, directoryName));
+        }
+
+        flushPath = new File(flushDirectory.location, join(metadata.ksName, directoryName));
+
+        for (File dir : allSSTablePaths())
+        {
+            try
             {
-                try
-                {
-                    FileUtils.createDirectory(dir);
-                }
-                catch (FSError e)
-                {
-                    // don't just let the default exception handler do this, we need the create loop to continue
-                    logger.error("Failed to create {} directory", dir);
-                    FileUtils.handleFSError(e);
-                }
+                FileUtils.createDirectory(dir);
+            }
+            catch (FSError e)
+            {
+                // don't just let the default exception handler do this, we need the create loop to continue
+                logger.error("Failed to create {} directory", dir);
+                FileUtils.handleFSError(e);
             }
         }
     }
