@@ -1,4 +1,4 @@
-        Restriction updateRestriction(ColumnDefinition def, Restriction restriction, Relation newRel, VariableSpecifications boundNames) throws InvalidRequestException
+        Restriction updateRestriction(CFMetaData cfm, ColumnDefinition def, Restriction restriction, Relation newRel, VariableSpecifications boundNames) throws InvalidRequestException
         {
             ColumnSpecification receiver = def;
             if (newRel.onToken)
@@ -11,6 +11,10 @@
                                                    new ColumnIdentifier("partition key token", true),
                                                    StorageService.getPartitioner().getTokenValidator());
             }
+
+            // We can only use the tuple notation of #4851 on clustering columns for now
+            if (newRel.previousInTuple != null && def.kind != ColumnDefinition.Kind.CLUSTERING_COLUMN)
+                throw new InvalidRequestException(String.format("Tuple notation can only be used on clustering columns but found on %s", def.name));
 
             switch (newRel.operator())
             {
@@ -58,7 +62,9 @@
                             throw new InvalidRequestException(String.format("%s cannot be restricted by both an equal and an inequal relation", def.name));
                         Term t = newRel.getValue().prepare(keyspace(), receiver);
                         t.collectMarkerSpecification(boundNames);
-                        ((Restriction.Slice)restriction).setBound(def.name, newRel.operator(), t);
+                        if (newRel.previousInTuple != null && (def.position() == 0 || !cfm.clusteringColumns().get(def.position() - 1).name.equals(newRel.previousInTuple)))
+                            throw new InvalidRequestException(String.format("Invalid tuple notation, column %s is not before column %s in the clustering order", newRel.previousInTuple, def.name));
+                        ((Restriction.Slice)restriction).setBound(def.name, newRel.operator(), t, newRel.previousInTuple);
                     }
                     break;
                 case CONTAINS_KEY:
