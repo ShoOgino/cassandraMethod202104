@@ -14,7 +14,16 @@
         int i = find(comparator, key, copyFrom, copyFromKeyPosition, copyFromKeyEnd);
         boolean found = i >= 0; // exact key match?
         boolean owns = true; // true iff this node (or a child) should contain the key
-        if (!found)
+        if (found)
+        {
+            Object prev = copyFrom[i];
+            Object next = updateFunction.apply(prev, key);
+            // we aren't actually replacing anything, so leave our state intact and continue
+            if (prev == next)
+                return null;
+            key = next;
+        }
+        else
         {
             i = -i - 1;
             if (i == copyFromKeyEnd && compare(comparator, upperBound, key) <= 0)
@@ -23,18 +32,34 @@
 
         if (isLeaf(copyFrom))
         {
-            // copy keys from the original node up to prior to the found index
-            copyKeys(i);
 
             if (owns)
             {
+                // copy keys from the original node up to prior to the found index
+                copyKeys(i);
+
                 if (found)
+                {
+                    // if found, we've applied updateFunction already
                     replaceNextKey(key);
+                }
                 else
+                {
+                    // if not found, we need to apply updateFunction still
+                    key = updateFunction.apply(key);
                     addNewKey(key); // handles splitting parent if necessary via ensureRoom
+                }
 
                 // done, so return null
                 return null;
+            }
+            else
+            {
+                // we don't want to copy anything if we're ascending and haven't copied anything previously,
+                // as in this case we can return the original node. Leaving buildKeyPosition as 0 indicates
+                // to buildFromRange that it should return the original instead of building a new node
+                if (buildKeyPosition > 0)
+                    copyKeys(i);
             }
 
             // if we don't own it, all we need to do is ensure we've copied everything in this node
@@ -63,9 +88,10 @@
                 ensureChild().reset(descendInto, newUpperBound, updateFunction, comparator);
                 return child;
             }
-            else
+            else if (buildKeyPosition > 0 || buildChildPosition > 0)
             {
-                // ensure we've copied all keys and children
+                // ensure we've copied all keys and children, but only if we've already copied something.
+                // otherwise we want to return the original node
                 copyKeys(copyFromKeyEnd);
                 copyChildren(copyFromKeyEnd + 1); // since we know that there are exactly 1 more child nodes, than keys
             }
