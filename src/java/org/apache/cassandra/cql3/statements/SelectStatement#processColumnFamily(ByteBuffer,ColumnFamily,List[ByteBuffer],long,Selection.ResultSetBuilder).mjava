@@ -17,7 +17,33 @@
         if (sliceRestriction != null)
             cells = applySliceRestriction(cells, variables);
 
-        for (Iterator<CQL3Row> iter = cfm.comparator.CQL3RowBuilder(now).group(cells); iter.hasNext();)
+        CQL3Row.RowIterator iter = cfm.comparator.CQL3RowBuilder(now).group(cells);
+
+        // If there is static columns but there is no non-static row, then provided the select was a full
+        // partition selection (i.e. not a 2ndary index search and there was no condition on clustering columns)
+        // then we want to include the static columns in the result set (and we're done).
+        CQL3Row staticRow = iter.getStaticRow();
+        if (staticRow != null && !iter.hasNext() && !usesSecondaryIndexing && hasNoClusteringColumnsRestriction())
+        {
+            result.newRow();
+            for (ColumnDefinition def : selection.getColumnsList())
+            {
+                switch (def.kind)
+                {
+                    case PARTITION_KEY:
+                        result.add(keyComponents[def.position()]);
+                        break;
+                    case STATIC:
+                        addValue(result, def, staticRow);
+                        break;
+                    default:
+                        result.add((ByteBuffer)null);
+                }
+            }
+            return;
+        }
+
+        while (iter.hasNext())
         {
             CQL3Row cql3Row = iter.next();
 
@@ -38,21 +64,13 @@
                         result.add(cql3Row.getColumn(null));
                         break;
                     case REGULAR:
-                        if (def.type.isCollection())
-                        {
-                            List<Cell> collection = cql3Row.getCollection(def.name);
-                            ByteBuffer value = collection == null
-                                             ? null
-                                             : ((CollectionType)def.type).serialize(collection);
-                            result.add(value);
-                        }
-                        else
-                        {
-                            result.add(cql3Row.getColumn(def.name));
-                        }
+                        addValue(result, def, cql3Row);
                         break;
-                    }
+                    case STATIC:
+                        addValue(result, def, staticRow);
+                        break;
                 }
+            }
         }
     }
 

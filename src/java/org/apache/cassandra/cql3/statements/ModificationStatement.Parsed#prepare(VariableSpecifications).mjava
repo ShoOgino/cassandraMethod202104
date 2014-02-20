@@ -24,24 +24,13 @@
                 }
                 else
                 {
-                    for (Pair<ColumnIdentifier, Operation.RawUpdate> entry : conditions)
+                    for (Pair<ColumnIdentifier, ColumnCondition.Raw> entry : conditions)
                     {
                         ColumnDefinition def = metadata.getColumnDefinition(entry.left);
                         if (def == null)
                             throw new InvalidRequestException(String.format("Unknown identifier %s", entry.left));
 
-                        /*
-                         * Lists column names are based on a server-side generated timeuuid. So we can't allow lists
-                         * operation or that would yield unexpected results (update that should apply wouldn't). So for
-                         * now, we just refuse lists, which also save use from having to bother about the read that some
-                         * list operation involve.
-                         */
-                        if (def.type instanceof ListType)
-                            throw new InvalidRequestException(String.format("List operation (%s) are not allowed in conditional updates", def.name));
-
-                        Operation condition = entry.right.prepare(keyspace(), def);
-                        assert !condition.requiresRead();
-
+                        ColumnCondition condition = entry.right.prepare(keyspace(), def);
                         condition.collectMarkerSpecification(boundNames);
 
                         switch (def.kind)
@@ -49,8 +38,7 @@
                             case PARTITION_KEY:
                             case CLUSTERING_COLUMN:
                                 throw new InvalidRequestException(String.format("PRIMARY KEY part %s found in SET part", entry.left));
-                            case COMPACT_VALUE:
-                            case REGULAR:
+                            default:
                                 stmt.addCondition(condition);
                                 break;
                         }

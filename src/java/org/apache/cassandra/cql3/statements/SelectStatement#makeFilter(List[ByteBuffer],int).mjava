@@ -12,30 +12,84 @@
             List<Composite> endBounds = getRequestedBound(Bound.END, variables);
             assert startBounds.size() == endBounds.size();
 
+            // Handles fetching static columns. Note that for 2i, the filter is just used to restrict
+            // the part of the index to query so adding the static slice would be useless and confusing.
+            // For 2i, static columns are retrieve in CompositesSearcher with each index hit.
+            ColumnSlice staticSlice = null;
+            if (selectsStaticColumns && !usesSecondaryIndexing)
+            {
+                // Note: we could use staticPrefix.start() for the start bound, but EMPTY gives us the
+                // same effect while saving a few CPU cycles.
+                staticSlice = isReversed
+                            ? new ColumnSlice(cfm.comparator.staticPrefix().end(), Composites.EMPTY)
+                            : new ColumnSlice(Composites.EMPTY, cfm.comparator.staticPrefix().end());
+
+                // In the case where we only select static columns, we want to really only check the static columns.
+                // So we return early as the rest of that method would actually make us query everything
+                if (selectsOnlyStaticColumns)
+                    return sliceFilter(staticSlice, limit, toGroup);
+            }
+
             // The case where startBounds == 1 is common enough that it's worth optimizing
-            ColumnSlice[] slices;
             if (startBounds.size() == 1)
             {
                 ColumnSlice slice = new ColumnSlice(startBounds.get(0), endBounds.get(0));
                 if (slice.isAlwaysEmpty(cfm.comparator, isReversed))
-                    return null;
-                slices = new ColumnSlice[]{slice};
+                    return staticSlice == null ? null : sliceFilter(staticSlice, limit, toGroup);
+
+                return staticSlice == null
+                     ? sliceFilter(slice, limit, toGroup)
+                     : (slice.includes(cfm.comparator, staticSlice.finish) ? sliceFilter(new ColumnSlice(staticSlice.start, slice.finish), limit, toGroup)
+                                                                           : sliceFilter(new ColumnSlice[]{ staticSlice, slice }, limit, toGroup));
+            }
+
+            List<ColumnSlice> l = new ArrayList<ColumnSlice>(startBounds.size());
+            for (int i = 0; i < startBounds.size(); i++)
+            {
+                ColumnSlice slice = new ColumnSlice(startBounds.get(i), endBounds.get(i));
+                if (!slice.isAlwaysEmpty(cfm.comparator, isReversed))
+                    l.add(slice);
+            }
+
+            if (l.isEmpty())
+                return staticSlice == null ? null : sliceFilter(staticSlice, limit, toGroup);
+            if (staticSlice == null)
+                return sliceFilter(l.toArray(new ColumnSlice[l.size()]), limit, toGroup);
+
+            // The slices should not overlap. We know the slices built from startBounds/endBounds don't, but if there is
+            // a static slice, it could overlap with the 2nd slice. Check for it and correct if that's the case
+            ColumnSlice[] slices;
+            if (isReversed)
+            {
+                if (l.get(l.size() - 1).includes(cfm.comparator, staticSlice.start))
+                {
+                    slices = l.toArray(new ColumnSlice[l.size()]);
+                    slices[slices.length-1] = new ColumnSlice(slices[slices.length-1].start, Composites.EMPTY);
+                }
+                else
+                {
+                    slices = l.toArray(new ColumnSlice[l.size()+1]);
+                    slices[slices.length-1] = staticSlice;
+                }
             }
             else
             {
-                List<ColumnSlice> l = new ArrayList<ColumnSlice>(startBounds.size());
-                for (int i = 0; i < startBounds.size(); i++)
+                if (l.get(0).includes(cfm.comparator, staticSlice.finish))
                 {
-                    ColumnSlice slice = new ColumnSlice(startBounds.get(i), endBounds.get(i));
-                    if (!slice.isAlwaysEmpty(cfm.comparator, isReversed))
-                        l.add(slice);
+                    slices = new ColumnSlice[l.size()];
+                    slices[0] = new ColumnSlice(Composites.EMPTY, l.get(0).finish);
+                    for (int i = 1; i < l.size(); i++)
+                        slices[i] = l.get(i);
                 }
-                if (l.isEmpty())
-                    return null;
-                slices = l.toArray(new ColumnSlice[l.size()]);
+                else
+                {
+                    slices = new ColumnSlice[l.size()+1];
+                    slices[0] = staticSlice;
+                    for (int i = 0; i < l.size(); i++)
+                        slices[i] = l.get(i);
+                }
             }
-
-            return new SliceQueryFilter(slices, isReversed, limit, toGroup);
+            return sliceFilter(slices, limit, toGroup);
         }
         else
         {

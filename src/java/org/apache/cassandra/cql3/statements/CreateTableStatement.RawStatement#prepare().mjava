@@ -15,7 +15,7 @@
 
             properties.validate();
 
-            CreateTableStatement stmt = new CreateTableStatement(cfName, properties, ifNotExists);
+            CreateTableStatement stmt = new CreateTableStatement(cfName, properties, ifNotExists, staticColumns);
 
             Map<ByteBuffer, CollectionType> definedCollections = null;
             for (Map.Entry<ColumnIdentifier, CQL3Type.Raw> entry : definitions.entrySet())
@@ -45,6 +45,8 @@
                 AbstractType<?> t = getTypeAndRemove(stmt.columns, alias);
                 if (t instanceof CounterColumnType)
                     throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", alias));
+                if (staticColumns.contains(alias))
+                    throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", alias));
                 keyTypes.add(t);
             }
             stmt.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
@@ -78,8 +80,13 @@
                 {
                     if (definedCollections != null)
                         throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
-                    stmt.columnAliases.add(columnAliases.get(0).bytes);
-                    AbstractType<?> at = getTypeAndRemove(stmt.columns, columnAliases.get(0));
+
+                    ColumnIdentifier alias = columnAliases.get(0);
+                    if (staticColumns.contains(alias))
+                        throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", alias));
+
+                    stmt.columnAliases.add(alias.bytes);
+                    AbstractType<?> at = getTypeAndRemove(stmt.columns, alias);
                     if (at instanceof CounterColumnType)
                         throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.columnAliases.get(0)));
                     stmt.comparator = new SimpleDenseCellNameType(at);
@@ -94,6 +101,8 @@
                         AbstractType<?> type = getTypeAndRemove(stmt.columns, t);
                         if (type instanceof CounterColumnType)
                             throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t));
+                        if (staticColumns.contains(t))
+                            throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", t));
                         types.add(type);
                     }
 
@@ -111,6 +120,16 @@
                                         : new CompoundSparseCellNameType.WithCollection(types, ColumnToCollectionType.getInstance(definedCollections));
                     }
                 }
+            }
+
+            if (!staticColumns.isEmpty())
+            {
+                // Only CQL3 tables can have static columns
+                if (useCompactStorage)
+                    throw new InvalidRequestException("Static columns are not supported in COMPACT STORAGE tables");
+                // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
+                if (columnAliases.isEmpty())
+                    throw new InvalidRequestException("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
             }
 
             if (useCompactStorage && !stmt.columnAliases.isEmpty())
