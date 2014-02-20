@@ -64,6 +64,7 @@
                     case COMPACT_VALUE:
                         throw new InvalidRequestException(String.format("Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", def.name));
                     case REGULAR:
+                    case STATIC:
                         // We only all IN on the row key and last clustering key so far, never on non-PK columns, and this even if there's an index
                         Restriction r = updateRestriction(cfm, def, stmt.metadataRestrictions.get(def.name), rel, names);
                         if (r.isIN() && !((Restriction.IN)r).canHaveOnlyOneValue())
@@ -158,6 +159,9 @@
             if (!stmt.usesSecondaryIndexing)
                 stmt.restrictedColumns.removeAll(cfm.partitionKeyColumns());
 
+            if (stmt.selectsOnlyStaticColumns && stmt.hasClusteringColumnsRestriction())
+                throw new InvalidRequestException("Cannot restrict clustering columns when selecting only static columns");
+
             // If a clustering key column is restricted by a non-EQ relation, all preceding
             // columns must have a EQ, and all following must have no restriction. Unless
             // the column is indexed that is.
@@ -243,8 +247,16 @@
                 stmt.usesSecondaryIndexing = true;
             }
 
-            if (stmt.usesSecondaryIndexing && stmt.keyIsInRelation)
-                throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
+            if (stmt.usesSecondaryIndexing)
+            {
+                if (stmt.keyIsInRelation)
+                    throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
+                // When the user only select static columns, the intent is that we don't query the whole partition but just
+                // the static parts. But 1) we don't have an easy way to do that with 2i and 2) since we don't support index on static columns
+                // so far, 2i means that you've restricted a non static column, so the query is somewhat non-sensical.
+                if (stmt.selectsOnlyStaticColumns)
+                    throw new InvalidRequestException("Queries using 2ndary indexes don't support selecting only static columns");
+            }
 
             if (!stmt.parameters.orderings.isEmpty())
             {

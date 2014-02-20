@@ -1,0 +1,41 @@
+    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params)
+    throws InvalidRequestException
+    {
+        List<Operation> deletions = getOperations();
+
+        if (prefix.size() < cfm.clusteringColumns().size() && !deletions.isEmpty())
+        {
+            // In general, we can't delete specific columns if not all clustering columns have been specified.
+            // However, if we delete only static colums, it's fine since we won't really use the prefix anyway.
+            for (Operation deletion : deletions)
+                if (!deletion.column.isStatic())
+                    throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s since %s specified", getFirstEmptyKey(), deletion.column.name));
+        }
+
+        if (deletions.isEmpty())
+        {
+            // We delete the slice selected by the prefix.
+            // However, for performance reasons, we distinguish 2 cases:
+            //   - It's a full internal row delete
+            //   - It's a full cell name (i.e it's a dense layout and the prefix is full)
+            if (prefix.isEmpty())
+            {
+                // No columns specified, delete the row
+                cf.delete(new DeletionInfo(params.timestamp, params.localDeletionTime));
+            }
+            else if (cfm.comparator.isDense() && prefix.size() == cfm.clusteringColumns().size())
+            {
+                cf.addAtom(params.makeTombstone(cfm.comparator.create(prefix, null)));
+            }
+            else
+            {
+                cf.addAtom(params.makeRangeTombstone(prefix.slice()));
+            }
+        }
+        else
+        {
+            for (Operation op : deletions)
+                op.execute(key, cf, prefix, params);
+        }
+    }
+
