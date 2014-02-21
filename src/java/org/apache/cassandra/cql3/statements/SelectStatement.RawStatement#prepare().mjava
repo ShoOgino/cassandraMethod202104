@@ -216,16 +216,6 @@
                         throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted by IN relation", cdef.name));
                     else if (stmt.selectACollection())
                         throw new InvalidRequestException(String.format("Cannot restrict PRIMARY KEY part %s by IN relation as a collection is selected by the query", cdef.name));
-                    // We will return rows in the order of the IN, unless that clustering column has a specific order set on.
-                    if (parameters.orderings.get(cdef.name) == null)
-                    {
-                        stmt.needOrderOnLastClustering = true;
-                        stmt.orderingIndexes = new HashMap<ColumnIdentifier, Integer>();
-                        int index = indexOf(cdef, stmt.selection);
-                        if (index < 0)
-                            index = stmt.selection.addColumnForOrdering(cdef);
-                        stmt.orderingIndexes.put(cdef.name, index);
-                    }
                 }
 
                 previous = cdef;
@@ -268,10 +258,9 @@
 
                 // If we order post-query (see orderResults), the sorted column needs to be in the ResultSet for sorting, even if we don't
                 // ultimately ship them to the client (CASSANDRA-4911).
-                if (stmt.keyIsInRelation || stmt.needOrderOnLastClustering)
+                if (stmt.keyIsInRelation)
                 {
-                    if (stmt.orderingIndexes == null)
-                        stmt.orderingIndexes = new HashMap<ColumnIdentifier, Integer>();
+                    stmt.orderingIndexes = new HashMap<>();
                     for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
                     {
                         final ColumnDefinition def = cfm.getColumnDefinition(column);
