@@ -16,15 +16,17 @@
             DeletionInfo deletionInfo;
             if (cm.deletionInfo().mayModify(current.deletionInfo))
             {
-                if (cm.deletionInfo().hasRanges())
+                if (indexer != SecondaryIndexManager.nullUpdater && cm.deletionInfo().hasRanges())
                 {
-                    for (Iterator<Cell> iter : new Iterator[] { insert.iterator(), BTree.<Cell>slice(current.tree, true) })
+                    for (Iterator<RangeTombstone> rangeIterator = cm.deletionInfo().rangeIterator(); rangeIterator.hasNext(); )
                     {
-                        while (iter.hasNext())
+                        RangeTombstone rt = rangeIterator.next();
+                        long deleteAt = rt.maxTimestamp();
+                        for (Iterator<Cell> iter = current.cellRange(getComparator().columnComparator(), rt.min, rt.max); iter.hasNext(); )
                         {
-                            Cell col = iter.next();
-                            if (cm.deletionInfo().isDeleted(col))
-                                indexer.remove(col);
+                            Cell c = iter.next();
+                            if (deleteAt >= c.timestamp())
+                                indexer.remove(c);
                         }
                     }
                 }
