@@ -1,0 +1,44 @@
+    @Test
+    public void testCassandra6778() throws CharacterCodingException
+    {
+        String cfname = "StandardInteger1";
+        Keyspace keyspace = Keyspace.open("Keyspace1");
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+
+        // insert two columns that represent the same integer but have different binary forms (the
+        // second one is padded with extra zeros)
+        RowMutation rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k1"));
+        byte[] column1 = {1};
+        rm.add(cfname, ByteBuffer.wrap(column1), ByteBufferUtil.bytes("data1"), 1);
+        rm.apply();
+        cfs.forceBlockingFlush();
+
+        rm = new RowMutation("Keyspace1", ByteBufferUtil.bytes("k1"));
+        byte[] column2 = {0, 0, 1};
+        rm.add(cfname, ByteBuffer.wrap(column2), ByteBufferUtil.bytes("data2"), 2);
+        rm.apply();
+        cfs.forceBlockingFlush();
+
+        // fetch by the first column name; we should get the second version of the column value
+        SliceByNamesReadCommand cmd = new SliceByNamesReadCommand(
+            "Keyspace1", ByteBufferUtil.bytes("k1"), cfname, System.currentTimeMillis(),
+            new NamesQueryFilter(FBUtilities.singleton(ByteBuffer.wrap(column1), cfs.getComparator())));
+
+        ColumnFamily cf = cmd.getRow(keyspace).cf;
+        assertEquals(1, cf.getColumnCount());
+        Column column = cf.getColumn(ByteBuffer.wrap(column1));
+        assertEquals("data2", ByteBufferUtil.string(column.value()));
+        assertEquals(ByteBuffer.wrap(column2), column.name());
+
+        // fetch by the second column name; we should get the second version of the column value
+        cmd = new SliceByNamesReadCommand(
+            "Keyspace1", ByteBufferUtil.bytes("k1"), cfname, System.currentTimeMillis(),
+            new NamesQueryFilter(FBUtilities.singleton(ByteBuffer.wrap(column2), cfs.getComparator())));
+
+        cf = cmd.getRow(keyspace).cf;
+        assertEquals(1, cf.getColumnCount());
+        column = cf.getColumn(ByteBuffer.wrap(column2));
+        assertEquals("data2", ByteBufferUtil.string(column.value()));
+        assertEquals(ByteBuffer.wrap(column2), column.name());
+    }
+
