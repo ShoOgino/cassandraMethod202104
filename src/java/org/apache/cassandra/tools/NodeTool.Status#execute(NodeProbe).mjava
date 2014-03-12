@@ -11,21 +11,21 @@
             hostIDMap = probe.getHostIdMap();
             epSnitchInfo = probe.getEndpointSnitchInfoProxy();
 
-            SetHostStat ownerships;
+            Map<InetAddress, Float> ownerships;
             try
             {
-                ownerships = new SetHostStat(probe.effectiveOwnership(keyspace));
+                ownerships = probe.effectiveOwnership(keyspace);
                 hasEffectiveOwns = true;
             } catch (IllegalStateException e)
             {
-                ownerships = new SetHostStat(probe.getOwnership());
+                ownerships = probe.getOwnership();
             }
 
             // More tokens then nodes (aka vnodes)?
-            if (new HashSet<>(tokensToEndpoints.values()).size() < tokensToEndpoints.keySet().size())
+            if (tokensToEndpoints.values().size() < tokensToEndpoints.keySet().size())
                 isTokenPerNode = false;
 
-            Map<String, SetHostStat> dcs = getOwnershipByDc(probe, ownerships);
+            Map<String, SetHostStat> dcs = getOwnershipByDc(probe, resolveIp, tokensToEndpoints, ownerships);
 
             findMaxAddressLength(dcs);
 
@@ -43,9 +43,23 @@
 
                 printNodesHeader(hasEffectiveOwns, isTokenPerNode);
 
-                // Nodes
-                for (HostStat entry : dc.getValue())
-                    printNode(probe, entry, hasEffectiveOwns, isTokenPerNode);
+                ArrayListMultimap<String, String> hostToTokens = ArrayListMultimap.create();
+                for (HostStat stat : dc.getValue())
+                    hostToTokens.put(stat.ipOrDns(), stat.token);
+
+                try
+                {
+                    for (String endpoint : hostToTokens.keySet())
+                    {
+                        Float owns = ownerships.get(InetAddress.getByName(endpoint));
+                        List<String> tokens = hostToTokens.get(endpoint);
+                        printNode(endpoint, owns, tokens, hasEffectiveOwns, isTokenPerNode);
+                    }
+                }
+                catch (UnknownHostException e)
+                {
+                    throw new RuntimeException(e);
+                }
             }
 
         }
