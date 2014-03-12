@@ -1,0 +1,41 @@
+    private void addStatementMutations(ModificationStatement statement,
+                                       QueryOptions options,
+                                       boolean local,
+                                       long now,
+                                       Map<String, Map<ByteBuffer, IMutation>> mutations)
+    throws RequestExecutionException, RequestValidationException
+    {
+        String ksName = statement.keyspace();
+        Map<ByteBuffer, IMutation> ksMap = mutations.get(ksName);
+        if (ksMap == null)
+        {
+            ksMap = new HashMap<>();
+            mutations.put(ksName, ksMap);
+        }
+
+        // The following does the same than statement.getMutations(), but we inline it here because
+        // we don't want to recreate mutations every time as this is particularly inefficient when applying
+        // multiple batch to the same partition (see #6737).
+        List<ByteBuffer> keys = statement.buildPartitionKeyNames(options);
+        Composite clusteringPrefix = statement.createClusteringPrefix(options);
+        UpdateParameters params = statement.makeUpdateParameters(keys, clusteringPrefix, options, local, now);
+
+        for (ByteBuffer key : keys)
+        {
+            IMutation mutation = ksMap.get(key);
+            Mutation mut;
+            if (mutation == null)
+            {
+                mut = new Mutation(ksName, key);
+                mutation = type == Type.COUNTER ? new CounterMutation(mut, options.getConsistency()) : mut;
+                ksMap.put(key, mutation);
+            }
+            else
+            {
+                mut = type == Type.COUNTER ? ((CounterMutation)mutation).getMutation() : (Mutation)mutation;
+            }
+
+            statement.addUpdateForKey(mut.addOrGet(statement.cfm), key, clusteringPrefix, params);
+        }
+    }
+

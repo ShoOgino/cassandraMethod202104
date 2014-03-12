@@ -1,0 +1,87 @@
+    private static List<Composite> buildBound(Bound bound,
+                                              Collection<ColumnDefinition> defs,
+                                              Restriction[] restrictions,
+                                              boolean isReversed,
+                                              CType type,
+                                              QueryOptions options) throws InvalidRequestException
+    {
+        CBuilder builder = type.builder();
+
+        // The end-of-component of composite doesn't depend on whether the
+        // component type is reversed or not (i.e. the ReversedType is applied
+        // to the component comparator but not to the end-of-component itself),
+        // it only depends on whether the slice is reversed
+        Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
+        for (Iterator<ColumnDefinition> iter = defs.iterator(); iter.hasNext();)
+        {
+            ColumnDefinition def = iter.next();
+
+            // In a restriction, we always have Bound.START < Bound.END for the "base" comparator.
+            // So if we're doing a reverse slice, we must inverse the bounds when giving them as start and end of the slice filter.
+            // But if the actual comparator itself is reversed, we must inversed the bounds too.
+            Bound b = isReversed == isReversedType(def) ? bound : Bound.reverse(bound);
+            Restriction r = restrictions[def.position()];
+            if (isNullRestriction(r, b))
+            {
+                // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
+                // For composites, if there was preceding component and we're computing the end, we must change the last component
+                // End-Of-Component, otherwise we would be selecting only one record.
+                Composite prefix = builder.build();
+                return Collections.singletonList(!prefix.isEmpty() && eocBound == Bound.END ? prefix.end() : prefix);
+            }
+
+            if (r.isSlice())
+            {
+                builder.add(getSliceValue(def, r, b, options));
+                Relation.Type relType = ((Restriction.Slice)r).getRelation(eocBound, b);
+
+                // We can have more non null restriction if the "scalar" notation was used for the bound (#4851).
+                // In that case, we need to add them all, and end the cell name with the correct end-of-component.
+                while (iter.hasNext())
+                {
+                    def = iter.next();
+                    r = restrictions[def.position()];
+                    if (isNullRestriction(r, b))
+                        break;
+
+                    builder.add(getSliceValue(def, r, b, options));
+                }
+                return Collections.singletonList(builder.build().withEOC(eocForRelation(relType)));
+            }
+            else
+            {
+                List<ByteBuffer> values = r.values(options);
+                if (values.size() != 1)
+                {
+                    // IN query, we only support it on the clustering column
+                    assert def.position() == defs.size() - 1;
+                    // The IN query might not have listed the values in comparator order, so we need to re-sort
+                    // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
+                    TreeSet<Composite> s = new TreeSet<Composite>(isReversed ? type.reverseComparator() : type);
+                    for (ByteBuffer val : values)
+                    {
+                        if (val == null)
+                            throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
+                        Composite prefix = builder.buildWith(val);
+                        // See below for why this
+                        s.add((b == Bound.END && builder.remainingCount() > 0) ? prefix.end() : prefix);
+                    }
+                    return new ArrayList<Composite>(s);
+                }
+
+                ByteBuffer val = values.get(0);
+                if (val == null)
+                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
+                builder.add(val);
+            }
+        }
+        // Means no relation at all or everything was an equal
+        // Note: if the builder is "full", there is no need to use the end-of-component bit. For columns selection,
+        // it would be harmless to do it. However, we use this method got the partition key too. And when a query
+        // with 2ndary index is done, and with the the partition provided with an EQ, we'll end up here, and in that
+        // case using the eoc would be bad, since for the random partitioner we have no guarantee that
+        // prefix.end() will sort after prefix (see #5240).
+        Composite prefix = builder.build();
+        return Collections.singletonList(bound == Bound.END && builder.remainingCount() > 0 ? prefix.end() : prefix);
+    }
+
