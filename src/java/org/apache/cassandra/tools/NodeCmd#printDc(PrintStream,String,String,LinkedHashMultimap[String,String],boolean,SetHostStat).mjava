@@ -1,5 +1,5 @@
     private void printDc(PrintStream outs, String format, String dc, LinkedHashMultimap<String, String> endpointsToTokens,
-            boolean keyspaceSelected, Map<InetAddress, Float> filteredOwnerships)
+                         boolean keyspaceSelected, SetHostStat hoststats)
     {
         Collection<String> liveNodes = probe.getLiveNodes();
         Collection<String> deadNodes = probe.getUnreachableNodes();
@@ -15,23 +15,22 @@
         List<String> tokens = new ArrayList<String>();
         String lastToken = "";
 
-        for (Map.Entry<InetAddress, Float> entry : filteredOwnerships.entrySet())
+        for (HostStat stat : hoststats)
         {
-            tokens.addAll(endpointsToTokens.get(entry.getKey().getHostAddress()));
+            tokens.addAll(endpointsToTokens.get(stat.ip));
             lastToken = tokens.get(tokens.size() - 1);
         }
 
-
         outs.printf(format, "Address", "Rack", "Status", "State", "Load", "Owns", "Token");
 
-        if (filteredOwnerships.size() > 1)
+        if (hoststats.size() > 1)
             outs.printf(format, "", "", "", "", "", "", lastToken);
         else
             outs.println();
 
-        for (Map.Entry<String, String> entry : endpointsToTokens.entries())
+        for (HostStat stat : hoststats)
         {
-            String endpoint = entry.getKey();
+            String endpoint = stat.ip;
             String rack;
             try
             {
@@ -60,18 +59,8 @@
             String load = loadMap.containsKey(endpoint)
                     ? loadMap.get(endpoint)
                     : "?";
-            String owns;
-            try
-            {
-                InetAddress ep = InetAddress.getByName(endpoint);
-                Float percent = filteredOwnerships.get(ep);
-                owns = (percent != null) ? new DecimalFormat("##0.00%").format(percent) : "?";
-            }
-            catch (UnknownHostException e)
-            {
-                throw new RuntimeException(e);
-            }
-            outs.printf(format, endpoint, rack, status, state, load, owns, entry.getValue());
+            String owns = stat.owns != null ? new DecimalFormat("##0.00%").format(stat.owns) : "?";
+            outs.printf(format, endpoint, rack, status, state, load, owns, stat.token);
         }
         outs.println();
     }
