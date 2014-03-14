@@ -1,0 +1,37 @@
+        public void encode(ChannelHandlerContext ctx, Message message, List results)
+        {
+            Connection connection = ctx.channel().attr(Connection.attributeKey).get();
+            // The only case the connection can be null is when we send the initial STARTUP message (client side thus)
+            int version = connection == null ? Server.CURRENT_VERSION : connection.getVersion();
+
+            EnumSet<Frame.Header.Flag> flags = EnumSet.noneOf(Frame.Header.Flag.class);
+
+            Codec<Message> codec = (Codec<Message>)message.type.codec;
+            int messageSize = codec.encodedSize(message, version);
+            ByteBuf body;
+            if (message instanceof Response)
+            {
+                UUID tracingId = ((Response)message).getTracingId();
+                if (tracingId != null)
+                {
+                    body = Unpooled.buffer(CBUtil.sizeOfUUID(tracingId) + messageSize);
+                    CBUtil.writeUUID(tracingId, body);
+                    flags.add(Frame.Header.Flag.TRACING);
+                }
+                else
+                {
+                    body = Unpooled.buffer(messageSize);
+                }
+            }
+            else
+            {
+                assert message instanceof Request;
+                body = Unpooled.buffer(messageSize);
+                if (((Request)message).isTracingRequested())
+                    flags.add(Frame.Header.Flag.TRACING);
+            }
+
+            codec.encode(message, body, version);
+            results.add(Frame.create(message.type, message.getStreamId(), version, flags, body));
+        }
+
