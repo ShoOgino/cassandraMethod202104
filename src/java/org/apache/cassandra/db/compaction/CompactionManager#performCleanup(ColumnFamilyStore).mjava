@@ -1,16 +1,30 @@
-    public void performCleanup(ColumnFamilyStore cfStore) throws InterruptedException, ExecutionException
+    public AllSSTableOpStatus performCleanup(final ColumnFamilyStore cfStore) throws InterruptedException, ExecutionException
     {
-        performAllSSTableOperation(cfStore, new AllSSTablesOperation()
+        final Iterable<SSTableReader> sstables = cfStore.markAllCompacting();
+        if (sstables == null)
         {
-            public void perform(ColumnFamilyStore store, Iterable<SSTableReader> sstables) throws IOException
+            logger.info("Aborting cleanup of {}.{} after failing to interrupt other compaction operations", cfStore.keyspace.getName(), cfStore.name);
+            return AllSSTableOpStatus.ABORTED;
+        }
+        if (Iterables.isEmpty(sstables))
+        {
+            logger.info("No sstables to cleanup for {}.{}", cfStore.keyspace.getName(), cfStore.name);
+            return AllSSTableOpStatus.SUCCESSFUL;
+        }
+
+        Runnable runnable = new UnmarkingRunnable(cfStore, sstables)
+        {
+            protected void runMayThrow() throws IOException
             {
                 // Sort the column families in order of SSTable size, so cleanup of smaller CFs
                 // can free up space for larger ones
                 List<SSTableReader> sortedSSTables = Lists.newArrayList(sstables);
                 Collections.sort(sortedSSTables, new SSTableReader.SizeComparator());
 
-                doCleanupCompaction(store, sortedSSTables);
+                doCleanupCompaction(cfStore, sortedSSTables);
             }
-        });
+        };
+        executor.submit(runnable).get();
+        return AllSSTableOpStatus.SUCCESSFUL;
     }
 

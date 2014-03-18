@@ -1,8 +1,20 @@
-    public void performSSTableRewrite(ColumnFamilyStore cfStore, final boolean excludeCurrentVersion) throws InterruptedException, ExecutionException
+    public AllSSTableOpStatus performSSTableRewrite(final ColumnFamilyStore cfs, final boolean excludeCurrentVersion) throws InterruptedException, ExecutionException
     {
-        performAllSSTableOperation(cfStore, new AllSSTablesOperation()
+        final Iterable<SSTableReader> sstables = cfs.markAllCompacting();
+        if (sstables == null)
         {
-            public void perform(ColumnFamilyStore cfs, Iterable<SSTableReader> sstables)
+            logger.info("Aborting sstable format upgrade of {}.{} after failing to interrupt other compaction operations", cfs.keyspace.getName(), cfs.name);
+            return AllSSTableOpStatus.ABORTED;
+        }
+        if (Iterables.isEmpty(sstables))
+        {
+            logger.info("No sstables to upgrade for {}.{}", cfs.keyspace.getName(), cfs.name);
+            return AllSSTableOpStatus.SUCCESSFUL;
+        }
+
+        Runnable runnable = new UnmarkingRunnable(cfs, sstables)
+        {
+            protected void runMayThrow() throws IOException
             {
                 for (final SSTableReader sstable : sstables)
                 {
@@ -17,6 +29,8 @@
                     task.execute(metrics);
                 }
             }
-        });
+        };
+        executor.submit(runnable).get();
+        return AllSSTableOpStatus.SUCCESSFUL;
     }
 
