@@ -1,37 +1,18 @@
-    /**
-     * Switch class loader before using the triggers for the column family, if
-     * not loaded them with the custom class loader.
-     */
-    private List<Mutation> execute(ByteBuffer key, ColumnFamily columnFamily)
+    public ColumnFamily execute(ByteBuffer key, ColumnFamily updates) throws InvalidRequestException
     {
-        Map<String,TriggerDefinition> triggers = columnFamily.metadata().getTriggers();
-        if (triggers.isEmpty())
-            return null;
-        List<Mutation> tmutations = Lists.newLinkedList();
-        Thread.currentThread().setContextClassLoader(customClassLoader);
-        try
+        List<Mutation> intermediate = executeInternal(key, updates);
+        if (intermediate == null)
+            return updates;
+
+        validateForSinglePartition(updates.metadata().getKeyValidator(), updates.id(), key, intermediate);
+
+        for (Mutation mutation : intermediate)
         {
-            for (TriggerDefinition td : triggers.values())
+            for (ColumnFamily cf : mutation.getColumnFamilies())
             {
-                ITrigger trigger = cachedTriggers.get(td.classOption);
-                if (trigger == null)
-                {
-                    trigger = loadTriggerInstance(td.classOption);
-                    cachedTriggers.put(td.classOption, trigger);
-                }
-                Collection<Mutation> temp = trigger.augment(key, columnFamily);
-                if (temp != null)
-                    tmutations.addAll(temp);
+                updates.addAll(cf);
             }
-            return tmutations;
         }
-        catch (Exception ex)
-        {
-            throw new RuntimeException(String.format("Exception while creating trigger on CF with ID: %s", columnFamily.id()), ex);
-        }
-        finally
-        {
-            Thread.currentThread().setContextClassLoader(parent);
-        }
+        return updates;
     }
 
