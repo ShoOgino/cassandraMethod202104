@@ -1,11 +1,25 @@
-    public void performScrub(ColumnFamilyStore cfStore, final boolean skipCorrupted) throws InterruptedException, ExecutionException
+    public AllSSTableOpStatus performScrub(final ColumnFamilyStore cfs, final boolean skipCorrupted) throws InterruptedException, ExecutionException
     {
-        performAllSSTableOperation(cfStore, new AllSSTablesOperation()
+        final Iterable<SSTableReader> sstables = cfs.markAllCompacting();
+        if (sstables == null)
         {
-            public void perform(ColumnFamilyStore store, Iterable<SSTableReader> sstables) throws IOException
+            logger.info("Aborting scrub of {}.{} after failing to interrupt other compaction operations", cfs.keyspace.getName(), cfs.name);
+            return AllSSTableOpStatus.ABORTED;
+        }
+        if (Iterables.isEmpty(sstables))
+        {
+            logger.info("No sstables to scrub for {}.{}", cfs.keyspace.getName(), cfs.name);
+            return AllSSTableOpStatus.SUCCESSFUL;
+        }
+
+        Runnable runnable = new UnmarkingRunnable(cfs, sstables)
+        {
+            protected void runMayThrow() throws IOException
             {
-                doScrub(store, sstables, skipCorrupted);
+                doScrub(cfs, sstables, skipCorrupted);
             }
-        });
+        };
+        executor.submit(runnable).get();
+        return AllSSTableOpStatus.SUCCESSFUL;
     }
 
