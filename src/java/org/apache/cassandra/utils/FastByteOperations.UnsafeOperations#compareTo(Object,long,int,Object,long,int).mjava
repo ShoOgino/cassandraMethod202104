@@ -1,0 +1,73 @@
+        /**
+         * Lexicographically compare two arrays.
+         *
+         * @param buffer1 left operand: a byte[] or null
+         * @param buffer2 right operand: a byte[] or null
+         * @param memoryOffset1 Where to start comparing in the left buffer (pure memory address if buffer1 is null, or relative otherwise)
+         * @param memoryOffset2 Where to start comparing in the right buffer (pure memory address if buffer1 is null, or relative otherwise)
+         * @param length1 How much to compare from the left buffer
+         * @param length2 How much to compare from the right buffer
+         * @return 0 if equal, < 0 if left is less than right, etc.
+         */
+        public int compareTo(Object buffer1, long memoryOffset1, int length1,
+                             Object buffer2, long memoryOffset2, int length2)
+        {
+            // Short circuit equal case
+            if (buffer1 == buffer2 && memoryOffset1 == memoryOffset2 && length1 == length2)
+                return 0;
+
+            int minLength = Math.min(length1, length2);
+            int minWords = minLength / Longs.BYTES;
+
+            /*
+             * Compare 8 bytes at a time. Benchmarking shows comparing 8 bytes at a
+             * time is no slower than comparing 4 bytes at a time even on 32-bit.
+             * On the other hand, it is substantially faster on 64-bit.
+             */
+
+            int wordComparisons = minWords * Longs.BYTES;
+            for (int i = 0; i < wordComparisons ; i += Longs.BYTES)
+            {
+                long lw = theUnsafe.getLong(buffer1, memoryOffset1 + (long) i);
+                long rw = theUnsafe.getLong(buffer2, memoryOffset2 + (long) i);
+                long diff = lw ^ rw;
+
+                if (diff != 0)
+                {
+                    if (!littleEndian)
+                        return lessThanUnsigned(lw, rw) ? -1 : 1;
+
+                    // Use binary search
+                    int n = 0;
+                    int y;
+                    int x = (int) diff;
+                    if (x == 0)
+                    {
+                        x = (int) (diff >>> 32);
+                        n = 32;
+                    }
+
+                    y = x << 16;
+                    if (y == 0)
+                        n += 16;
+                    else
+                        x = y;
+
+                    y = x << 8;
+                    if (y == 0)
+                        n += 8;
+                    return (int) (((lw >>> n) & 0xFFL) - ((rw >>> n) & 0xFFL));
+                }
+            }
+
+            // The epilogue to cover the last (minLength % 8) elements.
+            for (int i = minWords * Longs.BYTES; i < minLength; i++)
+            {
+                int result = UnsignedBytes.compare(theUnsafe.getByte(buffer1, memoryOffset1 + i),
+                                                   theUnsafe.getByte(buffer2, memoryOffset2 + i));
+                if (result != 0)
+                    return result;
+            }
+            return length1 - length2;
+        }
+
