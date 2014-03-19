@@ -11,13 +11,23 @@
         //   UPDATE t SET s = 3 WHERE k = 0 AND v = 1
         //   DELETE v FROM t WHERE k = 0 AND v = 1
         // sounds like you don't really understand what your are doing.
-        if (setsOnlyStaticColumns && columnConditions == null && (type != StatementType.INSERT || hasNoClusteringColumns))
+        if (setsStaticColumns && !setsRegularColumns)
         {
-            // Reject if any clustering columns is set
-            for (ColumnDefinition def : cfm.clusteringColumns())
-                if (processedKeys.get(def.name) != null)
-                    throw new InvalidRequestException(String.format("Invalid restriction on clustering column %s since the %s statement modifies only static columns", def.name, type));
-            return cfm.comparator.staticPrefix();
+            // If we set no non-static columns, then it's fine not to have clustering columns
+            if (hasNoClusteringColumns)
+                return cfm.comparator.staticPrefix();
+
+            // If we do have clustering columns however, then either it's an INSERT and the query is valid
+            // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
+            // (see above)
+            if (type != StatementType.INSERT)
+            {
+                for (ColumnDefinition def : cfm.clusteringColumns())
+                    if (processedKeys.get(def.name) != null)
+                        throw new InvalidRequestException(String.format("Invalid restriction on clustering column %s since the %s statement modifies only static columns", def.name, type));
+                // we should get there as it contradicts hasNoClusteringColumns == false
+                throw new AssertionError();
+            }
         }
 
         return createClusteringPrefixBuilderInternal(variables);
