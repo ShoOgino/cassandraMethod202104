@@ -1,0 +1,38 @@
+    public RowIndexEntry write(long currentPosition, DataOutputPlus out) throws IOException
+    {
+        assert !closed;
+
+        ColumnIndex columnsIndex;
+        try
+        {
+            indexBuilder = new ColumnIndex.Builder(emptyColumnFamily, key.key, out);
+            columnsIndex = indexBuilder.buildForCompaction(merger);
+
+            // if there aren't any columns or tombstones, return null
+            if (columnsIndex.columnsIndex.isEmpty() && !emptyColumnFamily.isMarkedForDelete())
+                return null;
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        // reach into the reducer (created during iteration) to get column count, size, max column timestamp
+        columnStats = new ColumnStats(reducer.columns,
+                                      reducer.minTimestampSeen,
+                                      Math.max(emptyColumnFamily.deletionInfo().maxTimestamp(), reducer.maxTimestampSeen),
+                                      reducer.maxLocalDeletionTimeSeen,
+                                      reducer.tombstones,
+                                      reducer.minColumnNameSeen,
+                                      reducer.maxColumnNameSeen
+        );
+
+        // in case no columns were ever written, we may still need to write an empty header with a top-level tombstone
+        indexBuilder.maybeWriteEmptyRowHeader();
+
+        out.writeShort(SSTableWriter.END_OF_ROW);
+
+        close();
+
+        return RowIndexEntry.create(currentPosition, emptyColumnFamily.deletionInfo().getTopLevelDeletion(), columnsIndex);
+    }
+
