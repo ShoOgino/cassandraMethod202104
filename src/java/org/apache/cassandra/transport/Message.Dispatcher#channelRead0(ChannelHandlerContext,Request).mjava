@@ -1,0 +1,27 @@
+        @Override
+        public void channelRead0(ChannelHandlerContext ctx, Request request)
+        {
+            try
+            {
+                assert request.connection() instanceof ServerConnection;
+                ServerConnection connection = (ServerConnection)request.connection();
+                QueryState qstate = connection.validateNewMessage(request.type, connection.getVersion(), request.getStreamId());
+
+                logger.debug("Received: {}, v={}", request, connection.getVersion());
+
+                Response response = request.execute(qstate);
+                response.setStreamId(request.getStreamId());
+                response.attach(connection);
+                connection.applyStateTransition(request.type, response.type);
+
+                logger.debug("Responding: {}, v={}", response, connection.getVersion());
+
+                ctx.channel().writeAndFlush(response);
+            }
+            catch (Exception ex)
+            {
+                // Don't let the exception propagate to exceptionCaught() if we can help it so that we can assign the right streamID.
+                ctx.channel().writeAndFlush(ErrorMessage.fromException(ex).setStreamId(request.getStreamId()));
+            }
+        }
+

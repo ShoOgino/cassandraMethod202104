@@ -1,0 +1,36 @@
+            public void encode(Metadata m, ByteBuf dest, int version)
+            {
+                boolean noMetadata = m.flags.contains(Flag.NO_METADATA);
+                boolean globalTablesSpec = m.flags.contains(Flag.GLOBAL_TABLES_SPEC);
+                boolean hasMorePages = m.flags.contains(Flag.HAS_MORE_PAGES);
+
+                assert version > 1 || (!m.flags.contains(Flag.HAS_MORE_PAGES) && !noMetadata): "version = " + version + ", flags = " + m.flags;
+
+                dest.writeInt(Flag.serialize(m.flags));
+                dest.writeInt(m.columnCount);
+
+                if (hasMorePages)
+                    CBUtil.writeValue(m.pagingState.serialize(), dest);
+
+                if (!noMetadata)
+                {
+                    if (globalTablesSpec)
+                    {
+                        CBUtil.writeString(m.names.get(0).ksName, dest);
+                        CBUtil.writeString(m.names.get(0).cfName, dest);
+                    }
+
+                    for (int i = 0; i < m.columnCount; i++)
+                    {
+                        ColumnSpecification name = m.names.get(i);
+                        if (!globalTablesSpec)
+                        {
+                            CBUtil.writeString(name.ksName, dest);
+                            CBUtil.writeString(name.cfName, dest);
+                        }
+                        CBUtil.writeString(name.name.toString(), dest);
+                        DataType.codec.writeOne(DataType.fromType(name.type), dest);
+                    }
+                }
+            }
+
