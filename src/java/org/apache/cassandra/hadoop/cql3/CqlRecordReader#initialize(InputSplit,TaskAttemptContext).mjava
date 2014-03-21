@@ -1,0 +1,45 @@
+    public void initialize(InputSplit split, TaskAttemptContext context) throws IOException
+    {
+        this.split = (ColumnFamilySplit) split;
+        Configuration conf = context.getConfiguration();
+        totalRowCount = (this.split.getLength() < Long.MAX_VALUE)
+                      ? (int) this.split.getLength()
+                      : ConfigHelper.getInputSplitSize(conf);
+        cfName = ConfigHelper.getInputColumnFamily(conf);
+        keyspace = ConfigHelper.getInputKeyspace(conf);              
+        cqlQuery = CqlConfigHelper.getInputCql(conf);
+        partitioner = ConfigHelper.getInputPartitioner(context.getConfiguration());
+        try
+        {
+            if (cluster != null)
+                return;
+
+            // create connection using thrift
+            String[] locations = split.getLocations();
+            Exception lastException = null;
+            for (String location : locations)
+            {
+                try
+                {
+                    cluster = CqlConfigHelper.getInputCluster(location, conf);
+                    break;
+                }
+                catch (Exception e)
+                {
+                    lastException = e;
+                    logger.warn("Failed to create authenticated client to {}", location);
+                }
+            }
+            if (cluster == null && lastException != null)
+                throw lastException;
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        session = cluster.connect(keyspace);
+        rowIterator = new RowIterator();
+        logger.debug("created {}", rowIterator);
+    }
+
