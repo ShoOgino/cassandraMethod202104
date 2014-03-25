@@ -1,0 +1,26 @@
+        // allocate memory in the tracker, and mark ourselves as owning it
+        public void allocate(long size, OpOrder.Group opGroup)
+        {
+            while (true)
+            {
+                if (parent.tryAllocate(size))
+                {
+                    acquired(size);
+                    return;
+                }
+                WaitQueue.Signal signal = opGroup.isBlockingSignal(parent.hasRoom().register());
+                boolean allocated = parent.tryAllocate(size);
+                if (allocated || opGroup.isBlocking())
+                {
+                    signal.cancel();
+                    if (allocated) // if we allocated, take ownership
+                        acquired(size);
+                    else // otherwise we're blocking so we're permitted to overshoot our constraints, to just allocate without blocking
+                        allocated(size);
+                    return;
+                }
+                else
+                    signal.awaitUninterruptibly();
+            }
+        }
+
