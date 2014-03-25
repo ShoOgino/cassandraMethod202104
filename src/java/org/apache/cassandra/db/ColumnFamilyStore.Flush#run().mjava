@@ -32,7 +32,18 @@
             {
                 // flush the memtable
                 MoreExecutors.sameThreadExecutor().execute(memtable.flushRunnable());
-                memtable.setDiscarded();
+
+                // issue a read barrier for reclaiming the memory, and offload the wait to another thread
+                final OpOrder.Barrier readBarrier = readOrdering.newBarrier();
+                readBarrier.issue();
+                reclaimExecutor.execute(new WrappedRunnable()
+                {
+                    public void runMayThrow() throws InterruptedException, ExecutionException
+                    {
+                        readBarrier.await();
+                        memtable.setDiscarded();
+                    }
+                });
             }
 
             // signal the post-flush we've done our work
