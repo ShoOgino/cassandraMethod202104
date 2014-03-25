@@ -10,13 +10,15 @@
 
         synchronized (replaceLock)
         {
-            boolean closeBf = true, closeSummary = true, closeFiles = true;
+            boolean closeBf = true, closeSummary = true, closeFiles = true, deleteFile = false;
 
             if (replacedBy != null)
             {
                 closeBf = replacedBy.bf != bf;
                 closeSummary = replacedBy.indexSummary != indexSummary;
                 closeFiles = replacedBy.dfile != dfile;
+                // if the replacement sstablereader uses a different path, clean up our paths
+                deleteFile = !dfile.path.equals(replacedBy.dfile.path);
             }
 
             if (replaces != null)
@@ -24,6 +26,7 @@
                 closeBf &= replaces.bf != bf;
                 closeSummary &= replaces.indexSummary != indexSummary;
                 closeFiles &= replaces.dfile != dfile;
+                deleteFile &= !dfile.path.equals(replaces.dfile.path);
             }
 
             boolean deleteAll = false;
@@ -49,31 +52,7 @@
                     replacedBy.replaces = replaces;
             }
 
-            if (references.get() != 0)
-            {
-                throw new IllegalStateException("SSTable is not fully released (" + references.get() + " references)");
-            }
-            if (closeBf)
-                bf.close();
-            if (closeSummary)
-                indexSummary.close();
-            if (closeFiles)
-            {
-                ifile.cleanup();
-                dfile.cleanup();
-            }
-            if (deleteAll)
-            {
-                /**
-                 * Do the OS a favour and suggest (using fadvice call) that we
-                 * don't want to see pages of this SSTable in memory anymore.
-                 *
-                 * NOTE: We can't use madvice in java because it requires the address of
-                 * the mapping, so instead we always open a file and run fadvice(fd, 0, 0) on it
-                 */
-                dropPageCache();
-                deletingTask.schedule();
-            }
+            scheduleTidy(closeBf, closeSummary, closeFiles, deleteFile, deleteAll);
         }
     }
 

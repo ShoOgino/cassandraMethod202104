@@ -7,50 +7,40 @@
     {
         assert !(range.keyRange() instanceof Range) || !((Range)range.keyRange()).isWrapAround() || range.keyRange().right.isMinimum(partitioner) : range.keyRange();
 
-        final ViewFragment view = markReferenced(range.keyRange());
+        final ViewFragment view = select(viewFilter(range.keyRange()));
         Tracing.trace("Executing seq scan across {} sstables for {}", view.sstables.size(), range.keyRange().getString(metadata.getKeyValidator()));
 
-        try
-        {
-            final CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(view.memtables, view.sstables, range, this, now);
+        final CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(view.memtables, view.sstables, range, this, now);
 
-            // todo this could be pushed into SSTableScanner
-            return new AbstractScanIterator()
+        // todo this could be pushed into SSTableScanner
+        return new AbstractScanIterator()
+        {
+            protected Row computeNext()
             {
-                protected Row computeNext()
-                {
-                    // pull a row out of the iterator
-                    if (!iterator.hasNext())
-                        return endOfData();
+                // pull a row out of the iterator
+                if (!iterator.hasNext())
+                    return endOfData();
 
-                    Row current = iterator.next();
-                    DecoratedKey key = current.key;
+                Row current = iterator.next();
+                DecoratedKey key = current.key;
 
-                    if (!range.stopKey().isMinimum(partitioner) && range.stopKey().compareTo(key) < 0)
-                        return endOfData();
+                if (!range.stopKey().isMinimum(partitioner) && range.stopKey().compareTo(key) < 0)
+                    return endOfData();
 
-                    // skipping outside of assigned range
-                    if (!range.contains(key))
-                        return computeNext();
+                // skipping outside of assigned range
+                if (!range.contains(key))
+                    return computeNext();
 
-                    if (logger.isTraceEnabled())
-                        logger.trace("scanned {}", metadata.getKeyValidator().getString(key.key));
+                if (logger.isTraceEnabled())
+                    logger.trace("scanned {}", metadata.getKeyValidator().getString(key.key));
 
-                    return current;
-                }
+                return current;
+            }
 
-                public void close() throws IOException
-                {
-                    SSTableReader.releaseReferences(view.sstables);
-                    iterator.close();
-                }
-            };
-        }
-        catch (RuntimeException e)
-        {
-            // In case getIterator() throws, otherwise the iteror close method releases the references.
-            SSTableReader.releaseReferences(view.sstables);
-            throw e;
-        }
+            public void close() throws IOException
+            {
+                iterator.close();
+            }
+        };
     }
 
