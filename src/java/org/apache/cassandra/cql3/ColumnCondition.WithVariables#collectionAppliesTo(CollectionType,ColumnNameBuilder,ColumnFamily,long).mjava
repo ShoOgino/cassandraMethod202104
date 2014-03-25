@@ -1,6 +1,17 @@
         private boolean collectionAppliesTo(CollectionType type, ColumnNameBuilder rowPrefix, ColumnFamily current, final long now) throws InvalidRequestException
         {
             ColumnNameBuilder collectionPrefix = copyOrUpdatePrefix(current.metadata(), rowPrefix).add(column.name.key);
+            Term.Terminal v = value.bind(variables);
+
+            // For map element access, we won't iterate over the collection, so deal with that first. In other case, we do.
+            if (collectionElement != null && type instanceof MapType)
+            {
+                ByteBuffer e = collectionElement.bindAndGet(variables);
+                if (e == null)
+                    throw new InvalidRequestException("Invalid null value for map access");
+                return mapElementAppliesTo((MapType)type, current, collectionPrefix, e, v.get(), now);
+            }
+
             // We are testing for collection equality, so we need to have the expected values *and* only those.
             ColumnSlice[] collectionSlice = new ColumnSlice[]{ new ColumnSlice(collectionPrefix.build(), collectionPrefix.buildAsEndOfRange()) };
             // Filter live columns, this makes things simpler afterwards
@@ -13,9 +24,18 @@
                 }
             });
 
-            Term.Terminal v = value.bind(variables);
             if (v == null)
                 return !iter.hasNext();
+
+            if (collectionElement != null)
+            {
+                assert type instanceof ListType;
+                ByteBuffer e = collectionElement.bindAndGet(variables);
+                if (e == null)
+                    throw new InvalidRequestException("Invalid null value for list access");
+
+                return listElementAppliesTo((ListType)type, iter, e, v.get());
+            }
 
             switch (type.kind)
             {
