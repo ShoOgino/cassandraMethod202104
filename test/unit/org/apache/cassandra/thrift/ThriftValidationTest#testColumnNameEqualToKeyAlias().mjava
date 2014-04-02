@@ -1,5 +1,5 @@
     @Test
-    public void testColumnNameEqualToKeyAlias()
+    public void testColumnNameEqualToKeyAlias() throws org.apache.cassandra.exceptions.InvalidRequestException
     {
         CFMetaData metaData = Schema.instance.getCFMetaData("Keyspace1", "Standard1");
         CFMetaData newMetadata = metaData.copy();
@@ -10,7 +10,7 @@
         // should not throw IRE here
         try
         {
-            newMetadata.addColumnDefinition(ColumnDefinition.partitionKeyDef(metaData, AsciiType.instance.decompose("id"), UTF8Type.instance, null));
+            newMetadata.addColumnDefinition(ColumnDefinition.partitionKeyDef(metaData, AsciiType.instance.decompose("id"), LongType.instance, null));
             newMetadata.validate();
         }
         catch (ConfigurationException e)
@@ -26,7 +26,7 @@
         // add a column with name = "id"
         try
         {
-            newMetadata.addColumnDefinition(ColumnDefinition.regularDef(metaData, ByteBufferUtil.bytes("id"), UTF8Type.instance, null));
+            newMetadata.addColumnDefinition(ColumnDefinition.regularDef(metaData, ByteBufferUtil.bytes("id"), LongType.instance, null));
             newMetadata.validate();
         }
         catch (ConfigurationException e)
@@ -35,5 +35,11 @@
         }
 
         assert gotException : "expected ConfigurationException but not received.";
+
+        // make sure the key alias does not affect validation of columns with the same name (CASSANDRA-6892)
+        Column column = new Column(ByteBufferUtil.bytes("id"));
+        column.setValue(ByteBufferUtil.bytes("not a long"));
+        column.setTimestamp(1234);
+        ThriftValidation.validateColumnData(newMetadata, null, column);
     }
 
