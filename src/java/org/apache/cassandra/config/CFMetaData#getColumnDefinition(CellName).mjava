@@ -4,8 +4,18 @@
     public ColumnDefinition getColumnDefinition(CellName cellName)
     {
         ColumnIdentifier id = cellName.cql3ColumnName();
-        return id == null
-             ? getColumnDefinition(cellName.toByteBuffer())  // Means a dense layout, try the full column name
-             : getColumnDefinition(id);
+        ColumnDefinition def = id == null
+                             ? getColumnDefinition(cellName.toByteBuffer())  // Means a dense layout, try the full column name
+                             : getColumnDefinition(id);
+
+        // It's possible that the def is a PRIMARY KEY or COMPACT_VALUE one in case a concrete cell
+        // name conflicts with a CQL column name, which can happen in 2 cases:
+        // 1) because the user inserted a cell through Thrift that conflicts with a default "alias" used
+        //    by CQL for thrift tables (see #6892).
+        // 2) for COMPACT STORAGE tables with a single utf8 clustering column, the cell name can be anything,
+        //    including a CQL column name (without this being a problem).
+        // In any case, this is fine, this just mean that columnDefinition is not the ColumnDefinition we are
+        // looking for.
+        return def != null && def.isPartOfCellName() ? def : null;
     }
 
