@@ -1,0 +1,32 @@
+    /**
+     * Tests CASSANDRA-6892 (key aliases being used improperly for validation)
+     */
+    @Test
+    public void testColumnNameEqualToDefaultKeyAlias() throws IOException, ParseException
+    {
+        File tempSS = tempSSTableFile("Keyspace1", "UUIDKeys");
+        ColumnFamily cfamily = TreeMapBackedSortedColumns.factory.create("Keyspace1", "UUIDKeys");
+        SSTableWriter writer = new SSTableWriter(tempSS.getPath(), 2);
+
+        // Add a row
+        cfamily.addColumn(column(CFMetaData.DEFAULT_KEY_ALIAS, "not a uuid", 1L));
+        writer.append(Util.dk(ByteBufferUtil.bytes(UUIDGen.getTimeUUID())), cfamily);
+
+        SSTableReader reader = writer.closeAndOpenReader();
+        // Export to JSON and verify
+        File tempJson = File.createTempFile("CFWithColumnNameEqualToDefaultKeyAlias", ".json");
+        SSTableExport.export(reader, new PrintStream(tempJson.getPath()), new String[0]);
+
+        JSONArray json = (JSONArray)JSONValue.parseWithException(new FileReader(tempJson));
+        assertEquals(1, json.size());
+
+        JSONObject row = (JSONObject)json.get(0);
+        JSONArray cols = (JSONArray) row.get("columns");
+        assertEquals(1, cols.size());
+
+        // check column name and value
+        JSONArray col = (JSONArray) cols.get(0);
+        assertEquals(CFMetaData.DEFAULT_KEY_ALIAS, ByteBufferUtil.string(hexToBytes((String) col.get(0))));
+        assertEquals("not a uuid", ByteBufferUtil.string(hexToBytes((String) col.get(1))));
+    }
+
