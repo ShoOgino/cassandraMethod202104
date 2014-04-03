@@ -1,7 +1,7 @@
     /**
      * Applies the counter mutation, returns the result Mutation (for replication to other nodes).
      *
-     * 1. Grabs the striped CF-level lock(s)
+     * 1. Grabs the striped cell-level locks in the proper order
      * 2. Gets the current values of the counters-to-be-modified from the counter cache
      * 3. Reads the rest of the current values (cache misses) from the CF
      * 4. Writes the updated counter values
@@ -14,33 +14,23 @@
      */
     public Mutation apply() throws WriteTimeoutException
     {
-        Mutation result = new Mutation(getKeyspaceName(), ByteBufferUtil.clone(key()));
+        Mutation result = new Mutation(getKeyspaceName(), key());
         Keyspace keyspace = Keyspace.open(getKeyspaceName());
 
-        ArrayList<UUID> cfIds = new ArrayList<>(getColumnFamilyIds());
-        Collections.sort(cfIds); // will lock in the sorted order, to avoid a potential deadlock.
-        ArrayList<Lock> locks = new ArrayList<>(cfIds.size());
+        int count = 0;
+        for (ColumnFamily cf : getColumnFamilies())
+            count += cf.getColumnCount();
+
+        List<Lock> locks = new ArrayList<>(count);
+        Tracing.trace("Acquiring {} counter locks", count);
         try
         {
-            Tracing.trace("Acquiring {} counter locks", cfIds.size());
-            for (UUID cfId : cfIds)
-            {
-                Lock lock = keyspace.getColumnFamilyStore(cfId).counterLockFor(key());
-                if (!lock.tryLock(getTimeout(), TimeUnit.MILLISECONDS))
-                    throw new WriteTimeoutException(WriteType.COUNTER, consistency(), 0, consistency().blockFor(keyspace));
-                locks.add(lock);
-            }
-
+            grabCounterLocks(keyspace, locks);
             for (ColumnFamily cf : getColumnFamilies())
                 result.add(processModifications(cf));
-
             result.apply();
             updateCounterCache(result, keyspace);
             return result;
-        }
-        catch (InterruptedException e)
-        {
-            throw new WriteTimeoutException(WriteType.COUNTER, consistency(), 0, consistency().blockFor(keyspace));
         }
         finally
         {
