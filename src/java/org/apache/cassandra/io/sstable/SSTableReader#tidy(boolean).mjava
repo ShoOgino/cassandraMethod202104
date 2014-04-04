@@ -1,0 +1,73 @@
+    private void tidy(boolean release)
+    {
+        if (readMeterSyncFuture != null)
+            readMeterSyncFuture.cancel(false);
+
+        assert references.get() == 0;
+
+        synchronized (replaceLock)
+        {
+            boolean closeBf = true, closeSummary = true, closeFiles = true;
+
+            if (replacedBy != null)
+            {
+                closeBf = replacedBy.bf != bf;
+                closeSummary = replacedBy.indexSummary != indexSummary;
+                closeFiles = replacedBy.dfile != dfile;
+            }
+
+            if (replaces != null)
+            {
+                closeBf &= replaces.bf != bf;
+                closeSummary &= replaces.indexSummary != indexSummary;
+                closeFiles &= replaces.dfile != dfile;
+            }
+
+            boolean deleteAll = false;
+            if (release && isCompacted.get())
+            {
+                assert replacedBy == null;
+                if (replaces != null)
+                {
+                    replaces.replacedBy = null;
+                    replaces.deletingTask = deletingTask;
+                    replaces.markObsolete();
+                }
+                else
+                {
+                    deleteAll = true;
+                }
+            }
+            else
+            {
+                if (replaces != null)
+                    replaces.replacedBy = replacedBy;
+                if (replacedBy != null)
+                    replacedBy.replaces = replaces;
+            }
+
+            assert references.get() == 0;
+            if (closeBf)
+                bf.close();
+            if (closeSummary)
+                indexSummary.close();
+            if (closeFiles)
+            {
+                ifile.cleanup();
+                dfile.cleanup();
+            }
+            if (deleteAll)
+            {
+                /**
+                 * Do the OS a favour and suggest (using fadvice call) that we
+                 * don't want to see pages of this SSTable in memory anymore.
+                 *
+                 * NOTE: We can't use madvice in java because it requires the address of
+                 * the mapping, so instead we always open a file and run fadvice(fd, 0, 0) on it
+                 */
+                dropPageCache();
+                deletingTask.schedule();
+            }
+        }
+    }
+
