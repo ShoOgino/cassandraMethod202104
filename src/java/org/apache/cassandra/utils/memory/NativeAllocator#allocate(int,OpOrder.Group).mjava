@@ -1,0 +1,32 @@
+    public long allocate(int size, OpOrder.Group opGroup)
+    {
+        assert size >= 0;
+        offHeap().allocate(size, opGroup);
+        // satisfy large allocations directly from JVM since they don't cause fragmentation
+        // as badly, and fill up our regions quickly
+        if (size > MAX_CLONED_SIZE)
+        {
+            unslabbed.addAndGet(size);
+            Region region = new Region(unsafe.allocateMemory(size), size);
+            regions.add(region);
+
+            long peer;
+            if ((peer = region.allocate(size)) == -1)
+                throw new AssertionError();
+
+            return peer;
+        }
+
+        while (true)
+        {
+            Region region = getRegion();
+
+            long peer;
+            if ((peer = region.allocate(size)) > 0)
+                return peer;
+
+            // not enough space!
+            currentRegion.compareAndSet(region, null);
+        }
+    }
+
