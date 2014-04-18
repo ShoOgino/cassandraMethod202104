@@ -2,7 +2,24 @@
     {
         DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(data));
         int size = in.readInt();
+        List<Mutation> mutations = new ArrayList<>(size);
+
         for (int i = 0; i < size; i++)
-            replaySerializedMutation(Mutation.serializer.deserialize(in, version), writtenAt, version, rateLimiter);
+        {
+            Mutation mutation = Mutation.serializer.deserialize(in, version);
+
+            // Remove CFs that have been truncated since. writtenAt and SystemTable#getTruncatedAt() both return millis.
+            // We don't abort the replay entirely b/c this can be considered a succes (truncated is same as delivered then
+            // truncated.
+            for (UUID cfId : mutation.getColumnFamilyIds())
+                if (writtenAt <= SystemKeyspace.getTruncatedAt(cfId))
+                    mutation = mutation.without(cfId);
+
+            if (!mutation.isEmpty())
+                mutations.add(mutation);
+        }
+
+        if (!mutations.isEmpty())
+            replayMutations(mutations, writtenAt, version, rateLimiter);
     }
 
