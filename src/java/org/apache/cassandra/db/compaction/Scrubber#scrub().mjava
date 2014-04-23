@@ -1,6 +1,7 @@
     public void scrub()
     {
         outputHandler.output(String.format("Scrubbing %s (%s bytes)", sstable, dataFile.length()));
+        SSTableRewriter writer = new SSTableRewriter(cfs, new HashSet<>(Collections.singleton(sstable)), sstable.maxDataAge, OperationType.SCRUB, isOffline);
         try
         {
             ByteBuffer nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
@@ -10,8 +11,7 @@
                 assert firstRowPositionFromIndex == 0 : firstRowPositionFromIndex;
             }
 
-            // TODO errors when creating the writer may leave empty temp files.
-            writer = CompactionManager.createWriter(cfs, destination, expectedBloomFilterSize, sstable.getSSTableMetadata().repairedAt, sstable);
+            writer.switchWriter(CompactionManager.createWriter(cfs, destination, expectedBloomFilterSize, sstable.getSSTableMetadata().repairedAt, sstable));
 
             DecoratedKey prevKey = null;
 
@@ -63,7 +63,6 @@
 
                 assert currentIndexKey != null || indexFile.isEOF();
 
-                writer.mark();
                 try
                 {
                     if (key == null)
@@ -79,7 +78,7 @@
                     }
 
                     AbstractCompactedRow compactedRow = new LazilyCompactedRow(controller, Collections.singletonList(atoms));
-                    if (writer.append(compactedRow) == null)
+                    if (writer.tryAppend(compactedRow) == null)
                         emptyRows++;
                     else
                         goodRows++;
@@ -91,7 +90,6 @@
                 {
                     throwIfFatal(th);
                     outputHandler.warn("Error reading row (stacktrace follows):", th);
-                    writer.resetAndTruncate();
 
                     if (currentIndexKey != null
                         && (key == null || !key.key.equals(currentIndexKey) || dataStart != dataStartFromIndex || dataSize != dataSizeFromIndex))
@@ -109,7 +107,7 @@
                             }
 
                             AbstractCompactedRow compactedRow = new LazilyCompactedRow(controller, Collections.singletonList(atoms));
-                            if (writer.append(compactedRow) == null)
+                            if (writer.tryAppend(compactedRow) == null)
                                 emptyRows++;
                             else
                                 goodRows++;
@@ -121,7 +119,6 @@
                             throwIfCommutative(key, th2);
 
                             outputHandler.warn("Retry failed too. Skipping to next row (retry's stacktrace follows)", th2);
-                            writer.resetAndTruncate();
                             dataFile.seek(nextRowPositionFromIndex);
                             badRows++;
                         }
@@ -138,32 +135,32 @@
                 }
             }
 
-            if (writer.getFilePointer() > 0)
+            if (!outOfOrderRows.isEmpty())
             {
+                // out of order rows, but no bad rows found - we can keep our repairedAt time
                 long repairedAt = badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt;
-                newSstable = writer.closeAndOpenReader(sstable.maxDataAge, repairedAt);
+                SSTableWriter inOrderWriter = CompactionManager.createWriter(cfs, destination, expectedBloomFilterSize, repairedAt, sstable);
+                for (Row row : outOfOrderRows)
+                    inOrderWriter.append(row.key, row.cf);
+                newInOrderSstable = inOrderWriter.closeAndOpenReader(sstable.maxDataAge);
+                if (!isOffline)
+                    cfs.getDataTracker().addSSTables(Collections.singleton(newInOrderSstable));
+                outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrderRows.size(), sstable, newInOrderSstable));
             }
+
+            // finish obsoletes the old sstable
+            writer.finish(!isOffline, badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt);
+            if (!writer.finished().isEmpty())
+                newSstable = writer.finished().get(0);
         }
         catch (Throwable t)
         {
-            if (writer != null)
-                writer.abort();
+            writer.abort();
             throw Throwables.propagate(t);
         }
         finally
         {
             controller.close();
-        }
-
-        if (!outOfOrderRows.isEmpty())
-        {
-            // out of order rows, but no bad rows found - we can keep our repairedAt time
-            long repairedAt = badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt;
-            SSTableWriter inOrderWriter = CompactionManager.createWriter(cfs, destination, expectedBloomFilterSize, repairedAt, sstable);
-            for (Row row : outOfOrderRows)
-                inOrderWriter.append(row.key, row.cf);
-            newInOrderSstable = inOrderWriter.closeAndOpenReader(sstable.maxDataAge);
-            outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrderRows.size(), sstable, newInOrderSstable));
         }
 
         if (newSstable == null)

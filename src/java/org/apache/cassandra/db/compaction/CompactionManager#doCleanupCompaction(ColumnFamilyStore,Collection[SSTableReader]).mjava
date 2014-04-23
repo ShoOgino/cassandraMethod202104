@@ -20,9 +20,10 @@
 
         for (SSTableReader sstable : sstables)
         {
-            if (!hasIndexes && !new Bounds<Token>(sstable.first.token, sstable.last.token).intersects(ranges))
+            if (!hasIndexes && !new Bounds<>(sstable.first.token, sstable.last.token).intersects(ranges))
             {
-                cfs.replaceCompactedSSTables(Arrays.asList(sstable), Collections.<SSTableReader>emptyList(), OperationType.CLEANUP);
+                cfs.getDataTracker().replaceReaders(Arrays.asList(sstable), Collections.<SSTableReader>emptyList());
+                cfs.getDataTracker().markCompactedSSTablesReplaced(Arrays.asList(sstable), Collections.<SSTableReader>emptyList(), OperationType.CLEANUP);
                 continue;
             }
             if (!needsCleanup(sstable, ranges))
@@ -51,20 +52,18 @@
             CleanupInfo ci = new CleanupInfo(sstable, scanner);
 
             metrics.beginCompaction(ci);
-            SSTableWriter writer = createWriter(cfs,
-                                                compactionFileLocation,
-                                                expectedBloomFilterSize,
-                                                sstable.getSSTableMetadata().repairedAt,
-                                                sstable);
-            SSTableReader newSstable = null;
+            SSTableRewriter writer = new SSTableRewriter(cfs, new HashSet<>(ImmutableSet.of(sstable)), sstable.maxDataAge, OperationType.CLEANUP, false);
+
             try
             {
+                writer.switchWriter(createWriter(cfs, compactionFileLocation, expectedBloomFilterSize, sstable.getSSTableMetadata().repairedAt, sstable));
+
                 while (scanner.hasNext())
                 {
                     if (ci.isStopRequested())
                         throw new CompactionInterruptedException(ci.getCompactionInfo());
-                    SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
 
+                    SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
                     row = cleanupStrategy.cleanup(row);
                     if (row == null)
                         continue;
@@ -72,10 +71,11 @@
                     if (writer.append(compactedRow) != null)
                         totalkeysWritten++;
                 }
-                if (totalkeysWritten > 0)
-                    newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
-                else
-                    writer.abort();
+
+                // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd
+                cfs.indexManager.flushIndexesBlocking();
+
+                writer.finish();
             }
             catch (Throwable e)
             {
@@ -89,23 +89,18 @@
                 metrics.finishCompaction(ci);
             }
 
-            List<SSTableReader> results = new ArrayList<SSTableReader>(1);
-            if (newSstable != null)
+            List<SSTableReader> results = writer.finished();
+            if (!results.isEmpty())
             {
-                results.add(newSstable);
-
                 String format = "Cleaned up to %s.  %,d to %,d (~%d%% of original) bytes for %,d keys.  Time: %,dms.";
                 long dTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
                 long startsize = sstable.onDiskLength();
-                long endsize = newSstable.onDiskLength();
+                long endsize = 0;
+                for (SSTableReader newSstable : results)
+                    endsize += newSstable.onDiskLength();
                 double ratio = (double) endsize / (double) startsize;
-                logger.info(String.format(format, writer.getFilename(), startsize, endsize, (int) (ratio * 100), totalkeysWritten, dTime));
+                logger.info(String.format(format, results.get(0).getFilename(), startsize, endsize, (int) (ratio * 100), totalkeysWritten, dTime));
             }
-
-            // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd
-            cfs.indexManager.flushIndexesBlocking();
-
-            cfs.replaceCompactedSSTables(Arrays.asList(sstable), results, OperationType.CLEANUP);
         }
     }
 
