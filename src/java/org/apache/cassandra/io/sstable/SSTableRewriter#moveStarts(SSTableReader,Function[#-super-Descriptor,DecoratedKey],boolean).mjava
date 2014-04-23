@@ -1,0 +1,49 @@
+    /**
+     * Replace the readers we are rewriting with cloneWithNewStart, reclaiming any page cache that is no longer
+     * needed, and transferring any key cache entries over to the new reader, expiring them from the old. if reset
+     * is true, we are instead restoring the starts of the readers from before the rewriting began
+     *
+     * @param newReader the rewritten reader that replaces them for this region
+     * @param newStarts a function mapping a reader's descriptor to their new start value
+     * @param reset true iff we are restoring earlier starts (increasing the range over which they are valid)
+     */
+    private void moveStarts(SSTableReader newReader, Function<? super Descriptor, DecoratedKey> newStarts, boolean reset)
+    {
+        if (isOffline)
+            return;
+        List<SSTableReader> toReplace = new ArrayList<>();
+        List<SSTableReader> replaceWith = new ArrayList<>();
+        final List<DecoratedKey> invalidateKeys = new ArrayList<>();
+        if (!reset)
+        {
+            invalidateKeys.addAll(cachedKeys.keySet());
+            for (Map.Entry<DecoratedKey, RowIndexEntry> cacheKey : cachedKeys.entrySet())
+                newReader.cacheKey(cacheKey.getKey(), cacheKey.getValue());
+        }
+        cachedKeys = new HashMap<>();
+        for (final SSTableReader sstable : rewriting)
+        {
+            DecoratedKey newStart = newStarts.apply(sstable.descriptor);
+            assert newStart != null;
+            if (sstable.first.compareTo(newStart) < 0 || (reset && newStart != sstable.first))
+            {
+                toReplace.add(sstable);
+                // we call getCurrentReplacement() to support multiple rewriters operating over the same source readers at once.
+                // note: only one such writer should be written to at any moment
+                replaceWith.add(sstable.getCurrentReplacement().cloneWithNewStart(newStart, new Runnable()
+                {
+                    public void run()
+                    {
+                        // this is somewhat racey, in that we could theoretically be closing this old reader
+                        // when an even older reader is still in use, but it's not likely to have any major impact
+                        for (DecoratedKey key : invalidateKeys)
+                            sstable.invalidateCacheKey(key);
+                    }
+                }));
+            }
+        }
+        replaceReaders(toReplace, replaceWith);
+        rewriting.removeAll(toReplace);
+        rewriting.addAll(replaceWith);
+    }
+
