@@ -2,32 +2,25 @@
      * Add columns to a column family.
      *
      * @param row the columns associated with a row
-     * @param superName name of the super column if any
      * @param cfamily the column family to add columns to
      */
-    private void addColumnsToCF(List<?> row, ByteBuffer superName, ColumnFamily cfamily)
+    private void addColumnsToCF(List<?> row, ColumnFamily cfamily)
     {
         CFMetaData cfm = cfamily.metadata();
         assert cfm != null;
 
         for (Object c : row)
         {
-            JsonColumn col = new JsonColumn<List>((List) c, cfm, oldSCFormat, (superName != null));
+            JsonColumn col = new JsonColumn<List>((List) c, cfm);
             if (col.isRangeTombstone())
             {
-                Composite start = superName == null
-                                ? cfm.comparator.fromByteBuffer(col.getName())
-                                : cfm.comparator.make(superName, col.getName());
-                Composite end = superName == null
-                              ? cfm.comparator.fromByteBuffer(col.getValue())
-                              : cfm.comparator.make(superName, col.getValue());
+                Composite start = cfm.comparator.fromByteBuffer(col.getName());
+                Composite end = cfm.comparator.fromByteBuffer(col.getValue());
                 cfamily.addAtom(new RangeTombstone(start, end, col.timestamp, col.localExpirationTime));
                 continue;
             }
 
-            CellName cname = superName == null
-                           ? cfm.comparator.cellFromByteBuffer(col.getName())
-                           : cfm.comparator.makeCellName(superName, col.getName());
+            CellName cname = cfm.comparator.cellFromByteBuffer(col.getName());
 
             if (col.isExpiring())
             {
@@ -43,9 +36,7 @@
             }
             else if (col.isRangeTombstone())
             {
-                CellName end = superName == null
-                             ? cfm.comparator.cellFromByteBuffer(col.getValue())
-                             : cfm.comparator.makeCellName(superName, col.getValue());
+                CellName end = cfm.comparator.cellFromByteBuffer(col.getValue());
                 cfamily.addAtom(new RangeTombstone(cname, end, col.timestamp, col.localExpirationTime));
             }
             // cql3 row marker, see CASSANDRA-5852
