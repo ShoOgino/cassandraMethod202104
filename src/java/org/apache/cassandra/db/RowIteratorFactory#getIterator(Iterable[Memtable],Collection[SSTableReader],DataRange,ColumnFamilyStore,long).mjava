@@ -14,32 +14,26 @@
                                                      final long now)
     {
         // fetch data from current memtable, historical memtables, and SSTables in the correct order.
-        final List<CloseableIterator<OnDiskAtomIterator>> iterators = new ArrayList<CloseableIterator<OnDiskAtomIterator>>();
+        final List<CloseableIterator<OnDiskAtomIterator>> iterators = new ArrayList<>(Iterables.size(memtables) + sstables.size());
 
-        // memtables
         for (Memtable memtable : memtables)
-        {
             iterators.add(new ConvertToColumnIterator(range, memtable.getEntryIterator(range.startKey(), range.stopKey())));
-        }
 
         for (SSTableReader sstable : sstables)
-        {
-            final SSTableScanner scanner = sstable.getScanner(range);
-            iterators.add(scanner);
-        }
+            iterators.add(sstable.getScanner(range));
 
         // reduce rows from all sources into a single row
         return MergeIterator.get(iterators, COMPARE_BY_KEY, new MergeIterator.Reducer<OnDiskAtomIterator, Row>()
         {
             private final int gcBefore = cfs.gcBefore(now);
-            private final List<OnDiskAtomIterator> colIters = new ArrayList<OnDiskAtomIterator>();
+            private final List<OnDiskAtomIterator> colIters = new ArrayList<>();
             private DecoratedKey key;
             private ColumnFamily returnCF;
 
             @Override
             protected void onKeyChange()
             {
-                this.returnCF = ArrayBackedSortedColumns.factory.create(cfs.metadata);
+                this.returnCF = ArrayBackedSortedColumns.factory.create(cfs.metadata, range.columnFilter.isReversed());
             }
 
             public void reduce(OnDiskAtomIterator current)

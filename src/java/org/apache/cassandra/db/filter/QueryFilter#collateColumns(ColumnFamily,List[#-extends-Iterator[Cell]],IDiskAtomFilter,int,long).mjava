@@ -1,27 +1,14 @@
-    public static void collateColumns(final ColumnFamily returnCF, List<? extends Iterator<Cell>> toCollate, IDiskAtomFilter filter, int gcBefore, long timestamp)
+    public static void collateColumns(ColumnFamily returnCF,
+                                      List<? extends Iterator<Cell>> toCollate,
+                                      IDiskAtomFilter filter,
+                                      int gcBefore,
+                                      long timestamp)
     {
-        final Comparator<Cell> fcomp = filter.getColumnComparator(returnCF.getComparator());
-        // define a 'reduced' iterator that merges columns w/ the same name, which
-        // greatly simplifies computing liveColumns in the presence of tombstones.
-        MergeIterator.Reducer<Cell, Cell> reducer = new MergeIterator.Reducer<Cell, Cell>()
-        {
-            Cell current;
+        Comparator<Cell> comparator = filter.getColumnComparator(returnCF.getComparator());
 
-            public void reduce(Cell next)
-            {
-                assert current == null || fcomp.compare(current, next) == 0;
-                current = current == null ? next : current.reconcile(next);
-            }
-
-            protected Cell getReduced()
-            {
-                assert current != null;
-                Cell toReturn = current;
-                current = null;
-                return toReturn;
-            }
-        };
-        Iterator<Cell> reduced = MergeIterator.get(toCollate, fcomp, reducer);
+        Iterator<Cell> reduced = toCollate.size() == 1
+                               ? toCollate.get(0)
+                               : MergeIterator.get(toCollate, comparator, getReducer(comparator));
 
         filter.collectReducedColumns(returnCF, reduced, gcBefore, timestamp);
     }
