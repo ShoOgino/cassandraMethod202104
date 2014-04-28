@@ -1,36 +1,28 @@
     public AllSSTableOpStatus performSSTableRewrite(final ColumnFamilyStore cfs, final boolean excludeCurrentVersion) throws InterruptedException, ExecutionException
     {
-        final Iterable<SSTableReader> sstables = cfs.markAllCompacting();
-        if (sstables == null)
+        return parallelAllSSTableOperation(cfs, new OneSSTableOperation()
         {
-            logger.info("Aborting sstable format upgrade of {}.{} after failing to interrupt other compaction operations", cfs.keyspace.getName(), cfs.name);
-            return AllSSTableOpStatus.ABORTED;
-        }
-        if (Iterables.isEmpty(sstables))
-        {
-            logger.info("No sstables to upgrade for {}.{}", cfs.keyspace.getName(), cfs.name);
-            return AllSSTableOpStatus.SUCCESSFUL;
-        }
-
-        Runnable runnable = new UnmarkingRunnable(cfs, sstables)
-        {
-            protected void runMayThrow() throws IOException
+            @Override
+            public Iterable<SSTableReader> filterSSTables(Iterable<SSTableReader> input)
             {
-                for (final SSTableReader sstable : sstables)
+                return Iterables.filter(input, new Predicate<SSTableReader>()
                 {
-                    if (excludeCurrentVersion && sstable.descriptor.version.equals(Descriptor.Version.CURRENT))
-                        continue;
-
-                    // SSTables are marked by the caller
-                    // NOTE: it is important that the task create one and only one sstable, even for Leveled compaction (see LeveledManifest.replace())
-                    AbstractCompactionTask task = cfs.getCompactionStrategy().getCompactionTask(Collections.singleton(sstable), NO_GC, Long.MAX_VALUE);
-                    task.setUserDefined(true);
-                    task.setCompactionType(OperationType.UPGRADE_SSTABLES);
-                    task.execute(metrics);
-                }
+                    @Override
+                    public boolean apply(SSTableReader sstable)
+                    {
+                        return !(excludeCurrentVersion && sstable.descriptor.version.equals(Descriptor.Version.CURRENT));
+                    }
+                });
             }
-        };
-        executor.submit(runnable).get();
-        return AllSSTableOpStatus.SUCCESSFUL;
+
+            @Override
+            public void execute(SSTableReader input) throws IOException
+            {
+                AbstractCompactionTask task = cfs.getCompactionStrategy().getCompactionTask(Collections.singleton(input), NO_GC, Long.MAX_VALUE);
+                task.setUserDefined(true);
+                task.setCompactionType(OperationType.UPGRADE_SSTABLES);
+                task.execute(metrics);
+            }
+        });
     }
 

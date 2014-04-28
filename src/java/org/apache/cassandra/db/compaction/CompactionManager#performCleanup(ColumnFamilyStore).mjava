@@ -1,30 +1,30 @@
     public AllSSTableOpStatus performCleanup(final ColumnFamilyStore cfStore) throws InterruptedException, ExecutionException
     {
-        final Iterable<SSTableReader> sstables = cfStore.markAllCompacting();
-        if (sstables == null)
+        assert !cfStore.isIndex();
+        Keyspace keyspace = cfStore.keyspace;
+        final Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(keyspace.getName());
+        if (ranges.isEmpty())
         {
-            logger.info("Aborting cleanup of {}.{} after failing to interrupt other compaction operations", cfStore.keyspace.getName(), cfStore.name);
+            logger.info("Cleanup cannot run before a node has joined the ring");
             return AllSSTableOpStatus.ABORTED;
         }
-        if (Iterables.isEmpty(sstables))
+        final boolean hasIndexes = cfStore.indexManager.hasIndexes();
+        final CleanupStrategy cleanupStrategy = CleanupStrategy.get(cfStore, ranges);
+        return parallelAllSSTableOperation(cfStore, new OneSSTableOperation()
         {
-            logger.info("No sstables to cleanup for {}.{}", cfStore.keyspace.getName(), cfStore.name);
-            return AllSSTableOpStatus.SUCCESSFUL;
-        }
-
-        Runnable runnable = new UnmarkingRunnable(cfStore, sstables)
-        {
-            protected void runMayThrow() throws IOException
+            @Override
+            public Iterable<SSTableReader> filterSSTables(Iterable<SSTableReader> input)
             {
-                // Sort the column families in order of SSTable size, so cleanup of smaller CFs
-                // can free up space for larger ones
-                List<SSTableReader> sortedSSTables = Lists.newArrayList(sstables);
+                List<SSTableReader> sortedSSTables = Lists.newArrayList(input);
                 Collections.sort(sortedSSTables, new SSTableReader.SizeComparator());
-
-                doCleanupCompaction(cfStore, sortedSSTables);
+                return sortedSSTables;
             }
-        };
-        executor.submit(runnable).get();
-        return AllSSTableOpStatus.SUCCESSFUL;
+
+            @Override
+            public void execute(SSTableReader input) throws IOException
+            {
+                doCleanupOne(cfStore, input, cleanupStrategy, ranges, hasIndexes);
+            }
+        });
     }
 
