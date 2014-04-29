@@ -27,7 +27,7 @@
         if (previous == null)
         {
             AtomicBTreeColumns empty = cf.cloneMeShallow(AtomicBTreeColumns.factory, false);
-            final DecoratedKey cloneKey = new DecoratedKey(key.token, allocator.clone(key.key, opGroup));
+            final DecoratedKey cloneKey = allocator.clone(key, opGroup);
             // We'll add the columns later. This avoids wasting works if we get beaten in the putIfAbsent
             previous = rows.putIfAbsent(cloneKey, empty);
             if (previous == null)
@@ -35,26 +35,16 @@
                 previous = empty;
                 // allocate the row overhead after the fact; this saves over allocating and having to free after, but
                 // means we can overshoot our declared limit.
-                int overhead = (int) (cfs.partitioner.getHeapSizeOf(key.token) + ROW_OVERHEAD_HEAP_SIZE);
-                allocator.allocate(overhead, opGroup);
+                int overhead = (int) (cfs.partitioner.getHeapSizeOf(key.getToken()) + ROW_OVERHEAD_HEAP_SIZE);
+                allocator.onHeap().allocate(overhead, opGroup);
             }
             else
             {
-                allocator.free(cloneKey.key);
+                allocator.reclaimer().reclaimImmediately(cloneKey);
             }
         }
 
-        ContextAllocator contextAllocator = allocator.wrap(opGroup);
-        AtomicBTreeColumns.Delta delta = previous.addAllWithSizeDelta(cf, contextAllocator, indexer, new AtomicBTreeColumns.Delta());
-        liveDataSize.addAndGet(delta.dataSize());
+        liveDataSize.addAndGet(previous.addAllWithSizeDelta(cf, allocator, opGroup, indexer));
         currentOperations.addAndGet(cf.getColumnCount() + (cf.isMarkedForDelete() ? 1 : 0) + cf.deletionInfo().rangeCount());
-
-        // allocate or free the delta in column overhead after the fact
-        for (Cell cell : delta.reclaimed())
-        {
-            cell.name.free(allocator);
-            allocator.free(cell.value);
-        }
-        allocator.allocate((int) delta.excessHeapSize(), opGroup);
     }
 
