@@ -7,19 +7,27 @@
                                    | ((input[2] & 0xFF) <<  8)
                                    | ((input[3] & 0xFF));
 
-            byte[] output = new byte[uncompressedLength];
+            ByteBuf output = CBUtil.onHeapAllocator.buffer(uncompressedLength);
 
             try
             {
-                int read = decompressor.decompress(input, INTEGER_BYTES, output, 0, uncompressedLength);
+                int read = decompressor.decompress(input, INTEGER_BYTES, output.array(), output.arrayOffset(), uncompressedLength);
                 if (read != input.length - INTEGER_BYTES)
                     throw new IOException("Compressed lengths mismatch");
 
-                return frame.with(Unpooled.wrappedBuffer(output));
+                output.writerIndex(uncompressedLength);
+
+                return frame.with(output);
             }
-            catch (LZ4Exception e)
+            catch (final Throwable e)
             {
-                throw new IOException(e);
+                output.release();
+                throw e;
+            }
+            finally
+            {
+                //release the old frame
+                frame.release();
             }
         }
 

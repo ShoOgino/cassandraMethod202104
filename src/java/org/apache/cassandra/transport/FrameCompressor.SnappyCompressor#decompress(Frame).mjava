@@ -5,8 +5,27 @@
             if (!Snappy.isValidCompressedBuffer(input, 0, input.length))
                 throw new ProtocolException("Provided frame does not appear to be Snappy compressed");
 
-            byte[] output = new byte[Snappy.uncompressedLength(input)];
-            int size = Snappy.uncompress(input, 0, input.length, output, 0);
-            return frame.with(Unpooled.wrappedBuffer(output, 0, size));
+            ByteBuf output = CBUtil.onHeapAllocator.buffer(Snappy.uncompressedLength(input));
+
+            try
+            {
+                int size = Snappy.uncompress(input, 0, input.length, output.array(), output.arrayOffset());
+                output.writerIndex(size);
+
+                //release the old frame
+                frame.release();
+            }
+            catch (final Throwable e)
+            {
+                output.release();
+                throw e;
+            }
+            finally
+            {
+                //release the old frame
+                frame.release();
+            }
+
+            return frame.with(output);
         }
 
