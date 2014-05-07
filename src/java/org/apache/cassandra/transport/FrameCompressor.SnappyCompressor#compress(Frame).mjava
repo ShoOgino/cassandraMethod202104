@@ -1,9 +1,24 @@
         public Frame compress(Frame frame) throws IOException
         {
             byte[] input = CBUtil.readRawBytes(frame.body);
-            byte[] output = new byte[Snappy.maxCompressedLength(input.length)];
+            ByteBuf output = CBUtil.onHeapAllocator.buffer(Snappy.maxCompressedLength(input.length));
 
-            int written = Snappy.compress(input, 0, input.length, output, 0);
-            return frame.with(Unpooled.wrappedBuffer(output, 0, written));
+            try
+            {
+                int written = Snappy.compress(input, 0, input.length, output.array(), output.arrayOffset());
+                output.writerIndex(written);
+            }
+            catch (final Throwable e)
+            {
+                output.release();
+                throw e;
+            }
+            finally
+            {
+                //release the old frame
+                frame.release();
+            }
+
+            return frame.with(output);
         }
 

@@ -14,24 +14,33 @@
                 UUID tracingId = ((Response)message).getTracingId();
                 if (tracingId != null)
                 {
-                    body = Unpooled.buffer(CBUtil.sizeOfUUID(tracingId) + messageSize);
+                    body = CBUtil.allocator.buffer(CBUtil.sizeOfUUID(tracingId) + messageSize);
                     CBUtil.writeUUID(tracingId, body);
                     flags.add(Frame.Header.Flag.TRACING);
                 }
                 else
                 {
-                    body = Unpooled.buffer(messageSize);
+                    body = CBUtil.allocator.buffer(messageSize);
                 }
             }
             else
             {
                 assert message instanceof Request;
-                body = Unpooled.buffer(messageSize);
+                body = CBUtil.allocator.buffer(messageSize);
                 if (((Request)message).isTracingRequested())
                     flags.add(Frame.Header.Flag.TRACING);
             }
 
-            codec.encode(message, body, version);
+            try
+            {
+                codec.encode(message, body, version);
+            }
+            catch (Throwable e)
+            {
+                body.release();
+                throw ErrorMessage.wrap(e, message.getStreamId());
+            }
+
             results.add(Frame.create(message.type, message.getStreamId(), version, flags, body));
         }
 
