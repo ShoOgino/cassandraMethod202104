@@ -1,11 +1,16 @@
         public ModificationStatement prepare(VariableSpecifications boundNames) throws InvalidRequestException
         {
             CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
+            CFDefinition cfDef = metadata.getCfDef();
+
+            // The collected count in the beginning of preparation.
+            // Will start at non-zero for statements nested inside a BatchStatement (the second and the further ones).
+            int collected = boundNames.getCollectedCount();
 
             Attributes preparedAttributes = attrs.prepare(keyspace(), columnFamily());
             preparedAttributes.collectMarkerSpecification(boundNames);
 
-            ModificationStatement stmt = prepareInternal(metadata, boundNames, preparedAttributes);
+            ModificationStatement stmt = prepareInternal(cfDef, boundNames, preparedAttributes);
 
             if (ifNotExists || ifExists || !conditions.isEmpty())
             {
@@ -13,7 +18,7 @@
                     throw new InvalidRequestException("Conditional updates are not supported on counter tables");
 
                 if (attrs.timestamp != null)
-                    throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
+                    throw new InvalidRequestException("Cannot provide custom timestamp for conditional update");
 
                 if (ifNotExists)
                 {
@@ -33,25 +38,29 @@
                 {
                     for (Pair<ColumnIdentifier, ColumnCondition.Raw> entry : conditions)
                     {
-                        ColumnDefinition def = metadata.getColumnDefinition(entry.left);
-                        if (def == null)
+                        CFDefinition.Name name = cfDef.get(entry.left);
+                        if (name == null)
                             throw new InvalidRequestException(String.format("Unknown identifier %s", entry.left));
 
-                        ColumnCondition condition = entry.right.prepare(keyspace(), def);
+                        ColumnCondition condition = entry.right.prepare(name);
                         condition.collectMarkerSpecification(boundNames);
 
-                        switch (def.kind)
+                        switch (name.kind)
                         {
-                            case PARTITION_KEY:
-                            case CLUSTERING_COLUMN:
+                            case KEY_ALIAS:
+                            case COLUMN_ALIAS:
                                 throw new InvalidRequestException(String.format("PRIMARY KEY part %s found in SET part", entry.left));
-                            default:
+                            case VALUE_ALIAS:
+                            case COLUMN_METADATA:
+                            case STATIC:
                                 stmt.addCondition(condition);
                                 break;
                         }
                     }
                 }
             }
+
+            stmt.boundTerms = boundNames.getCollectedCount() - collected;
             return stmt;
         }
 
