@@ -5,6 +5,22 @@
                                         ColumnNameBuilder builder,
                                         List<ByteBuffer> variables) throws InvalidRequestException
     {
+
+        // check the first restriction to see if we're dealing with a multi-column restriction
+        if (!names.isEmpty())
+        {
+            Restriction firstRestriction = restrictions[0];
+            if (firstRestriction != null && firstRestriction.isMultiColumn())
+            {
+                if (firstRestriction.isSlice())
+                    return buildMultiColumnSliceBound(bound, names, (MultiColumnRestriction.Slice) firstRestriction, isReversed, builder, variables);
+                else if (firstRestriction.isIN())
+                    return buildMultiColumnInBound(bound, names, (MultiColumnRestriction.IN) firstRestriction, isReversed, builder, variables);
+                else
+                    return buildMultiColumnEQBound(bound, (MultiColumnRestriction.EQ) firstRestriction, isReversed, builder, variables);
+            }
+        }
+
         // The end-of-component of composite doesn't depend on whether the
         // component type is reversed or not (i.e. the ReversedType is applied
         // to the component comparator but not to the end-of-component itself),
@@ -28,23 +44,10 @@
                                                  ? builder.buildAsEndOfRange()
                                                  : builder.build());
             }
-
             if (r.isSlice())
             {
-                builder.add(getSliceValue(name, r, b, variables));
+                builder.add(getSliceValue(r, b, variables));
                 Relation.Type relType = ((Restriction.Slice)r).getRelation(eocBound, b);
-
-                // We can have more non null restriction if the "scalar" notation was used for the bound (#4851).
-                // In that case, we need to add them all, and end the cell name with the correct end-of-component.
-                while (iter.hasNext())
-                {
-                    name = iter.next();
-                    r = restrictions[name.position];
-                    if (isNullRestriction(r, b))
-                        break;
-
-                    builder.add(getSliceValue(name, r, b, variables));
-                }
                 return Collections.singletonList(builder.buildForRelation(relType));
             }
             else
@@ -52,11 +55,11 @@
                 List<ByteBuffer> values = r.values(variables);
                 if (values.size() != 1)
                 {
-                    // IN query, we only support it on the clustering column
+                    // IN query, we only support it on the clustering columns
                     assert name.position == names.size() - 1;
                     // The IN query might not have listed the values in comparator order, so we need to re-sort
                     // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
-                    TreeSet<ByteBuffer> s = new TreeSet<ByteBuffer>(isReversed ? cfDef.cfm.comparator.reverseComparator : cfDef.cfm.comparator);
+                    TreeSet<ByteBuffer> s = new TreeSet<>(isReversed ? cfDef.cfm.comparator.reverseComparator : cfDef.cfm.comparator);
                     for (ByteBuffer val : values)
                     {
                         if (val == null)
@@ -65,7 +68,7 @@
                         // See below for why this
                         s.add((b == Bound.END && copy.remainingCount() > 0) ? copy.buildAsEndOfRange() : copy.build());
                     }
-                    return new ArrayList<ByteBuffer>(s);
+                    return new ArrayList<>(s);
                 }
 
                 ByteBuffer val = values.get(0);

@@ -1,0 +1,48 @@
+        private void processOrderingClause(SelectStatement stmt, CFDefinition cfDef) throws InvalidRequestException
+        {
+            verifyOrderingIsAllowed(stmt);
+
+            // If we order an IN query, we'll have to do a manual sort post-query. Currently, this sorting requires that we
+            // have queried the column on which we sort (TODO: we should update it to add the column on which we sort to the one
+            // queried automatically, and then removing it from the resultSet afterwards if needed)
+            if (stmt.keyIsInRelation)
+            {
+                stmt.orderingIndexes = new HashMap<CFDefinition.Name, Integer>();
+                for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
+                {
+                    final CFDefinition.Name name = cfDef.get(column);
+                    if (name == null)
+                        handleUnrecognizedOrderingColumn(column);
+
+                    if (selectClause.isEmpty()) // wildcard
+                    {
+                        stmt.orderingIndexes.put(name, Iterables.indexOf(cfDef, new Predicate<CFDefinition.Name>()
+                        {
+                            public boolean apply(CFDefinition.Name n)
+                            {
+                                return name.equals(n);
+                            }
+                        }));
+                    }
+                    else
+                    {
+                        boolean hasColumn = false;
+                        for (int i = 0; i < selectClause.size(); i++)
+                        {
+                            RawSelector selector = selectClause.get(i);
+                            if (name.name.equals(selector.selectable))
+                            {
+                                stmt.orderingIndexes.put(name, i);
+                                hasColumn = true;
+                                break;
+                            }
+                        }
+
+                        if (!hasColumn)
+                            throw new InvalidRequestException("ORDER BY could not be used on columns missing in select clause.");
+                    }
+                }
+            }
+            stmt.isReversed = isReversed(stmt, cfDef);
+        }
+

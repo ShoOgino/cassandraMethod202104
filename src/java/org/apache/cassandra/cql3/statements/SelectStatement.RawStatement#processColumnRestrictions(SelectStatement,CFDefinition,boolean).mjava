@@ -1,0 +1,59 @@
+        private void processColumnRestrictions(SelectStatement stmt, CFDefinition cfDef, boolean hasQueriableIndex) throws InvalidRequestException
+        {
+            // If a clustering key column is restricted by a non-EQ relation, all preceding
+            // columns must have a EQ, and all following must have no restriction. Unless
+            // the column is indexed that is.
+            boolean canRestrictFurtherComponents = true;
+            CFDefinition.Name previous = null;
+            boolean previousIsSlice = false;
+            Iterator<CFDefinition.Name> iter = cfDef.clusteringColumns().iterator();
+            for (int i = 0; i < stmt.columnRestrictions.length; i++)
+            {
+                CFDefinition.Name cname = iter.next();
+                Restriction restriction = stmt.columnRestrictions[i];
+
+                if (restriction == null)
+                {
+                    canRestrictFurtherComponents = false;
+                    previousIsSlice = false;
+                }
+                else if (!canRestrictFurtherComponents)
+                {
+                    // We're here if the previous clustering column was either not restricted or was a slice.
+                    // We can't restrict the current column unless:
+                    //   1) we're in the special case of the 'tuple' notation from #4851 which we expand as multiple
+                    //      consecutive slices: in which case we're good with this restriction and we continue
+                    //   2) we have a 2ndary index, in which case we have to use it but can skip more validation
+                    if (!(previousIsSlice && restriction.isSlice() && restriction.isMultiColumn()))
+                    {
+                        if (hasQueriableIndex)
+                        {
+                            stmt.usesSecondaryIndexing = true; // handle gaps and non-keyrange cases.
+                            break;
+                        }
+                        throw new InvalidRequestException(String.format(
+                                "PRIMARY KEY column \"%s\" cannot be restricted (preceding column \"%s\" is either not restricted or by a non-EQ relation)", cname, previous));
+                    }
+                }
+                else if (restriction.isSlice())
+                {
+                    previousIsSlice = true;
+                    canRestrictFurtherComponents = false;
+                    Restriction.Slice slice = (Restriction.Slice)restriction;
+                    // For non-composite slices, we don't support internally the difference between exclusive and
+                    // inclusive bounds, so we deal with it manually.
+                    if (!cfDef.isComposite && (!slice.isInclusive(Bound.START) || !slice.isInclusive(Bound.END)))
+                        stmt.sliceRestriction = slice;
+                }
+                else if (restriction.isIN())
+                {
+                    if (!restriction.isMultiColumn() && i != stmt.columnRestrictions.length - 1)
+                        throw new InvalidRequestException(String.format("Clustering column \"%s\" cannot be restricted by an IN relation", cname));
+                    if (stmt.selectACollection())
+                        throw new InvalidRequestException(String.format("Cannot restrict column \"%s\" by IN relation as a collection is selected by the query", cname));
+                }
+
+                previous = cname;
+            }
+        }
+

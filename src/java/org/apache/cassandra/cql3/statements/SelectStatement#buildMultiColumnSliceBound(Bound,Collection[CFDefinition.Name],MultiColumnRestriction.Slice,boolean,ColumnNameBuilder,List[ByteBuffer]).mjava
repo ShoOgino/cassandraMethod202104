@@ -1,0 +1,37 @@
+    private List<ByteBuffer> buildMultiColumnSliceBound(Bound bound,
+                                                        Collection<CFDefinition.Name> names,
+                                                        MultiColumnRestriction.Slice slice,
+                                                        boolean isReversed,
+                                                        ColumnNameBuilder builder,
+                                                        List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
+
+        Iterator<CFDefinition.Name> iter = names.iterator();
+        CFDefinition.Name firstName = iter.next();
+        // A hack to preserve pre-6875 behavior for tuple-notation slices where the comparator mixes ASCENDING
+        // and DESCENDING orders.  This stores the bound for the first component; we will re-use it for all following
+        // components, even if they don't match the first component's reversal/non-reversal.  Note that this does *not*
+        // guarantee correct query results, it just preserves the previous behavior.
+        Bound firstComponentBound = isReversed == isReversedType(firstName) ? bound : Bound.reverse(bound);
+
+        if (!slice.hasBound(firstComponentBound))
+            return Collections.singletonList(builder.componentCount() > 0 && eocBound == Bound.END
+                    ? builder.buildAsEndOfRange()
+                    : builder.build());
+
+        List<ByteBuffer> vals = slice.componentBounds(firstComponentBound, variables);
+        builder.add(vals.get(firstName.position));
+
+        while(iter.hasNext())
+        {
+            CFDefinition.Name name = iter.next();
+            if (name.position >= vals.size())
+                break;
+
+            builder.add(vals.get(name.position));
+        }
+        Relation.Type relType = slice.getRelation(eocBound, firstComponentBound);
+        return Collections.singletonList(builder.buildForRelation(relType));
+    }
+
