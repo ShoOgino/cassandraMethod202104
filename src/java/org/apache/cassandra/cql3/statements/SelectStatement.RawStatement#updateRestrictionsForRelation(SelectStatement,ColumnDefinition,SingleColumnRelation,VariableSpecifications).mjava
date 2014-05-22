@@ -1,0 +1,24 @@
+        private void updateRestrictionsForRelation(SelectStatement stmt, ColumnDefinition def, SingleColumnRelation relation, VariableSpecifications names) throws InvalidRequestException
+        {
+            switch (def.kind)
+            {
+                case PARTITION_KEY:
+                    stmt.keyRestrictions[def.position()] = updateSingleColumnRestriction(def, stmt.keyRestrictions[def.position()], relation, names);
+                    break;
+                case CLUSTERING_COLUMN:
+                    stmt.columnRestrictions[def.position()] = updateSingleColumnRestriction(def, stmt.columnRestrictions[def.position()], relation, names);
+                    break;
+                case COMPACT_VALUE:
+                    throw new InvalidRequestException(String.format("Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", def.name));
+                case REGULAR:
+                case STATIC:
+                    // We only all IN on the row key and last clustering key so far, never on non-PK columns, and this even if there's an index
+                    Restriction r = updateSingleColumnRestriction(def, stmt.metadataRestrictions.get(def.name), relation, names);
+                    if (r.isIN() && !((Restriction.IN)r).canHaveOnlyOneValue())
+                        // Note: for backward compatibility reason, we conside a IN of 1 value the same as a EQ, so we let that slide.
+                        throw new InvalidRequestException(String.format("IN predicates on non-primary-key columns (%s) is not yet supported", def.name));
+                    stmt.metadataRestrictions.put(def.name, r);
+                    break;
+            }
+        }
+

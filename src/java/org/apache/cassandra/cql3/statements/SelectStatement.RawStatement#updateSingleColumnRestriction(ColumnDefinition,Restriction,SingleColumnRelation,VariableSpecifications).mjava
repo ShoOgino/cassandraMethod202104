@@ -1,0 +1,88 @@
+        Restriction updateSingleColumnRestriction(ColumnDefinition def, Restriction existingRestriction, SingleColumnRelation newRel, VariableSpecifications boundNames) throws InvalidRequestException
+        {
+            ColumnSpecification receiver = def;
+            if (newRel.onToken)
+            {
+                if (def.kind != ColumnDefinition.Kind.PARTITION_KEY)
+                    throw new InvalidRequestException(String.format("The token() function is only supported on the partition key, found on %s", def.name));
+
+                receiver = new ColumnSpecification(def.ksName,
+                                                   def.cfName,
+                                                   new ColumnIdentifier("partition key token", true),
+                                                   StorageService.getPartitioner().getTokenValidator());
+            }
+
+            switch (newRel.operator())
+            {
+                case EQ:
+                {
+                    if (existingRestriction != null)
+                        throw new InvalidRequestException(String.format("%s cannot be restricted by more than one relation if it includes an Equal", def.name));
+                    Term t = newRel.getValue().prepare(keyspace(), receiver);
+                    t.collectMarkerSpecification(boundNames);
+                    existingRestriction = new SingleColumnRestriction.EQ(t, newRel.onToken);
+                }
+                break;
+                case IN:
+                    if (existingRestriction != null)
+                        throw new InvalidRequestException(String.format("%s cannot be restricted by more than one relation if it includes a IN", def.name));
+
+                    if (newRel.getInValues() == null)
+                    {
+                        // Means we have a "SELECT ... IN ?"
+                        assert newRel.getValue() != null;
+                        Term t = newRel.getValue().prepare(keyspace(), receiver);
+                        t.collectMarkerSpecification(boundNames);
+                        existingRestriction = new SingleColumnRestriction.InWithMarker((Lists.Marker)t);
+                    }
+                    else
+                    {
+                        List<Term> inValues = new ArrayList<>(newRel.getInValues().size());
+                        for (Term.Raw raw : newRel.getInValues())
+                        {
+                            Term t = raw.prepare(keyspace(), receiver);
+                            t.collectMarkerSpecification(boundNames);
+                            inValues.add(t);
+                        }
+                        existingRestriction = new SingleColumnRestriction.InWithValues(inValues);
+                    }
+                    break;
+                case GT:
+                case GTE:
+                case LT:
+                case LTE:
+                    {
+                        if (existingRestriction == null)
+                            existingRestriction = new SingleColumnRestriction.Slice(newRel.onToken);
+                        else if (!existingRestriction.isSlice())
+                            throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by both an equality and an inequality relation", def.name));
+                        else if (existingRestriction.isMultiColumn())
+                            throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by both a tuple notation inequality and a single column inequality (%s)", def.name, newRel));
+
+                        Term t = newRel.getValue().prepare(keyspace(), receiver);
+                        t.collectMarkerSpecification(boundNames);
+                        ((SingleColumnRestriction.Slice)existingRestriction).setBound(def.name, newRel.operator(), t);
+                    }
+                    break;
+                case CONTAINS_KEY:
+                    if (!(receiver.type instanceof MapType))
+                        throw new InvalidRequestException(String.format("Cannot use CONTAINS_KEY on non-map column %s", def.name));
+                    // Fallthrough on purpose
+                case CONTAINS:
+                {
+                    if (!receiver.type.isCollection())
+                        throw new InvalidRequestException(String.format("Cannot use %s relation on non collection column %s", newRel.operator(), def.name));
+
+                    if (existingRestriction == null)
+                        existingRestriction = new SingleColumnRestriction.Contains();
+                    else if (!existingRestriction.isContains())
+                        throw new InvalidRequestException(String.format("Collection column %s can only be restricted by CONTAINS or CONTAINS KEY", def.name));
+                    boolean isKey = newRel.operator() == Relation.Type.CONTAINS_KEY;
+                    receiver = makeCollectionReceiver(receiver, isKey);
+                    Term t = newRel.getValue().prepare(keyspace(), receiver);
+                    ((SingleColumnRestriction.Contains)existingRestriction).add(t, isKey);
+                }
+            }
+            return existingRestriction;
+        }
+
