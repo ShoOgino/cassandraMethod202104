@@ -1,0 +1,92 @@
+    public void run()
+    {
+        /**
+         * we maintain two important invariants:
+         * 1)   after exiting spinning phase, we ensure at least one more task on _each_ queue will be processed
+         *      promptly after we begin, assuming any are outstanding on any pools. this is to permit producers to
+         *      avoid signalling if there are _any_ spinning threads. we achieve this by simply calling maybeSchedule()
+         *      on each queue if on decrementing the spin counter we hit zero.
+         * 2)   before processing a task on a given queue, we attempt to assign another worker to the _same queue only_;
+         *      this allows a producer to skip signalling work if the task queue is currently non-empty, and in conjunction
+         *      with invariant (1) ensures that if any thread was spinning when a task was added to any executor, that
+         *      task will be processed immediately if work permits are available
+         */
+
+        SEPExecutor assigned = null;
+        Runnable task = null;
+        try
+        {
+            while (true)
+            {
+                if (isSpinning() && !selfAssign())
+                {
+                    doWaitSpin();
+                    continue;
+                }
+
+                // if stop was signalled, go to sleep (don't try self-assign; being put to sleep is rare, so let's obey it
+                // whenever we receive it - though we don't apply this constraint to producers, who may reschedule us before
+                // we go to sleep)
+                if (stop())
+                    while (isStopped())
+                        LockSupport.park();
+
+                // we can be assigned any state from STOPPED, so loop if we don't actually have any tasks assigned
+                assigned = get().assigned;
+                if (assigned == null)
+                    continue;
+                task = assigned.tasks.poll();
+
+                // if we do have tasks assigned, nobody will change our state so we can simply set it to WORKING
+                // (which is also a state that will never be interrupted externally)
+                set(Work.WORKING);
+                boolean shutdown;
+                while (true)
+                {
+                    // before we process any task, we maybe schedule a new worker _to our executor only_; this
+                    // ensures that even once all spinning threads have found work, if more work is left to be serviced
+                    // and permits are available, it will be dealt with immediately.
+                    assigned.maybeSchedule();
+
+                    // we know there is work waiting, as we have a work permit, so poll() will always succeed
+                    task.run();
+                    task = null;
+
+                    // if we're shutting down, or we fail to take a permit, we don't perform any more work
+                    if ((shutdown = assigned.shuttingDown) || !assigned.takeTaskPermit())
+                        break;
+                    task = assigned.tasks.poll();
+                }
+
+                // return our work permit, and maybe signal shutdown
+                assigned.returnWorkPermit();
+                if (shutdown && assigned.getActiveCount() == 0)
+                    assigned.shutdown.signalAll();
+                assigned = null;
+
+                // try to immediately reassign ourselves some work; if we fail, start spinning
+                if (!selfAssign())
+                    startSpinning();
+            }
+        }
+        catch (Throwable t)
+        {
+            while (true)
+            {
+                if (get().assigned != null)
+                {
+                    assigned = get().assigned;
+                    set(Work.WORKING);
+                }
+                if (assign(Work.STOPPED, true))
+                    break;
+            }
+            if (assigned != null)
+                assigned.returnWorkPermit();
+            if (task != null)
+                logger.error("Failed to execute task, unexpected exception killed worker: {}", t);
+            else
+                logger.error("Unexpected exception killed worker: {}", t);
+        }
+    }
+
