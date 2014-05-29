@@ -11,34 +11,52 @@
                 return;
             }
 
-            // Wait until we have read at least the header
-            if (buffer.readableBytes() < Header.LENGTH)
+            // Wait until we have read at least the short header
+            if (buffer.readableBytes() < Header.LEGACY_LENGTH)
                 return;
 
             int idx = buffer.readerIndex();
 
-            int firstByte = buffer.getByte(idx);
+            int firstByte = buffer.getByte(idx++);
             Message.Direction direction = Message.Direction.extractFromVersion(firstByte);
             int version = firstByte & 0x7F;
 
             if (version > Server.CURRENT_VERSION)
                 throw new ProtocolException("Invalid or unsupported protocol version: " + version);
 
-            int flags = buffer.getByte(idx + 1);
-            int streamId = buffer.getByte(idx + 2);
+            // Wait until we have the complete V3+ header
+            if (version >= Server.VERSION_3 && buffer.readableBytes() < Header.MODERN_LENGTH)
+                return;
+
+            int flags = buffer.getByte(idx++);
+
+            int streamId, headerLength;
+            if (version >= Server.VERSION_3)
+            {
+                streamId = buffer.getShort(idx);
+                idx += 2;
+                headerLength = Header.MODERN_LENGTH;
+            }
+            else
+            {
+                streamId = buffer.getByte(idx);
+                idx++;
+                headerLength = Header.LEGACY_LENGTH;
+            }
 
             // This throws a protocol exceptions if the opcode is unknown
-            Message.Type type = Message.Type.fromOpcode(buffer.getByte(idx + 3), direction);
+            Message.Type type = Message.Type.fromOpcode(buffer.getByte(idx++), direction);
 
-            long bodyLength = buffer.getUnsignedInt(idx + Header.BODY_LENGTH_OFFSET);
+            long bodyLength = buffer.getUnsignedInt(idx);
+            idx += Header.BODY_LENGTH_SIZE;
 
             if (bodyLength < 0)
             {
-                buffer.skipBytes(Header.LENGTH);
+                buffer.skipBytes(headerLength);
                 throw new ProtocolException("Invalid frame body length: " + bodyLength);
             }
 
-            long frameLength = bodyLength + Header.LENGTH;
+            long frameLength = bodyLength + headerLength;
             if (frameLength > MAX_FRAME_LENGTH)
             {
                 // Enter the discard mode and discard everything received so far.
@@ -51,14 +69,13 @@
                 return;
             }
 
-            // never overflows because it's less than the max frame length
-            int frameLengthInt = (int) frameLength;
-            if (buffer.readableBytes() < frameLengthInt)
+            if (buffer.readableBytes() < frameLength)
                 return;
 
             // extract body
-            ByteBuf body = CBUtil.allocator.buffer((int) bodyLength).writeBytes(buffer.duplicate().slice(idx + Header.LENGTH, (int) bodyLength));
-            buffer.readerIndex(idx + frameLengthInt);
+            ByteBuf body = CBUtil.allocator.buffer((int) bodyLength).writeBytes(buffer.duplicate().slice(idx, (int) bodyLength));
+            idx += bodyLength;
+            buffer.readerIndex(idx);
 
             Connection connection = ctx.channel().attr(Connection.attributeKey).get();
             if (connection == null)
