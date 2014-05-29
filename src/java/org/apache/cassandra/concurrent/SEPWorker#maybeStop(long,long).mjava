@@ -1,0 +1,35 @@
+    // stops a worker if elapsed real time is less than elapsed spin time, as this implies the equivalent of
+    // at least one worker achieved nothing in the interval. we achieve this by maintaining a stopCheck which
+    // is initialised to a negative offset from realtime; as we spin we add to this value, and if we ever exceed
+    // realtime we have spun too much and deschedule; if we get too far behind realtime, we reset to our initial offset
+    private void maybeStop(long stopCheck, long now)
+    {
+        long delta = now - stopCheck;
+        if (delta <= 0)
+        {
+            // if stopCheck has caught up with present, we've been spinning too much, so if we can atomically
+            // set it to the past again, we should stop a worker
+            if (pool.stopCheck.compareAndSet(stopCheck, now - stopCheckInterval))
+            {
+                // try and stop ourselves;
+                // if we've already been assigned work stop another worker
+                if (!assign(Work.STOP_SIGNALLED, true))
+                    pool.schedule(Work.STOP_SIGNALLED);
+            }
+        }
+        else if (soleSpinnerSpinTime > stopCheckInterval && pool.spinningCount.get() == 1)
+        {
+            // permit self-stopping
+            assign(Work.STOP_SIGNALLED, true);
+        }
+        else
+        {
+            // if stop check has gotten too far behind present, update it so new spins can affect it
+            while (delta > stopCheckInterval * 2 && !pool.stopCheck.compareAndSet(stopCheck, now - stopCheckInterval))
+            {
+                stopCheck = pool.stopCheck.get();
+                delta = now - stopCheck;
+            }
+        }
+    }
+
