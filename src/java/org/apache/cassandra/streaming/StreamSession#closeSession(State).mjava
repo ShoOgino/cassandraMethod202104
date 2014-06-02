@@ -1,19 +1,22 @@
-    private void closeSession(State finalState)
+    private synchronized void closeSession(State finalState)
     {
-        state(finalState);
-
-        if (finalState == State.FAILED)
+        if (isAborted.compareAndSet(false, true))
         {
-            for (StreamTask task : Iterables.concat(receivers.values(), transfers.values()))
-                task.abort();
+            state(finalState);
+
+            if (finalState == State.FAILED)
+            {
+                for (StreamTask task : Iterables.concat(receivers.values(), transfers.values()))
+                    task.abort();
+            }
+
+            // Note that we shouldn't block on this close because this method is called on the handler
+            // incoming thread (so we would deadlock).
+            handler.close();
+
+            Gossiper.instance.unregister(this);
+            FailureDetector.instance.unregisterFailureDetectionEventListener(this);
+            streamResult.handleSessionComplete(this);
         }
-
-        // Note that we shouldn't block on this close because this method is called on the handler
-        // incoming thread (so we would deadlock).
-        handler.close();
-
-        Gossiper.instance.unregister(this);
-        FailureDetector.instance.unregisterFailureDetectionEventListener(this);
-        streamResult.handleSessionComplete(this);
     }
 
