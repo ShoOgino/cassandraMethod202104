@@ -26,23 +26,32 @@
         assert job.desc.equals(desc);
         if (job.addTree(endpoint, tree) == 0)
         {
-            logger.debug("All response received for {}/{}", getId(), desc.columnFamily);
+            logger.debug("All responses received for {}/{}", getId(), desc.columnFamily);
             if (!job.isFailed())
             {
                 syncingJobs.put(job.desc.columnFamily, job);
                 job.submitDifferencers();
             }
 
-            // This job is complete, switching to next in line (note that only
-            // one thread will can ever do this)
+            // This job is complete, switching to next in line (note that only one thread will ever do this)
             jobs.poll();
             RepairJob nextJob = jobs.peek();
             if (nextJob == null)
+            {
+                // Unregister from FailureDetector once we've completed synchronizing Merkle trees.
+                // After this point, we rely on tcp_keepalive for individual sockets to notify us when a connection is down.
+                // See CASSANDRA-3569
+                if (fdUnregistered.compareAndSet(false, true))
+                    FailureDetector.instance.unregisterFailureDetectionEventListener(this);
+
                 // We are done with this repair session as far as differencing
                 // is considered. Just inform the session
                 differencingDone.signalAll();
+            }
             else
+            {
                 nextJob.sendTreeRequests(endpoints);
+            }
         }
     }
 
