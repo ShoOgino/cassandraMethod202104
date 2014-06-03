@@ -28,7 +28,7 @@
             // Create and queue a RepairJob for each column family
             for (String cfname : cfnames)
             {
-                RepairJob job = new RepairJob(parentRepairSession, id, keyspace, cfname, range, isSequential, taskExecutor);
+                RepairJob job = new RepairJob(this, parentRepairSession, id, keyspace, cfname, range, isSequential, taskExecutor);
                 jobs.offer(job);
             }
             logger.debug("Sending tree requests to endpoints {}", endpoints);
@@ -56,7 +56,13 @@
         {
             // mark this session as terminated
             terminate();
+
             ActiveRepairService.instance.removeFromActiveSessions(this);
+
+            // If we've reached here in an exception state without completing Merkle Tree sync, we'll still be registered
+            // with the FailureDetector.
+            if (fdUnregistered.compareAndSet(false, true))
+                FailureDetector.instance.unregisterFailureDetectionEventListener(this);
         }
     }
 
