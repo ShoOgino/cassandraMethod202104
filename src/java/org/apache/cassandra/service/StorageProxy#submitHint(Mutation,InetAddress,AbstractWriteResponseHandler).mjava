@@ -4,23 +4,30 @@
     {
         // local write that time out should be handled by LocalMutationRunnable
         assert !target.equals(FBUtilities.getBroadcastAddress()) : target;
+        mutation.retain();
 
         HintRunnable runnable = new HintRunnable(target)
         {
             public void runMayThrow()
             {
-                int ttl = HintedHandOffManager.calculateHintTTL(mutation);
-                if (ttl > 0)
+                try
                 {
-                    logger.debug("Adding hint for {}", target);
-                    writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
-                    // Notify the handler only for CL == ANY
-                    if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
-                        responseHandler.response(null);
+                    int ttl = HintedHandOffManager.calculateHintTTL(mutation);
+                    if (ttl > 0)
+                    {
+                        logger.debug("Adding hint for {}", target);
+                        writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
+                        // Notify the handler only for CL == ANY
+                        if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
+                            responseHandler.response(null);
+                    } else
+                    {
+                        logger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
+                    }
                 }
-                else
+                finally
                 {
-                    logger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
+                    mutation.release();
                 }
             }
         };
