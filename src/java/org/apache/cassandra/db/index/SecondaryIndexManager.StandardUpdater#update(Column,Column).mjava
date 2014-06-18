@@ -11,7 +11,14 @@
                     // where the row is invisible to both queries (the opposite seems preferable); see CASSANDRA-5540
                     if (!column.isMarkedForDelete(System.currentTimeMillis()))
                         ((PerColumnSecondaryIndex) index).insert(key.key, column);
-                    ((PerColumnSecondaryIndex) index).delete(key.key, oldColumn);
+
+                    // Usually we want to delete the old value from the index, except when
+                    // name/value/timestamp are all equal, but the columns themselves
+                    // are not (as is the case when overwriting expiring columns with
+                    // identical values and ttl) Then, we don't want to delete as the
+                    // tombstone will hide the new value we just inserted; see CASSANDRA-7268
+                    if (shouldCleanupOldValue(oldColumn, column))
+                        ((PerColumnSecondaryIndex) index).delete(key.key, oldColumn);
                 }
             }
         }
