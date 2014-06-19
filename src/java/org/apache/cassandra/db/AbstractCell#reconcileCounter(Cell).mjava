@@ -1,0 +1,34 @@
+    /** This is temporary until we start creating Cells of the different type (buffer vs. native) */
+    public Cell reconcileCounter(Cell cell)
+    {
+        assert this instanceof CounterCell : "Wrong class type: " + getClass();
+
+        // No matter what the counter cell's timestamp is, a tombstone always takes precedence. See CASSANDRA-7346.
+        if (cell instanceof DeletedCell)
+            return cell;
+
+        assert (cell instanceof CounterCell) : "Wrong class type: " + cell.getClass();
+
+        // live < live last delete
+        if (timestamp() < ((CounterCell) cell).timestampOfLastDelete())
+            return cell;
+
+        long timestampOfLastDelete = ((CounterCell) this).timestampOfLastDelete();
+
+        // live last delete > live
+        if (timestampOfLastDelete > cell.timestamp())
+            return this;
+
+        // live + live. return one of the cells if its context is a superset of the other's, or merge them otherwise
+        ByteBuffer context = CounterCell.contextManager.merge(value(), cell.value());
+        if (context == value() && timestamp() >= cell.timestamp() && timestampOfLastDelete >= ((CounterCell) cell).timestampOfLastDelete())
+            return this;
+        else if (context == cell.value() && cell.timestamp() >= timestamp() && ((CounterCell) cell).timestampOfLastDelete() >= timestampOfLastDelete)
+            return cell;
+        else // merge clocks and timestamps.
+            return new BufferCounterCell(name(),
+                                         context,
+                                         Math.max(timestamp(), cell.timestamp()),
+                                         Math.max(timestampOfLastDelete, ((CounterCell) cell).timestampOfLastDelete()));
+    }
+
