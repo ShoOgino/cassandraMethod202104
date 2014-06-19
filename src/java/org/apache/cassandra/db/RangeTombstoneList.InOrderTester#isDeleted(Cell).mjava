@@ -1,28 +1,37 @@
-        public boolean isDeleted(Composite name, long timestamp)
+        public boolean isDeleted(Cell cell)
         {
+            CellName name = cell.name();
+            long timestamp = cell.timestamp();
+
             while (idx < size)
             {
                 int cmp = comparator.compare(name, starts[idx]);
-                if (cmp == 0)
+
+                if (cmp < 0)
                 {
+                    return false;
+                }
+                else if (cmp == 0)
+                {
+                    // No matter what the counter cell's timestamp is, a tombstone always takes precedence. See CASSANDRA-7346.
+                    if (cell instanceof CounterCell)
+                        return true;
+
                     // As for searchInternal, we need to check the previous end
                     if (idx > 0 && comparator.compare(name, ends[idx-1]) == 0 && markedAts[idx-1] > markedAts[idx])
                         return markedAts[idx-1] >= timestamp;
                     else
                         return markedAts[idx] >= timestamp;
                 }
-                else if (cmp < 0)
-                {
-                    return false;
-                }
                 else
                 {
                     if (comparator.compare(name, ends[idx]) <= 0)
-                        return markedAts[idx] >= timestamp;
+                        return markedAts[idx] >= timestamp || cell instanceof CounterCell;
                     else
                         idx++;
                 }
             }
+
             return false;
         }
 
