@@ -6,39 +6,26 @@
     public KeyspaceMetrics(final Table ks)
     {
         factory = new KeyspaceMetricNameFactory(ks);
-
-        memtableColumnsCount = Metrics.newGauge(factory.createMetricName("MemtableColumnsCount"), new Gauge<Long>()
+        keyspace = ks;
+        memtableColumnsCount = createKeyspaceGauge("MemtableColumnsCount", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long total = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                {
-                    total += cf.metric.memtableColumnsCount.value();
-                }
-                return total;
+                return metric.memtableColumnsCount.value();
             }
         });
-        memtableDataSize = Metrics.newGauge(factory.createMetricName("MemtableDataSize"), new Gauge<Long>()
+        memtableDataSize = createKeyspaceGauge("MemtableDataSize", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long total = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                {
-                    total += cf.metric.memtableDataSize.value();
-                }
-                return total;
+                return metric.memtableDataSize.value();
             }
         });
-        memtableSwitchCount = Metrics.newGauge(factory.createMetricName("MemtableSwitchCount"), new Gauge<Long>()
+        memtableSwitchCount = createKeyspaceGauge("MemtableSwitchCount", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long sum = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                    sum += cf.metric.memtableSwitchCount.count();
-                return sum;
+                return metric.memtableSwitchCount.count();
             }
         });
         pendingTasks = Metrics.newGauge(factory.createMetricName("PendingTasks"), new Gauge<Integer>()
@@ -48,39 +35,36 @@
                 return Table.switchLock.getQueueLength();
             }
         });
-        liveDiskSpaceUsed = Metrics.newGauge(factory.createMetricName("LiveDiskSpaceUsed"), new Gauge<Long>()
+        liveDiskSpaceUsed = createKeyspaceGauge("LiveDiskSpaceUsed", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long sum = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                {
-                    sum += cf.metric.liveDiskSpaceUsed.count();
-                }
-                return sum;
+                return metric.liveDiskSpaceUsed.count();
             }
         });
-        totalDiskSpaceUsed = Metrics.newGauge(factory.createMetricName("TotalDiskSpaceUsed"), new Gauge<Long>()
+        totalDiskSpaceUsed = createKeyspaceGauge("TotalDiskSpaceUsed", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long sum = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                {
-                    sum += cf.metric.totalDiskSpaceUsed.count();
-                }
-                return sum;
+                return metric.totalDiskSpaceUsed.count();
             }
         });
-        bloomFilterDiskSpaceUsed = Metrics.newGauge(factory.createMetricName("BloomFilterDiskSpaceUsed"), new Gauge<Long>()
+        bloomFilterDiskSpaceUsed = createKeyspaceGauge("BloomFilterDiskSpaceUsed", new MetricValue()
         {
-            public Long value()
+            public Long getValue(ColumnFamilyMetrics metric)
             {
-                long total = 0;
-                for (ColumnFamilyStore cf : ks.getColumnFamilyStores())
-                    total += cf.metric.bloomFilterDiskSpaceUsed.value();
-                return total;
+                return metric.bloomFilterDiskSpaceUsed.value();
             }
         });
+        // latency metrics for ColumnFamilyMetrics to update
+        readLatency = new LatencyMetrics(factory, "Read");
+        writeLatency = new LatencyMetrics(factory, "Write");
+        rangeLatency = new LatencyMetrics(factory, "Range");
+        // create histograms for ColumnFamilyMetrics to replicate updates to
+        sstablesPerReadHistogram = Metrics.newHistogram(factory.createMetricName("SSTablesPerReadHistogram"), true);
+        tombstoneScannedHistogram = Metrics.newHistogram(factory.createMetricName("TombstoneScannedHistogram"), true);
+        liveScannedHistogram = Metrics.newHistogram(factory.createMetricName("LiveScannedHistogram"), true);
+        // add manually since histograms do not use createKeyspaceGauge method
+        allMetrics.addAll(Lists.newArrayList("SSTablesPerReadHistogram", "TombstoneScannedHistogram", "LiveScannedHistogram"));
     }
 
