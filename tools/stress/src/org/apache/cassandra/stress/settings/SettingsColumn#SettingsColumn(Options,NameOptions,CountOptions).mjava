@@ -1,9 +1,6 @@
     public SettingsColumn(Options options, NameOptions name, CountOptions count)
     {
         sizeDistribution = options.size.get();
-        superColumns = Integer.parseInt(options.superColumns.value());
-        dataGenFactory = options.generator.get();
-        useSuperColumns = superColumns > 0;
         {
             comparator = options.comparator.value();
             AbstractType parsed = null;
@@ -17,8 +14,6 @@
                 System.err.println(e.getMessage());
                 System.exit(1);
             }
-
-            useTimeUUIDComparator = parsed instanceof TimeUUIDType;
 
             if (!(parsed instanceof TimeUUIDType || parsed instanceof AsciiType || parsed instanceof UTF8Type))
             {
@@ -41,10 +36,13 @@
 
             final String[] names = name.name.value().split(",");
             this.names = new ArrayList<>(names.length);
-            this.namestrs = Arrays.asList(names);
 
             for (String columnName : names)
                 this.names.add(comparator.fromString(columnName));
+            Collections.sort(this.names, BytesType.instance);
+            this.namestrs = new ArrayList<>();
+            for (ByteBuffer columnName : this.names)
+                this.namestrs.add(comparator.getString(columnName));
 
             final int nameCount = this.names.size();
             countDistribution = new DistributionFactory()
@@ -62,17 +60,23 @@
             ByteBuffer[] names = new ByteBuffer[(int) countDistribution.get().maxValue()];
             String[] namestrs = new String[(int) countDistribution.get().maxValue()];
             for (int i = 0 ; i < names.length ; i++)
-            {
                 names[i] = ByteBufferUtil.bytes("C" + i);
-                namestrs[i] = "C" + i;
+            Arrays.sort(names, BytesType.instance);
+            try
+            {
+                for (int i = 0 ; i < names.length ; i++)
+                    namestrs[i] = ByteBufferUtil.string(names[i]);
             }
+            catch (CharacterCodingException e)
+            {
+                throw new RuntimeException(e);
+            }
+
             this.names = Arrays.asList(names);
             this.namestrs = Arrays.asList(namestrs);
         }
         maxColumnsPerKey = (int) countDistribution.get().maxValue();
         variableColumnCount = countDistribution.get().minValue() < maxColumnsPerKey;
-        // TODO: should warn that we always slice for useTimeUUIDComparator?
-        slice = options.slice.setByUser() || useTimeUUIDComparator;
-        // TODO: with useTimeUUIDCOmparator, should we still try to select a random start for reads if possible?
+        slice = options.slice.setByUser();
     }
 
