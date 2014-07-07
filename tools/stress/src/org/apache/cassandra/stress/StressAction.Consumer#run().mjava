@@ -17,63 +17,89 @@
                         sclient = settings.getSimpleNativeClient();
                         break;
                     case THRIFT:
-                        tclient = settings.getThriftClient();
-                        break;
                     case THRIFT_SMART:
-                        tclient = settings.getSmartThriftClient();
+                        tclient = settings.getThriftClient();
                         break;
                     default:
                         throw new IllegalStateException();
                 }
 
-                Work work;
-                while ( null != (work = workQueue.poll()) )
+                int maxBatchSize = operations.maxBatchSize();
+                Work work = workQueue.poll();
+                Partition[] partitions = new Partition[maxBatchSize];
+                int workDone = 0;
+                while (work != null)
                 {
 
-                    if (rateLimiter != null)
-                        rateLimiter.acquire(work.count);
+                    Operation op = operations.next();
+                    op.generator.reset();
+                    int batchSize = Math.max(1, (int) op.partitionCount.next());
+                    int partitionCount = 0;
 
-                    for (int i = 0 ; i < work.count ; i++)
+                    while (partitionCount < batchSize)
                     {
-                        try
+                        int count = Math.min((work.count - workDone), batchSize - partitionCount);
+                        for (int i = 0 ; i < count ; i++)
                         {
-                            Operation op = createOperation(state, i + work.offset);
-                            switch (settings.mode.api)
-                            {
-                                case JAVA_DRIVER_NATIVE:
-                                    op.run(jclient);
-                                    break;
-                                case SIMPLE_NATIVE:
-                                    op.run(sclient);
-                                    break;
-                                case THRIFT:
-                                case THRIFT_SMART:
-                                default:
-                                    op.run(tclient);
-                            }
-                        } catch (Exception e)
+                            long seed = seedGenerator.next(work.offset + workDone + i);
+                            partitions[partitionCount + i] = op.generator.generate(seed);
+                        }
+                        workDone += count;
+                        partitionCount += count;
+                        if (workDone == work.count)
                         {
-                            if (output == null)
+                            workDone = 0;
+                            work = workQueue.poll();
+                            if (work == null)
                             {
-                                System.err.println(e.getMessage());
-                                success = false;
-                                System.exit(-1);
+                                if (partitionCount == 0)
+                                    return;
+                                break;
                             }
-
-                            e.printStackTrace(output);
-                            success = false;
-                            workQueue.stop();
-                            state.metrics.cancel();
-                            return;
+                            if (rateLimiter != null)
+                                rateLimiter.acquire(work.count);
                         }
                     }
-                }
 
+                    op.setPartitions(Arrays.asList(partitions).subList(0, partitionCount));
+
+                    try
+                    {
+                        switch (settings.mode.api)
+                        {
+                            case JAVA_DRIVER_NATIVE:
+                                op.run(jclient);
+                                break;
+                            case SIMPLE_NATIVE:
+                                op.run(sclient);
+                                break;
+                            case THRIFT:
+                            case THRIFT_SMART:
+                            default:
+                                op.run(tclient);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        if (output == null)
+                        {
+                            System.err.println(e.getMessage());
+                            success = false;
+                            System.exit(-1);
+                        }
+
+                        e.printStackTrace(output);
+                        success = false;
+                        workQueue.stop();
+                        metrics.cancel();
+                        return;
+                    }
+                }
             }
             finally
             {
                 done.countDown();
-                state.timer.close();
+                timer.close();
             }
 
         }
