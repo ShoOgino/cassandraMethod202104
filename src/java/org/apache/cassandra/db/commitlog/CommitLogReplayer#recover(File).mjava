@@ -44,8 +44,9 @@
                  /* read the logs populate Mutation and apply */
                 while (reader.getPosition() < end && !reader.isEOF())
                 {
+                    long mutationStart = reader.getFilePointer();
                     if (logger.isDebugEnabled())
-                        logger.debug("Reading mutation at {}", reader.getFilePointer());
+                        logger.debug("Reading mutation at {}", mutationStart);
 
                     long claimedCRC32;
                     int serializedSize;
@@ -55,7 +56,7 @@
                         serializedSize = reader.readInt();
                         if (serializedSize == LEGACY_END_OF_SEGMENT_MARKER)
                         {
-                            logger.debug("Encountered end of segment marker at {}", reader.getFilePointer());
+                            logger.debug("Encountered end of segment marker at {}", mutationStart);
                             break main;
                         }
 
@@ -64,7 +65,11 @@
                         // 2-byte length from writeUTF/writeWithShortLength) and 4 bytes for column count.
                         // This prevents CRC by being fooled by special-case garbage in the file; see CASSANDRA-2128
                         if (serializedSize < 10)
+                        {
+                            if (!IGNORE_ERRORS)
+                                throw new MalformedCommitLogException("Too small mutation encountered at position " + mutationStart);
                             break main;
+                        }
 
                         long claimedSizeChecksum;
                         if (desc.version < CommitLogDescriptor.VERSION_21)
@@ -78,7 +83,11 @@
                             checksum.updateInt(serializedSize);
 
                         if (checksum.getValue() != claimedSizeChecksum)
+                        {
+                            if (!IGNORE_ERRORS)
+                                throw new IOException("Invalid size checksum for mutation at position " + mutationStart + " of " + file);
                             break main; // entry wasn't synced correctly/fully. that's
+                        }
                         // ok.
 
                         if (serializedSize > buffer.length)
@@ -91,12 +100,17 @@
                     }
                     catch (EOFException eof)
                     {
+                        if (!IGNORE_ERRORS)
+                            throw new MalformedCommitLogException("Encountered end-of-file unexpectedly", eof);
+
                         break main; // last CL entry didn't get completely written. that's ok.
                     }
 
                     checksum.update(buffer, 0, serializedSize);
                     if (claimedCRC32 != checksum.getValue())
                     {
+                        if (!IGNORE_ERRORS)
+                            throw new IOException("Invalid checksum for mutation at position " + mutationStart + " of " + file);
                         // this entry must not have been fsynced. probably the rest is bad too,
                         // but just in case there is no harm in trying them (since we still read on an entry boundary)
                         continue;
@@ -117,6 +131,9 @@
                     }
                     catch (UnknownColumnFamilyException ex)
                     {
+                        if (!IGNORE_MISSING_TABLES)
+                            throw ex;
+
                         if (ex.cfId == null)
                             continue;
                         AtomicInteger i = invalidMutations.get(ex.cfId);
@@ -131,15 +148,13 @@
                     }
                     catch (Throwable t)
                     {
+                        if (!IGNORE_ERRORS)
+                            throw new MalformedCommitLogException("Encountered bad mutation", t);
+
                         File f = File.createTempFile("mutation", "dat");
-                        DataOutputStream out = new DataOutputStream(new FileOutputStream(f));
-                        try
+                        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(f)))
                         {
                             out.write(buffer, 0, serializedSize);
-                        }
-                        finally
-                        {
-                            out.close();
                         }
                         String st = String.format("Unexpected error deserializing mutation; saved to %s and ignored.  This may be caused by replaying a mutation against a table with the same name but incompatible schema.  Exception follows: ",
                                                   f.getAbsolutePath());
@@ -156,7 +171,11 @@
                         public void runMayThrow() throws IOException
                         {
                             if (Schema.instance.getKSMetaData(mutation.getKeyspaceName()) == null)
+                            {
+                                if (!IGNORE_MISSING_TABLES)
+                                    throw new UnknownColumnFamilyException("Keyspace for this table is missing", mutation.getColumnFamilyIds().iterator().next());
                                 return;
+                            }
                             if (pointInTimeExceeded(mutation))
                                 return;
 
@@ -171,7 +190,12 @@
                             for (ColumnFamily columnFamily : replayFilter.filter(mutation))
                             {
                                 if (Schema.instance.getCF(columnFamily.id()) == null)
+                                {
+                                    if (!IGNORE_MISSING_TABLES)
+                                        throw new UnknownColumnFamilyException("Missing table with cfid=" + columnFamily.id(),
+                                                                               mutation.getColumnFamilyIds().iterator().next());
                                     continue; // dropped
+                                }
 
                                 ReplayPosition rp = cfPositions.get(columnFamily.id());
 
@@ -188,7 +212,7 @@
                             if (newMutation != null)
                             {
                                 assert !newMutation.isEmpty();
-                                Keyspace.open(newMutation.getKeyspaceName()).apply(newMutation, false);
+                                keyspace.apply(newMutation, false);
                                 keyspacesRecovered.add(keyspace);
                             }
                         }
