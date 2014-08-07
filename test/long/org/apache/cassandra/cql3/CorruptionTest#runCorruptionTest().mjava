@@ -1,0 +1,65 @@
+    @Test
+    public void runCorruptionTest()
+    {
+
+        final CountDownLatch failure = new CountDownLatch(1);
+
+
+        ExecutorService executor = Executors.newFixedThreadPool(THREADPOOL_SIZE);
+        for (int i = 0; i < THREADPOOL_SIZE; i++)
+        {
+            executor.execute(new Runnable()
+            {
+                @Override
+                public void run()
+                {
+                    for (int i = 0; i < 100000; i++)
+                    {
+                        put(KEY.getBytes(), VALUE.getBytes());
+                        byte[] res = get(KEY.getBytes());
+                        //since we're flooding the server we might get some timeouts, that's not
+                        //relevant for this test
+                        if (res == null)
+                            continue;
+
+                        if (!Arrays.equals(VALUE.getBytes(), res))
+                        {
+                            /*try
+                            {
+                                dumpKeys(VALUE.getBytes(), res);
+                            }
+                            catch (IOException e)
+                            {
+                                e.printStackTrace();
+                            }*/
+                            failure.countDown();
+                        }
+                    }
+                }
+
+                private void dumpKeys(byte[] putdata, byte[] getdata) throws IOException {
+                    String basename = "bad-data-tid" + Thread.currentThread().getId();
+                    File put = new File(basename+"-put");
+                    File get = new File(basename+"-get");
+                    try(FileWriter pw = new FileWriter(put)) {
+                        pw.write(new String(putdata));
+                    }
+                    try(FileWriter pw = new FileWriter(get)) {
+                        pw.write(new String(getdata));
+                    }
+                }
+            });
+        }
+
+        try
+        {
+            assert!failure.await(2, TimeUnit.MINUTES);
+        }
+        catch (InterruptedException e)
+        {
+
+        }
+        executor.shutdownNow();
+
+    }
+
