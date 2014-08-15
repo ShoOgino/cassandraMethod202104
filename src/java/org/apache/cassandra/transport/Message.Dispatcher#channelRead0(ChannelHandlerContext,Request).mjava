@@ -16,29 +16,15 @@
                 response = request.execute(qstate);
                 response.setStreamId(request.getStreamId());
                 response.attach(connection);
-                response.setSourceFrame(request.getSourceFrame());
                 connection.applyStateTransition(request.type, response.type);
             }
             catch (Throwable ex)
             {
-                request.getSourceFrame().release();
-                // Don't let the exception propagate to exceptionCaught() if we can help it so that we can assign the right streamID.
-                ctx.writeAndFlush(ErrorMessage.fromException(ex).setStreamId(request.getStreamId()), ctx.voidPromise());
+                flush(new FlushItem(ctx, ErrorMessage.fromException(ex).setStreamId(request.getStreamId()), request.getSourceFrame()));
                 return;
             }
 
             logger.debug("Responding: {}, v={}", response, connection.getVersion());
-
-            EventLoop loop = ctx.channel().eventLoop();
-            Flusher flusher = flusherLookup.get(loop);
-            if (flusher == null)
-            {
-                Flusher alt = flusherLookup.putIfAbsent(loop, flusher = new Flusher(loop));
-                if (alt != null)
-                    flusher = alt;
-            }
-
-            flusher.queued.add(new FlushItem(ctx, response));
-            flusher.start();
+            flush(new FlushItem(ctx, response, request.getSourceFrame()));
         }
 
