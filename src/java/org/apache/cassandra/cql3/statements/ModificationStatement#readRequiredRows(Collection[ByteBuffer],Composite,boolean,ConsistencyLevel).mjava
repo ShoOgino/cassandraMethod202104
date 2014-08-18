@@ -1,17 +1,46 @@
     protected Map<ByteBuffer, CQL3Row> readRequiredRows(Collection<ByteBuffer> partitionKeys, Composite clusteringPrefix, boolean local, ConsistencyLevel cl)
     throws RequestExecutionException, RequestValidationException
     {
-        // Lists SET operation incurs a read.
-        boolean requiresRead = false;
-        for (Operation op : columnOperations)
+        if (!requiresRead())
+            return null;
+
+        try
         {
-            if (op.requiresRead())
-            {
-                requiresRead = true;
-                break;
-            }
+            cl.validateForRead(keyspace());
+        }
+        catch (InvalidRequestException e)
+        {
+            throw new InvalidRequestException(String.format("Write operation require a read but consistency %s is not supported on reads", cl));
         }
 
-        return requiresRead ? readRows(partitionKeys, clusteringPrefix, cfm, local, cl) : null;
+        ColumnSlice[] slices = new ColumnSlice[]{ clusteringPrefix.slice() };
+        List<ReadCommand> commands = new ArrayList<ReadCommand>(partitionKeys.size());
+        long now = System.currentTimeMillis();
+        for (ByteBuffer key : partitionKeys)
+            commands.add(new SliceFromReadCommand(keyspace(),
+                                                  key,
+                                                  columnFamily(),
+                                                  now,
+                                                  new SliceQueryFilter(slices, false, Integer.MAX_VALUE)));
+
+        List<Row> rows = local
+                       ? SelectStatement.readLocally(keyspace(), commands)
+                       : StorageProxy.read(commands, cl);
+
+        Map<ByteBuffer, CQL3Row> map = new HashMap<ByteBuffer, CQL3Row>();
+        for (Row row : rows)
+        {
+            if (row.cf == null || row.cf.isEmpty())
+                continue;
+
+            Iterator<CQL3Row> iter = cfm.comparator.CQL3RowBuilder(cfm, now).group(row.cf.getSortedColumns().iterator());
+            if (iter.hasNext())
+            {
+                map.put(row.key.getKey(), iter.next());
+                // We can only update one CQ3Row per partition key at a time (we don't allow IN for clustering key)
+                assert !iter.hasNext();
+            }
+        }
+        return map;
     }
 
