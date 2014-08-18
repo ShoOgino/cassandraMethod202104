@@ -2,19 +2,19 @@
      * We call dense a CF for which each component of the comparator is a clustering column, i.e. no
      * component is used to store a regular column names. In other words, non-composite static "thrift"
      * and CQL3 CF are *not* dense.
-     * Note that his method is only used by rebuildCQL3Metadata. Once said metadata are built, finding
-     * if a CF is dense amounts more simply to check if clusteringKeyColumns.size() == comparator.componentsCount().
+     * We save whether the table is dense or not during table creation through CQL, but we don't have this
+     * information for table just created through thrift, nor for table prior to CASSANDRA-7744, so this
+     * method does its best to infer whether the table is dense or not based on other elements.
      */
     private static boolean isDense(AbstractType<?> comparator, Collection<ColumnDefinition> defs)
     {
         /*
          * As said above, this method is only here because we need to deal with thrift upgrades.
          * Once a CF has been "upgraded", i.e. we've rebuilt and save its CQL3 metadata at least once,
-         * then checking for isDense amounts to looking whether the maximum componentIndex for the
-         * CLUSTERING_KEY ColumnDefinitions is equal to comparator.componentsCount() - 1 or not.
+         * then we'll have saved the "is_dense" value and will be good to go.
          *
-         * But non-upgraded thrift CF will have no such CLUSTERING_KEY column definitions, so we need
-         * to infer that information without relying on them in that case. And for the most part this is
+         * But non-upgraded thrift CF (and pre-7744 CF) will have no value for "is_dense", so we need
+         * to infer that information without relying on it in that case. And for the most part this is
          * easy, a CF that has at least one REGULAR definition is not dense. But the subtlety is that not
          * having a REGULAR definition may not mean dense because of CQL3 definitions that have only the
          * PRIMARY KEY defined.
@@ -45,6 +45,5 @@
         return maxClusteringIdx >= 0
              ? maxClusteringIdx == comparator.componentsCount() - 1
              : !hasRegular && !isCQL3OnlyPKComparator(comparator);
-
     }
 
