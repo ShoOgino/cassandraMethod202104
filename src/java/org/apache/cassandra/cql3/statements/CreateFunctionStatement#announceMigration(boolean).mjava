@@ -1,6 +1,31 @@
     public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
     {
-        MigrationManager.announceNewFunction(ufMeta, isLocalOnly);
+        List<AbstractType<?>> argTypes = new ArrayList<>(argRawTypes.size());
+        for (CQL3Type.Raw rawType : argRawTypes)
+            // We have no proper keyspace to give, which means that this will break (NPE currently)
+            // for UDT: #7791 is open to fix this
+            argTypes.add(rawType.prepare(null).getType());
+
+        AbstractType<?> returnType = rawReturnType.prepare(null).getType();
+
+        Function old = Functions.find(functionName, argTypes);
+        if (old != null)
+        {
+            if (ifNotExists)
+                return false;
+            if (!orReplace)
+                throw new InvalidRequestException(String.format("Function %s already exists", old));
+
+            // Means we're replacing the function. We still need to validate that 1) it's not a native function and 2) that the return type
+            // matches (or that could break existing code badly)
+            if (old.isNative())
+                throw new InvalidRequestException(String.format("Cannot replace native function %s", old));
+            if (!old.returnType().isValueCompatibleWith(returnType))
+                throw new InvalidRequestException(String.format("Cannot replace function %s, the new return type %s is not compatible with the return type %s of existing function",
+                                                                functionName, returnType.asCQL3Type(), old.returnType().asCQL3Type()));
+        }
+
+        MigrationManager.announceNewFunction(UDFunction.create(functionName, argNames, argTypes, returnType, language, body, deterministic), isLocalOnly);
         return true;
     }
 
