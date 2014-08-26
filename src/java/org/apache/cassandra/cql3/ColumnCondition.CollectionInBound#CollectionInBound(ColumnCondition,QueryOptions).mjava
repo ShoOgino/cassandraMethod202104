@@ -1,0 +1,52 @@
+        private CollectionInBound(ColumnCondition condition, QueryOptions options) throws InvalidRequestException
+        {
+            super(condition.column, condition.operator);
+            assert column.type instanceof CollectionType && condition.collectionElement == null;
+            assert condition.operator.equals(Relation.Type.IN);
+            inValues = new ArrayList<>();
+            if (condition.inValues == null)
+            {
+                // We have a list of serialized collections that need to be deserialized for later comparisons
+                CollectionType collectionType = (CollectionType) column.type;
+                Lists.Marker inValuesMarker = (Lists.Marker) condition.value;
+                if (column.type instanceof ListType)
+                {
+                    ListType deserializer = ListType.getInstance(collectionType.valueComparator());
+                    for (ByteBuffer buffer : inValuesMarker.bind(options).elements)
+                    {
+                        if (buffer == null)
+                            this.inValues.add(null);
+                        else
+                            this.inValues.add(Lists.Value.fromSerialized(buffer, deserializer, options.getProtocolVersion()));
+                    }
+                }
+                else if (column.type instanceof MapType)
+                {
+                    MapType deserializer = MapType.getInstance(collectionType.nameComparator(), collectionType.valueComparator());
+                    for (ByteBuffer buffer : inValuesMarker.bind(options).elements)
+                    {
+                        if (buffer == null)
+                            this.inValues.add(null);
+                        else
+                            this.inValues.add(Maps.Value.fromSerialized(buffer, deserializer, options.getProtocolVersion()));
+                    }
+                }
+                else if (column.type instanceof SetType)
+                {
+                    SetType deserializer = SetType.getInstance(collectionType.valueComparator());
+                    for (ByteBuffer buffer : inValuesMarker.bind(options).elements)
+                    {
+                        if (buffer == null)
+                            this.inValues.add(null);
+                        else
+                            this.inValues.add(Sets.Value.fromSerialized(buffer, deserializer, options.getProtocolVersion()));
+                    }
+                }
+            }
+            else
+            {
+                for (Term value : condition.inValues)
+                    this.inValues.add(value.bind(options));
+            }
+        }
+
