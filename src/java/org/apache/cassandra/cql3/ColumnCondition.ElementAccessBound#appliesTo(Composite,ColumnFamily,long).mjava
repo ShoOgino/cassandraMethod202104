@@ -4,23 +4,16 @@
                 throw new InvalidRequestException("Invalid null value for " + (column.type instanceof MapType ? "map" : "list") + " element access");
 
             if (column.type instanceof MapType)
-                return equalsValue(value, current.getColumn(current.metadata().comparator.create(rowPrefix, column, collectionElement)), ((MapType)column.type).values, now);
+            {
+                Cell cell = current.getColumn(current.metadata().comparator.create(rowPrefix, column, collectionElement));
+                return isSatisfiedByValue(value, cell, ((MapType) column.type).values, operator, now);
+            }
 
+            // sets don't have element access, so it's a list
             assert column.type instanceof ListType;
-            int idx = ByteBufferUtil.toInt(collectionElement);
-            if (idx < 0)
-                throw new InvalidRequestException(String.format("Invalid negative list index %d", idx));
-
-            Iterator<Cell> iter = collectionColumns(current.metadata().comparator.create(rowPrefix, column), current, now);
-            int adv = Iterators.advance(iter, idx);
-            if (adv != idx || !iter.hasNext())
-                throw new InvalidRequestException(String.format("List index %d out of bound, list has size %d", idx, adv));
-
-            // We don't support null values inside collections, so a condition like 'IF l[3] = null' can only
-            // be false. We do special case though, as the compare below might mind getting a null.
-            if (value == null)
-                return false;
-
-            return ((ListType)column.type).elements.compare(iter.next().value(), value) == 0;
+            ByteBuffer columnValue = getListItem(
+                    collectionColumns(current.metadata().comparator.create(rowPrefix, column), current, now),
+                    getListIndex(collectionElement));
+            return compareWithOperator(operator, ((ListType)column.type).elements, value, columnValue);
         }
 

@@ -1,0 +1,33 @@
+        public boolean appliesTo(Composite rowPrefix, ColumnFamily current, final long now) throws InvalidRequestException
+        {
+            if (collectionElement == null)
+                throw new InvalidRequestException("Invalid null value for " + (column.type instanceof MapType ? "map" : "list") + " element access");
+
+            CellNameType nameType = current.metadata().comparator;
+            if (column.type instanceof MapType)
+            {
+                CellName name = nameType.create(rowPrefix, column, collectionElement);
+                Cell item = current.getColumn(name);
+                AbstractType<?> valueType = ((MapType) column.type).values;
+                for (ByteBuffer value : inValues)
+                {
+                    if (isSatisfiedByValue(value, item, valueType, Relation.Type.EQ, now))
+                        return true;
+                }
+                return false;
+            }
+
+            assert column.type instanceof ListType;
+            ByteBuffer columnValue = ElementAccessBound.getListItem(
+                    collectionColumns(nameType.create(rowPrefix, column), current, now),
+                    ElementAccessBound.getListIndex(collectionElement));
+
+            AbstractType<?> valueType = ((ListType) column.type).elements;
+            for (ByteBuffer value : inValues)
+            {
+                if (compareWithOperator(Relation.Type.EQ, valueType, value, columnValue))
+                    return true;
+            }
+            return false;
+        }
+
