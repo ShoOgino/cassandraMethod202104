@@ -1,0 +1,82 @@
+    private UnfilteredPartitionIterators.MergeListener listener()
+    {
+        return new UnfilteredPartitionIterators.MergeListener()
+        {
+            public UnfilteredRowIterators.MergeListener getRowMergeListener(DecoratedKey partitionKey, List<UnfilteredRowIterator> versions)
+            {
+                int merged = 0;
+                for (UnfilteredRowIterator iter : versions)
+                {
+                    if (iter != null)
+                        merged++;
+                }
+
+                assert merged > 0;
+
+                CompactionIterator.this.updateCounterFor(merged);
+
+                /*
+                 * The row level listener does 2 things:
+                 *  - It updates 2ndary indexes for deleted/shadowed cells
+                 *  - It updates progress regularly (every UNFILTERED_TO_UPDATE_PROGRESS)
+                 */
+                final SecondaryIndexManager.Updater indexer = type == OperationType.COMPACTION
+                                                            ? controller.cfs.indexManager.gcUpdaterFor(partitionKey, nowInSec)
+                                                            : SecondaryIndexManager.nullUpdater;
+
+                return new UnfilteredRowIterators.MergeListener()
+                {
+                    private Clustering clustering;
+
+                    public void onMergePartitionLevelDeletion(DeletionTime mergedDeletion, DeletionTime[] versions)
+                    {
+                    }
+
+                    public void onMergingRows(Clustering clustering, LivenessInfo mergedInfo, DeletionTime mergedDeletion, Row[] versions)
+                    {
+                        this.clustering = clustering;
+                    }
+
+                    public void onMergedComplexDeletion(ColumnDefinition c, DeletionTime mergedCompositeDeletion, DeletionTime[] versions)
+                    {
+                    }
+
+                    public void onMergedCells(Cell mergedCell, Cell[] versions)
+                    {
+                        if (indexer == SecondaryIndexManager.nullUpdater)
+                            return;
+
+                        for (int i = 0; i < versions.length; i++)
+                        {
+                            Cell version = versions[i];
+                            if (version != null && (mergedCell == null || !mergedCell.equals(version)))
+                                indexer.remove(clustering, version);
+                        }
+                    }
+
+                    public void onRowDone()
+                    {
+                        int merged = ++CompactionIterator.this.merged;
+                        if (merged % UNFILTERED_TO_UPDATE_PROGRESS == 0)
+                            updateBytesRead();
+                    }
+
+                    public void onMergedRangeTombstoneMarkers(RangeTombstoneMarker mergedMarker, RangeTombstoneMarker[] versions)
+                    {
+                        int merged = ++CompactionIterator.this.merged;
+                        if (merged % UNFILTERED_TO_UPDATE_PROGRESS == 0)
+                            updateBytesRead();
+                    }
+
+                    public void close()
+                    {
+                    }
+                };
+            }
+
+            public void close()
+            {
+            }
+        };
+    }
+

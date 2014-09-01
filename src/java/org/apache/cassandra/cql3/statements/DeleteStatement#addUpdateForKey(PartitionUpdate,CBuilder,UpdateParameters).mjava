@@ -1,0 +1,54 @@
+    public void addUpdateForKey(PartitionUpdate update, CBuilder cbuilder, UpdateParameters params)
+    throws InvalidRequestException
+    {
+        List<Operation> regularDeletions = getRegularOperations();
+        List<Operation> staticDeletions = getStaticOperations();
+
+        if (regularDeletions.isEmpty() && staticDeletions.isEmpty())
+        {
+            // We're not deleting any specific columns so it's either a full partition deletion ....
+            if (cbuilder.count() == 0)
+            {
+                update.addPartitionDeletion(params.deletionTime());
+            }
+            // ... or a row deletion ...
+            else if (cbuilder.remainingCount() == 0)
+            {
+                Clustering clustering = cbuilder.build();
+                Row.Writer writer = update.writer();
+                params.writeClustering(clustering, writer);
+                params.writeRowDeletion(writer);
+                writer.endOfRow();
+            }
+            // ... or a range of rows deletion.
+            else
+            {
+                update.addRangeTombstone(params.makeRangeTombstone(cbuilder));
+            }
+        }
+        else
+        {
+            if (!regularDeletions.isEmpty())
+            {
+                // We can't delete specific (regular) columns if not all clustering columns have been specified.
+                if (cbuilder.remainingCount() > 0)
+                    throw new InvalidRequestException(String.format("Primary key column '%s' must be specified in order to delete column '%s'", getFirstEmptyKey().name, regularDeletions.get(0).column.name));
+
+                Clustering clustering = cbuilder.build();
+                Row.Writer writer = update.writer();
+                params.writeClustering(clustering, writer);
+                for (Operation op : regularDeletions)
+                    op.execute(update.partitionKey(), clustering, writer, params);
+                writer.endOfRow();
+            }
+
+            if (!staticDeletions.isEmpty())
+            {
+                Row.Writer writer = update.staticWriter();
+                for (Operation op : staticDeletions)
+                    op.execute(update.partitionKey(), Clustering.STATIC_CLUSTERING, writer, params);
+                writer.endOfRow();
+            }
+        }
+    }
+

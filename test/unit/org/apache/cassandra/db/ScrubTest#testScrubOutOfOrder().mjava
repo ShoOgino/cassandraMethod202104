@@ -8,24 +8,28 @@
         cfs.clearUnsafe();
 
         /*
-         * Code used to generate an outOfOrder sstable. The test for out-of-order key in SSTableWriter must also be commented out.
+         * Code used to generate an outOfOrder sstable. The test for out-of-order key in BigTableWriter must also be commented out.
          * The test also assumes an ordered partitioner.
-         *
-        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(cfs.metadata);
-        cf.addColumn(new BufferCell(ByteBufferUtil.bytes("someName"), ByteBufferUtil.bytes("someValue"), 0L));
+        List<String> keys = Arrays.asList("t", "a", "b", "z", "c", "y", "d");
+        String filename = cfs.getTempSSTablePath(new File(System.getProperty("corrupt-sstable-root")));
+        SSTableWriter writer = SSTableWriter.create(cfs.metadata,
+                                                    Descriptor.fromFilename(filename),
+                                                    keys.size(),
+                                                    0L,
+                                                    0,
+                                                    DatabaseDescriptor.getPartitioner(),
+                                                    SerializationHeader.make(cfs.metadata, Collections.emptyList()));
 
-        SSTableWriter writer = new SSTableWriter(cfs.getTempSSTablePath(new File(System.getProperty("corrupt-sstable-root"))),
-                                                 cfs.metadata.getIndexInterval(),
-                                                 cfs.metadata,
-                                                 cfs.partitioner,
-                                                 SSTableMetadata.createCollector(BytesType.instance));
-        writer.append(Util.dk("a"), cf);
-        writer.append(Util.dk("b"), cf);
-        writer.append(Util.dk("z"), cf);
-        writer.append(Util.dk("c"), cf);
-        writer.append(Util.dk("y"), cf);
-        writer.append(Util.dk("d"), cf);
-        writer.finish();
+        for (String k : keys)
+        {
+            RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata, 0L, Util.dk(k));
+            PartitionUpdate update = builder.clustering("someName")
+                                            .add("val", "someValue")
+                                            .buildUpdate();
+
+            writer.append(update.unfilteredIterator());
+        }
+        writer.finish(false);
         */
 
         String root = System.getProperty("corrupt-sstable-root");
@@ -33,7 +37,7 @@
 
         File rootDir = new File(root);
         assert rootDir.isDirectory();
-        Descriptor desc = new Descriptor("jb", rootDir, KEYSPACE, columnFamily, 1, Descriptor.Type.FINAL, SSTableFormat.Type.LEGACY);
+        Descriptor desc = new Descriptor("la", rootDir, KEYSPACE, columnFamily, 1, Descriptor.Type.FINAL, SSTableFormat.Type.BIG);
         CFMetaData metadata = Schema.instance.getCFMetaData(desc.ksname, desc.cfname);
 
         try
@@ -45,7 +49,7 @@
 
         // open without validation for scrubbing
         Set<Component> components = new HashSet<>();
-        components.add(Component.COMPRESSION_INFO);
+        //components.add(Component.COMPRESSION_INFO);
         components.add(Component.DATA);
         components.add(Component.PRIMARY_INDEX);
         components.add(Component.FILTER);
@@ -63,8 +67,7 @@
             scrubber.scrub();
         }
         cfs.loadNewSSTables();
-        List<Row> rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
-        assert isRowOrdered(rows) : "Scrub failed: " + rows;
-        assert rows.size() == 6 : "Got " + rows.size();
+        assertOrderedAll(cfs, 7);
+        sstable.selfRef().release();
     }
 

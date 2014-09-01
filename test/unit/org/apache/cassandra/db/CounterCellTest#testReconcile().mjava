@@ -1,116 +1,63 @@
     @Test
     public void testReconcile()
     {
-        Cell left;
-        Cell right;
-        Cell reconciled;
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(COUNTER1);
+        ColumnDefinition cDef = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1).metadata.getColumnDefinition(ByteBufferUtil.bytes("val"));
+        ByteBuffer col = ByteBufferUtil.bytes("c1");
 
-        ByteBuffer context;
+        AbstractCell left;
+        AbstractCell right;
 
-        // tombstone + tombstone
-        left  = new BufferDeletedCell(cellname("x"), 1, 1L);
-        right = new BufferDeletedCell(cellname("x"), 2, 2L);
+        // both deleted, diff deletion time, same ts
+        left = createLegacyCounterCell(cfs, col, 1, 2, 0, 5);
+        right = createLegacyCounterCell(cfs, col, 1, 2, 0, 10);
+        assert Cells.reconcile(left, right, 10) == right;
 
-        assert left.reconcile(right).timestamp() == right.timestamp();
-        assert right.reconcile(left).timestamp() == right.timestamp();
+        // diff ts
+        right = createLegacyCounterCell(cfs, col, 1, 1, 0, 10);
+        assert Cells.reconcile(left, right, 10) == left;
 
-        // tombstone > live
-        left  = new BufferDeletedCell(cellname("x"), 1, 2L);
-        right = BufferCounterCell.createLocal(cellname("x"), 0L, 1L, Long.MIN_VALUE);
+        // < tombstone
+        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(6, 6));
+        right = createLegacyCounterCell(cfs, col, 1, 5, 0, 5);
+        assert Cells.reconcile(left, right, 10) == left;
 
-        assert left.reconcile(right) == left;
+        // > tombstone
+        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(1, 1));
+        right = createLegacyCounterCell(cfs, col, 1, 5, 0, Integer.MAX_VALUE);
+        assert Cells.reconcile(left, right, 10) == left;
 
-        // tombstone < live last delete
-        left  = new BufferDeletedCell(cellname("x"), 1, 1L);
-        right = BufferCounterCell.createLocal(cellname("x"), 0L, 4L, 2L);
-
-        assert left.reconcile(right) == left;
-
-        // tombstone == live last delete
-        left  = new BufferDeletedCell(cellname("x"), 1, 2L);
-        right = BufferCounterCell.createLocal(cellname("x"), 0L, 4L, 2L);
-
-        assert left.reconcile(right) == left;
-
-        // tombstone > live last delete
-        left  = new BufferDeletedCell(cellname("x"), 1, 4L);
-        right = BufferCounterCell.createLocal(cellname("x"), 0L, 9L, 1L);
-
-        assert left.reconcile(right) == left;
-
-        // live < tombstone
-        left  = BufferCounterCell.createLocal(cellname("x"), 0L, 1L, Long.MIN_VALUE);
-        right = new BufferDeletedCell(cellname("x"), 1, 2L);
-
-        assert left.reconcile(right) == right;
-
-        // live last delete > tombstone
-        left  = BufferCounterCell.createLocal(cellname("x"), 0L, 4L, 2L);
-        right = new BufferDeletedCell(cellname("x"), 1, 1L);
-
-        assert left.reconcile(right) == right;
-
-        // live last delete == tombstone
-        left  = BufferCounterCell.createLocal(cellname("x"), 0L, 4L, 2L);
-        right = new BufferDeletedCell(cellname("x"), 1, 2L);
-
-        assert left.reconcile(right) == right;
-
-        // live last delete < tombstone
-        left  = BufferCounterCell.createLocal(cellname("x"), 0L, 9L, 1L);
-        right = new BufferDeletedCell(cellname("x"), 1, 4L);
-
-        assert left.reconcile(right) == right;
-
-        // live < live last delete
-        left  = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L), 1L, Long.MIN_VALUE);
-        right = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L), 4L, 3L);
-
-        assert left.reconcile(right) == right;
-
-        // live last delete > live
-        left  = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L), 6L, 5L);
-        right = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L), 4L, 3L);
-
-        assert left.reconcile(right) == left;
+        // == tombstone
+        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(8, 8));
+        right = createLegacyCounterCell(cfs, col, 1, 8, 0, Integer.MAX_VALUE);
+        assert Cells.reconcile(left, right, 10) == left;
 
         // live + live
-        left = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 1L, 1L), 4L, Long.MIN_VALUE);
-        right = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(1), 2L, 3L), 1L, Long.MIN_VALUE);
+        left = createLegacyCounterCell(cfs, col, 1, 2, 0, Integer.MAX_VALUE);
+        right = createLegacyCounterCell(cfs, col, 3, 5, 0, Integer.MAX_VALUE);
+        Cell reconciled = Cells.reconcile(left, right, 10);
+        assertEquals(CounterContext.instance().total(reconciled.value()), 4);
+        assertEquals(reconciled.livenessInfo().timestamp(), 5L);
 
-        reconciled = left.reconcile(right);
-        assert reconciled.name().equals(left.name());
-        assert ((CounterCell)reconciled).total() == 3L;
-        assert reconciled.timestamp() == 4L;
+        // Add, don't change TS
+        Cell addTen = createLegacyCounterCell(cfs, col, 10, 4, 0, Integer.MAX_VALUE);
+        reconciled = Cells.reconcile(reconciled, addTen, 10);
+        assertEquals(CounterContext.instance().total(reconciled.value()), 14);
+        assertEquals(reconciled.livenessInfo().timestamp(), 5L);
 
-        left = reconciled;
-        right = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(2), 1L, 5L), 2L, Long.MIN_VALUE);
+        // Add w/new TS
+        Cell addThree = createLegacyCounterCell(cfs, col, 3, 7, 0, Integer.MAX_VALUE);
+        reconciled = Cells.reconcile(reconciled, addThree, 10);
+        assertEquals(CounterContext.instance().total(reconciled.value()), 17);
+        assertEquals(reconciled.livenessInfo().timestamp(), 7L);
 
-        reconciled = left.reconcile(right);
-        assert reconciled.name().equals(left.name());
-        assert ((CounterCell)reconciled).total() == 8L;
-        assert reconciled.timestamp() == 4L;
+        // Confirm no deletion time
+        assert reconciled.livenessInfo().localDeletionTime() == Integer.MAX_VALUE;
 
-        left = reconciled;
-        right = new BufferCounterCell(cellname("x"), cc.createRemote(CounterId.fromInt(2), 2L, 2L), 6L, Long.MIN_VALUE);
-
-        reconciled = left.reconcile(right);
-        assert reconciled.name().equals(left.name());
-        assert ((CounterCell)reconciled).total() == 5L;
-        assert reconciled.timestamp() == 6L;
-
-        context = reconciled.value();
-        int hd = 2; // header
-        assert hd + 2 * stepLength == context.remaining();
-
-        assert Util.equalsCounterId(CounterId.fromInt(1), context, hd);
-        assert 2L == context.getLong(hd + idLength);
-        assert 3L == context.getLong(hd + idLength + clockLength);
-
-        assert Util.equalsCounterId(CounterId.fromInt(2), context, hd + stepLength);
-        assert 2L == context.getLong(hd + stepLength + idLength);
-        assert 2L == context.getLong(hd + stepLength + idLength + clockLength);
-
-        assert ((CounterCell)reconciled).timestampOfLastDelete() == Long.MIN_VALUE;
+        Cell deleted = createLegacyCounterCell(cfs, col, 2, 8, 0, 8);
+        reconciled = Cells.reconcile(reconciled, deleted, 10);
+        assertEquals(2, CounterContext.instance().total(reconciled.value()));
+        assertEquals(reconciled.livenessInfo().timestamp(), 8L);
+        assert reconciled.livenessInfo().localDeletionTime() == 8;
     }
 

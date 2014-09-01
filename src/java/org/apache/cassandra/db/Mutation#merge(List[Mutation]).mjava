@@ -1,0 +1,52 @@
+    /**
+     * Creates a new mutation that merges all the provided mutations.
+     *
+     * @param mutations the mutations to merge together. All mutation must be
+     * on the same keyspace and partition key. There should also be at least one
+     * mutation.
+     * @return a mutation that contains all the modifications contained in {@code mutations}.
+     *
+     * @throws IllegalArgumentException if not all the mutations are on the same
+     * keyspace and key.
+     */
+    public static Mutation merge(List<Mutation> mutations)
+    {
+        assert !mutations.isEmpty();
+
+        if (mutations.size() == 1)
+            return mutations.get(0);
+
+        Set<UUID> updatedTables = new HashSet<>();
+        String ks = null;
+        DecoratedKey key = null;
+        for (Mutation mutation : mutations)
+        {
+            updatedTables.addAll(mutation.modifications.keySet());
+            if (ks != null && !ks.equals(mutation.keyspaceName))
+                throw new IllegalArgumentException();
+            if (key != null && !key.equals(mutation.key))
+                throw new IllegalArgumentException();
+            ks = mutation.keyspaceName;
+            key = mutation.key;
+        }
+
+        List<PartitionUpdate> updates = new ArrayList<>(mutations.size());
+        Map<UUID, PartitionUpdate> modifications = new HashMap<>(updatedTables.size());
+        for (UUID table : updatedTables)
+        {
+            for (Mutation mutation : mutations)
+            {
+                PartitionUpdate upd = mutation.modifications.get(table);
+                if (upd != null)
+                    updates.add(upd);
+            }
+
+            if (updates.isEmpty())
+                continue;
+
+            modifications.put(table, updates.size() == 1 ? updates.get(0) : PartitionUpdate.merge(updates));
+            updates.clear();
+        }
+        return new Mutation(ks, key, modifications);
+    }
+

@@ -9,26 +9,28 @@
         Keyspace keyspace = Keyspace.open(KEYSPACE2);
         String cfName = "Standard1";
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfName);
-        Mutation rm;
-        DecoratedKey key3 = Util.dk("key3");
+        String key3 = "key3";
 
         // inserts
-        rm = new Mutation(KEYSPACE2, key3.getKey());
-        rm.add(cfName, cellname("c1"), ByteBufferUtil.EMPTY_BYTE_BUFFER, 8);
-        rm.add(cfName, cellname("c2"), ByteBufferUtil.EMPTY_BYTE_BUFFER, 8);
-        rm.applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 8, key3)
+            .clustering("c1")
+            .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+            .build().applyUnsafe();
+
+        new RowUpdateBuilder(cfs.metadata, 8, key3)
+        .clustering("c2")
+        .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+        .build().applyUnsafe();
+
         cfs.forceBlockingFlush();
         // delete c1
-        rm = new Mutation(KEYSPACE2, key3.getKey());
-        rm.delete(cfName, cellname("c1"), 10);
-        rm.applyUnsafe();
+        RowUpdateBuilder.deleteRow(cfs.metadata, 10, key3, "c1").applyUnsafe();
+
         cfs.forceBlockingFlush();
         Collection<SSTableReader> sstablesIncomplete = cfs.getSSTables();
 
         // delete c2 so we have new delete in a diffrent SSTable
-        rm = new Mutation(KEYSPACE2, key3.getKey());
-        rm.delete(cfName, cellname("c2"), 9);
-        rm.applyUnsafe();
+        RowUpdateBuilder.deleteRow(cfs.metadata, 9, key3, "c2").applyUnsafe();
         cfs.forceBlockingFlush();
 
         // compact the sstables with the c1/c2 data and the c1 tombstone
@@ -36,8 +38,9 @@
 
         // We should have both the c1 and c2 tombstones still. Since the min timestamp in the c2 tombstone
         // sstable is older than the c1 tombstone, it is invalid to throw out the c1 tombstone.
-        ColumnFamily cf = cfs.getColumnFamily(QueryFilter.getIdentityFilter(key3, cfName, System.currentTimeMillis()));
-        assertFalse(cf.getColumn(cellname("c2")).isLive());
-        assertEquals(2, cf.getColumnCount());
+        ArrayBackedPartition partition = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs, key3).build());
+        assertEquals(2, partition.rowCount());
+        for (Row row : partition)
+            assertFalse(row.hasLiveData(FBUtilities.nowInSeconds()));
     }
 

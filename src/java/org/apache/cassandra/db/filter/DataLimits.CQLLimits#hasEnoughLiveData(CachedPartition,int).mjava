@@ -1,0 +1,24 @@
+        public boolean hasEnoughLiveData(CachedPartition cached, int nowInSec)
+        {
+            // We want the number of row that are currently live. Getting that precise number forces
+            // us to iterate the cached partition in general, but we can avoid that if:
+            //   - The number of rows with at least one non-expiring cell is greater than what we ask,
+            //     in which case we know we have enough live.
+            //   - The number of rows is less than requested, in which case we  know we won't have enough.
+            if (cached.rowsWithNonExpiringCells() >= rowLimit)
+                return true;
+
+            if (cached.rowCount() < rowLimit)
+                return false;
+
+            // Otherwise, we need to re-count
+            try (UnfilteredRowIterator cacheIter = cached.unfilteredIterator(ColumnFilter.selection(cached.columns()), Slices.ALL, false);
+                 CountingUnfilteredRowIterator iter = new CountingUnfilteredRowIterator(cacheIter, newCounter(nowInSec, false)))
+            {
+                // Consume the iterator until we've counted enough
+                while (iter.hasNext() && !iter.counter().isDone())
+                    iter.next();
+                return iter.counter().isDone();
+            }
+        }
+

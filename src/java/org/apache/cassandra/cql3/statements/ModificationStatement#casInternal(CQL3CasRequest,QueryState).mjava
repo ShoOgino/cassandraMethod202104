@@ -1,24 +1,22 @@
-    static ColumnFamily casInternal(CQL3CasRequest request, QueryState state)
+    static RowIterator casInternal(CQL3CasRequest request, QueryState state)
     {
         UUID ballot = UUIDGen.getTimeUUIDFromMicros(state.getTimestamp());
         CFMetaData metadata = Schema.instance.getCFMetaData(request.cfm.ksName, request.cfm.cfName);
 
-        ReadCommand readCommand = ReadCommand.create(request.cfm.ksName, request.key, request.cfm.cfName, request.now, request.readFilter());
-        Keyspace keyspace = Keyspace.open(request.cfm.ksName);
-
-        Row row = readCommand.getRow(keyspace);
-        ColumnFamily current = row.cf;
-        if (!request.appliesTo(current))
+        SinglePartitionReadCommand readCommand = request.readCommand(FBUtilities.nowInSeconds());
+        FilteredPartition current;
+        try (ReadOrderGroup orderGroup = readCommand.startOrderGroup(); PartitionIterator iter = readCommand.executeInternal(orderGroup))
         {
-            if (current == null)
-                current = ArrayBackedSortedColumns.factory.create(metadata);
-            return current;
+            current = FilteredPartition.create(PartitionIterators.getOnlyElement(iter, readCommand));
         }
 
-        ColumnFamily updates = request.makeUpdates(current);
-        updates = TriggerExecutor.instance.execute(request.key, updates);
+        if (!request.appliesTo(current))
+            return current.rowIterator();
 
-        Commit proposal = Commit.newProposal(request.key, ballot, updates);
+        PartitionUpdate updates = request.makeUpdates(current);
+        updates = TriggerExecutor.instance.execute(updates);
+
+        Commit proposal = Commit.newProposal(ballot, updates);
         proposal.makeMutation().apply();
         return null;
     }

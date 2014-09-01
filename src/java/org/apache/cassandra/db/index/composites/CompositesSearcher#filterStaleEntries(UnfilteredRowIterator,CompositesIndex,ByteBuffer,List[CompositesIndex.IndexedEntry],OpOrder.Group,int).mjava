@@ -1,0 +1,75 @@
+    private UnfilteredRowIterator filterStaleEntries(UnfilteredRowIterator dataIter,
+                                                     final CompositesIndex index,
+                                                     final ByteBuffer indexValue,
+                                                     final List<CompositesIndex.IndexedEntry> entries,
+                                                     final OpOrder.Group writeOp,
+                                                     final int nowInSec)
+    {
+        return new WrappingUnfilteredRowIterator(dataIter)
+        {
+            private int entriesIdx;
+            private Unfiltered next;
+
+            @Override
+            public boolean hasNext()
+            {
+                return prepareNext();
+            }
+
+            @Override
+            public Unfiltered next()
+            {
+                if (next == null)
+                    prepareNext();
+
+                Unfiltered toReturn = next;
+                next = null;
+                return toReturn;
+            }
+
+            private boolean prepareNext()
+            {
+                if (next != null)
+                    return true;
+
+                while (next == null && super.hasNext())
+                {
+                    next = super.next();
+                    if (next.kind() != Unfiltered.Kind.ROW)
+                        return true;
+
+                    Row row = (Row)next;
+                    CompositesIndex.IndexedEntry entry = findEntry(row.clustering(), writeOp, nowInSec);
+                    if (!index.isStale(row, indexValue, nowInSec))
+                        return true;
+
+                    // The entry is stale: delete the entry and ignore otherwise
+                    index.delete(entry, writeOp, nowInSec);
+                    next = null;
+                }
+                return false;
+            }
+
+            private CompositesIndex.IndexedEntry findEntry(Clustering clustering, OpOrder.Group writeOp, int nowInSec)
+            {
+                assert entriesIdx < entries.size();
+                while (entriesIdx < entries.size())
+                {
+                    CompositesIndex.IndexedEntry entry = entries.get(entriesIdx++);
+                    // The entries are in clustering order. So that the requested entry should be the
+                    // next entry, the one at 'entriesIdx'. However, we can have stale entries, entries
+                    // that have no corresponding row in the base table typically because of a range
+                    // tombstone or partition level deletion. Delete such stale entries.
+                    int cmp = metadata().comparator.compare(entry.indexedEntryClustering, clustering);
+                    assert cmp <= 0; // this would means entries are not in clustering order, which shouldn't happen
+                    if (cmp == 0)
+                        return entry;
+                    else
+                        index.delete(entry, writeOp, nowInSec);
+                }
+                // entries correspond to the rows we've queried, so we shouldn't have a row that has no corresponding entry.
+                throw new AssertionError();
+            }
+        };
+    }
+

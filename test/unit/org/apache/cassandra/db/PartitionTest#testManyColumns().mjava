@@ -1,0 +1,31 @@
+    @Test
+    public void testManyColumns() throws IOException
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_TENCOL);
+        RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata, 5, "key1")
+                                   .clustering("c")
+                                   .add("val", "val1");
+
+        for (int i = 0; i < 10; i++)
+            builder.add("val" + i, "val" + i);
+
+        PartitionUpdate update = builder.buildUpdate();
+
+        ArrayBackedCachedPartition partition = ArrayBackedCachedPartition.create(update.unfilteredIterator(), FBUtilities.nowInSeconds());
+
+        DataOutputBuffer bufOut = new DataOutputBuffer();
+        CachedPartition.cacheSerializer.serialize(partition, bufOut);
+
+        DataInputBuffer bufIn = new DataInputBuffer();
+        bufIn.reset(bufOut.getData(), 0, bufOut.getLength());
+        CachedPartition deserialized = CachedPartition.cacheSerializer.deserialize(bufIn);
+
+        assertEquals(partition.columns().regulars.columnCount(), deserialized.columns().regulars.columnCount());
+        assertTrue(deserialized.columns().regulars.getSimple(1).equals(partition.columns().regulars.getSimple(1)));
+        assertTrue(deserialized.columns().regulars.getSimple(5).equals(partition.columns().regulars.getSimple(5)));
+
+        ColumnDefinition cDef = cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("val8"));
+        assertTrue(partition.lastRow().getCell(cDef).value().equals(deserialized.lastRow().getCell(cDef).value()));
+        assert deserialized.partitionKey().equals(partition.partitionKey());
+    }
+

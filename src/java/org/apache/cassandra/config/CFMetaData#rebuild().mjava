@@ -1,46 +1,21 @@
-    public CFMetaData rebuild()
+    // This rebuild informations that are intrinsically duplicate of the table definition but
+    // are kept because they are often useful in a different format.
+    private void rebuild()
     {
-        if (isDense == null)
-            isDense(calculateIsDense(comparator.asAbstractType(), allColumns()));
+        this.comparator = new ClusteringComparator(extractTypes(clusteringColumns));
 
-        List<ColumnDefinition> pkCols = nullInitializedList(keyValidator.componentsCount());
-        List<ColumnDefinition> ckCols = nullInitializedList(comparator.clusteringPrefixSize());
-        // We keep things sorted to get consistent/predictable order in select queries
-        SortedSet<ColumnDefinition> regCols = new TreeSet<>(regularColumnComparator);
-        SortedSet<ColumnDefinition> statCols = new TreeSet<>(regularColumnComparator);
-        ColumnDefinition compactCol = null;
+        this.columnMetadata.clear();
+        for (ColumnDefinition def : partitionKeyColumns)
+            this.columnMetadata.put(def.name.bytes, def);
+        for (ColumnDefinition def : clusteringColumns)
+            this.columnMetadata.put(def.name.bytes, def);
+        for (ColumnDefinition def : partitionColumns)
+            this.columnMetadata.put(def.name.bytes, def);
 
-        for (ColumnDefinition def : allColumns())
-        {
-            switch (def.kind)
-            {
-                case PARTITION_KEY:
-                    assert !(def.isOnAllComponents() && keyValidator instanceof CompositeType);
-                    pkCols.set(def.position(), def);
-                    break;
-                case CLUSTERING_COLUMN:
-                    assert !(def.isOnAllComponents() && comparator.isCompound());
-                    ckCols.set(def.position(), def);
-                    break;
-                case REGULAR:
-                    regCols.add(def);
-                    break;
-                case STATIC:
-                    statCols.add(def);
-                    break;
-                case COMPACT_VALUE:
-                    assert compactCol == null : "There shouldn't be more than one compact value defined: got " + compactCol + " and " + def;
-                    compactCol = def;
-                    break;
-            }
-        }
+        List<AbstractType<?>> keyTypes = extractTypes(partitionKeyColumns);
+        this.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
 
-        // Now actually assign the correct value. This is not atomic, but then again, updating CFMetaData is never atomic anyway.
-        partitionKeyColumns = addDefaultKeyAliases(pkCols);
-        clusteringColumns = addDefaultColumnAliases(ckCols);
-        regularColumns = regCols;
-        staticColumns = statCols;
-        compactValueColumn = addDefaultValueAlias(compactCol);
-        return this;
+        if (isCompactTable())
+            this.compactValueColumn = CompactTables.getCompactValueColumn(partitionColumns, isSuper());
     }
 

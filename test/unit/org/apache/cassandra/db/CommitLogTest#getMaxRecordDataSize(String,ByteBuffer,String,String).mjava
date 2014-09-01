@@ -1,0 +1,15 @@
+    private static int getMaxRecordDataSize(String keyspace, ByteBuffer key, String cfName, String colName)
+    {
+        ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(cfName);
+        // We don't want to allocate a size of 0 as this is optimize under the hood and our computation would
+        // break testEqualRecordLimit
+        int allocSize = 1;
+        Mutation rm = new RowUpdateBuilder(cfs.metadata, 0, key)
+                      .clustering(colName)
+                      .add("val", ByteBuffer.allocate(allocSize)).build();
+
+        int max = (DatabaseDescriptor.getCommitLogSegmentSize() / 2);
+        max -= CommitLogSegment.ENTRY_OVERHEAD_SIZE; // log entry overhead
+        return max - (int) Mutation.serializer.serializedSize(rm, MessagingService.current_version) + allocSize;
+    }
+

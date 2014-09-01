@@ -1,0 +1,86 @@
+        public boolean isSatisfiedBy(DecoratedKey partitionKey, Row row)
+        {
+            // We support null conditions for LWT (in ColumnCondition) but not for RowFilter.
+            // TODO: we should try to merge both code someday.
+            assert value != null;
+
+            if (row.isStatic() != column.isStatic())
+                return true;
+
+            switch (operator)
+            {
+                case EQ:
+                case LT:
+                case LTE:
+                case GTE:
+                case GT:
+                case NEQ:
+                    {
+                        assert !column.isComplex() : "Only CONTAINS and CONTAINS_KEY are supported for 'complex' types";
+                        ByteBuffer foundValue = getValue(partitionKey, row);
+                        // Note that CQL expression are always of the form 'x < 4', i.e. the tested value is on the left.
+                        return foundValue != null && operator.isSatisfiedBy(column.type, foundValue, value);
+                    }
+                case CONTAINS:
+                    assert column.type.isCollection();
+                    CollectionType<?> type = (CollectionType<?>)column.type;
+                    if (column.isComplex())
+                    {
+                        Iterator<Cell> iter = row.getCells(column);
+                        while (iter.hasNext())
+                        {
+                            Cell cell = iter.next();
+                            if (type.kind == CollectionType.Kind.SET)
+                            {
+                                if (type.nameComparator().compare(cell.path().get(0), value) == 0)
+                                    return true;
+                            }
+                            else
+                            {
+                                if (type.valueComparator().compare(cell.value(), value) == 0)
+                                    return true;
+                            }
+                        }
+                        return false;
+                    }
+                    else
+                    {
+                        ByteBuffer foundValue = getValue(partitionKey, row);
+                        if (foundValue == null)
+                            return false;
+
+                        switch (type.kind)
+                        {
+                            case LIST:
+                                ListType<?> listType = (ListType<?>)type;
+                                return listType.compose(foundValue).contains(listType.getElementsType().compose(value));
+                            case SET:
+                                SetType<?> setType = (SetType<?>)type;
+                                return setType.compose(foundValue).contains(setType.getElementsType().compose(value));
+                            case MAP:
+                                MapType<?,?> mapType = (MapType<?, ?>)type;
+                                return mapType.compose(foundValue).containsValue(mapType.getValuesType().compose(value));
+                        }
+                        throw new AssertionError();
+                    }
+                case CONTAINS_KEY:
+                    assert column.type.isCollection() && column.type instanceof MapType;
+                    MapType<?, ?> mapType = (MapType<?, ?>)column.type;
+                    if (column.isComplex())
+                    {
+                         return row.getCell(column, CellPath.create(value)) != null;
+                    }
+                    else
+                    {
+                        ByteBuffer foundValue = getValue(partitionKey, row);
+                        return foundValue != null && mapType.getSerializer().getSerializedValue(foundValue, value, mapType.getKeysType()) != null;
+                    }
+
+                case IN:
+                    // It wouldn't be terribly hard to support this (though doing so would imply supporting
+                    // IN for 2ndary index) but currently we don't.
+                    throw new AssertionError();
+            }
+            throw new AssertionError();
+        }
+

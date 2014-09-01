@@ -1,0 +1,36 @@
+    @Test
+    public void testCassandra6778() throws CharacterCodingException
+    {
+        String cfname = CF_STANDARDINT;
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        cfs.truncateBlocking();
+
+        ByteBuffer col = ByteBufferUtil.bytes("val");
+        ColumnDefinition cDef = cfs.metadata.getColumnDefinition(col);
+
+        // insert two columns that represent the same integer but have different binary forms (the
+        // second one is padded with extra zeros)
+        new RowUpdateBuilder(cfs.metadata, 0, "k1")
+                .clustering(new BigInteger(new byte[]{1}))
+                .add("val", "val1")
+                .build()
+                .applyUnsafe();
+        cfs.forceBlockingFlush();
+
+        new RowUpdateBuilder(cfs.metadata, 1, "k1")
+                .clustering(new BigInteger(new byte[]{0, 0, 1}))
+                .add("val", "val2")
+                .build()
+                .applyUnsafe();
+        cfs.forceBlockingFlush();
+
+        // fetch by the first column name; we should get the second version of the column value
+        Row row = Util.getOnlyRow(Util.cmd(cfs, "k1").includeRow(new BigInteger(new byte[]{1})).build());
+        assertTrue(row.getCell(cDef).value().equals(ByteBufferUtil.bytes("val2")));
+
+        // fetch by the second column name; we should get the second version of the column value
+        row = Util.getOnlyRow(Util.cmd(cfs, "k1").includeRow(new BigInteger(new byte[]{0, 0, 1})).build());
+        assertTrue(row.getCell(cDef).value().equals(ByteBufferUtil.bytes("val2")));
+    }
+

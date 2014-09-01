@@ -1,0 +1,50 @@
+    /**
+     * Convert all expired cells to equivalent tombstones.
+     * <p>
+     * Once a cell expires, it acts exactly as a tombstone and this until it is purged. But in particular that
+     * means we don't care about the value of an expired cell, and it is thus equivalent but more efficient to
+     * replace the expired cell by an equivalent tombstone (that has no value).
+     *
+     * @param iterator the iterator in which to conver expired cells.
+     * @param nowInSec the current time to use to decide if a cell is expired.
+     * @return an iterator that returns the same data than {@code iterator} but with all expired cells converted
+     * to equivalent tombstones.
+     */
+    public static UnfilteredRowIterator convertExpiredCellsToTombstones(UnfilteredRowIterator iterator, final int nowInSec)
+    {
+        return new FilteringRowIterator(iterator)
+        {
+            protected FilteringRow makeRowFilter()
+            {
+                return new FilteringRow()
+                {
+                    @Override
+                    protected Cell filterCell(Cell cell)
+                    {
+                        Cell filtered = super.filterCell(cell);
+                        if (filtered == null)
+                            return null;
+
+                        LivenessInfo info = filtered.livenessInfo();
+                        if (info.hasTTL() && !filtered.isLive(nowInSec))
+                        {
+                            // The column is now expired, we can safely return a simple tombstone. Note that as long as the expiring
+                            // column and the tombstone put together live longer than GC grace seconds, we'll fulfil our responsibility
+                            // to repair. See discussion at
+                            // http://cassandra-user-incubator-apache-org.3065146.n2.nabble.com/repair-compaction-and-tombstone-rows-td7583481.html
+                            return Cells.create(filtered.column(),
+                                                filtered.isCounterCell(),
+                                                ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                SimpleLivenessInfo.forDeletion(info.timestamp(), info.localDeletionTime() - info.ttl()),
+                                                filtered.path());
+                        }
+                        else
+                        {
+                            return filtered;
+                        }
+                    }
+                };
+            }
+        };
+    }
+

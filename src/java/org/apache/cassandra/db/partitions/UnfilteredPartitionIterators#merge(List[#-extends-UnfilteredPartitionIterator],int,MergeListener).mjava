@@ -1,0 +1,71 @@
+    public static UnfilteredPartitionIterator merge(final List<? extends UnfilteredPartitionIterator> iterators, final int nowInSec, final MergeListener listener)
+    {
+        assert listener != null;
+        assert !iterators.isEmpty();
+
+        final boolean isForThrift = iterators.get(0).isForThrift();
+
+        final MergeIterator<UnfilteredRowIterator, UnfilteredRowIterator> merged = MergeIterator.get(iterators, partitionComparator, new MergeIterator.Reducer<UnfilteredRowIterator, UnfilteredRowIterator>()
+        {
+            private final List<UnfilteredRowIterator> toMerge = new ArrayList<>(iterators.size());
+
+            private CFMetaData metadata;
+            private DecoratedKey partitionKey;
+            private boolean isReverseOrder;
+
+            public void reduce(int idx, UnfilteredRowIterator current)
+            {
+                metadata = current.metadata();
+                partitionKey = current.partitionKey();
+                isReverseOrder = current.isReverseOrder();
+
+                // Note that because the MergeListener cares about it, we want to preserve the index of the iterator.
+                // Non-present iterator will thus be set to empty in getReduced.
+                toMerge.set(idx, current);
+            }
+
+            protected UnfilteredRowIterator getReduced()
+            {
+                UnfilteredRowIterators.MergeListener rowListener = listener.getRowMergeListener(partitionKey, toMerge);
+
+                // Replace nulls by empty iterators
+                for (int i = 0; i < toMerge.size(); i++)
+                    if (toMerge.get(i) == null)
+                        toMerge.set(i, UnfilteredRowIterators.emptyIterator(metadata, partitionKey, isReverseOrder));
+
+                return UnfilteredRowIterators.merge(toMerge, nowInSec, rowListener);
+            }
+
+            protected void onKeyChange()
+            {
+                toMerge.clear();
+                for (int i = 0; i < iterators.size(); i++)
+                    toMerge.add(null);
+            }
+        });
+
+        return new AbstractUnfilteredPartitionIterator()
+        {
+            public boolean isForThrift()
+            {
+                return isForThrift;
+            }
+
+            public boolean hasNext()
+            {
+                return merged.hasNext();
+            }
+
+            public UnfilteredRowIterator next()
+            {
+                return merged.next();
+            }
+
+            @Override
+            public void close()
+            {
+                merged.close();
+            }
+        };
+    }
+

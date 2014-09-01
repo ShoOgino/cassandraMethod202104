@@ -1,0 +1,35 @@
+    private Slices makeSlices(QueryOptions options)
+    throws InvalidRequestException
+    {
+        SortedSet<Slice.Bound> startBounds = restrictions.getClusteringColumnsBounds(Bound.START, options);
+        SortedSet<Slice.Bound> endBounds = restrictions.getClusteringColumnsBounds(Bound.END, options);
+        assert startBounds.size() == endBounds.size();
+
+        // The case where startBounds == 1 is common enough that it's worth optimizing
+        if (startBounds.size() == 1)
+        {
+            Slice.Bound start = startBounds.first();
+            Slice.Bound end = endBounds.first();
+            return cfm.comparator.compare(start, end) > 0
+                 ? Slices.NONE
+                 : Slices.with(cfm.comparator, Slice.make(start, end));
+        }
+
+        Slices.Builder builder = new Slices.Builder(cfm.comparator, startBounds.size());
+        Iterator<Slice.Bound> startIter = startBounds.iterator();
+        Iterator<Slice.Bound> endIter = endBounds.iterator();
+        while (startIter.hasNext() && endIter.hasNext())
+        {
+            Slice.Bound start = startIter.next();
+            Slice.Bound end = endIter.next();
+
+            // Ignore slices that are nonsensical
+            if (cfm.comparator.compare(start, end) > 0)
+                continue;
+
+            builder.add(start, end);
+        }
+
+        return builder.build();
+    }
+

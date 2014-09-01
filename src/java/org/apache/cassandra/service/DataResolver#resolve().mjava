@@ -1,0 +1,20 @@
+    public PartitionIterator resolve()
+    {
+        // We could get more responses while this method runs, which is ok (we're happy to ignore any response not here
+        // at the beginning of this method), so grab the response count once and use that through the method.
+        int count = responses.size();
+        List<UnfilteredPartitionIterator> iters = new ArrayList<>(count);
+        InetAddress[] sources = new InetAddress[count];
+        for (int i = 0; i < count; i++)
+        {
+            MessageIn<ReadResponse> msg = responses.get(i);
+            iters.add(msg.payload.makeIterator());
+            sources[i] = msg.from;
+        }
+
+        // Even though every responses should honor the limit, we might have more than requested post reconciliation,
+        // so ensure we're respecting the limit.
+        DataLimits.Counter counter = command.limits().newCounter(command.nowInSec(), true);
+        return new CountingPartitionIterator(mergeWithShortReadProtection(iters, sources, counter), counter);
+    }
+

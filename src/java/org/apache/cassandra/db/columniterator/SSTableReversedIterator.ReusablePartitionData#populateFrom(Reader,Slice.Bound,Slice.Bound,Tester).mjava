@@ -1,0 +1,58 @@
+        // Note that this method is here rather than in the readers because we want to use it for both readers and they
+        // don't extend one another
+        private void populateFrom(Reader reader, Slice.Bound start, Slice.Bound end, Tester tester) throws IOException
+        {
+            // If we have a start bound, skip everything that comes before it.
+            while (reader.deserializer.hasNext() && start != null && reader.deserializer.compareNextTo(start) <= 0 && !tester.isDone())
+            {
+                if (reader.deserializer.nextIsRow())
+                    reader.deserializer.skipNext();
+                else
+                    reader.updateOpenMarker((RangeTombstoneMarker)reader.deserializer.readNext());
+            }
+
+            // If we have an open marker, it's either one from what we just skipped (if start != null), or it's from the previous index block.
+            if (reader.openMarker != null)
+            {
+                // If we have no start but still an openMarker, this means we're indexed and it's coming from the previous block
+                Slice.Bound markerStart = start;
+                if (start == null)
+                {
+                    ClusteringPrefix c = ((IndexedReader)reader).previousIndex().lastName;
+                    markerStart = Slice.Bound.exclusiveStartOf(c);
+                }
+                writeMarker(markerStart, reader.openMarker);
+            }
+
+            // Now deserialize everything until we reach our requested end (if we have one)
+            while (reader.deserializer.hasNext()
+                   && (end == null || reader.deserializer.compareNextTo(end) <= 0)
+                   && !tester.isDone())
+            {
+                Unfiltered unfiltered = reader.deserializer.readNext();
+                if (unfiltered.kind() == Unfiltered.Kind.ROW)
+                {
+                    ((Row) unfiltered).copyTo(rowWriter);
+                }
+                else
+                {
+                    RangeTombstoneMarker marker = (RangeTombstoneMarker) unfiltered;
+                    reader.updateOpenMarker(marker);
+                    marker.copyTo(markerWriter);
+                }
+            }
+
+            // If we have an open marker, we should close it before finishing
+            if (reader.openMarker != null)
+            {
+                // If we no end and still an openMarker, this means we're indexed and the marker can be close using the blocks end
+                Slice.Bound markerEnd = end;
+                if (end == null)
+                {
+                    ClusteringPrefix c = ((IndexedReader)reader).currentIndex().lastName;
+                    markerEnd = Slice.Bound.inclusiveEndOf(c);
+                }
+                writeMarker(markerEnd, reader.getAndClearOpenMarker());
+            }
+        }
+

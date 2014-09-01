@@ -5,7 +5,11 @@
             ReplayPosition replayPosition = ReplayPosition.serializer.deserialize(in);
             long minTimestamp = in.readLong();
             long maxTimestamp = in.readLong();
+            // We use MAX_VALUE as that's the default value for "no deletion time"
+            int minLocalDeletionTime = version.storeRows() ? in.readInt() : Integer.MAX_VALUE;
             int maxLocalDeletionTime = in.readInt();
+            int minTTL = version.storeRows() ? in.readInt() : 0;
+            int maxTTL = version.storeRows() ? in.readInt() : Integer.MAX_VALUE;
             double compressionRatio = in.readDouble();
             StreamingHistogram tombstoneHistogram = StreamingHistogram.serializer.deserialize(in);
             int sstableLevel = in.readInt();
@@ -14,31 +18,39 @@
                 repairedAt = in.readLong();
 
             int colCount = in.readInt();
-            List<ByteBuffer> minColumnNames = new ArrayList<>(colCount);
+            List<ByteBuffer> minClusteringValues = new ArrayList<>(colCount);
             for (int i = 0; i < colCount; i++)
-                minColumnNames.add(ByteBufferUtil.readWithShortLength(in));
+                minClusteringValues.add(ByteBufferUtil.readWithShortLength(in));
 
             colCount = in.readInt();
-            List<ByteBuffer> maxColumnNames = new ArrayList<>(colCount);
+            List<ByteBuffer> maxClusteringValues = new ArrayList<>(colCount);
             for (int i = 0; i < colCount; i++)
-                maxColumnNames.add(ByteBufferUtil.readWithShortLength(in));
+                maxClusteringValues.add(ByteBufferUtil.readWithShortLength(in));
 
             boolean hasLegacyCounterShards = true;
             if (version.tracksLegacyCounterShards())
                 hasLegacyCounterShards = in.readBoolean();
+
+            long totalColumnsSet = version.storeRows() ? in.readLong() : -1L;
+            long totalRows = version.storeRows() ? in.readLong() : -1L;
 
             return new StatsMetadata(rowSizes,
                                      columnCounts,
                                      replayPosition,
                                      minTimestamp,
                                      maxTimestamp,
+                                     minLocalDeletionTime,
                                      maxLocalDeletionTime,
+                                     minTTL,
+                                     maxTTL,
                                      compressionRatio,
                                      tombstoneHistogram,
                                      sstableLevel,
-                                     minColumnNames,
-                                     maxColumnNames,
+                                     minClusteringValues,
+                                     maxClusteringValues,
                                      hasLegacyCounterShards,
-                                     repairedAt);
+                                     repairedAt,
+                                     totalColumnsSet,
+                                     totalRows);
         }
 

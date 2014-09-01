@@ -7,7 +7,7 @@
         if (getColumnDefinition(to) != null)
             throw new InvalidRequestException(String.format("Cannot rename column %s to %s in keyspace %s; another column of that name already exist", from, to, cfName));
 
-        if (def.isPartOfCellName())
+        if (def.isPartOfCellName(isCQLTable(), isSuper()))
         {
             throw new InvalidRequestException(String.format("Cannot rename non PRIMARY KEY part %s", from));
         }
@@ -17,9 +17,13 @@
         }
 
         ColumnDefinition newDef = def.withNewName(to);
-        // don't call addColumnDefinition/removeColumnDefition because we want to avoid recomputing
-        // the CQL3 cfDef between those two operation
         addOrReplaceColumnDefinition(newDef);
-        removeColumnDefinition(def);
+
+        // removeColumnDefinition doesn't work for partition key (expectedly) but renaming one is fine so we still
+        // want to update columnMetadata.
+        if (def.isPartitionKey())
+            columnMetadata.remove(def.name.bytes);
+        else
+            removeColumnDefinition(def);
     }
 

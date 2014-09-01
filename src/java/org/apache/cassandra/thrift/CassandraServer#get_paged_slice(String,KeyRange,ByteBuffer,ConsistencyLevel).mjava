@@ -27,10 +27,8 @@
             org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
             consistencyLevel.validateForRead(keyspace);
 
-            SlicePredicate predicate = new SlicePredicate().setSlice_range(new SliceRange(start_column, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, -1));
-
             IPartitioner p = StorageService.getPartitioner();
-            AbstractBounds<RowPosition> bounds;
+            AbstractBounds<PartitionPosition> bounds;
             if (range.start_key == null)
             {
                 // (token, key) is unsupported, assume (token, token)
@@ -41,30 +39,45 @@
             }
             else
             {
-                RowPosition end = range.end_key == null
+                PartitionPosition end = range.end_key == null
                                 ? p.getTokenFactory().fromString(range.end_token).maxKeyBound()
-                                : RowPosition.ForKey.get(range.end_key, p);
-                bounds = new Bounds<RowPosition>(RowPosition.ForKey.get(range.start_key, p), end);
+                                : PartitionPosition.ForKey.get(range.end_key, p);
+                bounds = new Bounds<PartitionPosition>(PartitionPosition.ForKey.get(range.start_key, p), end);
             }
 
             if (range.row_filter != null && !range.row_filter.isEmpty())
                 throw new InvalidRequestException("Cross-row paging is not supported along with index clauses");
 
-            List<Row> rows;
-            long now = System.currentTimeMillis();
+            int nowInSec = FBUtilities.nowInSeconds();
             schedule(DatabaseDescriptor.getRangeRpcTimeout());
             try
             {
-                IDiskAtomFilter filter = ThriftValidation.asIFilter(predicate, metadata, null);
-                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_family, now, filter, bounds, null, range.count, true, true), consistencyLevel);
+                ClusteringIndexFilter filter = new ClusteringIndexSliceFilter(Slices.ALL, false);
+                DataLimits limits = getLimits(range.count, true, Integer.MAX_VALUE);
+                Clustering pageFrom = metadata.isSuper()
+                                    ? new SimpleClustering(start_column)
+                                    : LegacyLayout.decodeCellName(metadata, start_column).clustering;
+                PartitionRangeReadCommand cmd = new PartitionRangeReadCommand(false,
+                                                                              true,
+                                                                              metadata,
+                                                                              nowInSec,
+                                                                              ColumnFilter.all(metadata),
+                                                                              RowFilter.NONE,
+                                                                              limits,
+                                                                              new DataRange(bounds, filter).forPaging(bounds, metadata.comparator, pageFrom, true));
+                try (PartitionIterator results = StorageProxy.getRangeSlice(cmd, consistencyLevel))
+                {
+                    return thriftifyKeySlices(results, new ColumnParent(column_family), limits.perPartitionCount());
+                }
+            }
+            catch (UnknownColumnException e)
+            {
+                throw new InvalidRequestException(e.getMessage());
             }
             finally
             {
                 release();
             }
-            assert rows != null;
-
-            return thriftifyKeySlices(rows, new ColumnParent(column_family), predicate, now);
         }
         catch (RequestValidationException e)
         {

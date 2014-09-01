@@ -2,15 +2,20 @@
     {
         try
         {
+            ColumnFamilyStore cfs = Keyspace.open(KSNAME).getColumnFamilyStore(CFNAME);
+
+
             SSTableReader reader = SSTableReader.open(getDescriptor(version));
-            CellNameType type = reader.metadata.comparator;
             for (String keystring : TEST_DATA)
             {
-                ByteBuffer key = ByteBufferUtil.bytes(keystring);
-                // confirm that the bloom filter does not reject any keys/names
-                DecoratedKey dk = reader.partitioner.decorateKey(key);
-                OnDiskAtomIterator iter = reader.iterator(dk, FBUtilities.singleton(Util.cellname(key), type));
-                assert iter.next().name().toByteBuffer().equals(key);
+
+                ByteBuffer key = bytes(keystring);
+
+                SliceableUnfilteredRowIterator iter = reader.iterator(Util.dk(key), ColumnFilter.selection(cfs.metadata.partitionColumns()), false, false);
+
+                // check not deleted (CASSANDRA-6527)
+                assert iter.partitionLevelDeletion().equals(DeletionTime.LIVE);
+                assert iter.next().clustering().get(0).equals(key);
             }
 
             // TODO actually test some reads

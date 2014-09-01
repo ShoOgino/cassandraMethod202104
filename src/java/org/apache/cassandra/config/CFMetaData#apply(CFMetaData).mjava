@@ -11,10 +11,13 @@
 
         validateCompatility(cfm);
 
-        // TODO: this method should probably return a new CFMetaData so that
-        // 1) we can keep comparator final
-        // 2) updates are applied atomically
-        comparator = cfm.comparator;
+        partitionKeyColumns = cfm.partitionKeyColumns;
+        clusteringColumns = cfm.clusteringColumns;
+
+        boolean hasColumnChange = !partitionColumns.equals(cfm.partitionColumns);
+        partitionColumns = cfm.partitionColumns;
+
+        rebuild();
 
         // compaction thresholds are checked by ThriftValidation. We shouldn't be doing
         // validation on the apply path; it's too late for that.
@@ -23,7 +26,6 @@
         readRepairChance = cfm.readRepairChance;
         dcLocalReadRepairChance = cfm.dcLocalReadRepairChance;
         gcGraceSeconds = cfm.gcGraceSeconds;
-        defaultValidator = cfm.defaultValidator;
         keyValidator = cfm.keyValidator;
         minCompactionThreshold = cfm.minCompactionThreshold;
         maxCompactionThreshold = cfm.maxCompactionThreshold;
@@ -39,21 +41,6 @@
         if (!cfm.droppedColumns.isEmpty())
             droppedColumns = cfm.droppedColumns;
 
-        MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(columnMetadata, cfm.columnMetadata);
-        // columns that are no longer needed
-        for (ColumnDefinition cd : columnDiff.entriesOnlyOnLeft().values())
-            removeColumnDefinition(cd);
-        // newly added columns
-        for (ColumnDefinition cd : columnDiff.entriesOnlyOnRight().values())
-            addColumnDefinition(cd);
-        // old columns with updated attributes
-        for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
-        {
-            ColumnDefinition oldDef = columnMetadata.get(name);
-            ColumnDefinition def = cfm.columnMetadata.get(name);
-            addOrReplaceColumnDefinition(oldDef.apply(def));
-        }
-
         compactionStrategyClass = cfm.compactionStrategyClass;
         compactionStrategyOptions = cfm.compactionStrategyOptions;
 
@@ -61,13 +48,8 @@
 
         triggers = cfm.triggers;
 
-        isDense(cfm.isDense);
-
-        rebuild();
         logger.debug("application result is {}", this);
 
-        return !columnDiff.entriesOnlyOnLeft().isEmpty() ||
-               !columnDiff.entriesOnlyOnRight().isEmpty() ||
-               !columnDiff.entriesDiffering().isEmpty();
+        return hasColumnChange;
     }
 

@@ -4,10 +4,19 @@
 
         // Extract the keys as strings to be reported.
         LinkedList<String> result = new LinkedList<>();
-        for (Row row : getHintsSlice(1))
+        ReadCommand cmd = PartitionRangeReadCommand.allDataRead(SystemKeyspace.Hints, FBUtilities.nowInSeconds());
+        try (ReadOrderGroup orderGroup = cmd.startOrderGroup(); UnfilteredPartitionIterator iter = cmd.executeLocally(orderGroup))
         {
-            if (row.cf != null) //ignore removed rows
-                result.addFirst(tokenFactory.toString(row.key.getToken()));
+            while (iter.hasNext())
+            {
+                try (UnfilteredRowIterator partition = iter.next())
+                {
+                    // We don't delete by range on the hints table, so we don't have to worry about the
+                    // iterator returning only range tombstone marker
+                    if (partition.hasNext())
+                        result.addFirst(tokenFactory.toString(partition.partitionKey().getToken()));
+                }
+            }
         }
         return result;
     }

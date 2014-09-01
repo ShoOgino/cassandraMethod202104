@@ -10,17 +10,13 @@
         cfs.disableAutoCompaction();
         cfs.setCompactionStrategyClass(SizeTieredCompactionStrategy.class.getCanonicalName());
 
-        Mutation rm = new Mutation(KSNAME, key);
+        UpdateBuilder builder = UpdateBuilder.create(cfs.metadata, key).withTimestamp(0);
         for (int i = 0; i < 10; i += 2)
-            add(rm, i, 0);
-        rm.applyUnsafe();
+            builder.newRow(i).add("val", i);
+        builder.applyUnsafe();
         cfs.forceBlockingFlush();
 
-        rm = new Mutation(KSNAME, key);
-        ColumnFamily cf = rm.addOrGet(CFNAME);
-        for (int i = 0; i < 10; i += 2)
-            delete(cf, 0, 7, 0);
-        rm.applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 0, key).addRangeTombstone(0, 7).build().applyUnsafe();
         cfs.forceBlockingFlush();
 
         // there should be 2 sstables
@@ -32,21 +28,18 @@
 
         // test the physical structure of the sstable i.e. rt & columns on disk
         SSTableReader sstable = cfs.getSSTables().iterator().next();
-        try(ISSTableScanner scanner = sstable.getScanner())
+        try (UnfilteredPartitionIterator scanner = sstable.getScanner())
         {
-            OnDiskAtomIterator iter = scanner.next();
-            int cnt = 0;
-            // after compaction, the first element should be an RT followed by the remaining non-deleted columns
-            while (iter.hasNext())
+            try (UnfilteredRowIterator iter = scanner.next())
             {
-                OnDiskAtom atom = iter.next();
-                if (cnt == 0)
-                    assertTrue(atom instanceof RangeTombstone);
-                if (cnt > 0)
-                    assertTrue(atom instanceof Cell);
-                cnt++;
+                // after compaction, we should have a single RT with a single row (the row 8)
+                Unfiltered u1 = iter.next();
+                assertTrue("Expecting open marker, got " + u1.toString(cfs.metadata), u1 instanceof RangeTombstoneMarker);
+                Unfiltered u2 = iter.next();
+                assertTrue("Expecting close marker, got " + u2.toString(cfs.metadata), u2 instanceof RangeTombstoneMarker);
+                Unfiltered u3 = iter.next();
+                assertTrue("Expecting row, got " + u3.toString(cfs.metadata), u3 instanceof Row);
             }
-            assertEquals(2, cnt);
         }
     }
 

@@ -1,0 +1,53 @@
+    public static PartitionIterator filter(final UnfilteredPartitionIterator iterator, final int nowInSec)
+    {
+        return new PartitionIterator()
+        {
+            private RowIterator next;
+
+            public boolean hasNext()
+            {
+                while (next == null && iterator.hasNext())
+                {
+                    @SuppressWarnings("resource") // closed either directly if empty, or, if assigned to next, by either
+                                                  // the caller of next() or close()
+                    UnfilteredRowIterator rowIterator = iterator.next();
+                    next = UnfilteredRowIterators.filter(rowIterator, nowInSec);
+                    if (!iterator.isForThrift() && next.isEmpty())
+                    {
+                        rowIterator.close();
+                        next = null;
+                    }
+                }
+                return next != null;
+            }
+
+            public RowIterator next()
+            {
+                if (next == null && !hasNext())
+                    throw new NoSuchElementException();
+
+                RowIterator toReturn = next;
+                next = null;
+                return toReturn;
+            }
+
+            public void remove()
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            public void close()
+            {
+                try
+                {
+                    iterator.close();
+                }
+                finally
+                {
+                    if (next != null)
+                        next.close();
+                }
+            }
+        };
+    }
+

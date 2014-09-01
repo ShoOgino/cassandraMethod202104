@@ -1,0 +1,37 @@
+    /**
+     * Finds and returns the first key beyond a given token in this SSTable or null if no such key exists.
+     */
+    public DecoratedKey firstKeyBeyond(PartitionPosition token)
+    {
+        if (token.compareTo(first) < 0)
+            return first;
+
+        long sampledPosition = getIndexScanPosition(token);
+
+        Iterator<FileDataInput> segments = ifile.iterator(sampledPosition);
+        while (segments.hasNext())
+        {
+            String path = null;
+            try (FileDataInput in = segments.next();)
+            {
+                path = in.getPath();
+                while (!in.isEOF())
+                {
+                    ByteBuffer indexKey = ByteBufferUtil.readWithShortLength(in);
+                    DecoratedKey indexDecoratedKey = partitioner.decorateKey(indexKey);
+                    if (indexDecoratedKey.compareTo(token) > 0)
+                        return indexDecoratedKey;
+
+                    RowIndexEntry.Serializer.skip(in);
+                }
+            }
+            catch (IOException e)
+            {
+                markSuspect();
+                throw new CorruptSSTableException(e, path);
+            }
+        }
+
+        return null;
+    }
+

@@ -1,0 +1,53 @@
+        public RangeTombstoneMarker merge()
+        {
+            /*
+             * Merging of range tombstones works this way:
+             *   1) We remember what is the currently open marker in the merged stream
+             *   2) We update our internal states of what range is opened on the input streams based on the new markers to merge
+             *   3) We compute what should be the state in the merge stream after 2)
+             *   4) We return what marker should be issued on the merged stream based on the difference between the state from 1) and 3)
+             */
+
+            DeletionTime previousDeletionTimeInMerged = currentOpenDeletionTimeInMerged();
+
+            updateOpenMarkers();
+
+            DeletionTime newDeletionTimeInMerged = currentOpenDeletionTimeInMerged();
+            if (previousDeletionTimeInMerged.equals(newDeletionTimeInMerged))
+                return null;
+
+            ByteBuffer[] values = bound.getRawValues();
+
+            RangeTombstoneMarker merged;
+            switch (MergedKind.forBound(bound, reversed))
+            {
+                case INCL_OPEN:
+                    merged = previousDeletionTimeInMerged.isLive()
+                           ? RangeTombstoneBoundMarker.inclusiveOpen(reversed, values, newDeletionTimeInMerged)
+                           : RangeTombstoneBoundaryMarker.exclusiveCloseInclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
+                    break;
+                case EXCL_CLOSE:
+                    merged = newDeletionTimeInMerged.isLive()
+                           ? RangeTombstoneBoundMarker.exclusiveClose(reversed, values, previousDeletionTimeInMerged)
+                           : RangeTombstoneBoundaryMarker.exclusiveCloseInclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
+                    break;
+                case EXCL_OPEN:
+                    merged = previousDeletionTimeInMerged.isLive()
+                           ? RangeTombstoneBoundMarker.exclusiveOpen(reversed, values, newDeletionTimeInMerged)
+                           : RangeTombstoneBoundaryMarker.inclusiveCloseExclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
+                    break;
+                case INCL_CLOSE:
+                    merged = newDeletionTimeInMerged.isLive()
+                           ? RangeTombstoneBoundMarker.inclusiveClose(reversed, values, previousDeletionTimeInMerged)
+                           : RangeTombstoneBoundaryMarker.inclusiveCloseExclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
+                    break;
+                default:
+                    throw new AssertionError();
+            }
+
+            if (listener != null)
+                listener.onMergedRangeTombstoneMarkers(merged, markers);
+
+            return merged;
+        }
+

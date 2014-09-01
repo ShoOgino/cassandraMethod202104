@@ -1,0 +1,28 @@
+    private UnfilteredPartitionIterator checkCacheFilter(UnfilteredPartitionIterator iter, final ColumnFamilyStore cfs)
+    {
+        return new WrappingUnfilteredPartitionIterator(iter)
+        {
+            @Override
+            public UnfilteredRowIterator computeNext(UnfilteredRowIterator iter)
+            {
+                // Note that we rely on the fact that until we actually advance 'iter', no really costly operation is actually done
+                // (except for reading the partition key from the index file) due to the call to mergeLazily in queryStorage.
+                DecoratedKey dk = iter.partitionKey();
+
+                // Check if this partition is in the rowCache and if it is, if  it covers our filter
+                CachedPartition cached = cfs.getRawCachedPartition(dk);
+                ClusteringIndexFilter filter = dataRange().clusteringIndexFilter(dk);
+
+                if (cached != null && cfs.isFilterFullyCoveredBy(filter, limits(), cached, nowInSec()))
+                {
+                    // We won't use 'iter' so close it now.
+                    iter.close();
+
+                    return filter.getUnfilteredRowIterator(columnFilter(), cached);
+                }
+
+                return iter;
+            }
+        };
+    }
+

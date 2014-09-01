@@ -1,0 +1,33 @@
+    @SuppressWarnings("resource") // The created resources are returned right away
+    public static UnfilteredRowIterator getOnlyElement(final UnfilteredPartitionIterator iter, SinglePartitionReadCommand<?> command)
+    {
+        // If the query has no results, we'll get an empty iterator, but we still
+        // want a RowIterator out of this method, so we return an empty one.
+        UnfilteredRowIterator toReturn = iter.hasNext()
+                              ? iter.next()
+                              : UnfilteredRowIterators.emptyIterator(command.metadata(),
+                                                                     command.partitionKey(),
+                                                                     command.clusteringIndexFilter().isReversed());
+
+        // Note that in general, we should wrap the result so that it's close method actually
+        // close the whole UnfilteredPartitionIterator.
+        return new WrappingUnfilteredRowIterator(toReturn)
+        {
+            public void close()
+            {
+                try
+                {
+                    super.close();
+                }
+                finally
+                {
+                    // asserting this only now because it bothers Serializer if hasNext() is called before
+                    // the previously returned iterator hasn't been fully consumed.
+                    assert !iter.hasNext();
+
+                    iter.close();
+                }
+            }
+        };
+    }
+

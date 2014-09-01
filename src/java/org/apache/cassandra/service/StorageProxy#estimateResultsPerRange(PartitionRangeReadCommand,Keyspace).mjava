@@ -1,0 +1,18 @@
+    /**
+     * Estimate the number of result rows (either cql3 rows or "thrift" rows, as called for by the command) per
+     * range in the ring based on our local data.  This assumes that ranges are uniformly distributed across the cluster
+     * and that the queried data is also uniformly distributed.
+     */
+    private static float estimateResultsPerRange(PartitionRangeReadCommand command, Keyspace keyspace)
+    {
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.metadata().cfId);
+        SecondaryIndexSearcher searcher = cfs.indexManager.getBestIndexSearcherFor(command);
+
+        float maxExpectedResults = searcher == null
+                                 ? command.limits().estimateTotalResults(cfs)
+                                 : searcher.highestSelectivityIndex(command.rowFilter()).estimateResultRows();
+
+        // adjust maxExpectedResults by the number of tokens this node has and the replication factor for this ks
+        return (maxExpectedResults / DatabaseDescriptor.getNumTokens()) / keyspace.getReplicationStrategy().getReplicationFactor();
+    }
+

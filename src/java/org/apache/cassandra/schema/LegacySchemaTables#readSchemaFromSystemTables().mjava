@@ -1,27 +1,35 @@
     public static Collection<KSMetaData> readSchemaFromSystemTables()
     {
-        List<Row> serializedSchema = getSchemaPartitionsForTable(KEYSPACES);
-
-        List<KSMetaData> keyspaces = new ArrayList<>(serializedSchema.size());
-
-        for (Row partition : serializedSchema)
+        ReadCommand cmd = getReadCommandForTableSchema(KEYSPACES);
+        try (ReadOrderGroup orderGroup = cmd.startOrderGroup(); PartitionIterator schema = cmd.executeInternal(orderGroup))
         {
-            if (isEmptySchemaPartition(partition) || isSystemKeyspaceSchemaPartition(partition))
-                continue;
+            List<KSMetaData> keyspaces = new ArrayList<>();
 
-            keyspaces.add(createKeyspaceFromSchemaPartitions(partition,
-                                                             readSchemaPartitionForKeyspace(COLUMNFAMILIES, partition.key),
-                                                             readSchemaPartitionForKeyspace(USERTYPES, partition.key)));
+            while (schema.hasNext())
+            {
+                try (RowIterator partition = schema.next())
+                {
+                    if (isSystemKeyspaceSchemaPartition(partition.partitionKey()))
+                        continue;
 
-            // Will be moved away in #6717
-            for (UDFunction function : createFunctionsFromFunctionsPartition(readSchemaPartitionForKeyspace(FUNCTIONS, partition.key)).values())
-                org.apache.cassandra.cql3.functions.Functions.addOrReplaceFunction(function);
+                    DecoratedKey key = partition.partitionKey();
 
-            // Will be moved away in #6717
-            for (UDAggregate aggregate : createAggregatesFromAggregatesPartition(readSchemaPartitionForKeyspace(AGGREGATES, partition.key)).values())
-                org.apache.cassandra.cql3.functions.Functions.addOrReplaceFunction(aggregate);
+                    readSchemaPartitionForKeyspaceAndApply(USERTYPES, key,
+                        types -> readSchemaPartitionForKeyspaceAndApply(COLUMNFAMILIES, key, tables -> keyspaces.add(createKeyspaceFromSchemaPartitions(partition, tables, types)))
+                    );
+
+                    // Will be moved away in #6717
+                    readSchemaPartitionForKeyspaceAndApply(FUNCTIONS, key,
+                        functions -> { createFunctionsFromFunctionsPartition(functions).forEach(function -> org.apache.cassandra.cql3.functions.Functions.addOrReplaceFunction(function)); return null; }
+                    );
+
+                    // Will be moved away in #6717
+                    readSchemaPartitionForKeyspaceAndApply(AGGREGATES, key,
+                        aggregates -> { createAggregatesFromAggregatesPartition(aggregates).forEach(aggregate -> org.apache.cassandra.cql3.functions.Functions.addOrReplaceFunction(aggregate)); return null; }
+                    );
+                }
+            }
+            return keyspaces;
         }
-
-        return keyspaces;
     }
 

@@ -1,0 +1,29 @@
+    /**
+     * Convenience method that count (live) cells/rows for a given slice of a row, but page underneath.
+     */
+    public static int countPaged(CFMetaData metadata,
+                                 DecoratedKey key,
+                                 ColumnFilter columnFilter,
+                                 ClusteringIndexFilter filter,
+                                 DataLimits limits,
+                                 ConsistencyLevel consistencyLevel,
+                                 ClientState state,
+                                 final int pageSize,
+                                 int nowInSec,
+                                 boolean isForThrift) throws RequestValidationException, RequestExecutionException
+    {
+        SinglePartitionReadCommand command = SinglePartitionReadCommand.create(isForThrift, metadata, nowInSec, columnFilter, RowFilter.NONE, limits, key, filter);
+        final SinglePartitionPager pager = new SinglePartitionPager(command, null);
+
+        int count = 0;
+        while (!pager.isExhausted())
+        {
+            try (CountingPartitionIterator iter = new CountingPartitionIterator(pager.fetchPage(pageSize, consistencyLevel, state), limits, nowInSec))
+            {
+                PartitionIterators.consume(iter);
+                count += iter.counter().counted();
+            }
+        }
+        return count;
+    }
+

@@ -1,70 +1,73 @@
     @Test
     public void testDiff()
     {
-        ContextState left;
-        ContextState right;
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(COUNTER1);
+        ByteBuffer col = ByteBufferUtil.bytes("c1");
 
-        CounterCell leftCell;
-        CounterCell rightCell;
+        TestCounterCell leftCell;
+        TestCounterCell rightCell;
+
+        // Equal count
+        leftCell = createLegacyCounterCell(cfs, col, 2, 2, 0, Integer.MAX_VALUE);
+        rightCell = createLegacyCounterCell(cfs, col, 2, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.EQUAL, CounterContext.instance().diff(leftCell.value(), rightCell.value()));
+
+        // Non-equal count
+        leftCell = createLegacyCounterCell(cfs, col, 1, 2, 0, Integer.MAX_VALUE);
+        rightCell = createLegacyCounterCell(cfs, col, 2, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.DISJOINT, CounterContext.instance().diff(leftCell.value(), rightCell.value()));
 
         // timestamp
-        leftCell = BufferCounterCell.createLocal(cellname("x"), 0, 1L, Long.MIN_VALUE);
-        rightCell = BufferCounterCell.createLocal(cellname("x"), 0, 2L, Long.MIN_VALUE);
+        CounterId id = CounterId.generate();
+        leftCell = createCounterCell(cfs, col, id, 2, 2, 0, Integer.MAX_VALUE);
+        rightCell = createCounterCell(cfs, col, id, 2, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.GREATER_THAN, CounterContext.instance().diff(leftCell.value(), rightCell.value()));
 
-        assert rightCell == leftCell.diff(rightCell);
-        assert null      == rightCell.diff(leftCell);
+        ContextState leftContext;
+        ContextState rightContext;
 
-        // timestampOfLastDelete
-        leftCell = BufferCounterCell.createLocal(cellname("x"), 0, 1L, 1L);
-        rightCell = BufferCounterCell.createLocal(cellname("x"), 0, 1L, 2L);
+        // Equal based on context w/shards etc
+        leftContext = ContextState.allocate(0, 0, 3);
+        leftContext.writeRemote(CounterId.fromInt(3), 3L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(6), 2L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(9), 1L, 0L);
+        rightContext = ContextState.wrap(ByteBufferUtil.clone(leftContext.context));
 
-        assert rightCell == leftCell.diff(rightCell);
-        assert null      == rightCell.diff(leftCell);
-
-        // equality: equal nodes, all counts same
-        left = ContextState.allocate(0, 0, 3);
-        left.writeRemote(CounterId.fromInt(3), 3L, 0L);
-        left.writeRemote(CounterId.fromInt(6), 2L, 0L);
-        left.writeRemote(CounterId.fromInt(9), 1L, 0L);
-        right = ContextState.wrap(ByteBufferUtil.clone(left.context));
-
-        leftCell  = new BufferCounterCell(cellname("x"), left.context,  1L);
-        rightCell = new BufferCounterCell(cellname("x"), right.context, 1L);
-        assert leftCell.diff(rightCell) == null;
+        leftCell = createCounterCellFromContext(cfs, col, leftContext, 1, 0, Integer.MAX_VALUE);
+        rightCell = createCounterCellFromContext(cfs, col, rightContext, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.EQUAL, CounterContext.instance().diff(leftCell.value, rightCell.value));
 
         // greater than: left has superset of nodes (counts equal)
-        left = ContextState.allocate(0, 0, 4);
-        left.writeRemote(CounterId.fromInt(3), 3L, 0L);
-        left.writeRemote(CounterId.fromInt(6), 2L, 0L);
-        left.writeRemote(CounterId.fromInt(9), 1L, 0L);
-        left.writeRemote(CounterId.fromInt(12), 0L, 0L);
+        leftContext = ContextState.allocate(0, 0, 4);
+        leftContext.writeRemote(CounterId.fromInt(3), 3L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(6), 2L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(9), 1L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(12), 0L, 0L);
 
-        right = ContextState.allocate(0, 0, 3);
-        right.writeRemote(CounterId.fromInt(3), 3L, 0L);
-        right.writeRemote(CounterId.fromInt(6), 2L, 0L);
-        right.writeRemote(CounterId.fromInt(9), 1L, 0L);
+        rightContext = ContextState.allocate(0, 0, 3);
+        rightContext.writeRemote(CounterId.fromInt(3), 3L, 0L);
+        rightContext.writeRemote(CounterId.fromInt(6), 2L, 0L);
+        rightContext.writeRemote(CounterId.fromInt(9), 1L, 0L);
 
-        leftCell  = new BufferCounterCell(cellname("x"), left.context,  1L);
-        rightCell = new BufferCounterCell(cellname("x"), right.context, 1L);
-        assert leftCell.diff(rightCell) == null;
-
-        // less than: right has subset of nodes (counts equal)
-        assert leftCell == rightCell.diff(leftCell);
+        leftCell = createCounterCellFromContext(cfs, col, leftContext, 1, 0, Integer.MAX_VALUE);
+        rightCell = createCounterCellFromContext(cfs, col, rightContext, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.GREATER_THAN, CounterContext.instance().diff(leftCell.value, rightCell.value));
+        assertEquals(CounterContext.Relationship.LESS_THAN, CounterContext.instance().diff(rightCell.value, leftCell.value));
 
         // disjoint: right and left have disjoint node sets
-        left = ContextState.allocate(0, 0, 3);
-        left.writeRemote(CounterId.fromInt(3), 1L, 0L);
-        left.writeRemote(CounterId.fromInt(4), 1L, 0L);
-        left.writeRemote(CounterId.fromInt(9), 1L, 0L);
+        leftContext = ContextState.allocate(0, 0, 3);
+        leftContext.writeRemote(CounterId.fromInt(3), 1L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(4), 1L, 0L);
+        leftContext.writeRemote(CounterId.fromInt(9), 1L, 0L);
 
-        right = ContextState.allocate(0, 0, 3);
-        right.writeRemote(CounterId.fromInt(3), 1L, 0L);
-        right.writeRemote(CounterId.fromInt(6), 1L, 0L);
-        right.writeRemote(CounterId.fromInt(9), 1L, 0L);
+        rightContext = ContextState.allocate(0, 0, 3);
+        rightContext.writeRemote(CounterId.fromInt(3), 1L, 0L);
+        rightContext.writeRemote(CounterId.fromInt(6), 1L, 0L);
+        rightContext.writeRemote(CounterId.fromInt(9), 1L, 0L);
 
-        leftCell  = new BufferCounterCell(cellname("x"), left.context,  1L);
-        rightCell = new BufferCounterCell(cellname("x"), right.context, 1L);
-        assert rightCell == leftCell.diff(rightCell);
-        assert leftCell  == rightCell.diff(leftCell);
+        leftCell = createCounterCellFromContext(cfs, col, leftContext, 1, 0, Integer.MAX_VALUE);
+        rightCell = createCounterCellFromContext(cfs, col, rightContext, 1, 0, Integer.MAX_VALUE);
+        assertEquals(CounterContext.Relationship.DISJOINT, CounterContext.instance().diff(leftCell.value, rightCell.value));
+        assertEquals(CounterContext.Relationship.DISJOINT, CounterContext.instance().diff(rightCell.value, leftCell.value));
     }
 

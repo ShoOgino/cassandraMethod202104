@@ -1,0 +1,56 @@
+        public boolean addCell(LegacyCell cell)
+        {
+            if (isStatic)
+            {
+                if (cell.name.clustering != Clustering.STATIC_CLUSTERING)
+                    return false;
+            }
+            else if (clustering == null)
+            {
+                clustering = cell.name.clustering.takeAlias();
+                clustering.writeTo(writer);
+            }
+            else if (!clustering.equals(cell.name.clustering))
+            {
+                return false;
+            }
+
+            // Ignore shadowed cells
+            if (rowDeletion != null && rowDeletion.deletionTime.deletes(cell.timestamp))
+                return true;
+
+            LivenessInfo info = livenessInfo(metadata, cell);
+
+            ColumnDefinition column = cell.name.column;
+            if (column == null)
+            {
+                // It's the row marker
+                assert !cell.value.hasRemaining();
+                helper.writePartitionKeyLivenessInfo(writer, info.timestamp(), info.ttl(), info.localDeletionTime());
+            }
+            else
+            {
+                if (collectionDeletion != null && collectionDeletion.start.collectionName.name.equals(column.name) && collectionDeletion.deletionTime.deletes(cell.timestamp))
+                    return true;
+
+                if (helper.includes(column))
+                {
+                    CellPath path = null;
+                    if (column.isComplex())
+                    {
+                        // Recalling startOfComplexColumn for every cell is a big inefficient, but it's ok in practice
+                        // and it's simpler. And since 1) this only matter for super column selection in thrift in
+                        // practice and 2) is only used during upgrade, it's probably worth keeping things simple.
+                        helper.startOfComplexColumn(column);
+                        path = cell.name.collectionElement == null ? null : CellPath.create(cell.name.collectionElement);
+                    }
+                    helper.writeCell(writer, column, cell.isCounter(), cell.value, info.timestamp(), info.localDeletionTime(), info.ttl(), path);
+                    if (column.isComplex())
+                    {
+                        helper.endOfComplexColumn(column);
+                    }
+                }
+            }
+            return true;
+        }
+

@@ -1,12 +1,18 @@
-    private static Map<DecoratedKey, ColumnFamily> readSchemaForKeyspaces(String schemaTableName, Set<String> keyspaceNames)
+    private static Map<DecoratedKey, FilteredPartition> readSchemaForKeyspaces(String schemaTableName, Set<String> keyspaceNames)
     {
-        Map<DecoratedKey, ColumnFamily> schema = new HashMap<>();
+        Map<DecoratedKey, FilteredPartition> schema = new HashMap<>();
 
         for (String keyspaceName : keyspaceNames)
         {
-            Row schemaEntity = readSchemaPartitionForKeyspace(schemaTableName, keyspaceName);
-            if (schemaEntity.cf != null)
-                schema.put(schemaEntity.key, schemaEntity.cf);
+            // We don't to return the RowIterator directly because we should guarantee that this iterator
+            // will be closed, and putting it in a Map make that harder/more awkward.
+            readSchemaPartitionForKeyspaceAndApply(schemaTableName, keyspaceName,
+                partition -> {
+                    if (!partition.isEmpty())
+                        schema.put(partition.partitionKey(), FilteredPartition.create(partition));
+                    return null;
+                }
+            );
         }
 
         return schema;

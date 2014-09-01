@@ -10,11 +10,10 @@
         {
             mutation = Mutation.serializer.deserialize(new DataInputStream(bufIn),
                                                        desc.getMessagingVersion(),
-                                                       ColumnSerializer.Flag.LOCAL);
+                                                       SerializationHelper.Flag.LOCAL);
             // doublecheck that what we read is [still] valid for the current schema
-            for (ColumnFamily cf : mutation.getColumnFamilies())
-                for (Cell cell : cf)
-                    cf.getComparator().validate(cell.name());
+            for (PartitionUpdate upd : mutation.getPartitionUpdates())
+                upd.validate();
         }
         catch (UnknownColumnFamilyException ex)
         {
@@ -47,7 +46,7 @@
         }
 
         if (logger.isDebugEnabled())
-            logger.debug("replaying mutation for {}.{}: {}", mutation.getKeyspaceName(), ByteBufferUtil.bytesToHex(mutation.key()), "{" + StringUtils.join(mutation.getColumnFamilies().iterator(), ", ") + "}");
+            logger.debug("replaying mutation for {}.{}: {}", mutation.getKeyspaceName(), mutation.key(), "{" + StringUtils.join(mutation.getPartitionUpdates().iterator(), ", ") + "}");
 
         Runnable runnable = new WrappedRunnable()
         {
@@ -66,12 +65,12 @@
                 // or c) are part of a cf that was dropped.
                 // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
                 Mutation newMutation = null;
-                for (ColumnFamily columnFamily : replayFilter.filter(mutation))
+                for (PartitionUpdate update : replayFilter.filter(mutation))
                 {
-                    if (Schema.instance.getCF(columnFamily.id()) == null)
+                    if (Schema.instance.getCF(update.metadata().cfId) == null)
                         continue; // dropped
 
-                    ReplayPosition rp = cfPositions.get(columnFamily.id());
+                    ReplayPosition rp = cfPositions.get(update.metadata().cfId);
 
                     // replay if current segment is newer than last flushed one or,
                     // if it is the last known segment, if we are after the replay position
@@ -79,7 +78,7 @@
                     {
                         if (newMutation == null)
                             newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
-                        newMutation.add(columnFamily);
+                        newMutation.add(update);
                         replayedCount.incrementAndGet();
                     }
                 }

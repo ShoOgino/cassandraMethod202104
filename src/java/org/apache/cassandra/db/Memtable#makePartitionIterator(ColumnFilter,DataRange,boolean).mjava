@@ -1,0 +1,44 @@
+    public UnfilteredPartitionIterator makePartitionIterator(final ColumnFilter columnFilter, final DataRange dataRange, final boolean isForThrift)
+    {
+        AbstractBounds<PartitionPosition> keyRange = dataRange.keyRange();
+
+        boolean startIsMin = keyRange.left.isMinimum();
+        boolean stopIsMin = keyRange.right.isMinimum();
+
+        boolean isBound = keyRange instanceof Bounds;
+        boolean includeStart = isBound || keyRange instanceof IncludingExcludingBounds;
+        boolean includeStop = isBound || keyRange instanceof Range;
+        Map<PartitionPosition, AtomicBTreePartition> subMap;
+        if (startIsMin)
+            subMap = stopIsMin ? partitions : partitions.headMap(keyRange.right, includeStop);
+        else
+            subMap = stopIsMin
+                   ? partitions.tailMap(keyRange.left, includeStart)
+                   : partitions.subMap(keyRange.left, includeStart, keyRange.right, includeStop);
+
+        final Iterator<Map.Entry<PartitionPosition, AtomicBTreePartition>> iter = subMap.entrySet().iterator();
+
+        return new AbstractUnfilteredPartitionIterator()
+        {
+            public boolean isForThrift()
+            {
+                return isForThrift;
+            }
+
+            public boolean hasNext()
+            {
+                return iter.hasNext();
+            }
+
+            public UnfilteredRowIterator next()
+            {
+                Map.Entry<PartitionPosition, AtomicBTreePartition> entry = iter.next();
+                // Actual stored key should be true DecoratedKey
+                assert entry.getKey() instanceof DecoratedKey;
+                DecoratedKey key = (DecoratedKey)entry.getKey();
+                ClusteringIndexFilter filter = dataRange.clusteringIndexFilter(key);
+                return filter.getUnfilteredRowIterator(columnFilter, entry.getValue());
+            }
+        };
+    }
+

@@ -7,38 +7,41 @@
         String cfName = "Standard1";
         Keyspace keyspace = Keyspace.open(keyspaceName);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfName);
-        DecoratedKey key = Util.dk("key3");
-        Mutation rm;
-        QueryFilter filter = QueryFilter.getIdentityFilter(key, cfName, System.currentTimeMillis());
+        String key = "key3";
 
         // inserts
-        rm = new Mutation(keyspaceName, key.getKey());
         for (int i = 0; i < 10; i++)
-            rm.add(cfName, cellname(String.valueOf(i)), ByteBufferUtil.EMPTY_BYTE_BUFFER, i);
+        {
+            RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata, i, key);
+            builder.clustering(String.valueOf(i))
+                   .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                   .build().applyUnsafe();
+        }
+
+        // deletes partition with timestamp such that not all columns are deleted
+        Mutation rm = new Mutation(KEYSPACE1, dk(key));
+        rm.add(PartitionUpdate.fullPartitionDelete(cfs.metadata, dk(key), 4, FBUtilities.nowInSeconds()));
         rm.applyUnsafe();
 
-        // deletes row with timestamp such that not all columns are deleted
-        rm = new Mutation(keyspaceName, key.getKey());
-        rm.delete(cfName, 4);
-        rm.applyUnsafe();
-        ColumnFamily cf = cfs.getColumnFamily(filter);
-        assertTrue(cf.isMarkedForDelete());
+        ArrayBackedPartition partition = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs, key).build());
+        assertFalse(partition.partitionLevelDeletion().isLive());
 
         // flush and major compact (with tombstone purging)
         cfs.forceBlockingFlush();
         Util.compactAll(cfs, Integer.MAX_VALUE).get();
-        assertFalse(cfs.getColumnFamily(filter).isMarkedForDelete());
+        assertFalse(Util.getOnlyPartitionUnfiltered(Util.cmd(cfs, key).build()).isEmpty());
 
         // re-inserts with timestamp lower than delete
-        rm = new Mutation(keyspaceName, key.getKey());
         for (int i = 0; i < 5; i++)
-            rm.add(cfName, cellname(String.valueOf(i)), ByteBufferUtil.EMPTY_BYTE_BUFFER, i);
-        rm.applyUnsafe();
+        {
+            RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata, i, key);
+            builder.clustering(String.valueOf(i))
+                   .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                   .build().applyUnsafe();
+        }
 
         // Check that the second insert went in
-        cf = cfs.getColumnFamily(filter);
-        assertEquals(10, cf.getColumnCount());
-        for (Cell c : cf)
-            assertTrue(c.isLive());
+        partition = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs, key).build());
+        assertEquals(10, partition.rowCount());
     }
 

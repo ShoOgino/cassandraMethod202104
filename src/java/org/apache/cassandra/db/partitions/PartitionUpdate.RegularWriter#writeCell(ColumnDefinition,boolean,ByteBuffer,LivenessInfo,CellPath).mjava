@@ -1,0 +1,28 @@
+        @Override
+        public void writeCell(ColumnDefinition column, boolean isCounter, ByteBuffer value, LivenessInfo info, CellPath path)
+        {
+            if (column.isComplex())
+            {
+                if (updatedComplex.contains(column)
+                    && (!column.equals(lastUpdatedComplex) || (column.cellPathComparator().compare(path, lastUpdatedComplexPath)) <= 0))
+                {
+                    // We've updated that complex already, but we've either updated another complex or it's not in order: as this
+                    // break the writer assumption, switch rows.
+                    endOfRow();
+
+                    // Copy the clustering values from the previous row
+                    int clusteringSize = metadata.clusteringColumns().size();
+                    int base = (row - 1) * clusteringSize;
+                    for (int i = 0; i < clusteringSize; i++)
+                        writer.writeClusteringValue(clusterings[base + i]);
+
+                    updatedComplex.clear();
+                }
+
+                lastUpdatedComplex = column;
+                lastUpdatedComplexPath = path;
+                updatedComplex.add(column);
+            }
+            super.writeCell(column, isCounter, value, info, path);
+        }
+

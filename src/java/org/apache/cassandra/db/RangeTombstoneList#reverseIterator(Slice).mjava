@@ -1,0 +1,46 @@
+    private Iterator<RangeTombstone> reverseIterator(final Slice slice)
+    {
+        int startIdx = slice.end() == Slice.Bound.TOP ? 0 : searchInternal(slice.end(), 0, size);
+        // if startIdx is the first range after 'slice.end()' we care only until the previous range
+        final int start = startIdx < 0 ? -startIdx-2 : startIdx;
+
+        if (start >= size)
+            return Iterators.<RangeTombstone>emptyIterator();
+
+        int finishIdx = slice.start() == Slice.Bound.BOTTOM ? 0 : searchInternal(slice.start(), 0, start);
+        // if stopIdx is the first range after 'slice.end()' we care only until the previous range
+        final int finish = finishIdx < 0 ? -finishIdx-1 : finishIdx;
+
+        if (start < finish)
+            return Iterators.<RangeTombstone>emptyIterator();
+
+        if (start == finish)
+        {
+            // We want to make sure the range are stricly included within the queried slice as this
+            // make it easier to combine things when iterator over successive slices.
+            Slice.Bound s = comparator.compare(starts[start], slice.start()) < 0 ? slice.start() : starts[start];
+            Slice.Bound e = comparator.compare(slice.end(), ends[start]) < 0 ? slice.end() : ends[start];
+            return Iterators.<RangeTombstone>singletonIterator(rangeTombstoneWithNewBounds(start, s, e));
+        }
+
+        return new AbstractIterator<RangeTombstone>()
+        {
+            private int idx = start;
+
+            protected RangeTombstone computeNext()
+            {
+                if (idx < 0 || idx < finish)
+                    return endOfData();
+
+                // We want to make sure the range are stricly included within the queried slice as this
+                // make it easier to combine things when iterator over successive slices. This means that
+                // for the first and last range we might have to "cut" the range returned.
+                if (idx == start && comparator.compare(slice.end(), ends[idx]) < 0)
+                    return rangeTombstoneWithNewEnd(idx--, slice.end());
+                if (idx == finish && comparator.compare(starts[idx], slice.start()) < 0)
+                    return rangeTombstoneWithNewStart(idx--, slice.start());
+                return rangeTombstone(idx++);
+            }
+        };
+    }
+

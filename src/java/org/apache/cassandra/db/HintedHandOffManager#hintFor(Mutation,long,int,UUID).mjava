@@ -15,10 +15,19 @@
 
         UUID hintId = UUIDGen.getTimeUUID();
         // serialize the hint with id and version as a composite column name
-        CellName name = SystemKeyspace.Hints.comparator.makeCellName(hintId, MessagingService.current_version);
+
+        PartitionUpdate upd = new PartitionUpdate(SystemKeyspace.Hints,
+                                                  StorageService.getPartitioner().decorateKey(UUIDType.instance.decompose(targetId)),
+                                                  PartitionColumns.of(hintColumn),
+                                                  1);
+
+        Row.Writer writer = upd.writer();
+        Rows.writeClustering(SystemKeyspace.Hints.comparator.make(hintId, MessagingService.current_version), writer);
+
         ByteBuffer value = ByteBuffer.wrap(FBUtilities.serialize(mutation, Mutation.serializer, MessagingService.current_version));
-        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(Schema.instance.getCFMetaData(SystemKeyspace.NAME, SystemKeyspace.HINTS));
-        cf.addColumn(name, value, now, ttl);
-        return new Mutation(SystemKeyspace.NAME, UUIDType.instance.decompose(targetId), cf);
+        writer.writeCell(hintColumn, false, value, SimpleLivenessInfo.forUpdate(now, ttl, FBUtilities.nowInSeconds(), SystemKeyspace.Hints), null);
+        writer.endOfRow();
+
+        return new Mutation(upd);
     }
 

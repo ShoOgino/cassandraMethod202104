@@ -35,15 +35,17 @@
         assertEquals(1, cfs.getSSTables().size());
 
         // and that the index and filter were properly recovered
-        List<Row> rows = Util.getRangeSlice(cfs);
-        assertEquals(offs.length, rows.size());
+        List<ArrayBackedPartition> partitions = Util.getAllUnfiltered(Util.cmd(cfs).build());
+        assertEquals(offs.length, partitions.size());
         for (int i = 0; i < offs.length; i++)
         {
             String key = "key" + offs[i];
             String col = "col" + offs[i];
-            assert cfs.getColumnFamily(QueryFilter.getIdentityFilter(Util.dk(key), cfs.name, System.currentTimeMillis())) != null;
-            assert rows.get(i).key.getKey().equals(ByteBufferUtil.bytes(key));
-            assert rows.get(i).cf.getColumn(cellname(col)) != null;
+
+            assert !Util.getAll(Util.cmd(cfs, key).build()).isEmpty();
+            ArrayBackedPartition partition = partitions.get(i);
+            assert ByteBufferUtil.compareUnsigned(partition.partitionKey().getKey(), ByteBufferUtil.bytes(key)) == 0;
+            assert ByteBufferUtil.compareUnsigned(partition.iterator().next().clustering().get(0), ByteBufferUtil.bytes(col)) == 0;
         }
 
         // and that the max timestamp for the file was rediscovered

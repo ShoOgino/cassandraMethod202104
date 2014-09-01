@@ -20,19 +20,25 @@
         {
             DecoratedKey key = Util.dk("key" + i);
 
-            cachedStore.getColumnFamily(key, Composites.EMPTY, Composites.EMPTY, false, 1, System.currentTimeMillis());
+            Util.getAll(Util.cmd(cachedStore, key).build());
             assert CacheService.instance.rowCache.size() == i + 1;
-            assert cachedStore.containsCachedRow(key); // current key should be stored in the cache
+            assert cachedStore.containsCachedParition(key); // current key should be stored in the cache
 
             // checking if cell is read correctly after cache
-            ColumnFamily cf = cachedStore.getColumnFamily(key, Composites.EMPTY, Composites.EMPTY, false, 1, System.currentTimeMillis());
-            Collection<Cell> cells = cf.getSortedColumns();
+            CachedPartition cp = cachedStore.getRawCachedPartition(key);
+            try (UnfilteredRowIterator ai = cp.unfilteredIterator(ColumnFilter.selection(cp.columns()), Slices.ALL, false))
+            {
+                assert ai.hasNext();
+                Row r = (Row)ai.next();
+                assertFalse(ai.hasNext());
 
-            Cell cell = cells.iterator().next();
+                Iterator<Cell> ci = r.iterator();
+                assert(ci.hasNext());
+                Cell cell = ci.next();
 
-            assert cells.size() == 1;
-            assert cell.name().toByteBuffer().equals(ByteBufferUtil.bytes("col" + i));
-            assert cell.value().equals(ByteBufferUtil.bytes("val" + i));
+                assert cell.column().name.bytes.equals(ByteBufferUtil.bytes("val"));
+                assert cell.value().equals(ByteBufferUtil.bytes("val" + i));
+            }
         }
 
         // insert 10 more keys
@@ -42,25 +48,31 @@
         {
             DecoratedKey key = Util.dk("key" + i);
 
-            cachedStore.getColumnFamily(key, Composites.EMPTY, Composites.EMPTY, false, 1, System.currentTimeMillis());
-            assert cachedStore.containsCachedRow(key); // cache should be populated with the latest rows read (old ones should be popped)
+            Util.getAll(Util.cmd(cachedStore, key).build());
+            assert cachedStore.containsCachedParition(key); // cache should be populated with the latest rows read (old ones should be popped)
 
             // checking if cell is read correctly after cache
-            ColumnFamily cf = cachedStore.getColumnFamily(key, Composites.EMPTY, Composites.EMPTY, false, 1, System.currentTimeMillis());
-            Collection<Cell> cells = cf.getSortedColumns();
+            CachedPartition cp = cachedStore.getRawCachedPartition(key);
+            try (UnfilteredRowIterator ai = cp.unfilteredIterator(ColumnFilter.selection(cp.columns()), Slices.ALL, false))
+            {
+                assert ai.hasNext();
+                Row r = (Row)ai.next();
+                assertFalse(ai.hasNext());
 
-            Cell cell = cells.iterator().next();
+                Iterator<Cell> ci = r.iterator();
+                assert(ci.hasNext());
+                Cell cell = ci.next();
 
-            assert cells.size() == 1;
-            assert cell.name().toByteBuffer().equals(ByteBufferUtil.bytes("col" + i));
-            assert cell.value().equals(ByteBufferUtil.bytes("val" + i));
+                assert cell.column().name.bytes.equals(ByteBufferUtil.bytes("val"));
+                assert cell.value().equals(ByteBufferUtil.bytes("val" + i));
+            }
         }
 
         // clear 100 rows from the cache
         int keysLeft = 109;
         for (int i = 109; i >= 10; i--)
         {
-            cachedStore.invalidateCachedRow(Util.dk("key" + i));
+            cachedStore.invalidateCachedPartition(Util.dk("key" + i));
             assert CacheService.instance.rowCache.size() == keysLeft;
             keysLeft--;
         }

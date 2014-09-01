@@ -1,0 +1,66 @@
+        @Override
+        public Iterator<Unfiltered> slice(final Slice slice) throws IOException
+        {
+            // if our previous slicing already got us the smallest row in the sstable, we're done
+            if (currentIndexIdx < 0)
+                return Collections.emptyIterator();
+
+            final List<IndexHelper.IndexInfo> indexes = indexEntry.columnsIndex();
+
+            // Find the first index block we'll need to read for the slice.
+            final int startIdx = IndexHelper.indexFor(slice.end(), indexes, sstable.metadata.comparator, true, currentIndexIdx);
+            if (startIdx < 0)
+                return Collections.emptyIterator();
+
+            // Find the last index block we'll need to read for the slice.
+            int lastIdx = IndexHelper.indexFor(slice.start(), indexes, sstable.metadata.comparator, true, startIdx);
+
+            // The index search is by firstname and so lastIdx is such that
+            //   indexes[lastIdx].firstName < slice.start <= indexes[lastIdx + 1].firstName
+            // However, if indexes[lastIdx].lastName < slice.start we can bump lastIdx.
+            if (lastIdx >= 0 && metadata().comparator.compare(indexes.get(lastIdx).lastName, slice.start()) < 0)
+                ++lastIdx;
+
+            final int endIdx = lastIdx;
+
+            // Because we're reversed, even if it is our current block, we should re-prepare the block since we would
+            // have skipped anything not in the previous slice.
+            prepareBlock(startIdx, slice.start(), slice.end());
+
+            return new AbstractIterator<Unfiltered>()
+            {
+                private Iterator<Unfiltered> currentBlockIterator = partition.unfilteredIterator(columns, Slices.with(metadata().comparator, slice), true);
+
+                protected Unfiltered computeNext()
+                {
+                    try
+                    {
+                        if (currentBlockIterator.hasNext())
+                            return currentBlockIterator.next();
+
+                        --currentIndexIdx;
+                        if (currentIndexIdx < 0 || currentIndexIdx < endIdx)
+                            return endOfData();
+
+                        // Note that since we know we're read blocks backward, there is no point in checking the slice end, so we pass null
+                        prepareBlock(currentIndexIdx, slice.start(), null);
+                        currentBlockIterator = partition.unfilteredIterator(columns, Slices.with(metadata().comparator, slice), true);
+                        return computeNext();
+                    }
+                    catch (IOException e)
+                    {
+                        try
+                        {
+                            close();
+                        }
+                        catch (IOException suppressed)
+                        {
+                            e.addSuppressed(suppressed);
+                        }
+                        sstable.markSuspect();
+                        throw new CorruptSSTableException(e, file.getPath());
+                    }
+                }
+            };
+        }
+

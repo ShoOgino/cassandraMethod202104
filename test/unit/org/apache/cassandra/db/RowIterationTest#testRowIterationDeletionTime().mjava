@@ -1,28 +1,24 @@
     @Test
-    public void testRowIterationDeletionTime()
+    public void testRowIterationDeletionTime() throws Throwable
     {
-        Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        String CF_NAME = "Standard3";
-        ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF_NAME);
-        DecoratedKey key = Util.dk("key");
+        String tableName = createTable("CREATE TABLE %s (a int PRIMARY KEY, b int)");
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
 
-        // Delete row in first sstable
-        Mutation rm = new Mutation(KEYSPACE1, key.getKey());
-        rm.delete(CF_NAME, 0);
-        rm.add(CF_NAME, Util.cellname("c"), ByteBufferUtil.bytes("values"), 0L);
-        rm.applyUnsafe();
-        store.forceBlockingFlush();
+        execute("INSERT INTO %s (a, b) VALUES (?, ?) USING TIMESTAMP ?", 0, 0, 0L);
+        execute("DELETE FROM %s USING TIMESTAMP ? WHERE a = ?", 0L, 0);
+
+        cfs.forceBlockingFlush();
 
         // Delete row in second sstable with higher timestamp
-        rm = new Mutation(KEYSPACE1, key.getKey());
-        rm.delete(CF_NAME, 1);
-        rm.add(CF_NAME, Util.cellname("c"), ByteBufferUtil.bytes("values"), 1L);
-        DeletionInfo delInfo2 = rm.getColumnFamilies().iterator().next().deletionInfo();
-        assert delInfo2.getTopLevelDeletion().markedForDeleteAt == 1L;
-        rm.applyUnsafe();
-        store.forceBlockingFlush();
+        execute("INSERT INTO %s (a, b) VALUES (?, ?) USING TIMESTAMP ?", 0, 0, 1L);
+        execute("DELETE FROM %s USING TIMESTAMP ? WHERE a = ?", 1L, 0);
 
-        ColumnFamily cf = Util.getRangeSlice(store).get(0).cf;
-        assert cf.deletionInfo().equals(delInfo2);
+        int localDeletionTime = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs).build()).partitionLevelDeletion().localDeletionTime();
+
+        cfs.forceBlockingFlush();
+
+        DeletionTime dt = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs).build()).partitionLevelDeletion();
+        assertEquals(1L, dt.markedForDeleteAt());
+        assertEquals(localDeletionTime, dt.localDeletionTime());
     }
 

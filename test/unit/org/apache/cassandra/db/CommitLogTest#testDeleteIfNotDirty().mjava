@@ -3,9 +3,14 @@
     {
         DatabaseDescriptor.getCommitLogSegmentSize();
         CommitLog.instance.resetUnsafe(true);
+        ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
+        ColumnFamilyStore cfs2 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD2);
+
         // Roughly 32 MB mutation
-        Mutation rm = new Mutation(KEYSPACE1, bytes("k"));
-        rm.add(CF1, Util.cellname("c1"), ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/4) - 1), 0);
+        Mutation rm = new RowUpdateBuilder(cfs1.metadata, 0, "k")
+                      .clustering("bytes")
+                      .add("val", ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/4) - 1))
+                      .build();
 
         // Adding it twice (won't change segment)
         CommitLog.instance.add(rm);
@@ -21,8 +26,10 @@
         assert CommitLog.instance.activeSegments() == 1 : "Expecting 1 segment, got " + CommitLog.instance.activeSegments();
 
         // Adding new mutation on another CF, large enough (including CL entry overhead) that a new segment is created
-        Mutation rm2 = new Mutation(KEYSPACE1, bytes("k"));
-        rm2.add(CF2, Util.cellname("c1"), ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/2) - 200), 0);
+        Mutation rm2 = new RowUpdateBuilder(cfs2.metadata, 0, "k")
+                       .clustering("bytes")
+                       .add("val", ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/2) - 200))
+                       .build();
         CommitLog.instance.add(rm2);
         // also forces a new segment, since each entry-with-overhead is just under half the CL size
         CommitLog.instance.add(rm2);

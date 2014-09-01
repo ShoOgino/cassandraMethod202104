@@ -1,0 +1,52 @@
+    /**
+     * Merges the provided updates, yielding a new update that incorporates all those updates.
+     *
+     * @param updates the collection of updates to merge. This shouldn't be empty.
+     *
+     * @return a partition update that include (merge) all the updates from {@code updates}.
+     */
+    public static PartitionUpdate merge(Collection<PartitionUpdate> updates)
+    {
+        assert !updates.isEmpty();
+        if (updates.size() == 1)
+            return Iterables.getOnlyElement(updates);
+
+        int totalSize = 0;
+        PartitionColumns.Builder builder = PartitionColumns.builder();
+        DecoratedKey key = null;
+        CFMetaData metadata = null;
+        for (PartitionUpdate update : updates)
+        {
+            totalSize += update.rows;
+            builder.addAll(update.columns());
+
+            if (key == null)
+                key = update.partitionKey();
+            else
+                assert key.equals(update.partitionKey());
+
+            if (metadata == null)
+                metadata = update.metadata();
+            else
+                assert metadata.cfId.equals(update.metadata().cfId);
+        }
+
+        // Used when merging row to decide of liveness
+        int nowInSec = FBUtilities.nowInSeconds();
+        PartitionUpdate newUpdate = new PartitionUpdate(metadata, key, builder.build(), totalSize);
+        for (PartitionUpdate update : updates)
+        {
+            newUpdate.deletionInfo.add(update.deletionInfo);
+            if (!update.staticRow().isEmpty())
+            {
+                if (newUpdate.staticRow().isEmpty())
+                    newUpdate.staticRow = update.staticRow().takeAlias();
+                else
+                    Rows.merge(newUpdate.staticRow(), update.staticRow(), newUpdate.columns().statics, newUpdate.staticWriter(), nowInSec, SecondaryIndexManager.nullUpdater);
+            }
+            for (Row row : update)
+                row.copyTo(newUpdate.writer);
+        }
+        return newUpdate;
+    }
+

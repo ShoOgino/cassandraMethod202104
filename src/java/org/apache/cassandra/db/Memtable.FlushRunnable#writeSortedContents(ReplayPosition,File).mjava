@@ -4,32 +4,32 @@
 
             SSTableReader ssTable;
             // errors when creating the writer that may leave empty temp files.
-            try (SSTableWriter writer = createFlushWriter(cfs.getTempSSTablePath(sstableDirectory)))
+            try (SSTableWriter writer = createFlushWriter(cfs.getTempSSTablePath(sstableDirectory), columnsCollector.get(), statsCollector.get()))
             {
                 boolean trackContention = logger.isDebugEnabled();
                 int heavilyContendedRowCount = 0;
                 // (we can't clear out the map as-we-go to free up memory,
                 //  since the memtable is being used for queries in the "pending flush" category)
-                for (Map.Entry<RowPosition, AtomicBTreeColumns> entry : rows.entrySet())
+                for (AtomicBTreePartition partition : partitions.values())
                 {
-                    AtomicBTreeColumns cf = entry.getValue();
+                    // Each batchlog partition is a separate entry in the log. And for an entry, we only do 2
+                    // operations: 1) we insert the entry and 2) we delete it. Further, BL data is strictly local,
+                    // we don't need to preserve tombstones for repair. So if both operation are in this
+                    // memtable (which will almost always be the case if there is no ongoing failure), we can
+                    // just skip the entry (CASSANDRA-4667).
+                    if (isBatchLogTable && !partition.partitionLevelDeletion().isLive() && partition.hasRows())
+                        continue;
 
-                    if (cf.isMarkedForDelete() && cf.hasColumns())
-                    {
-                        // When every node is up, there's no reason to write batchlog data out to sstables
-                        // (which in turn incurs cost like compaction) since the BL write + delete cancel each other out,
-                        // and BL data is strictly local, so we don't need to preserve tombstones for repair.
-                        // If we have a data row + row level tombstone, then writing it is effectively an expensive no-op so we skip it.
-                        // See CASSANDRA-4667.
-                        if (cfs.name.equals(SystemKeyspace.BATCHLOG) && cfs.keyspace.getName().equals(SystemKeyspace.NAME))
-                            continue;
-                    }
-
-                    if (trackContention && cf.usePessimisticLocking())
+                    if (trackContention && partition.usePessimisticLocking())
                         heavilyContendedRowCount++;
 
-                    if (!cf.isEmpty())
-                        writer.append((DecoratedKey)entry.getKey(), cf);
+                    if (!partition.isEmpty())
+                    {
+                        try (UnfilteredRowIterator iter = partition.unfilteredIterator())
+                        {
+                            writer.append(iter);
+                        }
+                    }
                 }
 
                 if (writer.getFilePointer() > 0)
@@ -47,7 +47,7 @@
                 }
 
                 if (heavilyContendedRowCount > 0)
-                    logger.debug(String.format("High update contention in %d/%d partitions of %s ", heavilyContendedRowCount, rows.size(), Memtable.this.toString()));
+                    logger.debug(String.format("High update contention in %d/%d partitions of %s ", heavilyContendedRowCount, partitions.size(), Memtable.this.toString()));
 
                 return ssTable;
             }

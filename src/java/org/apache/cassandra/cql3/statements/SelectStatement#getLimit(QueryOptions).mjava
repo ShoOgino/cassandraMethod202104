@@ -1,26 +1,36 @@
     /**
      * May be used by custom QueryHandler implementations
      */
-    public int getLimit(QueryOptions options) throws InvalidRequestException
+    public DataLimits getLimit(QueryOptions options) throws InvalidRequestException
     {
-        if (limit != null)
+        int userLimit = -1;
+        // If we aggregate, the limit really apply to the number of rows returned to the user, not to what is queried, and
+        // since in practice we currently only aggregate at top level (we have no GROUP BY support yet), we'll only ever
+        // return 1 result and can therefore basically ignore the user LIMIT in this case.
+        // Whenever we support GROUP BY, we'll have to add a new DataLimits kind that knows how things are grouped and is thus
+        // able to apply the user limit properly.
+        if (limit != null && !selection.isAggregate())
         {
             ByteBuffer b = checkNotNull(limit.bindAndGet(options), "Invalid null value of limit");
             // treat UNSET limit value as 'unlimited'
-            if (b == UNSET_BYTE_BUFFER)
-                return Integer.MAX_VALUE;
-            try
+            if (b != UNSET_BYTE_BUFFER)
             {
-                Int32Type.instance.validate(b);
-                int l = Int32Type.instance.compose(b);
-                checkTrue(l > 0, "LIMIT must be strictly positive");
-                return l;
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException("Invalid limit value");
+                try
+                {
+                    Int32Type.instance.validate(b);
+                    userLimit = Int32Type.instance.compose(b);
+                    checkTrue(userLimit > 0, "LIMIT must be strictly positive");
+                }
+                catch (MarshalException e)
+                {
+                    throw new InvalidRequestException("Invalid limit value");
+                }
             }
         }
-        return Integer.MAX_VALUE;
+
+        if (parameters.isDistinct)
+            return userLimit < 0 ? DataLimits.DISTINCT_NONE : DataLimits.distinctLimits(userLimit);
+
+        return userLimit < 0 ? DataLimits.NONE : DataLimits.cqlLimits(userLimit);
     }
 

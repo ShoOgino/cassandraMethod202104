@@ -1,40 +1,39 @@
     @Test
     public void dropKS() throws ConfigurationException
     {
-        DecoratedKey dk = Util.dk("dropKs");
         // sanity
         final KSMetaData ks = Schema.instance.getKSMetaData(KEYSPACE1);
-        Assert.assertNotNull(ks);
-        final CFMetaData cfm = ks.cfMetaData().get("Standard2");
-        Assert.assertNotNull(cfm);
+        assertNotNull(ks);
+        final CFMetaData cfm = ks.cfMetaData().get(TABLE2);
+        assertNotNull(cfm);
 
         // write some data, force a flush, then verify that files exist on disk.
-        Mutation rm = new Mutation(ks.name, dk.getKey());
         for (int i = 0; i < 100; i++)
-            rm.add(cfm.cfName, cellname("col" + i), ByteBufferUtil.bytes("anyvalue"), 1L);
-        rm.applyUnsafe();
-        ColumnFamilyStore store = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
-        Assert.assertNotNull(store);
-        store.forceBlockingFlush();
-        Assert.assertTrue(store.directories.sstableLister().list().size() > 0);
+            QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)",
+                                                         KEYSPACE1, TABLE2),
+                                           "dropKs", "col" + i, "anyvalue");
+        ColumnFamilyStore cfs = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
+        assertNotNull(cfs);
+        cfs.forceBlockingFlush();
+        assertTrue(!cfs.directories.sstableLister().list().isEmpty());
 
         MigrationManager.announceKeyspaceDrop(ks.name);
 
-        Assert.assertNull(Schema.instance.getKSMetaData(ks.name));
+        assertNull(Schema.instance.getKSMetaData(ks.name));
 
         // write should fail.
-        rm = new Mutation(ks.name, dk.getKey());
         boolean success = true;
         try
         {
-            rm.add("Standard1", cellname("col0"), ByteBufferUtil.bytes("value0"), 1L);
-            rm.applyUnsafe();
+            QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)",
+                                                         KEYSPACE1, TABLE2),
+                                           "dropKs", "col0", "anyvalue");
         }
         catch (Throwable th)
         {
             success = false;
         }
-        Assert.assertFalse("This mutation should have failed since the CF no longer exists.", success);
+        assertFalse("This mutation should have failed since the KS no longer exists.", success);
 
         // reads should fail too.
         boolean threw = false;
@@ -46,6 +45,6 @@
         {
             threw = true;
         }
-        Assert.assertTrue(threw);
+        assertTrue(threw);
     }
 

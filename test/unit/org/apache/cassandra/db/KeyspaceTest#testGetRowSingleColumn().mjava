@@ -1,29 +1,35 @@
     @Test
     public void testGetRowSingleColumn() throws Throwable
     {
-        final Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        final ColumnFamilyStore cfStore = keyspace.getColumnFamilyStore("Standard1");
+        String tableName = createTable("CREATE TABLE %s (a text, b int, c int, PRIMARY KEY (a, b))");
 
-        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(KEYSPACE1, "Standard1");
-        cf.addColumn(column("col1","val1", 1L));
-        cf.addColumn(column("col2","val2", 1L));
-        cf.addColumn(column("col3","val3", 1L));
-        Mutation rm = new Mutation(KEYSPACE1, TEST_KEY.getKey(), cf);
-        rm.applyUnsafe();
+        for (int i = 0; i < 2; i++)
+            execute("INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", "0", i, i);
 
-        Runnable verify = new WrappedRunnable()
+        final ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
+
+        for (int round = 0; round < 2; round++)
         {
-            public void runMayThrow() throws Exception
+            // slice with limit 1
+            Row row = Util.getOnlyRow(Util.cmd(cfs, "0").columns("c").withLimit(1).build());
+            assertEquals(ByteBufferUtil.bytes(0), row.getCell(cfs.metadata.getColumnDefinition(new ColumnIdentifier("c", false))).value());
+
+            // fetch each row by name
+            for (int i = 0; i < 2; i++)
             {
-                ColumnFamily cf;
-
-                cf = cfStore.getColumnFamily(Util.namesQueryFilter(cfStore, TEST_KEY, "col1"));
-                assertColumns(cf, "col1");
-
-                cf = cfStore.getColumnFamily(Util.namesQueryFilter(cfStore, TEST_KEY, "col3"));
-                assertColumns(cf, "col3");
+                row = Util.getOnlyRow(Util.cmd(cfs, "0").columns("c").includeRow(i).build());
+                assertEquals(ByteBufferUtil.bytes(i), row.getCell(cfs.metadata.getColumnDefinition(new ColumnIdentifier("c", false))).value());
             }
-        };
-        reTest(keyspace.getColumnFamilyStore("Standard1"), verify);
+
+            // fetch each row by slice
+            for (int i = 0; i < 2; i++)
+            {
+                row = Util.getOnlyRow(Util.cmd(cfs, "0").columns("c").fromIncl(i).toIncl(i).build());
+                assertEquals(ByteBufferUtil.bytes(i), row.getCell(cfs.metadata.getColumnDefinition(new ColumnIdentifier("c", false))).value());
+            }
+
+            if (round == 0)
+                cfs.forceBlockingFlush();
+        }
     }
 

@@ -1,0 +1,42 @@
+    public static ByteBuffer encodeCellName(CFMetaData metadata, Clustering clustering, ByteBuffer columnName, ByteBuffer collectionElement)
+    {
+        boolean isStatic = clustering == Clustering.STATIC_CLUSTERING;
+
+        if (!metadata.isCompound())
+        {
+            if (isStatic)
+                return columnName;
+
+            assert clustering.size() == 1;
+            return clustering.get(0);
+        }
+
+        // We use comparator.size() rather than clustering.size() because of static clusterings
+        int clusteringSize = metadata.comparator.size();
+        int size = clusteringSize + (metadata.isDense() ? 0 : 1) + (collectionElement == null ? 0 : 1);
+        ByteBuffer[] values = new ByteBuffer[size];
+        for (int i = 0; i < clusteringSize; i++)
+        {
+            if (isStatic)
+            {
+                values[i] = ByteBufferUtil.EMPTY_BYTE_BUFFER;
+                continue;
+            }
+
+            ByteBuffer v = clustering.get(i);
+            // we can have null (only for dense compound tables for backward compatibility reasons) but that
+            // means we're done and should stop there as far as building the composite is concerned.
+            if (v == null)
+                return CompositeType.build(Arrays.copyOfRange(values, 0, i));
+
+            values[i] = v;
+        }
+
+        if (!metadata.isDense())
+            values[clusteringSize] = columnName;
+        if (collectionElement != null)
+            values[clusteringSize + 1] = collectionElement;
+
+        return CompositeType.build(isStatic, values);
+    }
+

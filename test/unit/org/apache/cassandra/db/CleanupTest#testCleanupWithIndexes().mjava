@@ -2,27 +2,22 @@
     public void testCleanupWithIndexes() throws IOException, ExecutionException, InterruptedException
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_INDEXED1);
 
-        List<Row> rows;
 
         // insert data and verify we get it back w/ range query
-        fillCF(cfs, LOOPS);
-        rows = Util.getRangeSlice(cfs);
-        assertEquals(LOOPS, rows.size());
+        fillCF(cfs, "birthdate", LOOPS);
+        assertEquals(LOOPS, Util.getAll(Util.cmd(cfs).build()).size());
 
-        SecondaryIndex index = cfs.indexManager.getIndexForColumn(COLUMN);
+        SecondaryIndex index = cfs.indexManager.getIndexForColumn(cfs.metadata.getColumnDefinition(COLUMN));
         long start = System.nanoTime();
         while (!index.isIndexBuilt(COLUMN) && System.nanoTime() - start < TimeUnit.SECONDS.toNanos(10))
             Thread.sleep(10);
 
-        // verify we get it back w/ index query too
-        IndexExpression expr = new IndexExpression(COLUMN, Operator.EQ, VALUE);
-        List<IndexExpression> clause = Arrays.asList(expr);
-        IDiskAtomFilter filter = new IdentityQueryFilter();
-        Range<RowPosition> range = Util.range("", "");
-        rows = keyspace.getColumnFamilyStore(CF1).search(range, clause, filter, Integer.MAX_VALUE);
-        assertEquals(LOOPS, rows.size());
+        ColumnDefinition cdef = cfs.metadata.getColumnDefinition(COLUMN);
+        RowFilter cf = RowFilter.create();
+        cf.add(cdef, Operator.EQ, VALUE);
+        assertEquals(LOOPS, Util.getAll(Util.cmd(cfs).filterOn("birthdate", Operator.EQ, VALUE).build()).size());
 
         // we don't allow cleanup when the local host has no range to avoid wipping up all data when a node has not join the ring.
         // So to make sure cleanup erase everything here, we give the localhost the tiniest possible range.
@@ -36,14 +31,12 @@
         CompactionManager.instance.performCleanup(cfs);
 
         // row data should be gone
-        rows = Util.getRangeSlice(cfs);
-        assertEquals(0, rows.size());
+        assertEquals(0, Util.getAll(Util.cmd(cfs).build()).size());
 
         // not only should it be gone but there should be no data on disk, not even tombstones
         assert cfs.getSSTables().isEmpty();
 
         // 2ary indexes should result in no results, too (although tombstones won't be gone until compacted)
-        rows = cfs.search(range, clause, filter, Integer.MAX_VALUE);
-        assertEquals(0, rows.size());
+        assertEquals(0, Util.getAll(Util.cmd(cfs).filterOn("birthdate", Operator.EQ, VALUE).build()).size());
     }
 

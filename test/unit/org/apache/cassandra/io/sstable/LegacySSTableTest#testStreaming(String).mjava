@@ -15,16 +15,15 @@
         ColumnFamilyStore cfs = Keyspace.open(KSNAME).getColumnFamilyStore(CFNAME);
         assert cfs.getSSTables().size() == 1;
         sstable = cfs.getSSTables().iterator().next();
-        CellNameType type = sstable.metadata.comparator;
         for (String keystring : TEST_DATA)
         {
-            ByteBuffer key = ByteBufferUtil.bytes(keystring);
-            OnDiskAtomIterator iter = sstable.iterator(Util.dk(key), FBUtilities.singleton(Util.cellname(key), type));
-            ColumnFamily cf = iter.getColumnFamily();
+            ByteBuffer key = bytes(keystring);
+
+            SliceableUnfilteredRowIterator iter = sstable.iterator(Util.dk(key), ColumnFilter.selectionBuilder().add(cfs.metadata.getColumnDefinition(bytes("name"))).build(), false, false);
 
             // check not deleted (CASSANDRA-6527)
-            assert cf.deletionInfo().equals(DeletionInfo.live());
-            assert iter.next().name().toByteBuffer().equals(key);
+            assert iter.partitionLevelDeletion().equals(DeletionTime.LIVE);
+            assert iter.next().clustering().get(0).equals(key);
         }
         sstable.selfRef().release();
     }

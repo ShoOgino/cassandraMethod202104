@@ -5,13 +5,15 @@
         final ColumnFamilyStore store = keyspace.getColumnFamilyStore("StandardLowIndexInterval"); // index interval of 8, no key caching
         CompactionManager.instance.disableAutoCompaction();
 
-        final int NUM_ROWS = 512;
-        for (int j = 0; j < NUM_ROWS; j++)
+        final int NUM_PARTITIONS = 512;
+        for (int j = 0; j < NUM_PARTITIONS; j++)
         {
-            ByteBuffer key = ByteBufferUtil.bytes(String.format("%3d", j));
-            Mutation rm = new Mutation(KEYSPACE1, key);
-            rm.add("StandardLowIndexInterval", Util.cellname("0"), ByteBufferUtil.bytes(String.format("%3d", j)), j);
-            rm.applyUnsafe();
+            new RowUpdateBuilder(store.metadata, j, String.format("%3d", j))
+            .clustering("0")
+            .add("val", String.format("%3d", j))
+            .build()
+            .applyUnsafe();
+
         }
         store.forceBlockingFlush();
         CompactionManager.instance.performMaximal(store, false);
@@ -21,8 +23,8 @@
         final SSTableReader sstable = sstables.iterator().next();
 
         ThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(5);
-        List<Future> futures = new ArrayList<>(NUM_ROWS * 2);
-        for (int i = 0; i < NUM_ROWS; i++)
+        List<Future> futures = new ArrayList<>(NUM_PARTITIONS * 2);
+        for (int i = 0; i < NUM_PARTITIONS; i++)
         {
             final ByteBuffer key = ByteBufferUtil.bytes(String.format("%3d", i));
             final int index = i;
@@ -31,9 +33,8 @@
             {
                 public void run()
                 {
-                    ColumnFamily result = store.getColumnFamily(sstable.partitioner.decorateKey(key), Composites.EMPTY, Composites.EMPTY, false, 100, 100);
-                    assertFalse(result.isEmpty());
-                    assertEquals(0, ByteBufferUtil.compare(String.format("%3d", index).getBytes(), result.getColumn(Util.cellname("0")).value()));
+                    Row row = Util.getOnlyRowUnfiltered(Util.cmd(store, key).build());
+                    assertEquals(0, ByteBufferUtil.compare(String.format("%3d", index).getBytes(), row.iterator().next().value()));
                 }
             }));
 

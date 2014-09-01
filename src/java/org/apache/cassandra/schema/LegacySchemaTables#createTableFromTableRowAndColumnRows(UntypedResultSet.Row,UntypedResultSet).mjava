@@ -6,35 +6,47 @@
 
         AbstractType<?> rawComparator = TypeParser.parse(result.getString("comparator"));
         AbstractType<?> subComparator = result.has("subcomparator") ? TypeParser.parse(result.getString("subcomparator")) : null;
-        ColumnFamilyType cfType = ColumnFamilyType.valueOf(result.getString("type"));
 
-        AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
+        boolean isSuper = result.getString("type").toLowerCase().equals("super");
+        boolean isDense = result.getBoolean("is_dense");
+        boolean isCompound = rawComparator instanceof CompositeType;
 
-        List<ColumnDefinition> columnDefs = createColumnsFromColumnRows(serializedColumnDefinitions,
-                                                                        ksName,
-                                                                        cfName,
-                                                                        fullRawComparator,
-                                                                        cfType == ColumnFamilyType.Super);
-
-        boolean isDense = result.has("is_dense")
-                        ? result.getBoolean("is_dense")
-                        : CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
-
-        CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
+        // We don't really use the default validator but as we have it for backward compatibility, we use it to know if it's a counter table
+        AbstractType<?> defaultValidator = TypeParser.parse(result.getString("default_validator"));
+        boolean isCounter =  defaultValidator instanceof CounterColumnType;
 
         // if we are upgrading, we use id generated from names initially
         UUID cfId = result.has("cf_id")
                   ? result.getUUID("cf_id")
                   : CFMetaData.generateLegacyCfId(ksName, cfName);
 
-        CFMetaData cfm = new CFMetaData(ksName, cfName, cfType, comparator, cfId);
-        cfm.isDense(isDense);
+        boolean isCQLTable = !isSuper && !isDense && isCompound;
+        boolean isStaticCompactTable = !isDense && !isCompound;
+
+        // Internally, compact tables have a specific layout, see CompactTables. But when upgrading from
+        // previous versions, they may not have the expected schema, so detect if we need to upgrade and do
+        // it in createColumnsFromColumnRows.
+        // We can remove this once we don't support upgrade from versions < 3.0.
+        boolean needsUpgrade = isCQLTable ? false : checkNeedsUpgrade(serializedColumnDefinitions, isSuper, isStaticCompactTable);
+
+        List<ColumnDefinition> columnDefs = createColumnsFromColumnRows(serializedColumnDefinitions,
+                                                                        ksName,
+                                                                        cfName,
+                                                                        rawComparator,
+                                                                        subComparator,
+                                                                        isSuper,
+                                                                        isCQLTable,
+                                                                        isStaticCompactTable,
+                                                                        needsUpgrade);
+
+        if (needsUpgrade)
+            addDefinitionForUpgrade(columnDefs, ksName, cfName, isStaticCompactTable, isSuper, rawComparator, subComparator, defaultValidator);
+
+        CFMetaData cfm = CFMetaData.create(ksName, cfName, cfId, isDense, isCompound, isSuper, isCounter, columnDefs);
 
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
         cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
-        cfm.defaultValidator(TypeParser.parse(result.getString("default_validator")));
-        cfm.keyValidator(TypeParser.parse(result.getString("key_validator")));
         cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
         cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
@@ -62,11 +74,13 @@
             cfm.bloomFilterFpChance(cfm.getBloomFilterFpChance());
 
         if (result.has("dropped_columns"))
-            cfm.droppedColumns(convertDroppedColumns(result.getMap("dropped_columns", UTF8Type.instance, LongType.instance)));
+        {
+            Map<String, String> types = result.has("dropped_columns_types")
+                                      ? result.getMap("dropped_columns_types", UTF8Type.instance, UTF8Type.instance) 
+                                      : Collections.<String, String>emptyMap();
+            addDroppedColumns(cfm, result.getMap("dropped_columns", UTF8Type.instance, LongType.instance), types);
+        }
 
-        for (ColumnDefinition cd : columnDefs)
-            cfm.addOrReplaceColumnDefinition(cd);
-
-        return cfm.rebuild();
+        return cfm;
     }
 

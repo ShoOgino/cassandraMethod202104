@@ -1,0 +1,23 @@
+    public static LegacyBound decodeBound(CFMetaData metadata, ByteBuffer bound, boolean isStart)
+    {
+        if (!bound.hasRemaining())
+            return isStart ? LegacyBound.BOTTOM : LegacyBound.TOP;
+
+        List<ByteBuffer> components = metadata.isCompound()
+                                    ? CompositeType.splitName(bound)
+                                    : Collections.singletonList(bound);
+
+        // Either it's a prefix of the clustering, or it's the bound of a collection range tombstone (and thus has
+        // the collection column name)
+        assert components.size() <= metadata.comparator.size() || (!metadata.isCompactTable() && components.size() == metadata.comparator.size() + 1);
+
+        List<ByteBuffer> prefix = components.size() <= metadata.comparator.size() ? components : components.subList(0, metadata.comparator.size());
+        Slice.Bound sb = Slice.Bound.create(isStart ? Slice.Bound.Kind.INCL_START_BOUND : Slice.Bound.Kind.INCL_END_BOUND,
+                                            prefix.toArray(new ByteBuffer[prefix.size()]));
+
+        ColumnDefinition collectionName = components.size() == metadata.comparator.size() + 1
+                                        ? metadata.getColumnDefinition(components.get(metadata.comparator.size()))
+                                        : null;
+        return new LegacyBound(sb, metadata.isCompound() && CompositeType.isStaticName(bound), collectionName);
+    }
+

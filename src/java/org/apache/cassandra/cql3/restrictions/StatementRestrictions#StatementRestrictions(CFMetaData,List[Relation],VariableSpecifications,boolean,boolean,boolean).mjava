@@ -1,0 +1,67 @@
+    public StatementRestrictions(CFMetaData cfm,
+                                 List<Relation> whereClause,
+                                 VariableSpecifications boundNames,
+                                 boolean selectsOnlyStaticColumns,
+                                 boolean selectACollection,
+                                 boolean useFiltering) throws InvalidRequestException
+    {
+        this(cfm);
+
+        /*
+         * WHERE clause. For a given entity, rules are:
+         *   - EQ relation conflicts with anything else (including a 2nd EQ)
+         *   - Can't have more than one LT(E) relation (resp. GT(E) relation)
+         *   - IN relation are restricted to row keys (for now) and conflicts with anything else (we could
+         *     allow two IN for the same entity but that doesn't seem very useful)
+         *   - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value
+         *     in CQL so far)
+         */
+        for (Relation relation : whereClause)
+            addRestriction(relation.toRestriction(cfm, boundNames));
+
+        ColumnFamilyStore cfs = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
+        SecondaryIndexManager secondaryIndexManager = cfs.indexManager;
+
+        boolean hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(secondaryIndexManager);
+        boolean hasQueriableIndex = hasQueriableClusteringColumnIndex
+                || partitionKeyRestrictions.hasSupportingIndex(secondaryIndexManager)
+                || nonPrimaryKeyRestrictions.hasSupportingIndex(secondaryIndexManager);
+
+        // At this point, the select statement if fully constructed, but we still have a few things to validate
+        processPartitionKeyRestrictions(hasQueriableIndex);
+
+        // Some but not all of the partition key columns have been specified;
+        // hence we need turn these restrictions into a row filter.
+        if (usesSecondaryIndexing)
+            indexRestrictions.add(partitionKeyRestrictions);
+
+        checkFalse(selectsOnlyStaticColumns && hasClusteringColumnsRestriction(),
+                   "Cannot restrict clustering columns when selecting only static columns");
+
+        processClusteringColumnsRestrictions(hasQueriableIndex, selectACollection);
+
+        // Covers indexes on the first clustering column (among others).
+        if (isKeyRange && hasQueriableClusteringColumnIndex)
+            usesSecondaryIndexing = true;
+
+        usesSecondaryIndexing = usesSecondaryIndexing || clusteringColumnsRestrictions.isContains();
+
+        if (usesSecondaryIndexing)
+            indexRestrictions.add(clusteringColumnsRestrictions);
+
+        // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
+        // there is restrictions not covered by the PK.
+        if (!nonPrimaryKeyRestrictions.isEmpty())
+        {
+            if (hasQueriableIndex)
+                usesSecondaryIndexing = true;
+            else if (!useFiltering)
+                throw new InvalidRequestException("No supported secondary index found for the non primary key columns restrictions");
+
+            indexRestrictions.add(nonPrimaryKeyRestrictions);
+        }
+
+        if (usesSecondaryIndexing)
+            validateSecondaryIndexSelections(selectsOnlyStaticColumns);
+    }
+

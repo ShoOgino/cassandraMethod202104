@@ -29,10 +29,8 @@
             org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
             consistencyLevel.validateForRead(keyspace);
 
-            List<Row> rows = null;
-
             IPartitioner p = StorageService.getPartitioner();
-            AbstractBounds<RowPosition> bounds;
+            AbstractBounds<PartitionPosition> bounds;
             if (range.start_key == null)
             {
                 Token.TokenFactory tokenFactory = p.getTokenFactory();
@@ -42,32 +40,36 @@
             }
             else
             {
-                RowPosition end = range.end_key == null
+                PartitionPosition end = range.end_key == null
                                 ? p.getTokenFactory().fromString(range.end_token).maxKeyBound()
-                                : RowPosition.ForKey.get(range.end_key, p);
-                bounds = new Bounds<RowPosition>(RowPosition.ForKey.get(range.start_key, p), end);
+                                : PartitionPosition.ForKey.get(range.end_key, p);
+                bounds = new Bounds<PartitionPosition>(PartitionPosition.ForKey.get(range.start_key, p), end);
             }
-            long now = System.currentTimeMillis();
+            int nowInSec = FBUtilities.nowInSeconds();
             schedule(DatabaseDescriptor.getRangeRpcTimeout());
             try
             {
-                IDiskAtomFilter filter = ThriftValidation.asIFilter(predicate, metadata, column_parent.super_column);
-                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace,
-                                                                        column_parent.column_family,
-                                                                        now,
-                                                                        filter,
-                                                                        bounds,
-                                                                        ThriftConversion.indexExpressionsFromThrift(range.row_filter),
-                                                                        range.count),
-                                                  consistencyLevel);
+                ColumnFilter columns = makeColumnFilter(metadata, column_parent, predicate);
+                ClusteringIndexFilter filter = toInternalFilter(metadata, column_parent, predicate);
+                DataLimits limits = getLimits(range.count, metadata.isSuper() && !column_parent.isSetSuper_column(), predicate);
+                PartitionRangeReadCommand cmd = new PartitionRangeReadCommand(false,
+                                                                              true,
+                                                                              metadata,
+                                                                              nowInSec,
+                                                                              columns,
+                                                                              ThriftConversion.rowFilterFromThrift(metadata, range.row_filter),
+                                                                              limits,
+                                                                              new DataRange(bounds, filter));
+                try (PartitionIterator results = StorageProxy.getRangeSlice(cmd, consistencyLevel))
+                {
+                    assert results != null;
+                    return thriftifyKeySlices(results, column_parent, limits.perPartitionCount());
+                }
             }
             finally
             {
                 release();
             }
-            assert rows != null;
-
-            return thriftifyKeySlices(rows, column_parent, predicate, now);
         }
         catch (RequestValidationException e)
         {

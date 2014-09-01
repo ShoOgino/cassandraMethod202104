@@ -1,0 +1,27 @@
+    private void populate(int count) throws Throwable
+    {
+        byte [] payload = new byte[1000];
+        new Random().nextBytes(payload);
+        ByteBuffer b = ByteBuffer.wrap(payload);
+
+        for (int i = 0; i < count; i++)
+            for (int j = 0; j < ROW_PER_PARTITION; j++)
+                execute(String.format("INSERT INTO %s.%s(k, t, v) VALUES (?, ?, ?)", KEYSPACE, TABLE), i, j, b);
+
+        ColumnFamilyStore cfs = getColumnFamilyStore();
+        cfs.forceBlockingFlush();
+        if (cfs.getSSTables().size() > 1)
+        {
+            // we want just one big sstable to avoid doing actual compaction in compact() above
+            try
+            {
+                cfs.forceMajorCompaction();
+            }
+            catch (Throwable t)
+            {
+                throw new RuntimeException(t);
+            }
+        }
+        assert cfs.getSSTables().size() == 1 : cfs.getSSTables();
+    }
+

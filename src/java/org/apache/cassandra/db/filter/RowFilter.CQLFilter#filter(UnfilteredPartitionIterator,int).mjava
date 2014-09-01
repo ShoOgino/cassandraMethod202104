@@ -1,0 +1,26 @@
+        public UnfilteredPartitionIterator filter(UnfilteredPartitionIterator iter, final int nowInSec)
+        {
+            if (expressions.isEmpty())
+                return iter;
+
+            return new WrappingUnfilteredPartitionIterator(iter)
+            {
+                @Override
+                public UnfilteredRowIterator computeNext(final UnfilteredRowIterator iter)
+                {
+                    return new FilteringRowIterator(iter)
+                    {
+                        // We filter tombstones when passing the row to isSatisfiedBy so that the method doesn't have to bother with them.
+                        // (we should however not filter them in the output of the method, hence it's not used as row filter for the
+                        // FilteringRowIterator)
+                        private final TombstoneFilteringRow filter = new TombstoneFilteringRow(nowInSec);
+
+                        protected boolean includeRow(Row row)
+                        {
+                            return CQLFilter.this.isSatisfiedBy(iter.partitionKey(), filter.setTo(row));
+                        }
+                    };
+                }
+            };
+        }
+

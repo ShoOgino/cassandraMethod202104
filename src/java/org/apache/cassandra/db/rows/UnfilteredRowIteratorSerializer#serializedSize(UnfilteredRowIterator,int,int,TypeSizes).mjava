@@ -1,0 +1,39 @@
+    // Please note that this consume the iterator, and as such should not be called unless we have a simple way to
+    // recreate an iterator for both serialize and serializedSize, which is mostly only PartitionUpdate
+    public long serializedSize(UnfilteredRowIterator iterator, int version, int rowEstimate, TypeSizes sizes)
+    {
+        SerializationHeader header = new SerializationHeader(iterator.metadata(),
+                                                             iterator.columns(),
+                                                             iterator.stats());
+
+        assert rowEstimate >= 0;
+
+        long size = CFMetaData.serializer.serializedSize(iterator.metadata(), version, sizes)
+                  + sizes.sizeofWithLength(iterator.partitionKey().getKey())
+                  + 1; // flags
+
+        if (iterator.isEmpty())
+            return size;
+
+        DeletionTime partitionDeletion = iterator.partitionLevelDeletion();
+        Row staticRow = iterator.staticRow();
+        boolean hasStatic = staticRow != Rows.EMPTY_STATIC_ROW;
+
+        size += SerializationHeader.serializer.serializedSizeForMessaging(header, sizes, hasStatic);
+
+        if (!partitionDeletion.isLive())
+            size += delTimeSerializedSize(partitionDeletion, header, sizes);
+
+        if (hasStatic)
+            size += UnfilteredSerializer.serializer.serializedSize(staticRow, header, version, sizes);
+
+        if (rowEstimate >= 0)
+            size += sizes.sizeof(rowEstimate);
+
+        while (iterator.hasNext())
+            size += UnfilteredSerializer.serializer.serializedSize(iterator.next(), header, version, sizes);
+        size += UnfilteredSerializer.serializer.serializedSizeEndOfPartition(sizes);
+
+        return size;
+    }
+

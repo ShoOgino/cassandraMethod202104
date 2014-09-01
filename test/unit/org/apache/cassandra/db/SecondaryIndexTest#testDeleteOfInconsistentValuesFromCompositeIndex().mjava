@@ -1,0 +1,37 @@
+    @Test
+    public void testDeleteOfInconsistentValuesFromCompositeIndex() throws Exception
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        String cfName = WITH_COMPOSITE_INDEX;
+
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfName);
+
+        ByteBuffer col = ByteBufferUtil.bytes("birthdate");
+
+        // create a row and update the author value
+        new RowUpdateBuilder(cfs.metadata, 0, "k1").clustering("c").add("birthdate", 10l).build().applyUnsafe();
+
+        // test that the index query fetches this version
+        assertIndexedOne(cfs, col, 10l);
+
+        // force a flush and retry the query, so our index isn't being read from a memtable
+        keyspace.getColumnFamilyStore(cfName).forceBlockingFlush();
+        assertIndexedOne(cfs, col, 10l);
+
+        // now apply another update, but force the index update to be skipped
+        keyspace.apply(new RowUpdateBuilder(cfs.metadata, 1, "k1").clustering("c").add("birthdate", 20l).build(), true, false);
+
+        // Now searching the index for either the old or new value should return 0 rows
+        // because the new value was not indexed and the old value should be ignored
+        // (and in fact purged from the index cf).
+        // first check for the old value
+        assertIndexedNone(cfs, col, 10l);
+        assertIndexedNone(cfs, col, 20l);
+
+        // now, reset back to the original value, still skipping the index update, to
+        // make sure the value was expunged from the index when it was discovered to be inconsistent
+        // TODO: Figure out why this is re-inserting
+        keyspace.apply(new RowUpdateBuilder(cfs.metadata, 2, "k1").clustering("c1").add("birthdate", 10l).build(), true, false);
+        assertIndexedNone(cfs, col, 20l);
+    }
+

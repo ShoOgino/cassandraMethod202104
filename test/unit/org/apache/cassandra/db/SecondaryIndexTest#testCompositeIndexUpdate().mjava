@@ -1,0 +1,22 @@
+    @Test
+    public void testCompositeIndexUpdate() throws IOException
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(WITH_COMPOSITE_INDEX);
+        ByteBuffer col = ByteBufferUtil.bytes("birthdate");
+
+        // create a row and update the birthdate value, test that the index query fetches the new version
+        new RowUpdateBuilder(cfs.metadata, 1, "testIndexUpdate").clustering("c").add("birthdate", 100L).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 2, "testIndexUpdate").clustering("c").add("birthdate", 200L).build().applyUnsafe();
+
+        // Confirm old version fetch fails
+        assertIndexedNone(cfs, col, 100L);
+
+        // Confirm new works
+        assertIndexedOne(cfs, col, 200L);
+
+        // update the birthdate value with an OLDER timestamp, and test that the index ignores this
+        assertIndexedNone(cfs, col, 300L);
+        assertIndexedOne(cfs, col, 200L);
+    }
+

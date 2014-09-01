@@ -1,12 +1,13 @@
     public void scrub()
     {
         outputHandler.output(String.format("Scrubbing %s (%s bytes)", sstable, dataFile.length()));
+        int nowInSec = FBUtilities.nowInSeconds();
         try (SSTableRewriter writer = new SSTableRewriter(cfs, transaction, sstable.maxDataAge, isOffline);)
         {
             nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
             {
                 // throw away variable so we don't have a side effect in the assert
-                long firstRowPositionFromIndex = rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
+                long firstRowPositionFromIndex = rowIndexEntrySerializer.deserialize(indexFile).position;
                 assert firstRowPositionFromIndex == 0 : firstRowPositionFromIndex;
             }
 
@@ -59,7 +60,8 @@
                     if (currentIndexKey != null && !key.getKey().equals(currentIndexKey))
                     {
                         throw new IOError(new IOException(String.format("Key from data file (%s) does not match key from index file (%s)",
-                                ByteBufferUtil.bytesToHex(key.getKey()), ByteBufferUtil.bytesToHex(currentIndexKey))));
+                                //ByteBufferUtil.bytesToHex(key.getKey()), ByteBufferUtil.bytesToHex(currentIndexKey))));
+                                "_too big_", ByteBufferUtil.bytesToHex(currentIndexKey))));
                     }
 
                     if (dataSizeFromIndex > dataFile.length())
@@ -68,20 +70,19 @@
                     if (dataStart != dataStartFromIndex)
                         outputHandler.warn(String.format("Data file row position %d differs from index file row position %d", dataStart, dataStartFromIndex));
 
-                    SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, checkData);
-
-                    if (prevKey != null && prevKey.compareTo(key) > 0)
+                    try (UnfilteredRowIterator iterator = withValidation(new SSTableIdentityIterator(sstable, dataFile, key), dataFile.getPath()))
                     {
-                        saveOutOfOrderRow(prevKey, key, atoms);
-                        continue;
-                    }
+                        if (prevKey != null && prevKey.compareTo(key) > 0)
+                        {
+                            saveOutOfOrderRow(prevKey, key, iterator);
+                            continue;
+                        }
 
-                    @SuppressWarnings("resource")
-                    AbstractCompactedRow compactedRow = new LazilyCompactedRow(controller, Collections.singletonList(atoms));
-                    if (writer.tryAppend(compactedRow) == null)
-                        emptyRows++;
-                    else
-                        goodRows++;
+                        if (writer.tryAppend(iterator) == null)
+                            emptyRows++;
+                        else
+                            goodRows++;
+                    }
 
                     prevKey = key;
                 }
@@ -100,19 +101,19 @@
                         {
                             dataFile.seek(dataStartFromIndex);
 
-                            SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, checkData);
-                            if (prevKey != null && prevKey.compareTo(key) > 0)
+                            try (UnfilteredRowIterator iterator = withValidation(new SSTableIdentityIterator(sstable, dataFile, key), dataFile.getPath()))
                             {
-                                saveOutOfOrderRow(prevKey, key, atoms);
-                                continue;
-                            }
+                                if (prevKey != null && prevKey.compareTo(key) > 0)
+                                {
+                                    saveOutOfOrderRow(prevKey, key, iterator);
+                                    continue;
+                                }
 
-                            @SuppressWarnings("resource")
-                            AbstractCompactedRow compactedRow = new LazilyCompactedRow(controller, Collections.singletonList(atoms));
-                            if (writer.tryAppend(compactedRow) == null)
-                                emptyRows++;
-                            else
-                                goodRows++;
+                                if (writer.tryAppend(iterator) == null)
+                                    emptyRows++;
+                                else
+                                    goodRows++;
+                            }
 
                             prevKey = key;
                         }
@@ -138,18 +139,18 @@
                 }
             }
 
-            if (!outOfOrderRows.isEmpty())
+            if (!outOfOrder.isEmpty())
             {
                 // out of order rows, but no bad rows found - we can keep our repairedAt time
                 long repairedAt = badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt;
                 try (SSTableWriter inOrderWriter = CompactionManager.createWriter(cfs, destination, expectedBloomFilterSize, repairedAt, sstable);)
                 {
-                    for (Row row : outOfOrderRows)
-                        inOrderWriter.append(row.key, row.cf);
+                    for (Partition partition : outOfOrder)
+                        inOrderWriter.append(partition.unfilteredIterator());
                     newInOrderSstable = inOrderWriter.finish(-1, sstable.maxDataAge, true);
                 }
                 transaction.update(newInOrderSstable, false);
-                outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrderRows.size(), sstable, newInOrderSstable));
+                outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrder.size(), sstable, newInOrderSstable));
             }
 
             // finish obsoletes the old sstable
@@ -160,10 +161,6 @@
         catch (IOException e)
         {
             throw Throwables.propagate(e);
-        }
-        finally
-        {
-            controller.close();
         }
 
         if (newSstable == null)

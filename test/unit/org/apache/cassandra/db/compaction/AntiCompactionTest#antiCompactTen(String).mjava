@@ -1,4 +1,4 @@
-    public void antiCompactTen(String compactionStrategy) throws Exception
+    public void antiCompactTen(String compactionStrategy) throws InterruptedException, IOException
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE1);
         ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF);
@@ -30,22 +30,24 @@
         int nonRepairedKeys = 0;
         for (SSTableReader sstable : store.getSSTables())
         {
-            try(ISSTableScanner scanner = sstable.getScanner())
+            try (ISSTableScanner scanner = sstable.getScanner((RateLimiter) null))
             {
                 while (scanner.hasNext())
                 {
-                    SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
-                    if (sstable.isRepaired())
+                    try (UnfilteredRowIterator row = scanner.next())
                     {
-                        assertTrue(range.contains(row.getKey().getToken()));
-                        assertEquals(repairedAt, sstable.getSSTableMetadata().repairedAt);
-                        repairedKeys++;
-                    }
-                    else
-                    {
-                        assertFalse(range.contains(row.getKey().getToken()));
-                        assertEquals(ActiveRepairService.UNREPAIRED_SSTABLE, sstable.getSSTableMetadata().repairedAt);
-                        nonRepairedKeys++;
+                        if (sstable.isRepaired())
+                        {
+                            assertTrue(range.contains(row.partitionKey().getToken()));
+                            assertEquals(repairedAt, sstable.getSSTableMetadata().repairedAt);
+                            repairedKeys++;
+                        }
+                        else
+                        {
+                            assertFalse(range.contains(row.partitionKey().getToken()));
+                            assertEquals(ActiveRepairService.UNREPAIRED_SSTABLE, sstable.getSSTableMetadata().repairedAt);
+                            nonRepairedKeys++;
+                        }
                     }
                 }
             }

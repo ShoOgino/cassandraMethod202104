@@ -1,15 +1,21 @@
     @Test
     public void testResolve()
     {
-        ColumnFamily cf1 = ArrayBackedSortedColumns.factory.create(KEYSPACE1, "Standard1");
-        cf1.addColumn(column("one", "A", 0));
+        ColumnDefinition defA = cfm.getColumnDefinition(new ColumnIdentifier("a", true));
+        ColumnDefinition defB = cfm.getColumnDefinition(new ColumnIdentifier("b", true));
 
-        ColumnFamily cf2 = ArrayBackedSortedColumns.factory.create(KEYSPACE1, "Standard1");
-        cf2.addColumn(column("one", "B", 1));
-        cf2.addColumn(column("two", "C", 1));
+        PartitionUpdate update = new PartitionUpdate(cfm, dk, cfm.partitionColumns(), 1);
+        Rows.writeClustering(update.metadata().comparator.make("c1"), update.writer());
+        writeSimpleCellValue(update.writer(), cfm, defA, "a1", 0, nowInSeconds);
+        writeSimpleCellValue(update.writer(), cfm, defA, "a2", 1, nowInSeconds);
+        writeSimpleCellValue(update.writer(), cfm, defB, "b1", 1, nowInSeconds);
+        update.writer().endOfRow();
 
-        cf1.addAll(cf2);
-        assert Arrays.equals(cf1.getColumn(CellNames.simpleDense(ByteBufferUtil.bytes("one"))).value().array(), "B".getBytes());
-        assert Arrays.equals(cf1.getColumn(CellNames.simpleDense(ByteBufferUtil.bytes("two"))).value().array(), "C".getBytes());
+        Unfiltered unfiltered = update.unfilteredIterator().next();
+        assertTrue(unfiltered.kind() == Unfiltered.Kind.ROW);
+        Row row = (Row) unfiltered;
+        assertEquals("a2", defA.cellValueType().getString(row.getCell(defA).value()));
+        assertEquals("b1", defB.cellValueType().getString(row.getCell(defB).value()));
+        assertEquals(2, row.columns().columnCount());
     }
 

@@ -21,10 +21,10 @@
             cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.SELECT);
             Keyspace keyspaceName = Keyspace.open(keyspace);
             ColumnFamilyStore cfs = keyspaceName.getColumnFamilyStore(column_parent.column_family);
-            long timestamp = System.currentTimeMillis();
+            int nowInSec = FBUtilities.nowInSeconds();
 
             if (predicate.column_names != null)
-                return getSliceInternal(keyspace, key, column_parent, timestamp, predicate, consistency_level, cState).size();
+                return getSliceInternal(keyspace, key, column_parent, nowInSec, predicate, consistency_level, cState).size();
 
             int pageSize;
             // request by page if this is a large row
@@ -43,16 +43,34 @@
             SliceRange sliceRange = predicate.slice_range == null
                                   ? new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, Integer.MAX_VALUE)
                                   : predicate.slice_range;
-            SliceQueryFilter filter = toInternalFilter(cfs.metadata, column_parent, sliceRange);
 
-            return QueryPagers.countPaged(keyspace,
-                                          column_parent.column_family,
-                                          key,
+            ColumnFilter columnFilter;
+            ClusteringIndexFilter filter;
+            if (cfs.metadata.isSuper() && !column_parent.isSetSuper_column())
+            {
+                // If we count on a super column table without having set the super column name, we're in fact interested by the count of super columns
+                columnFilter = ColumnFilter.all(cfs.metadata);
+                filter = new ClusteringIndexSliceFilter(makeSlices(cfs.metadata, sliceRange), sliceRange.reversed);
+            }
+            else
+            {
+                columnFilter = makeColumnFilter(cfs.metadata, column_parent, sliceRange);
+                filter = toInternalFilter(cfs.metadata, column_parent, sliceRange);
+            }
+
+            DataLimits limits = getLimits(1, cfs.metadata.isSuper() && !column_parent.isSetSuper_column(), predicate);
+            DecoratedKey dk = StorageService.getPartitioner().decorateKey(key);
+
+            return QueryPagers.countPaged(cfs.metadata,
+                                          dk,
+                                          columnFilter,
                                           filter,
+                                          limits,
                                           ThriftConversion.fromThrift(consistency_level),
                                           cState,
                                           pageSize,
-                                          timestamp);
+                                          nowInSec,
+                                          true);
         }
         catch (IllegalArgumentException e)
         {

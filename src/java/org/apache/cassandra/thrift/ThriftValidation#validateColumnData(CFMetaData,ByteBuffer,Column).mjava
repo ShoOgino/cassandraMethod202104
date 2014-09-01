@@ -1,0 +1,37 @@
+    /**
+     * Validates the data part of the column (everything in the column object but the name, which is assumed to be valid)
+     */
+    public static void validateColumnData(CFMetaData metadata, ByteBuffer scName, Column column) throws org.apache.cassandra.exceptions.InvalidRequestException
+    {
+        validateTtl(column);
+        if (!column.isSetValue())
+            throw new org.apache.cassandra.exceptions.InvalidRequestException("Column value is required");
+        if (!column.isSetTimestamp())
+            throw new org.apache.cassandra.exceptions.InvalidRequestException("Column timestamp is required");
+
+        try
+        {
+            LegacyLayout.LegacyCellName cn = LegacyLayout.decodeCellName(metadata, scName, column.name);
+            cn.column.validateCellValue(column.value);
+
+            // Indexed column values cannot be larger than 64K.  See CASSANDRA-3057/4240 for more details
+            Keyspace.open(metadata.ksName).getColumnFamilyStore(metadata.cfName).indexManager.validate(cn.column, column.value, null);
+        }
+        catch (UnknownColumnException e)
+        {
+            throw new org.apache.cassandra.exceptions.InvalidRequestException(e.getMessage());
+        }
+        catch (MarshalException me)
+        {
+            if (logger.isDebugEnabled())
+                logger.debug("rejecting invalid value {}", ByteBufferUtil.bytesToHex(summarize(column.value)));
+
+            throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("(%s) [%s][%s][%s] failed validation",
+                                                                      me.getMessage(),
+                                                                      metadata.ksName,
+                                                                      metadata.cfName,
+                                                                      (getThriftColumnNameComparator(metadata, scName)).getString(column.name)));
+        }
+
+    }
+

@@ -26,35 +26,58 @@
 
             ThriftValidation.validateKey(metadata, key);
 
-            IDiskAtomFilter filter;
+            ColumnFilter columns;
+            ClusteringIndexFilter filter;
             if (metadata.isSuper())
             {
-                CellNameType columnType = new SimpleDenseCellNameType(metadata.comparator.subtype(column_path.column == null ? 0 : 1));
-                SortedSet<CellName> names = new TreeSet<CellName>(columnType);
-                names.add(columnType.cellFromByteBuffer(column_path.column == null ? column_path.super_column : column_path.column));
-                filter = SuperColumns.fromSCNamesFilter(metadata.comparator, column_path.column == null ? null : column_path.bufferForSuper_column(), new NamesQueryFilter(names));
+                if (column_path.column == null)
+                {
+                    // Selects a full super column
+                    columns = ColumnFilter.all(metadata);
+                }
+                else
+                {
+                    // Selects a single column within a super column
+                    ColumnFilter.Builder builder = ColumnFilter.selectionBuilder();
+                    ColumnDefinition staticDef = metadata.getColumnDefinition(column_path.column);
+                    ColumnDefinition dynamicDef = metadata.compactValueColumn();
+
+                    if (staticDef != null)
+                        builder.add(staticDef);
+                    // Note that even if there is a staticDef, we still query the dynamicDef since we can't guarantee the static one hasn't
+                    // been created after data has been inserted for that definition
+                    builder.select(dynamicDef, CellPath.create(column_path.column));
+                    columns = builder.build();
+                }
+                filter = new ClusteringIndexNamesFilter(FBUtilities.<Clustering>singleton(new SimpleClustering(column_path.super_column), metadata.comparator),
+                                                  false);
             }
             else
             {
-                SortedSet<CellName> names = new TreeSet<CellName>(metadata.comparator);
-                names.add(metadata.comparator.cellFromByteBuffer(column_path.column));
-                filter = new NamesQueryFilter(names);
+                LegacyLayout.LegacyCellName cellname = LegacyLayout.decodeCellName(metadata, column_path.super_column, column_path.column);
+                columns = ColumnFilter.selection(PartitionColumns.of(cellname.column));
+                filter = new ClusteringIndexNamesFilter(FBUtilities.<Clustering>singleton(cellname.clustering, metadata.comparator), false);
             }
 
             long now = System.currentTimeMillis();
-            ReadCommand command = ReadCommand.create(keyspace, key, column_path.column_family, now, filter);
+            DecoratedKey dk = StorageService.getPartitioner().decorateKey(key);
+            SinglePartitionReadCommand<?> command = SinglePartitionReadCommand.create(true, metadata, FBUtilities.nowInSeconds(), columns, RowFilter.NONE, DataLimits.NONE, dk, filter);
 
-            Map<DecoratedKey, ColumnFamily> cfamilies = readColumnFamily(Arrays.asList(command), consistencyLevel, cState);
+            try (RowIterator result = PartitionIterators.getOnlyElement(read(Arrays.<SinglePartitionReadCommand<?>>asList(command), consistencyLevel, cState), command))
+            {
+                if (!result.hasNext())
+                    throw new NotFoundException();
 
-            ColumnFamily cf = cfamilies.get(StorageService.getPartitioner().decorateKey(command.key));
-
-            if (cf == null)
-                throw new NotFoundException();
-            List<ColumnOrSuperColumn> tcolumns = thriftifyColumnFamily(cf, metadata.isSuper() && column_path.column != null, false, now);
-            if (tcolumns.isEmpty())
-                throw new NotFoundException();
-            assert tcolumns.size() == 1;
-            return tcolumns.get(0);
+                List<ColumnOrSuperColumn> tcolumns = thriftifyPartition(result, metadata.isSuper() && column_path.column != null, result.isReverseOrder(), 1);
+                if (tcolumns.isEmpty())
+                    throw new NotFoundException();
+                assert tcolumns.size() == 1;
+                return tcolumns.get(0);
+            }
+        }
+        catch (UnknownColumnException e)
+        {
+            throw new InvalidRequestException(e.getMessage());
         }
         catch (RequestValidationException e)
         {

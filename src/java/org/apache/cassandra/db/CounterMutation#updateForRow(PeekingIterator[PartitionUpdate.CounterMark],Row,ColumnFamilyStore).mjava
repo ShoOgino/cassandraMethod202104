@@ -1,0 +1,26 @@
+    private void updateForRow(PeekingIterator<PartitionUpdate.CounterMark> markIter, Row row, ColumnFamilyStore cfs)
+    {
+        int cmp = 0;
+        // If the mark is before the row, we have no value for this mark, just consume it
+        while (markIter.hasNext() && (cmp = compare(markIter.peek().clustering(), row.clustering(), cfs)) < 0)
+            markIter.next();
+
+        if (!markIter.hasNext())
+            return;
+
+        while (cmp == 0)
+        {
+            PartitionUpdate.CounterMark mark = markIter.next();
+            Cell cell = mark.path() == null ? row.getCell(mark.column()) : row.getCell(mark.column(), mark.path());
+            if (cell != null)
+            {
+                updateWithCurrentValue(mark, CounterContext.instance().getLocalClockAndCount(cell.value()), cfs);
+                markIter.remove();
+            }
+            if (!markIter.hasNext())
+                return;
+
+            cmp = compare(markIter.peek().clustering(), row.clustering(), cfs);
+        }
+    }
+

@@ -1,0 +1,71 @@
+    @Test
+    public void testIndexScan()
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(WITH_COMPOSITE_INDEX);
+
+        new RowUpdateBuilder(cfs.metadata, 0, "k1").clustering("c").add("birthdate", 1L).add("notbirthdate", 1L).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 0, "k2").clustering("c").add("birthdate", 2L).add("notbirthdate", 2L).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 0, "k3").clustering("c").add("birthdate", 1L).add("notbirthdate", 2L).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 0, "k4").clustering("c").add("birthdate", 3L).add("notbirthdate", 2L).build().applyUnsafe();
+
+        // basic single-expression query
+        List<FilteredPartition> partitions = Util.getAll(Util.cmd(cfs).fromKeyExcl("k1").toKeyIncl("k3").columns("birthdate").build());
+        assertEquals(2, partitions.size());
+        Util.assertCellValue(2L, cfs, Util.row(partitions.get(0), "c"), "birthdate");
+        Util.assertCellValue(1L, cfs, Util.row(partitions.get(1), "c"), "birthdate");
+
+        // 2 columns, 3 results
+        partitions = Util.getAll(Util.cmd(cfs).fromKeyExcl("k1").toKeyIncl("k4aaa").build());
+        assertEquals(3, partitions.size());
+
+        Row first = Util.row(partitions.get(0), "c");
+        Util.assertCellValue(2L, cfs, first, "birthdate");
+        Util.assertCellValue(2L, cfs, first, "notbirthdate");
+
+        Row second = Util.row(partitions.get(1), "c");
+        Util.assertCellValue(1L, cfs, second, "birthdate");
+        Util.assertCellValue(2L, cfs, second, "notbirthdate");
+
+        Row third = Util.row(partitions.get(2), "c");
+        Util.assertCellValue(3L, cfs, third, "birthdate");
+        Util.assertCellValue(2L, cfs, third, "notbirthdate");
+
+        // Verify getIndexSearchers finds the data for our rc
+        ReadCommand rc = Util.cmd(cfs).fromKeyIncl("k1")
+                                      .toKeyIncl("k3")
+                                      .columns("birthdate")
+                                      .filterOn("birthdate", Operator.EQ, 1L)
+                                      .build();
+        List<SecondaryIndexSearcher> searchers = cfs.indexManager.getIndexSearchersFor(rc);
+        assertEquals(searchers.size(), 1);
+        try (ReadOrderGroup orderGroup = rc.startOrderGroup(); UnfilteredPartitionIterator pi = searchers.get(0).search(rc, orderGroup))
+        {
+            assertTrue(pi.hasNext());
+            pi.next().close();
+        }
+
+        // Verify gt on idx scan
+        partitions = Util.getAll(Util.cmd(cfs).fromKeyIncl("k1").toKeyIncl("k4aaa") .filterOn("birthdate", Operator.GT, 1L).build());
+        int rowCount = 0;
+        for (FilteredPartition partition : partitions)
+        {
+            for (Row row : partition)
+            {
+                ++rowCount;
+                assert ByteBufferUtil.toLong(Util.cell(cfs, row, "birthdate").value()) > 1L;
+            }
+        }
+        assertEquals(2, rowCount);
+
+        // Filter on non-indexed, LT comparison
+        Util.assertEmpty(Util.cmd(cfs).fromKeyExcl("k1").toKeyIncl("k4aaa")
+                                      .filterOn("notbirthdate", Operator.NEQ, 2L)
+                                      .build());
+
+        // Hit on primary, fail on non-indexed filter
+        Util.assertEmpty(Util.cmd(cfs).fromKeyExcl("k1").toKeyIncl("k4aaa")
+                                      .filterOn("birthdate", Operator.EQ, 1L)
+                                      .filterOn("notbirthdate", Operator.NEQ, 2L)
+                                      .build());
+    }
+

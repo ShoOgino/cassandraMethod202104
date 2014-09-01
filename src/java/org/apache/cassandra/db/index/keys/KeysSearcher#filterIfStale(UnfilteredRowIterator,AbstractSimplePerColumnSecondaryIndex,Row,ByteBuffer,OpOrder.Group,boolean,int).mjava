@@ -1,0 +1,37 @@
+    private UnfilteredRowIterator filterIfStale(UnfilteredRowIterator iterator,
+                                                AbstractSimplePerColumnSecondaryIndex index,
+                                                Row indexHit,
+                                                ByteBuffer indexedValue,
+                                                OpOrder.Group writeOp,
+                                                boolean isForThrift,
+                                                int nowInSec)
+    {
+        if (isForThrift)
+        {
+            // The data we got has gone though ThrifResultsMerger, so we're looking for the row whose clustering
+            // is the indexed name. Ans so we need to materialize the partition.
+            ArrayBackedPartition result = ArrayBackedPartition.create(iterator);
+            iterator.close();
+            Row data = result.getRow(new SimpleClustering(index.indexedColumn().name.bytes));
+            Cell cell = data == null ? null : data.getCell(baseCfs.metadata.compactValueColumn());
+            return deleteIfStale(iterator.partitionKey(), cell, index, indexHit, indexedValue, writeOp, nowInSec)
+                 ? null
+                 : result.unfilteredIterator();
+        }
+        else
+        {
+            assert iterator.metadata().isCompactTable();
+            Row data = iterator.staticRow();
+            Cell cell = data == null ? null : data.getCell(index.indexedColumn());
+            if (deleteIfStale(iterator.partitionKey(), cell, index, indexHit, indexedValue, writeOp, nowInSec))
+            {
+                iterator.close();
+                return null;
+            }
+            else
+            {
+                return iterator;
+            }
+        }
+    }
+

@@ -5,21 +5,20 @@
         String keyspace = "cql_keyspace";
         String table = "table2";
         ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
-        CompositeType ct = (CompositeType)cfs.metadata.comparator.asAbstractType();
 
         // Insert rows but with a tombstone as last cell
         for (int i = 0; i < 5; i++)
             executeInternal(String.format("INSERT INTO %s.%s (k, c, v) VALUES ('k%d', 'c%d', null)", keyspace, table, 0, i));
 
-        SliceQueryFilter filter = new SliceQueryFilter(ColumnSlice.ALL_COLUMNS_ARRAY, false, 100);
-        QueryPager pager = QueryPagers.localPager(new SliceFromReadCommand(keyspace, bytes("k0"), table, 0, filter));
+        ReadCommand command = SinglePartitionSliceCommand.create(cfs.metadata, FBUtilities.nowInSeconds(), Util.dk("k0"), Slice.ALL);
+
+        QueryPager pager = command.getPager(null);
 
         for (int i = 0; i < 5; i++)
         {
-            List<Row> page = pager.fetchPage(1);
-            assertEquals(toString(page), 1, page.size());
+            List<FilteredPartition> partitions = query(pager, 1);
             // The only live cell we should have each time is the row marker
-            assertRow(page.get(0), "k0", ct.decompose("c" + i, ""));
+            assertRow(partitions.get(0), "k0", "c" + i);
         }
     }
 

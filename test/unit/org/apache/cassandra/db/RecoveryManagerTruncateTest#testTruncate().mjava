@@ -2,27 +2,23 @@
     public void testTruncate() throws IOException
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE1);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
-
-        Mutation rm;
-        ColumnFamily cf;
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore("Standard1");
 
         // add a single cell
-        cf = ArrayBackedSortedColumns.factory.create(KEYSPACE1, CF_STANDARD1);
-        cf.addColumn(column("col1", "val1", 1L));
-        rm = new Mutation(KEYSPACE1, ByteBufferUtil.bytes("keymulti"), cf);
-        rm.applyUnsafe();
-        long time = System.currentTimeMillis();
+        new RowUpdateBuilder(cfs.metadata, 0, "key1")
+            .clustering("cc")
+            .add("val", "val1")
+            .build()
+            .applyUnsafe();
 
         // Make sure data was written
-        assertNotNull(getFromTable(keyspace, CF_STANDARD1, "keymulti", "col1"));
+        assertTrue(Util.getAll(Util.cmd(cfs).build()).size() > 0);
 
         // and now truncate it
         cfs.truncateBlocking();
-        CommitLog.instance.resetUnsafe(false);
+        assert 0 != CommitLog.instance.resetUnsafe(false);
 
         // and validate truncation.
-        assertNull(getFromTable(keyspace, CF_STANDARD1, "keymulti", "col1"));
-        assertTrue(SystemKeyspace.getTruncatedAt(cfs.metadata.cfId) > time);
+        Util.assertEmptyUnfiltered(Util.cmd(cfs).build());
     }
 

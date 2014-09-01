@@ -1,22 +1,21 @@
     public List<ByteBuffer> buildPartitionKeyNames(QueryOptions options)
     throws InvalidRequestException
     {
-        CompositesBuilder keyBuilder = new CompositesBuilder(cfm.getKeyValidatorAsCType());
+        MultiCBuilder keyBuilder = MultiCBuilder.create(cfm.getKeyValidatorAsClusteringComparator());
         for (ColumnDefinition def : cfm.partitionKeyColumns())
         {
             Restriction r = checkNotNull(processedKeys.get(def.name), "Missing mandatory PRIMARY KEY part %s", def.name);
             r.appendTo(keyBuilder, options);
         }
 
-        return Lists.transform(keyBuilder.build(), new com.google.common.base.Function<Composite, ByteBuffer>()
+        NavigableSet<Clustering> clusterings = keyBuilder.build();
+        List<ByteBuffer> keys = new ArrayList<ByteBuffer>(clusterings.size());
+        for (Clustering clustering : clusterings)
         {
-            @Override
-            public ByteBuffer apply(Composite composite)
-            {
-                ByteBuffer byteBuffer = composite.toByteBuffer();
-                ThriftValidation.validateKey(cfm, byteBuffer);
-                return byteBuffer;
-            }
-        });
+            ByteBuffer key = CFMetaData.serializePartitionKey(clustering);
+            ThriftValidation.validateKey(cfm, key);
+            keys.add(key);
+        }
+        return keys;
     }
 

@@ -1,13 +1,23 @@
     @Test
-    public void testExpiringColumnExpiration()
+    public void testExpiringColumnExpiration() throws IOException
     {
-        Cell c = new BufferExpiringCell(CellNames.simpleDense(ByteBufferUtil.bytes("one")), ByteBufferUtil.bytes("A"), 0, 1);
-        assertTrue(c.isLive());
+        int ttl = 1;
+        ColumnDefinition def = cfm.getColumnDefinition(new ColumnIdentifier("a", true));
+        PartitionUpdate update = new PartitionUpdate(cfm, dk, cfm.partitionColumns(), 1);
+        Rows.writeClustering(update.metadata().comparator.make("c1"), update.writer());
+        update.writer().writeCell(def, false, ((AbstractType) def.cellValueType()).decompose("a1"),
+                                  SimpleLivenessInfo.forUpdate(0, ttl, nowInSeconds, cfm),
+                                  null);
+        update.writer().endOfRow();
+        new Mutation(update).applyUnsafe();
 
-        // Because we keep the local deletion time with a precision of a
-        // second, we could have to wait 2 seconds in worst case scenario.
-        Uninterruptibles.sleepUninterruptibly(2, TimeUnit.SECONDS);
+        // when we read with a nowInSeconds before the cell has expired,
+        // the PartitionIterator includes the row we just wrote
+        Row row = Util.getOnlyRow(Util.cmd(cfs, dk).includeRow("c1").withNowInSeconds(nowInSeconds).build());
+        assertEquals("a1", ByteBufferUtil.string(row.getCell(def).value()));
 
-        assert !c.isLive() && c.timestamp() == 0;
+        // when we read with a nowInSeconds after the cell has expired, the row is filtered
+        // so the PartitionIterator is empty
+        Util.assertEmpty(Util.cmd(cfs, dk).includeRow("c1").withNowInSeconds(nowInSeconds + ttl + 1).build());
     }
 

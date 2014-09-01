@@ -6,11 +6,14 @@
         truncate(cfs);
         for (int i = 0; i < 100; i++)
         {
-            DecoratedKey key = Util.dk(Integer.toString(i));
-            Mutation rm = new Mutation(KEYSPACE, key.getKey());
+            String key = Integer.toString(i);
+
             for (int j = 0; j < 10; j++)
-                rm.add(CF, Util.cellname(Integer.toString(j)), ByteBufferUtil.EMPTY_BYTE_BUFFER, 100);
-            rm.apply();
+                new RowUpdateBuilder(cfs.metadata, 100, key)
+                    .clustering(Integer.toString(j))
+                    .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                    .build()
+                    .apply();
         }
         cfs.forceBlockingFlush();
         cfs.forceMajorCompaction();
@@ -26,12 +29,13 @@
              CompactionController controller = new CompactionController(cfs, compacting, 0);
              LifecycleTransaction txn = cfs.getTracker().tryModify(compacting, OperationType.UNKNOWN);
              SSTableRewriter rewriter = new SSTableRewriter(cfs, txn, 1000, false, 1);
+             CompactionIterator ci = new CompactionIterator(OperationType.COMPACTION, Collections.singletonList(scanner), controller, FBUtilities.nowInSeconds(), UUIDGen.getTimeUUID())
         )
         {
             rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
-            while (scanner.hasNext())
+            while (ci.hasNext())
             {
-                rewriter.append(new LazilyCompactedRow(controller, Arrays.asList(scanner.next())));
+                rewriter.append(ci.next());
                 if (keyCount % 10 == 0)
                 {
                     rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
