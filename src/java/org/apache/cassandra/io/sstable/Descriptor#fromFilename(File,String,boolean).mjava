@@ -3,7 +3,7 @@
      *
      * <ul>
      *     <li>&lt;ksname&gt;-&lt;cfname&gt;-(tmp-)?&lt;version&gt;-&lt;gen&gt;-&lt;component&gt; for cassandra 2.0 and before</li>
-     *     <li>(&lt;tmp marker&gt;-)?&lt;version&gt;-&lt;gen&gt;-&lt;component&gt; for cassandra 2.1 and later</li>
+     *     <li>(&lt;tmp marker&gt;-)?&lt;version&gt;-&lt;gen&gt;-&lt;component&gt; for cassandra 3.0 and later</li>
      * </ul>
      *
      * If this is for SSTable of secondary index, directory should ends with index name for 2.1+.
@@ -32,32 +32,42 @@
         // component suffix
         String component = skipComponent ? null : tokenStack.pop();
 
+        nexttok = tokenStack.pop();
+        // generation OR Type
+        SSTableFormat.Type fmt = SSTableFormat.Type.LEGACY;
+        if (!CharMatcher.DIGIT.matchesAllOf(nexttok))
+        {
+            fmt = SSTableFormat.Type.validate(nexttok);
+            nexttok = tokenStack.pop();
+        }
+
         // generation
-        int generation = Integer.parseInt(tokenStack.pop());
+        int generation = Integer.parseInt(nexttok);
 
         // version
         nexttok = tokenStack.pop();
-        if (!Version.validate(nexttok))
+        Version version = fmt.info.getVersion(nexttok);
+
+        if (!version.validate(nexttok))
             throw new UnsupportedOperationException("SSTable " + name + " is too old to open.  Upgrade to 2.0 first, and run upgradesstables");
-        Version version = new Version(nexttok);
 
         // optional temporary marker
-        Type type = Type.FINAL;
+        Type type = Descriptor.Type.FINAL;
         nexttok = tokenStack.peek();
-        if (Type.TEMP.marker.equals(nexttok))
+        if (Descriptor.Type.TEMP.marker.equals(nexttok))
         {
-            type = Type.TEMP;
+            type = Descriptor.Type.TEMP;
             tokenStack.pop();
         }
-        else if (Type.TEMPLINK.marker.equals(nexttok))
+        else if (Descriptor.Type.TEMPLINK.marker.equals(nexttok))
         {
-            type = Type.TEMPLINK;
+            type = Descriptor.Type.TEMPLINK;
             tokenStack.pop();
         }
 
         // ks/cf names
         String ksname, cfname;
-        if (version.newFileName)
+        if (version.hasNewFileName())
         {
             // for 2.1+ read ks and cf names from directory
             File cfDirectory = parentDirectory;
@@ -86,6 +96,6 @@
         }
         assert tokenStack.isEmpty() : "Invalid file name " + name + " in " + directory;
 
-        return Pair.create(new Descriptor(version, parentDirectory, ksname, cfname, generation, type), component);
+        return Pair.create(new Descriptor(version, parentDirectory, ksname, cfname, generation, type, fmt), component);
     }
 
