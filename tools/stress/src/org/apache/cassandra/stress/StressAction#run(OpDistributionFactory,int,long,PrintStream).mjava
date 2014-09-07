@@ -5,11 +5,11 @@
                                      operations.desc(),
                                      threadCount,
                                      opCount > 0 ? " for " + opCount + " iterations" : "until stderr of mean < " + settings.command.targetUncertainty));
-        final WorkQueue workQueue;
+        final WorkManager workManager;
         if (opCount < 0)
-            workQueue = new ContinuousWorkQueue(50);
+            workManager = new ContinuousWorkManager();
         else
-            workQueue = FixedWorkQueue.build(opCount);
+            workManager = new FixedWorkManager(opCount);
 
         RateLimiter rateLimiter = null;
         // TODO : move this to a new queue wrapper that gates progress based on a poisson (or configurable) distribution
@@ -21,7 +21,7 @@
         final CountDownLatch done = new CountDownLatch(threadCount);
         final Consumer[] consumers = new Consumer[threadCount];
         for (int i = 0; i < threadCount; i++)
-            consumers[i] = new Consumer(operations, done, workQueue, metrics, rateLimiter);
+            consumers[i] = new Consumer(operations, done, workManager, metrics, rateLimiter);
 
         // starting worker threadCount
         for (int i = 0; i < threadCount; i++)
@@ -37,14 +37,15 @@
                         settings.command.minimumUncertaintyMeasurements,
                         settings.command.maximumUncertaintyMeasurements);
             } catch (InterruptedException e) { }
-            workQueue.stop();
+            workManager.stop();
         }
 
         try
         {
             done.await();
             metrics.stop();
-        } catch (InterruptedException e) {}
+        }
+        catch (InterruptedException e) {}
 
         if (metrics.wasCancelled())
             return null;
