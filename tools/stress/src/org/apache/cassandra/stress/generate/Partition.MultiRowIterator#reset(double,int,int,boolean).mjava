@@ -1,0 +1,52 @@
+        // if we're a write, the expected behaviour is that the requested batch count is compounded with the seed's visit
+        // count to decide how much we should return in one iteration
+        void reset(double useChance, int targetCount, int batches, boolean isWrite)
+        {
+            if (this.useChance < 1d)
+            {
+                // we clear our prior roll-modifiers if the use chance was previously less-than zero
+                Arrays.fill(rollmodifier, 1d);
+                Arrays.fill(chancemodifier, 1d);
+            }
+
+            // set the seed for the first clustering component
+            generator.clusteringComponents.get(0).setSeed(idseed);
+            int[] position = seed.position;
+
+            // calculate how many first clustering components we'll generate, and how many total rows this predicts
+            int firstComponentCount = (int) generator.clusteringComponents.get(0).clusteringDistribution.next();
+            int expectedRowCount;
+
+            if (!isWrite && position != null)
+            {
+                expectedRowCount = 0;
+                for (int i = 0 ; i < position.length ; i++)
+                {
+                    expectedRowCount += position[i] * generator.clusteringChildAverages[i];
+                    limit[i] = position[i];
+                }
+            }
+            else
+            {
+                expectedRowCount = firstComponentCount * generator.clusteringChildAverages[0];
+                if (isWrite)
+                    batches *= seed.visits;
+                Arrays.fill(limit, Integer.MAX_VALUE);
+            }
+
+            batchSize = Math.max(1, expectedRowCount / batches);
+            if (Double.isNaN(useChance))
+                useChance = Math.max(0d, Math.min(1d, targetCount / (double) expectedRowCount));
+
+            // clear any remnants of the last iteration, wire up our constants, and fill in the first clustering components
+            this.useChance = useChance;
+            this.returnedOne = false;
+            for (Queue<?> q : clusteringComponents)
+                q.clear();
+            clusteringSeeds[0] = idseed;
+            fill(clusteringComponents[0], firstComponentCount, generator.clusteringComponents.get(0));
+
+            // seek to our start position
+            seek(isWrite ? position : null);
+        }
+
