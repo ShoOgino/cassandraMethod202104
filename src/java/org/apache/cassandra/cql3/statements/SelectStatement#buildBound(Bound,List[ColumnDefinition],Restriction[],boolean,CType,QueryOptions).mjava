@@ -22,6 +22,7 @@
             }
         }
 
+        CompositesBuilder compositeBuilder = new CompositesBuilder(builder, isReversed ? type.reverseComparator() : type);
         // The end-of-component of composite doesn't depend on whether the
         // component type is reversed or not (i.e. the ReversedType is applied
         // to the component comparator but not to the end-of-component itself),
@@ -41,41 +42,21 @@
                 // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
                 // For composites, if there was preceding component and we're computing the end, we must change the last component
                 // End-Of-Component, otherwise we would be selecting only one record.
-                Composite prefix = builder.build();
-                return Collections.singletonList(!prefix.isEmpty() && eocBound == Bound.END ? prefix.end() : prefix);
+                EOC eoc = !compositeBuilder.isEmpty() && eocBound == Bound.END ? EOC.END : EOC.NONE;
+                return compositeBuilder.buildWithEOC(eoc);
             }
             if (r.isSlice())
             {
-                builder.add(getSliceValue(r, b, options));
-                Relation.Type relType = ((Restriction.Slice)r).getRelation(eocBound, b);
-                return Collections.singletonList(builder.build().withEOC(eocForRelation(relType)));
+                compositeBuilder.addElementToAll(getSliceValue(r, b, options));
+                Relation.Type relType = ((Restriction.Slice) r).getRelation(eocBound, b);
+                return compositeBuilder.buildWithEOC(eocForRelation(relType));
             }
-            else
-            {
-                List<ByteBuffer> values = r.values(options);
-                if (values.size() != 1)
-                {
-                    // IN query, we only support it on the clustering columns
-                    assert def.position() == defs.size() - 1;
-                    // The IN query might not have listed the values in comparator order, so we need to re-sort
-                    // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
-                    TreeSet<Composite> s = new TreeSet<>(isReversed ? type.reverseComparator() : type);
-                    for (ByteBuffer val : values)
-                    {
-                        if (val == null)
-                            throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
-                        Composite prefix = builder.buildWith(val);
-                        // See below for why this
-                        s.add((eocBound == Bound.END && builder.remainingCount() > 0) ? prefix.end() : prefix);
-                    }
-                    return new ArrayList<>(s);
-                }
 
-                ByteBuffer val = values.get(0);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
-                builder.add(val);
-            }
+            compositeBuilder.addEachElementToAll(r.values(options));
+
+            if (compositeBuilder.containsNull())
+                throw new InvalidRequestException(
+                        String.format("Invalid null clustering key part %s", def.name));
         }
         // Means no relation at all or everything was an equal
         // Note: if the builder is "full", there is no need to use the end-of-component bit. For columns selection,
@@ -83,7 +64,7 @@
         // with 2ndary index is done, and with the the partition provided with an EQ, we'll end up here, and in that
         // case using the eoc would be bad, since for the random partitioner we have no guarantee that
         // prefix.end() will sort after prefix (see #5240).
-        Composite prefix = builder.build();
-        return Collections.singletonList(eocBound == Bound.END && builder.remainingCount() > 0 ? prefix.end() : prefix);
+        EOC eoc = eocBound == Bound.END && compositeBuilder.hasRemaining() ? EOC.END : EOC.NONE;
+        return compositeBuilder.buildWithEOC(eoc);
     }
 

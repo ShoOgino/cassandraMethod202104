@@ -4,7 +4,7 @@
         // we always do a slice for CQL3 tables, so it's ok to ignore them here
         assert !isColumnRange();
 
-        CBuilder builder = cfm.comparator.prefixBuilder();
+        CompositesBuilder builder = new CompositesBuilder(cfm.comparator.prefixBuilder(), cfm.comparator);
         Iterator<ColumnDefinition> idIter = cfm.clusteringColumns().iterator();
         for (Restriction r : columnRestrictions)
         {
@@ -12,35 +12,19 @@
             assert r != null && !r.isSlice();
 
             List<ByteBuffer> values = r.values(options);
-            if (values.size() == 1)
-            {
-                ByteBuffer val = values.get(0);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
-                builder.add(val);
-            }
-            else
-            {
-                // We have a IN, which we only support for the last column.
-                // If compact, just add all values and we're done. Otherwise,
-                // for each value of the IN, creates all the columns corresponding to the selection.
-                if (values.isEmpty())
-                    return null;
-                SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
-                Iterator<ByteBuffer> iter = values.iterator();
-                while (iter.hasNext())
-                {
-                    ByteBuffer val = iter.next();
-                    if (val == null)
-                        throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
 
-                    Composite prefix = builder.buildWith(val);
-                    columns.addAll(addSelectedColumns(prefix));
-                }
-                return columns;
-            }
+            if (values.isEmpty())
+                return null;
+
+            builder.addEachElementToAll(values);
+            if (builder.containsNull())
+                throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s",
+                                                                def.name));
         }
+        SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
+        for (Composite composite : builder.build())
+            columns.addAll(addSelectedColumns(composite));
 
-        return addSelectedColumns(builder.build());
+        return columns;
     }
 
