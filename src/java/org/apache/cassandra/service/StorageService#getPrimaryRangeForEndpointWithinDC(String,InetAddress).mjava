@@ -1,0 +1,35 @@
+    /**
+     * Get the "primary ranges" within local DC for the specified keyspace and endpoint.
+     *
+     * @see #getPrimaryRangesForEndpoint(String, java.net.InetAddress)
+     * @param keyspace Keyspace name to check primary ranges
+     * @param referenceEndpoint endpoint we are interested in.
+     * @return primary ranges within local DC for the specified endpoint.
+     */
+    public Collection<Range<Token>> getPrimaryRangeForEndpointWithinDC(String keyspace, InetAddress referenceEndpoint)
+    {
+        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+        String localDC = DatabaseDescriptor.getEndpointSnitch().getDatacenter(referenceEndpoint);
+        Collection<InetAddress> localDcNodes = metadata.getTopology().getDatacenterEndpoints().get(localDC);
+        AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
+
+        Collection<Range<Token>> localDCPrimaryRanges = new HashSet<>();
+        for (Token token : metadata.sortedTokens())
+        {
+            List<InetAddress> endpoints = strategy.calculateNaturalEndpoints(token, metadata);
+            for (InetAddress endpoint : endpoints)
+            {
+                if (localDcNodes.contains(endpoint))
+                {
+                    if (endpoint.equals(referenceEndpoint))
+                    {
+                        localDCPrimaryRanges.add(new Range<>(metadata.getPredecessor(token), token));
+                    }
+                    break;
+                }
+            }
+        }
+
+        return localDCPrimaryRanges;
+    }
+

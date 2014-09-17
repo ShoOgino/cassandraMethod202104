@@ -1,11 +1,21 @@
     public int forceRepairAsync(String keyspace, boolean isSequential, Collection<String> dataCenters, Collection<String> hosts, boolean primaryRange, boolean fullRepair, String... columnFamilies) throws IOException
     {
-        // when repairing only primary range, dataCenter nor hosts can be set
-        if (primaryRange && (dataCenters != null || hosts != null))
+        Collection<Range<Token>> ranges;
+        if (primaryRange)
         {
-            throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
+            // when repairing only primary range, neither dataCenters nor hosts can be set
+            if (dataCenters == null && hosts == null)
+                ranges = getPrimaryRanges(keyspace);
+            // except dataCenters only contain local DC (i.e. -local)
+            else if (dataCenters != null && dataCenters.size() == 1 && dataCenters.contains(DatabaseDescriptor.getLocalDataCenter()))
+                ranges = getPrimaryRangesWithinDC(keyspace);
+            else
+                throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
         }
-        Collection<Range<Token>> ranges = primaryRange ? getLocalPrimaryRanges(keyspace) : getLocalRanges(keyspace);
+        else
+        {
+             ranges = getLocalRanges(keyspace);
+        }
 
         return forceRepairAsync(keyspace, isSequential, dataCenters, hosts, ranges, fullRepair, columnFamilies);
     }
