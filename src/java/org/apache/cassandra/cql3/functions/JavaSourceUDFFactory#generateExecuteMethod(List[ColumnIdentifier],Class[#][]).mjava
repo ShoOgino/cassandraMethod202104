@@ -1,0 +1,72 @@
+    /**
+     *
+     * Generate public execute() method implementation.
+     *
+     * Generated looks like this:
+     * <code><pre>
+     *
+     * public java.nio.ByteBuffer execute(java.util.List params)
+     * throws org.apache.cassandra.exceptions.InvalidRequestException
+     * {
+     *     try
+     *     {
+     *         Object result = executeInternal(
+     *             (<cast to JAVA_ARG_TYPE>)org.apache.cassandra.cql3.functions.JavaSourceUDFFactory.compose(argTypes, params, 0)
+     *         );
+     *         return result != null ? returnType.decompose(result) : null;
+     *     }
+     *     catch (Throwable t)
+     *     {
+     *         logger.error("Invocation of function '{}' failed", this, t);
+     *         if (t instanceof VirtualMachineError)
+     *             throw (VirtualMachineError)t;
+     *         throw new org.apache.cassandra.exceptions.InvalidRequestException("Invocation of function '" + this + "' failed: " + t);
+     *     }
+     * }
+     * </pre></code>
+     */
+    private static String generateExecuteMethod(List<ColumnIdentifier> argNames, Class<?>[] paramTypes)
+    {
+        // usual methods are 700-800 chars long (prevent temp object allocations)
+        StringBuilder code = new StringBuilder(1024);
+        // overrides org.apache.cassandra.cql3.functions.Function.execute(java.util.List)
+        code.append("public java.nio.ByteBuffer execute(java.util.List params)\n" +
+                    "throws org.apache.cassandra.exceptions.InvalidRequestException\n" +
+                    "{\n" +
+                    "  try\n" +
+                    "  {\n" +
+                    "    Object result = executeInternal(");
+        for (int i = 0; i < paramTypes.length; i++)
+        {
+            if (i > 0)
+                code.append(',');
+
+            if (logger.isDebugEnabled())
+                code.append("\n      /* ").append(argNames.get(i)).append(" */ ");
+
+            code.
+                 // cast to Java type
+                 append("\n      (").append(paramTypes[i].getName()).append(")").
+                 // generate object representation of input parameter
+                 append("org.apache.cassandra.cql3.functions.JavaSourceUDFFactory.compose(argTypes, params, ").append(i).append(')');
+        }
+
+        code.append("\n    );\n" +
+                    // generate serialized return value (returnType is a field in AbstractFunction class)
+                    "    return result != null ? returnType.decompose(result) : null;\n" +
+                    //
+                    // error handling ...
+                    "  }\n" +
+                    "  catch (Throwable t)\n" +
+                    "  {\n" +
+                    "    logger.error(\"Invocation of function '{}' failed\", this, t);\n" +
+                    // handle OutOfMemoryError and other fatals not here!
+                    "    if (t instanceof VirtualMachineError)\n" +
+                    "      throw (VirtualMachineError)t;\n" +
+                    "    throw new org.apache.cassandra.exceptions.InvalidRequestException(\"Invocation of function '\" + this + \"' failed: \" + t);\n" +
+                    "  }\n" +
+                    "}");
+
+        return code.toString();
+    }
+

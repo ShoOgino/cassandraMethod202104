@@ -1,0 +1,59 @@
+    static UDFunction buildUDF(FunctionName name,
+                               List<ColumnIdentifier> argNames,
+                               List<AbstractType<?>> argTypes,
+                               AbstractType<?> returnType,
+                               String body,
+                               boolean deterministic)
+    throws InvalidRequestException
+    {
+        Class<?> javaReturnType = UDFunction.javaType(returnType);
+        Class<?>[] javaParamTypes = UDFunction.javaParamTypes(argTypes);
+
+        String clsName = generateClassName(name);
+
+        String codeCtor = generateConstructor(clsName);
+
+        // Generate 'execute' method (implements org.apache.cassandra.cql3.functions.Function.execute)
+        String codeExec = generateExecuteMethod(argNames, javaParamTypes);
+
+        // Generate the 'executeInternal' method
+        // It is separated to allow return type and argument type checks during compile time via javassist.
+        String codeExecInt = generateExecuteInternalMethod(argNames, body, javaReturnType, javaParamTypes);
+
+        if (logger.isDebugEnabled())
+            logger.debug("Generating java source UDF for {} with following c'tor and functions:\n{}\n{}\n{}",
+                         name, codeCtor, codeExecInt, codeExec);
+
+        try
+        {
+            ClassPool classPool = ClassPool.getDefault();
+
+            // get super class
+            CtClass base = classPool.get(UDFunction.class.getName());
+
+            // prepare class to generate
+            CtClass cc = classPool.makeClass(GENERATED_CODE_PACKAGE + clsName, base);
+            cc.setModifiers(cc.getModifiers() | Modifier.FINAL);
+
+            // add c'tor plus methods (order matters)
+            cc.addConstructor(CtNewConstructor.make(codeCtor, cc));
+            cc.addMethod(CtNewMethod.make(codeExecInt, cc));
+            cc.addMethod(CtNewMethod.make(codeExec, cc));
+
+            Constructor ctor =
+                cc.toClass().getDeclaredConstructor(
+                   FunctionName.class, List.class, List.class,
+                   AbstractType.class, String.class, boolean.class);
+            return (UDFunction) ctor.newInstance(name, argNames, argTypes, returnType, body, deterministic);
+        }
+        catch (NotFoundException | CannotCompileException | NoSuchMethodException | LinkageError | InstantiationException | IllegalAccessException e)
+        {
+            throw new InvalidRequestException(String.format("Could not compile function '%s' from Java source: %s", name, e));
+        }
+        catch (InvocationTargetException e)
+        {
+            // in case of an ITE, use the cause
+            throw new InvalidRequestException(String.format("Could not compile function '%s' from Java source: %s", name, e.getCause()));
+        }
+    }
+
