@@ -11,31 +11,30 @@
         Pageable command = getPageableCommand(options, limit, now);
 
         int pageSize = options.getPageSize();
-        // A count query will never be paged for the user, but we always page it internally to avoid OOM.
+
+        // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
         // If we user provided a pageSize we'll use that to page internally (because why not), otherwise we use our default
         // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
-        if (parameters.isCount && pageSize <= 0)
+        if (selection.isAggregate() && pageSize <= 0)
             pageSize = DEFAULT_COUNT_PAGE_SIZE;
 
         if (pageSize <= 0 || command == null || !QueryPagers.mayNeedPaging(command, pageSize))
         {
             return execute(command, options, limit, now);
         }
-        else
-        {
-            QueryPager pager = QueryPagers.pager(command, cl, options.getPagingState());
-            if (parameters.isCount)
-                return pageCountQuery(pager, options, pageSize, now, limit);
 
-            // We can't properly do post-query ordering if we page (see #6722)
-            if (needsPostQueryOrdering())
-                throw new InvalidRequestException("Cannot page queries with both ORDER BY and a IN restriction on the partition key; you must either remove the "
-                                                + "ORDER BY or the IN and sort client side, or disable paging for this query");
+        QueryPager pager = QueryPagers.pager(command, cl, options.getPagingState());
+        if (selection.isAggregate())
+            return pageAggregateQuery(pager, options, pageSize, now);
 
-            List<Row> page = pager.fetchPage(pageSize);
-            ResultMessage.Rows msg = processResults(page, options, limit, now);
+        // We can't properly do post-query ordering if we page (see #6722)
+        if (needsPostQueryOrdering())
+            throw new InvalidRequestException("Cannot page queries with both ORDER BY and a IN restriction on the partition key; you must either remove the "
+                                            + "ORDER BY or the IN and sort client side, or disable paging for this query");
 
-            return pager.isExhausted() ? msg : msg.withPagingState(pager.state());
-        }
+        List<Row> page = pager.fetchPage(pageSize);
+        ResultMessage.Rows msg = processResults(page, options, limit, now);
+
+        return pager.isExhausted() ? msg : msg.withPagingState(pager.state());
     }
 

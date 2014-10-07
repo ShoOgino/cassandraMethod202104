@@ -3,12 +3,16 @@
             Function fun = Functions.get(keyspace, name, terms, receiver.ksName, receiver.cfName);
             if (fun == null)
                 throw new InvalidRequestException(String.format("Unknown function %s called", name));
+            if (fun.isAggregate())
+                throw new InvalidRequestException("Aggregation function are not supported in the where clause");
+
+            ScalarFunction scalarFun = (ScalarFunction) fun;
 
             // Functions.get() will complain if no function "name" type check with the provided arguments.
             // We still have to validate that the return type matches however
-            if (!receiver.type.isValueCompatibleWith(fun.returnType()))
+            if (!receiver.type.isValueCompatibleWith(scalarFun.returnType()))
                 throw new InvalidRequestException(String.format("Type error: cannot assign result of function %s (type %s) to %s (type %s)",
-                                                                fun.name(), fun.returnType().asCQL3Type(),
+                                                                scalarFun.name(), scalarFun.returnType().asCQL3Type(),
                                                                 receiver.name, receiver.type.asCQL3Type()));
 
             if (fun.argTypes().size() != terms.size())
@@ -19,7 +23,7 @@
             boolean allTerminal = true;
             for (int i = 0; i < terms.size(); i++)
             {
-                Term t = terms.get(i).prepare(keyspace, Functions.makeArgSpec(receiver.ksName, receiver.cfName, fun, i));
+                Term t = terms.get(i).prepare(keyspace, Functions.makeArgSpec(receiver.ksName, receiver.cfName, scalarFun, i));
                 if (t instanceof NonTerminal)
                     allTerminal = false;
                 parameters.add(t);
@@ -27,8 +31,8 @@
 
             // If all parameters are terminal and the function is pure, we can
             // evaluate it now, otherwise we'd have to wait execution time
-            return allTerminal && fun.isPure()
-                ? makeTerminal(fun, execute(fun, parameters), QueryOptions.DEFAULT.getProtocolVersion())
-                : new FunctionCall(fun, parameters);
+            return allTerminal && scalarFun.isPure()
+                ? makeTerminal(scalarFun, execute(scalarFun, parameters), QueryOptions.DEFAULT.getProtocolVersion())
+                : new FunctionCall(scalarFun, parameters);
         }
 
