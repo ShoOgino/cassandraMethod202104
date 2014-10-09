@@ -1,0 +1,161 @@
+    private FutureTask<Object> createRepairTask(final int cmd, final String keyspace, final RepairOption options)
+    {
+        if (!options.getDataCenters().isEmpty() && options.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
+        {
+            throw new IllegalArgumentException("the local data center must be part of the repair");
+        }
+
+        return new FutureTask<>(new WrappedRunnable()
+        {
+            protected void runMayThrow() throws Exception
+            {
+                final long startTime = System.currentTimeMillis();
+                String message = String.format("Starting repair command #%d, repairing keyspace %s with %s", cmd, keyspace, options);
+                logger.info(message);
+                sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.STARTED.ordinal()});
+
+                if (options.isSequential() && options.isIncremental())
+                {
+                    message = "It is not possible to mix sequential repair and incremental repairs.";
+                    logger.error(message);
+                    sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
+                    return;
+                }
+
+                final Set<InetAddress> allNeighbors = new HashSet<>();
+                Map<Range, Set<InetAddress>> rangeToNeighbors = new HashMap<>();
+                for (Range<Token> range : options.getRanges())
+                {
+                    try
+                    {
+                        Set<InetAddress> neighbors = ActiveRepairService.getNeighbors(keyspace, range, options.getDataCenters(), options.getHosts());
+                        rangeToNeighbors.put(range, neighbors);
+                        allNeighbors.addAll(neighbors);
+                    }
+                    catch (IllegalArgumentException e)
+                    {
+                        logger.error("Repair failed:", e);
+                        sendNotification("repair", e.getMessage(), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
+                        return;
+                    }
+                }
+
+                // Validate columnfamilies
+                List<ColumnFamilyStore> columnFamilyStores = new ArrayList<>();
+                String[] columnFamilies = options.getColumnFamilies().toArray(new String[options.getColumnFamilies().size()]);
+                try
+                {
+                    Iterables.addAll(columnFamilyStores, getValidColumnFamilies(false, false, keyspace, columnFamilies));
+                }
+                catch (IllegalArgumentException e)
+                {
+                    sendNotification("repair", e.getMessage(), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
+                    return;
+                }
+
+                final UUID parentSession;
+                long repairedAt = ActiveRepairService.UNREPAIRED_SSTABLE;
+                if (options.isIncremental())
+                {
+                    try
+                    {
+                        parentSession = ActiveRepairService.instance.prepareForRepair(allNeighbors, options.getRanges(), columnFamilyStores);
+                        repairedAt = ActiveRepairService.instance.getParentRepairSession(parentSession).repairedAt;
+                    }
+                    catch (Throwable t)
+                    {
+                        sendNotification("repair", String.format("Repair failed with error %s", t.getMessage()), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
+                        return;
+                    }
+                }
+                else
+                {
+                    parentSession = null;
+                }
+
+                // Set up RepairJob executor for this repair command.
+                final ListeningExecutorService executor = MoreExecutors.listeningDecorator(new JMXConfigurableThreadPoolExecutor(options.getJobThreads(),
+                                                                                                                           Integer.MAX_VALUE,
+                                                                                                                           TimeUnit.SECONDS,
+                                                                                                                           new LinkedBlockingQueue<Runnable>(),
+                                                                                                                           new NamedThreadFactory("Repair#" + cmd),
+                                                                                                                           "internal"));
+
+                List<ListenableFuture<?>> futures = new ArrayList<>(options.getRanges().size());
+                String[] cfnames = new String[columnFamilyStores.size()];
+                for (int i = 0; i < columnFamilyStores.size(); i++)
+                {
+                    cfnames[i] = columnFamilyStores.get(i).name;
+                }
+                for (Range<Token> range : options.getRanges())
+                {
+                    final RepairSession session = ActiveRepairService.instance.submitRepairSession(parentSession,
+                                                                      range,
+                                                                      keyspace,
+                                                                      options.isSequential(),
+                                                                      rangeToNeighbors.get(range),
+                                                                      repairedAt,
+                                                                      executor,
+                                                                      cfnames);
+                    if (session == null)
+                        continue;
+                    // After repair session completes, notify client its result
+                    Futures.addCallback(session, new FutureCallback<List<RepairResult>>()
+                    {
+                        public void onSuccess(List<RepairResult> results)
+                        {
+                            String message = String.format("Repair session %s for range %s finished", session.getId(), session.getRange().toString());
+                            logger.info(message);
+                            sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.SESSION_SUCCESS.ordinal()});
+                        }
+
+                        public void onFailure(Throwable t)
+                        {
+                            String message = String.format("Repair session %s for range %s failed with error %s", session.getId(), session.getRange().toString(), t.getMessage());
+                            logger.error(message, t);
+                            sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.SESSION_FAILED.ordinal()});
+                        }
+                    });
+                    futures.add(session);
+                }
+
+                // After all repair sessions completes(successful or not),
+                // run anticompaction if necessary and send finish notice back to client
+                ListenableFuture<?> allSessions = Futures.allAsList(futures);
+                Futures.addCallback(allSessions, new FutureCallback<Object>()
+                {
+                    public void onSuccess(@Nullable Object result)
+                    {
+                        if (options.isIncremental())
+                        {
+                            try
+                            {
+                                ActiveRepairService.instance.finishParentSession(parentSession, allNeighbors);
+                            }
+                            catch (Exception e)
+                            {
+                                logger.error("Error in incremental repair", e);
+                            }
+                        }
+                        repairComplete();
+                    }
+
+                    public void onFailure(Throwable t)
+                    {
+                        repairComplete();
+                    }
+
+                    private void repairComplete()
+                    {
+                        String duration = DurationFormatUtils.formatDurationWords(System.currentTimeMillis() - startTime, true, true);
+                        String message = String.format("Repair command #%d finished in %s", cmd, duration);
+                        sendNotification("repair", message,
+                                         new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
+                        logger.info(message);
+                        executor.shutdownNow();
+                    }
+                }, MoreExecutors.sameThreadExecutor());
+            }
+        }, null);
+    }
+

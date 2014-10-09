@@ -1,0 +1,25 @@
+    public int repairAsync(String keyspace, Map<String, String> repairSpec)
+    {
+        RepairOption option = RepairOption.parse(repairSpec, getPartitioner());
+        // if ranges are not specified
+        if (option.getRanges().isEmpty())
+        {
+            if (option.isPrimaryRange())
+            {
+                // when repairing only primary range, neither dataCenters nor hosts can be set
+                if (option.getDataCenters().isEmpty() && option.getHosts().isEmpty())
+                    option.getRanges().addAll(getPrimaryRanges(keyspace));
+                    // except dataCenters only contain local DC (i.e. -local)
+                else if (option.getDataCenters().size() == 1 && option.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
+                    option.getRanges().addAll(getPrimaryRangesWithinDC(keyspace));
+                else
+                    throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
+            }
+            else
+            {
+                option.getRanges().addAll(getLocalRanges(keyspace));
+            }
+        }
+        return forceRepairAsync(keyspace, option);
+    }
+

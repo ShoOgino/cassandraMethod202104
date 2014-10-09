@@ -1,0 +1,20 @@
+    /**
+     * Starts sending/receiving our list of differences to/from the remote endpoint: creates a callback
+     * that will be called out of band once the streams complete.
+     */
+    protected void startSync(List<Range<Token>> differences)
+    {
+        InetAddress local = FBUtilities.getBroadcastAddress();
+        // We can take anyone of the node as source or destination, however if one is localhost, we put at source to avoid a forwarding
+        InetAddress dst = r2.endpoint.equals(local) ? r1.endpoint : r2.endpoint;
+
+        logger.info(String.format("[repair #%s] Performing streaming repair of %d ranges with %s", desc.sessionId, differences.size(), dst));
+        new StreamPlan("Repair", repairedAt, 1).listeners(this)
+                                            .flushBeforeTransfer(true)
+                                            // request ranges from the remote node
+                                            .requestRanges(dst, desc.keyspace, differences, desc.columnFamily)
+                                            // send ranges to the remote node
+                                            .transferRanges(dst, desc.keyspace, differences, desc.columnFamily)
+                                            .execute();
+    }
+

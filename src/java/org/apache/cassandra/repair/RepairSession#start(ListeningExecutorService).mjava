@@ -1,0 +1,64 @@
+    /**
+     * Start RepairJob on given ColumnFamilies.
+     *
+     * This first validates if all replica are available, and if they are,
+     * creates RepairJobs and submit to run on given executor.
+     *
+     * @param executor Executor to run validation
+     */
+    public void start(ListeningExecutorService executor)
+    {
+        if (terminated)
+            return;
+
+        logger.info(String.format("[repair #%s] new session: will sync %s on range %s for %s.%s", getId(), repairedNodes(), range, keyspace, Arrays.toString(cfnames)));
+
+        if (endpoints.isEmpty())
+        {
+            logger.info(String.format("[repair #%s] No neighbors to repair with on range %s: session completed", getId(), range));
+            set(Lists.<RepairResult>newArrayList());
+            return;
+        }
+
+        // Checking all nodes are live
+        for (InetAddress endpoint : endpoints)
+        {
+            if (!FailureDetector.instance.isAlive(endpoint))
+            {
+                String message = String.format("Cannot proceed on repair because a neighbor (%s) is dead: session failed", endpoint);
+                logger.error("[repair #{}] {}", getId(), message);
+                setException(new IOException(message));
+                return;
+            }
+        }
+
+        // Create and submit RepairJob for each ColumnFamily
+        List<ListenableFuture<RepairResult>> jobs = new ArrayList<>(cfnames.length);
+        for (String cfname : cfnames)
+        {
+            RepairJob job = new RepairJob(this, cfname, isSequential, repairedAt, taskExecutor);
+            executor.execute(job);
+            jobs.add(job);
+        }
+
+        // When all RepairJobs are done without error, cleanup and set the final result
+        Futures.addCallback(Futures.allAsList(jobs), new FutureCallback<List<RepairResult>>()
+        {
+            public void onSuccess(List<RepairResult> results)
+            {
+                // this repair session is completed
+                logger.info(String.format("[repair #%s] session completed successfully", getId()));
+                set(results);
+                taskExecutor.shutdown();
+                // mark this session as terminated
+                terminate();
+            }
+
+            public void onFailure(Throwable t)
+            {
+                logger.error("Repair job failed", t);
+                setException(t);
+            }
+        });
+    }
+

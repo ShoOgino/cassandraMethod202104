@@ -1,0 +1,41 @@
+    /**
+     * Requests repairs for the given keyspace and column families.
+     *
+     * @return Future for asynchronous call or null if there is no need to repair
+     */
+    public RepairSession submitRepairSession(UUID parentRepairSession,
+                                             Range<Token> range,
+                                             String keyspace,
+                                             boolean isSequential,
+                                             Set<InetAddress> endpoints,
+                                             long repairedAt,
+                                             ListeningExecutorService executor,
+                                             String... cfnames)
+    {
+        if (endpoints.isEmpty())
+            return null;
+
+        final RepairSession session = new RepairSession(parentRepairSession, UUIDGen.getTimeUUID(), range, keyspace, isSequential, endpoints, repairedAt, cfnames);
+
+        sessions.put(session.getId(), session);
+        // register listeners
+        gossiper.register(session);
+        failureDetector.registerFailureDetectionEventListener(session);
+
+        // unregister listeners at completion
+        session.addListener(new Runnable()
+        {
+            /**
+             * When repair finished, do clean up
+             */
+            public void run()
+            {
+                failureDetector.unregisterFailureDetectionEventListener(session);
+                gossiper.unregister(session);
+                sessions.remove(session.getId());
+            }
+        }, MoreExecutors.sameThreadExecutor());
+        session.start(executor);
+        return session;
+    }
+

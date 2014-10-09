@@ -1,22 +1,33 @@
-    public int forceRepairAsync(String keyspace, boolean isSequential, Collection<String> dataCenters, Collection<String> hosts, boolean primaryRange, boolean fullRepair, String... columnFamilies) throws IOException
+    public int forceRepairAsync(String keyspace,
+                                boolean isSequential,
+                                Collection<String> dataCenters,
+                                Collection<String> hosts,
+                                boolean primaryRange,
+                                boolean fullRepair,
+                                String... columnFamilies)
     {
-        Collection<Range<Token>> ranges;
-        if (primaryRange)
+        if (!FBUtilities.isUnix() && isSequential)
         {
-            // when repairing only primary range, neither dataCenters nor hosts can be set
-            if (dataCenters == null && hosts == null)
-                ranges = getPrimaryRanges(keyspace);
-            // except dataCenters only contain local DC (i.e. -local)
-            else if (dataCenters != null && dataCenters.size() == 1 && dataCenters.contains(DatabaseDescriptor.getLocalDataCenter()))
-                ranges = getPrimaryRangesWithinDC(keyspace);
-            else
-                throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
-        }
-        else
-        {
-             ranges = getLocalRanges(keyspace);
+            logger.warn("Snapshot-based repair is not yet supported on Windows.  Reverting to parallel repair.");
+            isSequential = false;
         }
 
-        return forceRepairAsync(keyspace, isSequential, dataCenters, hosts, ranges, fullRepair, columnFamilies);
+        RepairOption options = new RepairOption(isSequential, primaryRange, !fullRepair, 1, Collections.<Range<Token>>emptyList());
+        if (dataCenters != null)
+        {
+            options.getDataCenters().addAll(dataCenters);
+        }
+        if (hosts != null)
+        {
+            options.getHosts().addAll(hosts);
+        }
+        if (columnFamilies != null)
+        {
+            for (String columnFamily : columnFamilies)
+            {
+                options.getColumnFamilies().add(columnFamily);
+            }
+        }
+        return forceRepairAsync(keyspace, options);
     }
 
