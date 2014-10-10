@@ -1,0 +1,33 @@
+    /**
+     *
+     * @param gcBefore
+     * @return
+     */
+    private List<SSTableReader> getNextBackgroundSStables(final int gcBefore)
+    {
+        if (!isEnabled() || cfs.getSSTables().isEmpty())
+            return Collections.emptyList();
+
+        int base = cfs.getMinimumCompactionThreshold();
+        long now = getNow();
+
+        Iterable<SSTableReader> candidates = filterSuspectSSTables(cfs.getUncompactingSSTables());
+
+        List<SSTableReader> mostInteresting = getCompactionCandidates(candidates, now, base);
+        if (mostInteresting != null)
+            return mostInteresting;
+
+        // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
+        // ratio is greater than threshold.
+        List<SSTableReader> sstablesWithTombstones = Lists.newArrayList();
+        for (SSTableReader sstable : candidates)
+        {
+            if (worthDroppingTombstones(sstable, gcBefore))
+                sstablesWithTombstones.add(sstable);
+        }
+        if (sstablesWithTombstones.isEmpty())
+            return Collections.emptyList();
+
+        return Collections.singletonList(Collections.min(sstablesWithTombstones, new SSTableReader.SizeComparator()));
+    }
+
