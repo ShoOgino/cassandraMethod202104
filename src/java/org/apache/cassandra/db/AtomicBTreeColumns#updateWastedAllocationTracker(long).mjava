@@ -1,0 +1,34 @@
+    /**
+     * Update the wasted allocation tracker state based on newly wasted allocation information
+     *
+     * @param wastedBytes the number of bytes wasted by this thread
+     * @return true if the caller should now proceed with pessimistic locking because the waste limit has been reached
+     */
+    private boolean updateWastedAllocationTracker(long wastedBytes) {
+        // Early check for huge allocation that exceeds the limit
+        if (wastedBytes < EXCESS_WASTE_BYTES)
+        {
+            // We round up to ensure work < granularity are still accounted for
+            int wastedAllocation = ((int) (wastedBytes + ALLOCATION_GRANULARITY_BYTES - 1)) / ALLOCATION_GRANULARITY_BYTES;
+
+            int oldTrackerValue;
+            while (TRACKER_PESSIMISTIC_LOCKING != (oldTrackerValue = wasteTracker))
+            {
+                // Note this time value has an arbitrary offset, but is a constant rate 32 bit counter (that may wrap)
+                int time = (int) (System.nanoTime() >>> CLOCK_SHIFT);
+                int delta = oldTrackerValue - time;
+                if (oldTrackerValue == TRACKER_NEVER_WASTED || delta >= 0 || delta < -EXCESS_WASTE_OFFSET)
+                    delta = -EXCESS_WASTE_OFFSET;
+                delta += wastedAllocation;
+                if (delta >= 0)
+                    break;
+                if (wasteTrackerUpdater.compareAndSet(this, oldTrackerValue, avoidReservedValues(time + delta)))
+                    return false;
+            }
+        }
+        // We have definitely reached our waste limit so set the state if it isn't already
+        wasteTrackerUpdater.set(this, TRACKER_PESSIMISTIC_LOCKING);
+        // And tell the caller to proceed with pessimistic locking
+        return true;
+    }
+
