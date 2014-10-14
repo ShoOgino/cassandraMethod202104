@@ -1,0 +1,23 @@
+    // Taken from Netty's ChannelBuffers.decodeString(). We need to use our own decoder to properly handle invalid
+    // UTF-8 sequences.  See CASSANDRA-8101 for more details.  This can be removed once https://github.com/netty/netty/pull/2999
+    // is resolved in a release used by Cassandra.
+    private static String decodeString(ByteBuffer src) throws CharacterCodingException
+    {
+        // the decoder needs to be reset every time we use it, hence the copy per thread
+        CharsetDecoder theDecoder = decoder.get();
+        theDecoder.reset();
+
+        final CharBuffer dst = CharBuffer.allocate(
+                (int) ((double) src.remaining() * theDecoder.maxCharsPerByte()));
+
+        CoderResult cr = theDecoder.decode(src, dst, true);
+        if (!cr.isUnderflow())
+            cr.throwException();
+
+        cr = theDecoder.flush(dst);
+        if (!cr.isUnderflow())
+            cr.throwException();
+
+        return dst.flip().toString();
+    }
+
