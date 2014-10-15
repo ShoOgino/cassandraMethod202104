@@ -1,53 +1,34 @@
     public synchronized void add(SSTableReader reader)
     {
-        if (!hasRepairedData && reader.isRepaired())
-        {
-            // this is the first repaired sstable we get - we need to
-            // rebuild the entire manifest, unrepaired data should be
-            // in unrepairedL0. Note that we keep the sstable level in
-            // the sstable metadata since we are likely to be able to
-            // re-add it at a good level later (during anticompaction
-            // for example).
-            hasRepairedData = true;
-            rebuildManifestAfterFirstRepair();
-        }
-
         int level = reader.getSSTableLevel();
-        if (hasRepairedData && !reader.isRepaired())
+
+        assert level < generations.length : "Invalid level " + level + " out of " + (generations.length - 1);
+        logDistribution();
+        if (canAddSSTable(reader))
         {
-            logger.debug("Adding unrepaired {} to unrepaired L0", reader);
-            unrepairedL0.add(reader);
+            // adding the sstable does not cause overlap in the level
+            logger.debug("Adding {} to L{}", reader, level);
+            generations[level].add(reader);
         }
         else
         {
-            assert level < generations.length : "Invalid level " + level + " out of " + (generations.length - 1);
-            logDistribution();
-            if (canAddSSTable(reader))
+            // this can happen if:
+            // * a compaction has promoted an overlapping sstable to the given level, or
+            //   was also supposed to add an sstable at the given level.
+            // * we are moving sstables from unrepaired to repaired and the sstable
+            //   would cause overlap
+            //
+            // The add(..):ed sstable will be sent to level 0
+            try
             {
-                // adding the sstable does not cause overlap in the level
-                logger.debug("Adding {} to L{}", reader, level);
-                generations[level].add(reader);
+                reader.descriptor.getMetadataSerializer().mutateLevel(reader.descriptor, 0);
+                reader.reloadSSTableMetadata();
             }
-            else
+            catch (IOException e)
             {
-                // this can happen if:
-                // * a compaction has promoted an overlapping sstable to the given level, or
-                // * we promote a non-repaired sstable to repaired at level > 0, but an ongoing compaction
-                //   was also supposed to add an sstable at the given level.
-                //
-                // The add(..):ed sstable will be sent to level 0
-                try
-                {
-                    reader.descriptor.getMetadataSerializer().mutateLevel(reader.descriptor, 0);
-                    reader.reloadSSTableMetadata();
-                }
-                catch (IOException e)
-                {
-                    logger.error("Could not change sstable level - adding it at level 0 anyway, we will find it at restart.", e);
-                }
-                generations[0].add(reader);
+                logger.error("Could not change sstable level - adding it at level 0 anyway, we will find it at restart.", e);
             }
+            generations[0].add(reader);
         }
-
     }
 
