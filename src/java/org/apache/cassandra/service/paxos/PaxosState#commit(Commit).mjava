@@ -1,15 +1,23 @@
     public static void commit(Commit proposal)
     {
-        // There is no guarantee we will see commits in the right order, because messages
-        // can get delayed, so a proposal can be older than our current most recent ballot/commit.
-        // Committing it is however always safe due to column timestamps, so always do it. However,
-        // if our current in-progress ballot is strictly greater than the proposal one, we shouldn't
-        // erase the in-progress update.
-        Tracing.trace("Committing proposal {}", proposal);
-        RowMutation rm = proposal.makeMutation();
-        Keyspace.open(rm.getKeyspaceName()).apply(rm, true);
+        long start = System.nanoTime();
+        try
+        {
+            // There is no guarantee we will see commits in the right order, because messages
+            // can get delayed, so a proposal can be older than our current most recent ballot/commit.
+            // Committing it is however always safe due to column timestamps, so always do it. However,
+            // if our current in-progress ballot is strictly greater than the proposal one, we shouldn't
+            // erase the in-progress update.
+            Tracing.trace("Committing proposal {}", proposal);
+            RowMutation rm = proposal.makeMutation();
+            Keyspace.open(rm.getKeyspaceName()).apply(rm, true);
 
-        // We don't need to lock, we're just blindly updating
-        SystemKeyspace.savePaxosCommit(proposal);
+            // We don't need to lock, we're just blindly updating
+            SystemKeyspace.savePaxosCommit(proposal);
+        }
+        finally
+        {
+            Keyspace.open(proposal.update.metadata().ksName).getColumnFamilyStore(proposal.update.metadata().cfId).metric.casCommit.addNano(System.nanoTime() - start);
+        }
     }
 
