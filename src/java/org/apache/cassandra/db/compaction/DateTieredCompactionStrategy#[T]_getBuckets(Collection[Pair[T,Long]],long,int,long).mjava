@@ -1,0 +1,59 @@
+    /**
+     * Group files with similar min timestamp into buckets. Files with recent min timestamps are grouped together into
+     * buckets designated to short timespans while files with older timestamps are grouped into buckets representing
+     * longer timespans.
+     * @param files pairs consisting of a file and its min timestamp
+     * @param timeUnit
+     * @param base
+     * @param now
+     * @return a list of buckets of files. The list is ordered such that the files with newest timestamps come first.
+     *         Each bucket is also a list of files ordered from newest to oldest.
+     */
+    @VisibleForTesting
+    static <T> List<List<T>> getBuckets(Collection<Pair<T, Long>> files, long timeUnit, int base, long now)
+    {
+        // Sort files by age. Newest first.
+        final List<Pair<T, Long>> sortedFiles = Lists.newArrayList(files);
+        Collections.sort(sortedFiles, Collections.reverseOrder(new Comparator<Pair<T, Long>>()
+        {
+            public int compare(Pair<T, Long> p1, Pair<T, Long> p2)
+            {
+                return p1.right.compareTo(p2.right);
+            }
+        }));
+
+        List<List<T>> buckets = Lists.newArrayList();
+        Target target = getInitialTarget(now, timeUnit);
+        PeekingIterator<Pair<T, Long>> it = Iterators.peekingIterator(sortedFiles.iterator());
+
+        outerLoop:
+        while (it.hasNext())
+        {
+            while (!target.onTarget(it.peek().right))
+            {
+                // If the file is too new for the target, skip it.
+                if (target.compareToTimestamp(it.peek().right) < 0)
+                {
+                    it.next();
+
+                    if (!it.hasNext())
+                        break outerLoop;
+                }
+                else // If the file is too old for the target, switch targets.
+                    target = target.nextTarget(base);
+            }
+
+            List<T> bucket = Lists.newArrayList();
+            while (target.onTarget(it.peek().right))
+            {
+                bucket.add(it.next().left);
+
+                if (!it.hasNext())
+                    break;
+            }
+            buckets.add(bucket);
+        }
+
+        return buckets;
+    }
+
