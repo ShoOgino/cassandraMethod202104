@@ -2,19 +2,31 @@
     {
         if (writer == null)
             return;
+
+        switchWriter(null);
+
         moveStarts(null, Functions.forMap(originalStarts), true);
-        List<SSTableReader> close = new ArrayList<>(finished);
+
+        List<SSTableReader> close = Lists.newArrayList(finishedOpenedEarly);
         if (currentlyOpenedEarly != null)
             close.add(currentlyOpenedEarly);
+
+        for (Pair<SSTableWriter, SSTableReader> w : finishedWriters)
+        {
+        // we should close the bloom filter if we have not opened an sstable reader from this
+        // writer (it will get closed when we release the sstable reference below):
+            w.left.abort(w.right == null);
+        }
+
         // also remove already completed SSTables
         for (SSTableReader sstable : close)
             sstable.markObsolete();
+
         // releases reference in replaceReaders
         if (!isOffline)
         {
             dataTracker.replaceReaders(close, Collections.<SSTableReader>emptyList(), false);
             dataTracker.unmarkCompacting(close);
         }
-        writer.abort(currentlyOpenedEarly == null);
     }
 
