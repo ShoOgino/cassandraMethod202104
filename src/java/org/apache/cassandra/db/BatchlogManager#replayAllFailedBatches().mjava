@@ -1,9 +1,5 @@
-    @VisibleForTesting
-    void replayAllFailedBatches() throws ExecutionException, InterruptedException
+    private void replayAllFailedBatches() throws ExecutionException, InterruptedException
     {
-        if (!isReplaying.compareAndSet(false, true))
-            return;
-
         logger.debug("Started replayAllFailedBatches");
 
         // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -11,33 +7,26 @@
         int throttleInKB = DatabaseDescriptor.getBatchlogReplayThrottleInKB() / StorageService.instance.getTokenMetadata().getAllEndpoints().size();
         RateLimiter rateLimiter = RateLimiter.create(throttleInKB == 0 ? Double.MAX_VALUE : throttleInKB * 1024);
 
-        try
+        UntypedResultSet page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s LIMIT %d",
+                                                              Keyspace.SYSTEM_KS,
+                                                              SystemKeyspace.BATCHLOG_CF,
+                                                              PAGE_SIZE));
+
+        while (!page.isEmpty())
         {
-            UntypedResultSet page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s LIMIT %d",
-                                                                  Keyspace.SYSTEM_KS,
-                                                                  SystemKeyspace.BATCHLOG_CF,
-                                                                  PAGE_SIZE));
+            UUID id = processBatchlogPage(page, rateLimiter);
 
-            while (!page.isEmpty())
-            {
-                UUID id = processBatchlogPage(page, rateLimiter);
+            if (page.size() < PAGE_SIZE)
+                break; // we've exhausted the batchlog, next query would be empty.
 
-                if (page.size() < PAGE_SIZE)
-                    break; // we've exhausted the batchlog, next query would be empty.
-
-                page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s WHERE token(id) > token(?) LIMIT %d",
-                                                     Keyspace.SYSTEM_KS,
-                                                     SystemKeyspace.BATCHLOG_CF,
-                                                     PAGE_SIZE), 
-                                       id);
-            }
-
-            cleanup();
+            page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s WHERE token(id) > token(?) LIMIT %d",
+                                                 Keyspace.SYSTEM_KS,
+                                                 SystemKeyspace.BATCHLOG_CF,
+                                                 PAGE_SIZE),
+                                   id);
         }
-        finally
-        {
-            isReplaying.set(false);
-        }
+
+        cleanup();
 
         logger.debug("Finished replayAllFailedBatches");
     }
