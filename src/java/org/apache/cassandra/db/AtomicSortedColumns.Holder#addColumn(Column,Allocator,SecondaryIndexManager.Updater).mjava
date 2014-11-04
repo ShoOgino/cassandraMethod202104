@@ -1,4 +1,4 @@
-        long addColumn(Column column, Allocator allocator, SecondaryIndexManager.Updater indexer)
+        Pair<Integer, Long> addColumn(Column column, Allocator allocator, SecondaryIndexManager.Updater indexer)
         {
             ByteBuffer name = column.name();
             while (true)
@@ -7,14 +7,15 @@
                 if (oldColumn == null)
                 {
                     indexer.insert(column);
-                    return column.dataSize();
+                    return Pair.create(column.dataSize(), Long.MAX_VALUE);
                 }
 
                 Column reconciledColumn = column.reconcile(oldColumn, allocator);
                 if (map.replace(name, oldColumn, reconciledColumn))
                 {
                     indexer.update(oldColumn, reconciledColumn);
-                    return reconciledColumn.dataSize() - oldColumn.dataSize();
+                    return Pair.create(reconciledColumn.dataSize() - oldColumn.dataSize(),
+                            enableColUpdateTimeDelta?  Math.abs(oldColumn.timestamp - column.timestamp): Long.MAX_VALUE );
                 }
                 // We failed to replace column due to a concurrent update or a concurrent removal. Keep trying.
                 // (Currently, concurrent removal should not happen (only updates), but let us support that anyway.)
