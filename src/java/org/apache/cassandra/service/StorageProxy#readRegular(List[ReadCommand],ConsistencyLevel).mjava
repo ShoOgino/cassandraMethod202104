@@ -1,0 +1,34 @@
+    private static List<Row> readRegular(List<ReadCommand> commands, ConsistencyLevel consistencyLevel)
+    throws UnavailableException, ReadTimeoutException
+    {
+        long start = System.nanoTime();
+        List<Row> rows = null;
+
+        try
+        {
+            rows = fetchRows(commands, consistencyLevel);
+        }
+        catch (UnavailableException e)
+        {
+            readMetrics.unavailables.mark();
+            ClientRequestMetrics.readUnavailables.inc();
+            throw e;
+        }
+        catch (ReadTimeoutException e)
+        {
+            readMetrics.timeouts.mark();
+            ClientRequestMetrics.readTimeouts.inc();
+            throw e;
+        }
+        finally
+        {
+            long latency = System.nanoTime() - start;
+            readMetrics.addNano(latency);
+            // TODO avoid giving every command the same latency number.  Can fix this in CASSADRA-5329
+            for (ReadCommand command : commands)
+                Keyspace.open(command.ksName).getColumnFamilyStore(command.cfName).metric.coordinatorReadLatency.update(latency, TimeUnit.NANOSECONDS);
+        }
+
+        return rows;
+    }
+

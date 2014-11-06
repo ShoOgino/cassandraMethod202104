@@ -1,79 +1,8 @@
-    /**
-     * Performs the actual reading of a row out of the StorageService, fetching
-     * a specific set of column names from a given column family.
-     */
-    public static List<Row> read(List<ReadCommand> commands, ConsistencyLevel consistency_level)
+    public static List<Row> read(List<ReadCommand> commands, ConsistencyLevel consistencyLevel)
     throws UnavailableException, IsBootstrappingException, ReadTimeoutException, InvalidRequestException
     {
-        if (StorageService.instance.isBootstrapMode() && !systemKeyspaceQuery(commands))
-        {
-            readMetrics.unavailables.mark();
-            ClientRequestMetrics.readUnavailables.inc();
-            throw new IsBootstrappingException();
-        }
-
-        long start = System.nanoTime();
-        List<Row> rows = null;
-        try
-        {
-            if (consistency_level.isSerialConsistency())
-            {
-                // make sure any in-progress paxos writes are done (i.e., committed to a majority of replicas), before performing a quorum read
-                if (commands.size() > 1)
-                    throw new InvalidRequestException("SERIAL/LOCAL_SERIAL consistency may only be requested for one row at a time");
-                ReadCommand command = commands.get(0);
-
-                CFMetaData metadata = Schema.instance.getCFMetaData(command.ksName, command.cfName);
-                Pair<List<InetAddress>, Integer> p = getPaxosParticipants(command.ksName, command.key, consistency_level);
-                List<InetAddress> liveEndpoints = p.left;
-                int requiredParticipants = p.right;
-
-                // does the work of applying in-progress writes; throws UAE or timeout if it can't
-                final ConsistencyLevel consistencyForCommitOrFetch = consistency_level == ConsistencyLevel.LOCAL_SERIAL ? ConsistencyLevel.LOCAL_QUORUM : ConsistencyLevel.QUORUM;
-                try
-                {
-                    final Pair<UUID, Integer> pair = beginAndRepairPaxos(start, command.key, metadata, liveEndpoints, requiredParticipants, consistency_level, consistencyForCommitOrFetch, false);
-                    if(pair.right > 0)
-                        casReadMetrics.contention.update(pair.right);
-                }
-                catch (WriteTimeoutException e)
-                {
-                    throw new ReadTimeoutException(consistency_level, 0, consistency_level.blockFor(Keyspace.open(command.ksName)), false);
-                }
-
-                rows = fetchRows(commands, consistencyForCommitOrFetch);
-            }
-            else
-            {
-                rows = fetchRows(commands, consistency_level);
-            }
-        }
-        catch (UnavailableException e)
-        {
-            readMetrics.unavailables.mark();
-            ClientRequestMetrics.readUnavailables.inc();
-            if(consistency_level.isSerialConsistency())
-                casReadMetrics.unavailables.mark();
-            throw e;
-        }
-        catch (ReadTimeoutException e)
-        {
-            readMetrics.timeouts.mark();
-            ClientRequestMetrics.readTimeouts.inc();
-            if(consistency_level.isSerialConsistency())
-                casReadMetrics.timeouts.mark();
-            throw e;
-        }
-        finally
-        {
-            long latency = System.nanoTime() - start;
-            readMetrics.addNano(latency);
-            if(consistency_level.isSerialConsistency())
-                casReadMetrics.addNano(latency);
-            // TODO avoid giving every command the same latency number.  Can fix this in CASSADRA-5329
-            for (ReadCommand command : commands)
-                Keyspace.open(command.ksName).getColumnFamilyStore(command.cfName).metric.coordinatorReadLatency.update(latency, TimeUnit.NANOSECONDS);
-        }
-        return rows;
+        // When using serial CL, the ClientState should be provided
+        assert !consistencyLevel.isSerialConsistency();
+        return read(commands, consistencyLevel, null);
     }
 
