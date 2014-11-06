@@ -4,7 +4,15 @@
      * @return the Paxos ballot promised by the replicas if no in-progress requests were seen and a quorum of
      * nodes have seen the mostRecentCommit.  Otherwise, return null.
      */
-    private static Pair<UUID, Integer> beginAndRepairPaxos(long start, ByteBuffer key, CFMetaData metadata, List<InetAddress> liveEndpoints, int requiredParticipants, ConsistencyLevel consistencyForPaxos, ConsistencyLevel consistencyForCommit, final boolean isWrite)
+    private static Pair<UUID, Integer> beginAndRepairPaxos(long start,
+                                                           ByteBuffer key,
+                                                           CFMetaData metadata,
+                                                           List<InetAddress> liveEndpoints,
+                                                           int requiredParticipants,
+                                                           ConsistencyLevel consistencyForPaxos,
+                                                           ConsistencyLevel consistencyForCommit,
+                                                           final boolean isWrite,
+                                                           ClientState state)
     throws WriteTimeoutException
     {
         long timeout = TimeUnit.MILLISECONDS.toNanos(DatabaseDescriptor.getCasContentionTimeout());
@@ -13,9 +21,13 @@
         int contentions = 0;
         while (System.nanoTime() - start < timeout)
         {
+            // We don't want to use a timestamp that is older than the last one assigned by the ClientState or operations
+            // may appear out-of-order (#7801). But note that state.getTimestamp() is in microseconds while the ballot
+            // timestamp is only in milliseconds
+            long currentTime = (state.getTimestamp() / 1000) + 1;
             long ballotMillis = summary == null
-                              ? System.currentTimeMillis()
-                              : Math.max(System.currentTimeMillis(), 1 + UUIDGen.unixTimestamp(summary.mostRecentInProgressCommit.ballot));
+                              ? currentTime
+                              : Math.max(currentTime, 1 + UUIDGen.unixTimestamp(summary.mostRecentInProgressCommit.ballot));
             UUID ballot = UUIDGen.getTimeUUID(ballotMillis);
 
             // prepare
@@ -73,6 +85,10 @@
                 // latter ticket, we can pass CL.ALL to the commit above and remove the 'continue'.
                 continue;
             }
+
+            // We might commit this ballot and we want to ensure operations starting after this CAS succeed will be assigned
+            // a timestamp greater that the one of this ballot, so operation order is preserved (#7801)
+            state.updateLastTimestamp(ballotMillis * 1000);
 
             return Pair.create(ballot, contentions);
         }
