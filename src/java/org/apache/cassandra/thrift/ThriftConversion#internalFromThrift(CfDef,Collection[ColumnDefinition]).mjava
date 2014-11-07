@@ -1,9 +1,10 @@
     // Convert a thrift CfDef, given a list of ColumnDefinitions to copy over to the created CFMetadata before the CQL metadata are rebuild
-    private static CFMetaData internalFromThrift(CfDef cf_def, Collection<ColumnDefinition> previousCQLMetadata) throws InvalidRequestException, ConfigurationException
+    private static CFMetaData internalFromThrift(CfDef cf_def, Collection<ColumnDefinition> previousCQLMetadata)
+    throws org.apache.cassandra.exceptions.InvalidRequestException, ConfigurationException
     {
         ColumnFamilyType cfType = ColumnFamilyType.create(cf_def.column_type);
         if (cfType == null)
-            throw new InvalidRequestException("Invalid column type " + cf_def.column_type);
+            throw new org.apache.cassandra.exceptions.InvalidRequestException("Invalid column type " + cf_def.column_type);
 
         applyImplicitDefaults(cf_def);
 
@@ -11,15 +12,15 @@
         {
             AbstractType<?> rawComparator = TypeParser.parse(cf_def.comparator_type);
             AbstractType<?> subComparator = cfType == ColumnFamilyType.Standard
-                                          ? null
-                                          : cf_def.subcomparator_type == null ? BytesType.instance : TypeParser.parse(cf_def.subcomparator_type);
+                    ? null
+                    : cf_def.subcomparator_type == null ? BytesType.instance : TypeParser.parse(cf_def.subcomparator_type);
 
-            AbstractType<?> fullRawComparator = makeRawAbstractType(rawComparator, subComparator);
+            AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
 
             AbstractType<?> keyValidator = cf_def.isSetKey_validation_class() ? TypeParser.parse(cf_def.key_validation_class) : null;
 
             // Convert the REGULAR definitions from the input CfDef
-            List<ColumnDefinition> defs = ColumnDefinition.fromThrift(cf_def.keyspace, cf_def.name, rawComparator, subComparator, cf_def.column_metadata);
+            List<ColumnDefinition> defs = fromThrift(cf_def.keyspace, cf_def.name, rawComparator, subComparator, cf_def.column_metadata);
 
             // Add the keyAlias if there is one, since that's on CQL metadata that thrift can actually change (for
             // historical reasons)
@@ -40,7 +41,7 @@
                 defs.add(def);
             }
 
-            CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, calculateIsDense(fullRawComparator, defs));
+            CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, CFMetaData.calculateIsDense(fullRawComparator, defs));
 
             UUID cfId = Schema.instance.getId(cf_def.keyspace, cf_def.name);
             if (cfId == null)
@@ -59,7 +60,7 @@
             if (cf_def.isSetMax_compaction_threshold())
                 newCFMD.maxCompactionThreshold(cf_def.max_compaction_threshold);
             if (cf_def.isSetCompaction_strategy())
-                newCFMD.compactionStrategyClass(createCompactionStrategy(cf_def.compaction_strategy));
+                newCFMD.compactionStrategyClass(CFMetaData.createCompactionStrategy(cf_def.compaction_strategy));
             if (cf_def.isSetCompaction_strategy_options())
                 newCFMD.compactionStrategyOptions(new HashMap<>(cf_def.compaction_strategy_options));
             if (cf_def.isSetBloom_filter_fp_chance())
@@ -79,9 +80,9 @@
             if (cf_def.isSetMax_index_interval())
                 newCFMD.maxIndexInterval(cf_def.max_index_interval);
             if (cf_def.isSetSpeculative_retry())
-                newCFMD.speculativeRetry(SpeculativeRetry.fromString(cf_def.speculative_retry));
+                newCFMD.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(cf_def.speculative_retry));
             if (cf_def.isSetTriggers())
-                newCFMD.triggers(TriggerDefinition.fromThrift(cf_def.triggers));
+                newCFMD.triggers(triggerDefinitionsFromThrift(cf_def.triggers));
 
             return newCFMD.comment(cf_def.comment)
                           .defaultValidator(TypeParser.parse(cf_def.default_validation_class))
