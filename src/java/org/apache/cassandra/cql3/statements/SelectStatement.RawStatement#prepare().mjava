@@ -80,16 +80,26 @@
                 stmt.usesSecondaryIndexing = true;
 
             if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedColumns.removeAll(cfm.clusteringColumns());
+            {
+                for (ColumnDefinition def : cfm.clusteringColumns())
+                {
+                    // Remove clustering column restrictions that can be handled by slices; the remainder will be
+                    // handled by filters (which may require a secondary index).
+                    Restriction restriction = stmt.columnRestrictions[def.position()];
+                    if (restriction != null)
+                    {
+                        if (restriction.canEvaluateWithSlices())
+                            stmt.restrictedColumns.remove(def);
+                        else
+                            stmt.usesSecondaryIndexing = true;
+                    }
+                }
+            }
 
             // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
-            // there is restrictions not covered by the PK.
+            // there are restrictions not covered by the PK.
             if (!stmt.metadataRestrictions.isEmpty())
-            {
-                if (!hasQueriableIndex)
-                    throw new InvalidRequestException("No indexed columns present in by-columns clause with Equal operator");
                 stmt.usesSecondaryIndexing = true;
-            }
 
             if (stmt.usesSecondaryIndexing)
                 validateSecondaryIndexSelections(stmt);

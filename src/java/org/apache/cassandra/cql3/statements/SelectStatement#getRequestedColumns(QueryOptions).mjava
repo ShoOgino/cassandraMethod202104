@@ -11,33 +11,52 @@
             ColumnDefinition def = idIter.next();
             assert r != null && !r.isSlice();
 
-            List<ByteBuffer> values = r.values(options);
-            if (values.size() == 1)
+            if (r.isEQ())
             {
-                ByteBuffer val = values.get(0);
+                ByteBuffer val = r.values(options).get(0);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
                 builder.add(val);
             }
             else
             {
-                // We have a IN, which we only support for the last column.
-                // If compact, just add all values and we're done. Otherwise,
-                // for each value of the IN, creates all the columns corresponding to the selection.
-                if (values.isEmpty())
-                    return null;
-                SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
-                Iterator<ByteBuffer> iter = values.iterator();
-                while (iter.hasNext())
+                if (!r.isMultiColumn())
                 {
-                    ByteBuffer val = iter.next();
-                    if (val == null)
-                        throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
+                    List<ByteBuffer> values = r.values(options);
+                    // We have a IN, which we only support for the last column.
+                    // If compact, just add all values and we're done. Otherwise,
+                    // for each value of the IN, creates all the columns corresponding to the selection.
+                    if (values.isEmpty())
+                        return null;
+                    SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
+                    Iterator<ByteBuffer> iter = values.iterator();
+                    while (iter.hasNext())
+                    {
+                        ByteBuffer val = iter.next();
+                        if (val == null)
+                            throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", def.name));
 
-                    Composite prefix = builder.buildWith(val);
-                    columns.addAll(addSelectedColumns(prefix));
+                        Composite prefix = builder.buildWith(val);
+                        columns.addAll(addSelectedColumns(prefix));
+                    }
+                    return columns;
                 }
-                return columns;
+                else
+                {
+                    // we have a multi-column IN restriction
+                    List<List<ByteBuffer>> values = ((MultiColumnRestriction.IN) r).splitValues(options);
+                    TreeSet<CellName> inValues = new TreeSet<>(cfm.comparator);
+                    for (List<ByteBuffer> components : values)
+                    {
+                        for (int i = 0; i < components.size(); i++)
+                            if (components.get(i) == null)
+                                throw new InvalidRequestException("Invalid null value in condition for column " + cfm.clusteringColumns().get(i + def.position()));
+
+                        Composite prefix = builder.buildWith(components);
+                        inValues.addAll(addSelectedColumns(prefix));
+                    }
+                    return inValues;
+                }
             }
         }
 

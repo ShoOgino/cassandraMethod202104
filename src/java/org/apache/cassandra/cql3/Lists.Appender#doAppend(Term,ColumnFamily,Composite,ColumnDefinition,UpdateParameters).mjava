@@ -1,17 +1,29 @@
         static void doAppend(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
         {
             Term.Terminal value = t.bind(params.options);
-            // If we append null, do nothing. Note that for Setter, we've
-            // already removed the previous value so we're good here too
-            if (value == null)
-                return;
-
-            assert value instanceof Lists.Value;
-            List<ByteBuffer> toAdd = ((Lists.Value)value).elements;
-            for (int i = 0; i < toAdd.size(); i++)
+            Lists.Value listValue = (Lists.Value)value;
+            if (column.type.isMultiCell())
             {
-                ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes());
-                cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
+                // If we append null, do nothing. Note that for Setter, we've
+                // already removed the previous value so we're good here too
+                if (value == null)
+                    return;
+
+                List<ByteBuffer> toAdd = listValue.elements;
+                for (int i = 0; i < toAdd.size(); i++)
+                {
+                    ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes());
+                    cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
+                }
+            }
+            else
+            {
+                // for frozen lists, we're overwriting the whole cell value
+                CellName name = cf.getComparator().create(prefix, column);
+                if (value == null)
+                    cf.addAtom(params.makeTombstone(name));
+                else
+                    cf.addColumn(params.makeColumn(name, listValue.getWithProtocolVersion(Server.CURRENT_VERSION)));
             }
         }
 

@@ -1,16 +1,27 @@
         static void doAdd(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
         {
             Term.Terminal value = t.bind(params.options);
-            if (value == null)
-                return;
-
-            assert value instanceof Sets.Value : value;
-
-            Set<ByteBuffer> toAdd = ((Sets.Value)value).elements;
-            for (ByteBuffer bb : toAdd)
+            Sets.Value setValue = (Sets.Value)value;
+            if (column.type.isMultiCell())
             {
-                CellName cellName = cf.getComparator().create(prefix, column, bb);
-                cf.addColumn(params.makeColumn(cellName, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+                if (value == null)
+                    return;
+
+                Set<ByteBuffer> toAdd = setValue.elements;
+                for (ByteBuffer bb : toAdd)
+                {
+                    CellName cellName = cf.getComparator().create(prefix, column, bb);
+                    cf.addColumn(params.makeColumn(cellName, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+                }
+            }
+            else
+            {
+                // for frozen sets, we're overwriting the whole cell
+                CellName cellName = cf.getComparator().create(prefix, column);
+                if (value == null)
+                    cf.addAtom(params.makeTombstone(cellName));
+                else
+                    cf.addColumn(params.makeColumn(cellName, ((Value) value).getWithProtocolVersion(Server.CURRENT_VERSION)));
             }
         }
 
