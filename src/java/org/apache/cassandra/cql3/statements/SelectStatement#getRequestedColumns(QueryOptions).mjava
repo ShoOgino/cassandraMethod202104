@@ -6,25 +6,40 @@
 
         CompositesBuilder builder = new CompositesBuilder(cfm.comparator.prefixBuilder(), cfm.comparator);
         Iterator<ColumnDefinition> idIter = cfm.clusteringColumns().iterator();
-        for (Restriction r : columnRestrictions)
+        for (int i = 0; i < columnRestrictions.length; i++)
         {
+            Restriction r = columnRestrictions[i];
             ColumnDefinition def = idIter.next();
             assert r != null && !r.isSlice();
 
-            List<ByteBuffer> values = r.values(options);
+            if (r.isEQ() || !r.isMultiColumn())
+            {
+                List<ByteBuffer> values = r.values(options);
+                if (values.isEmpty())
+                    return null;
+                builder.addEachElementToAll(values);
+            }
+            else
+            {
+                // we have a multi-column IN restriction
+                List<List<ByteBuffer>> splitValues = ((MultiColumnRestriction.IN) r).splitValues(options);
+                if (splitValues.isEmpty())
+                    return null;
 
-            if (values.isEmpty())
-                return null;
+                builder.addAllElementsToAll(splitValues);
 
-            builder.addEachElementToAll(values);
+                // increment i to skip the remainder of the multicolumn restriction
+                i += splitValues.get(0).size() - 1;
+            }
+
             if (builder.containsNull())
                 throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s",
-                                                                def.name));
+                        def.name));
         }
-        SortedSet<CellName> columns = new TreeSet<CellName>(cfm.comparator);
+
+        SortedSet<CellName> columns = new TreeSet<>(cfm.comparator);
         for (Composite composite : builder.build())
             columns.addAll(addSelectedColumns(composite));
-
         return columns;
     }
 

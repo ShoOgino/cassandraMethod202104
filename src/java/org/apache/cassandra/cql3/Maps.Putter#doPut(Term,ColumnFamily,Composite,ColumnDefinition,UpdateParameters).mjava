@@ -1,15 +1,26 @@
         static void doPut(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
         {
             Term.Terminal value = t.bind(params.options);
-            if (value == null)
-                return;
-            assert value instanceof Maps.Value;
-
-            Map<ByteBuffer, ByteBuffer> toAdd = ((Maps.Value)value).map;
-            for (Map.Entry<ByteBuffer, ByteBuffer> entry : toAdd.entrySet())
+            Maps.Value mapValue = (Maps.Value) value;
+            if (column.type.isMultiCell())
             {
-                CellName cellName = cf.getComparator().create(prefix, column, entry.getKey());
-                cf.addColumn(params.makeColumn(cellName, entry.getValue()));
+                if (value == null)
+                    return;
+
+                for (Map.Entry<ByteBuffer, ByteBuffer> entry : mapValue.map.entrySet())
+                {
+                    CellName cellName = cf.getComparator().create(prefix, column, entry.getKey());
+                    cf.addColumn(params.makeColumn(cellName, entry.getValue()));
+                }
+            }
+            else
+            {
+                // for frozen maps, we're overwriting the whole cell
+                CellName cellName = cf.getComparator().create(prefix, column);
+                if (value == null)
+                    cf.addAtom(params.makeTombstone(cellName));
+                else
+                    cf.addColumn(params.makeColumn(cellName, mapValue.getWithProtocolVersion(Server.CURRENT_VERSION)));
             }
         }
 
