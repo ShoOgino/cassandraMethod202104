@@ -9,14 +9,17 @@
         {
             public void run()
             {
-                CFMetaData cfMeta = CFMetaData.TraceSessionsCf;
-                ColumnFamily cf = ArrayBackedSortedColumns.factory.create(cfMeta);
-                addColumn(cf, buildName(cfMeta, "coordinator"), FBUtilities.getBroadcastAddress());
-                addParameterColumns(cf, parameters);
-                addColumn(cf, buildName(cfMeta, bytes("request")), request);
-                addColumn(cf, buildName(cfMeta, bytes("started_at")), started_at);
-                addParameterColumns(cf, parameters);
-                mutateWithCatch(new Mutation(TRACE_KS, sessionIdBytes, cf));
+                Mutation mutation = new Mutation(TRACE_KS, sessionIdBytes);
+                ColumnFamily cells = mutation.addOrGet(CFMetaData.TraceSessionsCf);
+
+                CFRowAdder adder = new CFRowAdder(cells, cells.metadata().comparator.builder().build(), FBUtilities.timestampMicros());
+                adder.add("coordinator", FBUtilities.getBroadcastAddress());
+                for (Map.Entry<String, String> entry : parameters.entrySet())
+                    adder.addMapEntry("parameters", entry.getKey(), entry.getValue());
+                adder.add("request", request);
+                adder.add("started_at", new Date(started_at));
+
+                mutateWithCatch(mutation);
             }
         });
     }
