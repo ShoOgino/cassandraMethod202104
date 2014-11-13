@@ -1,5 +1,5 @@
     @Test
-    public void testNumberOfFilesAndSizes() throws InterruptedException
+    public void testNumberOfFilesAndSizes() throws Exception
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF);
@@ -13,20 +13,22 @@
         SSTableRewriter rewriter = new SSTableRewriter(cfs, compacting, 1000, false);
         rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
 
-        ICompactionScanner scanner = s.getScanner();
-        CompactionController controller = new CompactionController(cfs, compacting, 0);
         int files = 1;
-        while(scanner.hasNext())
+        try (ICompactionScanner scanner = s.getScanner();
+             CompactionController controller = new CompactionController(cfs, compacting, 0))
         {
-            rewriter.append(new LazilyCompactedRow(controller, Arrays.asList(scanner.next())));
-            if (rewriter.currentWriter().getOnDiskFilePointer() > 25000000)
+            while(scanner.hasNext())
             {
-                rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
-                files++;
-                assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
-                assertEquals(s.bytesOnDisk(), cfs.metric.liveDiskSpaceUsed.count());
-                assertEquals(s.bytesOnDisk(), cfs.metric.totalDiskSpaceUsed.count());
+                rewriter.append(new LazilyCompactedRow(controller, Arrays.asList(scanner.next())));
+                if (rewriter.currentWriter().getOnDiskFilePointer() > 25000000)
+                {
+                    rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
+                    files++;
+                    assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
+                    assertEquals(s.bytesOnDisk(), cfs.metric.liveDiskSpaceUsed.count());
+                    assertEquals(s.bytesOnDisk(), cfs.metric.totalDiskSpaceUsed.count());
 
+                }
             }
         }
         List<SSTableReader> sstables = rewriter.finish();
