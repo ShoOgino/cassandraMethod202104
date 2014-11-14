@@ -8,45 +8,47 @@
         execute("INSERT INTO %s(key, d) VALUES (?, ?)", 3, 3d);
 
         // simple creation
-        execute("CREATE FUNCTION foo::sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
+        execute("CREATE FUNCTION "+KS_FOO+".sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
         // check we can't recreate the same function
-        assertInvalid("CREATE FUNCTION foo::sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
+        assertInvalid("CREATE FUNCTION "+KS_FOO+".sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
         // but that it doesn't complay with "IF NOT EXISTS"
-        execute("CREATE FUNCTION IF NOT EXISTS foo::sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
+        execute("CREATE FUNCTION IF NOT EXISTS "+KS_FOO+".sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
 
         // Validate that it works as expected
-        assertRows(execute("SELECT key, foo::sin(d) FROM %s"),
+        assertRows(execute("SELECT key, "+KS_FOO+".sin(d) FROM %s"),
             row(1, Math.sin(1d)),
             row(2, Math.sin(2d)),
             row(3, Math.sin(3d))
         );
 
+        // Replace the method with incompatible return type
+        assertInvalid("CREATE OR REPLACE FUNCTION " + KS_FOO + ".sin ( input double ) RETURNS text LANGUAGE java AS 'return Double.valueOf(42d);'");
         // proper replacement
-        execute("CREATE OR REPLACE FUNCTION foo::sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(42d);'");
+        execute("CREATE OR REPLACE FUNCTION "+KS_FOO+".sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(42d);'");
 
         // Validate the method as been replaced
-        assertRows(execute("SELECT key, foo::sin(d) FROM %s"),
+        assertRows(execute("SELECT key, "+KS_FOO+".sin(d) FROM %s"),
             row(1, 42.0),
             row(2, 42.0),
             row(3, 42.0)
         );
 
         // same function but without namespace
-        execute("CREATE FUNCTION sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
-        assertRows(execute("SELECT key, sin(d) FROM %s"),
+        execute("CREATE FUNCTION "+KEYSPACE+".sin ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
+        assertRows(execute("SELECT key, "+KEYSPACE+".sin(d) FROM %s"),
             row(1, Math.sin(1d)),
             row(2, Math.sin(2d)),
             row(3, Math.sin(3d))
         );
 
-        // Drop with and without namespace
-        execute("DROP FUNCTION foo::sin");
-        execute("DROP FUNCTION sin");
+        // Drop with and without keyspace
+        execute("DROP FUNCTION "+KS_FOO+".sin");
+        execute("DROP FUNCTION "+KEYSPACE+".sin");
 
         // Drop unexisting function
-        assertInvalid("DROP FUNCTION foo::sin");
+        assertInvalid("DROP FUNCTION "+KS_FOO+".sin");
         // but don't complain with "IF EXISTS"
-        execute("DROP FUNCTION IF EXISTS foo::sin");
+        execute("DROP FUNCTION IF EXISTS "+KS_FOO+".sin");
 
         // can't drop native functions
         assertInvalid("DROP FUNCTION dateof");
