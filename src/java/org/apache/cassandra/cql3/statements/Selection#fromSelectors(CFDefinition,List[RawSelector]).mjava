@@ -1,8 +1,8 @@
     public static Selection fromSelectors(CFDefinition cfDef, List<RawSelector> rawSelectors) throws InvalidRequestException
     {
-        boolean usesFunction = isUsingFunction(rawSelectors);
+        boolean needsProcessing = selectionsNeedProcessing(rawSelectors);
 
-        if (usesFunction)
+        if (needsProcessing)
         {
             List<CFDefinition.Name> names = new ArrayList<CFDefinition.Name>();
             List<ColumnSpecification> metadata = new ArrayList<ColumnSpecification>(rawSelectors.size());
@@ -19,7 +19,7 @@
                     collectTTLs |= !((WritetimeOrTTLSelector)selector).isWritetime;
                 }
             }
-            return new SelectionWithFunctions(names, metadata, selectors, collectTimestamps, collectTTLs);
+            return new SelectionWithProcessing(names, metadata, selectors, collectTimestamps, collectTTLs);
         }
         else
         {
@@ -27,10 +27,11 @@
             List<ColumnSpecification> metadata = new ArrayList<ColumnSpecification>(rawSelectors.size());
             for (RawSelector rawSelector : rawSelectors)
             {
-                assert rawSelector.selectable instanceof ColumnIdentifier;
-                CFDefinition.Name name = cfDef.get((ColumnIdentifier)rawSelector.selectable);
+                assert rawSelector.selectable instanceof ColumnIdentifier.Raw;
+                ColumnIdentifier id = ((ColumnIdentifier.Raw)rawSelector.selectable).prepare(cfDef.cfm);
+                CFDefinition.Name name = cfDef.get(id);
                 if (name == null)
-                    throw new InvalidRequestException(String.format("Undefined name %s in selection clause", rawSelector.selectable));
+                    throw new InvalidRequestException(String.format("Undefined name %s in selection clause", id));
                 names.add(name);
                 metadata.add(rawSelector.alias == null ? name : makeAliasSpec(cfDef, name.type, rawSelector.alias));
             }
