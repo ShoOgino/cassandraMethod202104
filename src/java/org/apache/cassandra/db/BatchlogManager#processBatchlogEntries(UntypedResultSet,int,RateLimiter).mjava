@@ -3,6 +3,9 @@
         int positionInPage = 0;
         ArrayList<Batch> unfinishedBatches = new ArrayList<>(pageSize);
 
+        Set<InetAddress> hintedNodes = new HashSet<>();
+        Set<UUID> replayedBatches = new HashSet<>();
+
         // Sending out batches for replay without waiting for them, so that one stuck batch doesn't affect others
         for (UntypedResultSet.Row row : batches)
         {
@@ -11,7 +14,7 @@
             Batch batch = new Batch(id, row.getBytes("data"), version);
             try
             {
-                if (batch.replay(rateLimiter) > 0)
+                if (batch.replay(rateLimiter, hintedNodes) > 0)
                 {
                     unfinishedBatches.add(batch);
                 }
@@ -31,10 +34,17 @@
             {
                 // We have reached the end of a batch. To avoid keeping more than a page of mutations in memory,
                 // finish processing the page before requesting the next row.
-                finishAndClearBatches(unfinishedBatches);
+                finishAndClearBatches(unfinishedBatches, hintedNodes, replayedBatches);
                 positionInPage = 0;
             }
         }
-        finishAndClearBatches(unfinishedBatches);
+
+        finishAndClearBatches(unfinishedBatches, hintedNodes, replayedBatches);
+
+        // to preserve batch guarantees, we must ensure that hints (if any) have made it to disk, before deleting the batches
+        HintsService.instance.flushAndFsyncBlockingly(transform(hintedNodes, StorageService.instance::getHostIdForEndpoint));
+
+        // once all generated hints are fsynced, actually delete the batches
+        replayedBatches.forEach(BatchlogManager::deleteBatch);
     }
 

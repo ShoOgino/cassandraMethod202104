@@ -1,0 +1,26 @@
+    @Test
+    public void testApplyWithTruncation()
+    {
+        long now = FBUtilities.timestampMicros();
+        String key = "testApplyWithTruncation";
+        Mutation mutation = createMutation(key, now);
+
+        // sanity check that there is no data inside yet
+        assertNoPartitions(key, TABLE0);
+        assertNoPartitions(key, TABLE1);
+        assertNoPartitions(key, TABLE2);
+
+        // truncate TABLE1
+        Keyspace.open(KEYSPACE).getColumnFamilyStore(TABLE1).truncateBlocking();
+
+        // create and apply a hint with creation time in the past (one second before the truncation)
+        Hint.create(mutation, now / 1000 - 1).apply();
+
+        // TABLE1 update should have been skipped and not applied, as expired
+        assertNoPartitions(key, TABLE1);
+
+        // TABLE0 and TABLE2 updates should have been applied successfully
+        assertPartitionsEqual(mutation.getPartitionUpdate(Schema.instance.getId(KEYSPACE, TABLE0)), readPartition(key, TABLE0));
+        assertPartitionsEqual(mutation.getPartitionUpdate(Schema.instance.getId(KEYSPACE, TABLE2)), readPartition(key, TABLE2));
+    }
+

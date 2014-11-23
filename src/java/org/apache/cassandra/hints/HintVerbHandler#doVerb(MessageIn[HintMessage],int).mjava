@@ -1,0 +1,40 @@
+    public void doVerb(MessageIn<HintMessage> message, int id)
+    {
+        UUID hostId = message.payload.hostId;
+        Hint hint = message.payload.hint;
+
+        // If we see an unknown table id, it means the table, or one of the tables in the mutation, had been dropped.
+        // In that case there is nothing we can really do, or should do, other than log it go on.
+        // This will *not* happen due to a not-yet-seen table, because we don't transfer hints unless there
+        // is schema agreement between the sender and the receiver.
+        if (hint == null)
+        {
+            logger.debug("Failed to decode and apply a hint for {} - table with id {} is unknown",
+                         hostId,
+                         message.payload.unknownTableID);
+            reply(id, message.from);
+            return;
+        }
+
+        // We must perform validation before applying the hint, and there is no other place to do it other than here.
+        try
+        {
+            hint.mutation.getPartitionUpdates().forEach(PartitionUpdate::validate);
+        }
+        catch (MarshalException e)
+        {
+            logger.warn("Failed to validate a hint for {} (table id {}) - skipped", hostId);
+            reply(id, message.from);
+            return;
+        }
+
+        // Apply the hint if this node is the destination, store for future dispatch if this node isn't (must have gotten
+        // it from a decommissioned node that had streamed it before going out).
+        if (hostId.equals(StorageService.instance.getLocalHostUUID()))
+            hint.apply();
+        else
+            HintsService.instance.write(hostId, hint);
+
+        reply(id, message.from);
+    }
+

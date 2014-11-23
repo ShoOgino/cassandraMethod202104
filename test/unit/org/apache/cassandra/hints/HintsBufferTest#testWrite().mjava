@@ -1,0 +1,69 @@
+    @Test
+    public void testWrite() throws IOException, InterruptedException
+    {
+        // generate 10 random host ids to choose from
+        UUID[] hostIds = new UUID[HOST_ID_COUNT];
+        for (int i = 0; i < hostIds.length; i++)
+            hostIds[i] = UUID.randomUUID();
+
+        // map each index to one random UUID from the previously created UUID array
+        Random random = new Random(System.currentTimeMillis());
+        UUID[] load = new UUID[HINTS_COUNT];
+        for (int i = 0; i < load.length; i++)
+            load[i] = hostIds[random.nextInt(HOST_ID_COUNT)];
+
+        // calculate the size of a single hint (they will all have an equal size in this test)
+        int hintSize = (int) Hint.serializer.serializedSize(createHint(0, System.currentTimeMillis()), MessagingService.current_version);
+        int entrySize = hintSize + HintsBuffer.ENTRY_OVERHEAD_SIZE;
+
+        // allocate a slab to fit *precisely* HINTS_COUNT hints
+        int slabSize = entrySize * HINTS_COUNT;
+        HintsBuffer buffer = HintsBuffer.create(slabSize);
+
+        // use a fixed timestamp base for all mutation timestamps
+        long baseTimestamp = System.currentTimeMillis();
+
+        // create HINT_THREADS_COUNT, start them, and wait for them to finish
+        List<Thread> threads = new ArrayList<>(HINT_THREADS_COUNT);
+        for (int i = 0; i < HINT_THREADS_COUNT; i ++)
+            threads.add(new Thread(new Writer(buffer, load, hintSize, i, baseTimestamp)));
+        threads.forEach(java.lang.Thread::start);
+        for (Thread thread : threads)
+            thread.join();
+
+        // sanity check that we are full
+        assertEquals(slabSize, buffer.capacity());
+        assertEquals(0, buffer.remaining());
+
+        // try to allocate more bytes, ensure that the allocation fails
+        assertNull(buffer.allocate(1));
+
+        // a failed allocation should automatically close the oporder
+        buffer.waitForModifications();
+
+        // a failed allocation should also automatically make the buffer as closed
+        assertTrue(buffer.isClosed());
+
+        // assert that host id set in the buffer equals to hostIds
+        assertEquals(HOST_ID_COUNT, buffer.hostIds().size());
+        assertEquals(new HashSet<>(Arrays.asList(hostIds)), buffer.hostIds());
+
+        // iterate over *every written hint*, validate its content
+        for (UUID hostId : hostIds)
+        {
+            Iterator<ByteBuffer> iter = buffer.consumingHintsIterator(hostId);
+            while (iter.hasNext())
+            {
+                int idx = validateEntry(hostId, iter.next(), baseTimestamp, load);
+                load[idx] = null; // nullify each visited entry
+            }
+        }
+
+        // assert that all the entries in load array have been visited and nullified
+        for (UUID hostId : load)
+            assertNull(hostId);
+
+        // free the buffer
+        buffer.free();
+    }
+

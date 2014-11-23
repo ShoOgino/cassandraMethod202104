@@ -1,0 +1,25 @@
+    private Action sendHintsAndAwait(HintsReader.Page page)
+    {
+        Collection<Callback> callbacks = new ArrayList<>();
+
+        /*
+         * If hints file messaging version matches the version of the target host, we'll use the optimised path -
+         * skipping the redundant decoding/encoding cycle of the already encoded hint.
+         *
+         * If that is not the case, we'll need to perform conversion to a newer (or an older) format, and decoding the hint
+         * is an unavoidable intermediate step.
+         */
+        Action action = reader.descriptor().messagingVersion() == messagingVersion
+                      ? sendHints(page.buffersIterator(), callbacks, this::sendEncodedHint)
+                      : sendHints(page.hintsIterator(), callbacks, this::sendHint);
+
+        if (action == Action.ABORT)
+            return action;
+
+        for (Callback cb : callbacks)
+            if (cb.await() != Callback.Outcome.SUCCESS)
+                return Action.RETRY;
+
+        return Action.CONTINUE;
+    }
+
