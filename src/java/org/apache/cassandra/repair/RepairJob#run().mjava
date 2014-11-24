@@ -10,7 +10,8 @@
         allEndpoints.add(FBUtilities.getBroadcastAddress());
 
         ListenableFuture<List<TreeResponse>> validations;
-        if (isSequential)
+        // Create a snapshot at all nodes unless we're using pure parallel repairs
+        if (parallelismDegree != RepairParallelism.PARALLEL)
         {
             // Request snapshot to all replica
             List<ListenableFuture<InetAddress>> snapshotTasks = new ArrayList<>(allEndpoints.size());
@@ -26,12 +27,17 @@
             {
                 public ListenableFuture<List<TreeResponse>> apply(List<InetAddress> endpoints) throws Exception
                 {
-                    return sendValidationRequest(endpoints);
+                    logger.info(String.format("[repair #%s] requesting merkle trees for %s (to %s)", desc.sessionId, desc.columnFamily, endpoints));
+                    if (parallelismDegree == RepairParallelism.SEQUENTIAL)
+                        return sendSequentialValidationRequest(endpoints);
+                    else
+                        return sendDCAwareValidationRequest(endpoints);
                 }
             }, taskExecutor);
         }
         else
         {
+            logger.info(String.format("[repair #%s] requesting merkle trees for %s (to %s)", desc.sessionId, desc.columnFamily, allEndpoints));
             // If not sequential, just send validation request to all replica
             validations = sendValidationRequest(allEndpoints);
         }
