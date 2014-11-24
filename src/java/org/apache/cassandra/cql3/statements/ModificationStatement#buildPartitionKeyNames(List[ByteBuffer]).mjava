@@ -2,7 +2,7 @@
     throws InvalidRequestException
     {
         CFDefinition cfDef = cfm.getCfDef();
-        ColumnNameBuilder keyBuilder = cfDef.getKeyNameBuilder();
+        ColumnNameBuilder keyBuilderBase = cfDef.getKeyNameBuilder();
         List<ByteBuffer> keys = new ArrayList<ByteBuffer>();
         for (CFDefinition.Name name : cfDef.partitionKeys())
         {
@@ -11,14 +11,19 @@
                 throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s", name));
 
             List<ByteBuffer> values = r.values(variables);
-
-            if (keyBuilder.remainingCount() == 1)
+            if (keyBuilderBase.remainingCount() == 1)
             {
                 for (ByteBuffer val : values)
                 {
                     if (val == null)
                         throw new InvalidRequestException(String.format("Invalid null value for partition key part %s", name));
-                    ByteBuffer key = keyBuilder.copy().add(val).build();
+
+                    ColumnNameBuilder keyBuilder = keyBuilderBase.copy().add(val);
+                    if (keyBuilder.getLength() > FBUtilities.MAX_UNSIGNED_SHORT)
+                        throw new InvalidRequestException(String.format("Partition key size %s exceeds maximum %s",
+                                                                        keyBuilder.getLength(),
+                                                                        FBUtilities.MAX_UNSIGNED_SHORT));
+                    ByteBuffer key = keyBuilder.build();
                     ThriftValidation.validateKey(cfm, key);
                     keys.add(key);
                 }
@@ -30,7 +35,7 @@
                 ByteBuffer val = values.get(0);
                 if (val == null)
                     throw new InvalidRequestException(String.format("Invalid null value for partition key part %s", name));
-                keyBuilder.add(val);
+                keyBuilderBase.add(val);
             }
         }
         return keys;
