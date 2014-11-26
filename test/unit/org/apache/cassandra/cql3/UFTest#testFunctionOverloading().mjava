@@ -5,45 +5,55 @@
 
         execute("INSERT INTO %s(k, v) VALUES (?, ?)", "f2", 1);
 
-        execute("CREATE FUNCTION "+KEYSPACE+".overloaded(v varchar) RETURNS text LANGUAGE java AS 'return \"f1\";'");
-        execute("CREATE OR REPLACE FUNCTION "+KEYSPACE+".overloaded(i int) RETURNS text LANGUAGE java AS 'return \"f2\";'");
-        execute("CREATE OR REPLACE FUNCTION "+KEYSPACE+".overloaded(v1 text, v2 text) RETURNS text LANGUAGE java AS 'return \"f3\";'");
-        execute("CREATE OR REPLACE FUNCTION "+KEYSPACE+".overloaded(v ascii) RETURNS text LANGUAGE java AS 'return \"f1\";'");
+        String fOverload = createFunction(KEYSPACE_PER_TEST, "varchar",
+                                          "CREATE FUNCTION %s ( input varchar ) " +
+                                          "RETURNS text " +
+                                          "LANGUAGE java " +
+                                          "AS 'return \"f1\";'");
+        createFunctionOverload(fOverload,
+                               "int",
+                               "CREATE OR REPLACE FUNCTION %s(i int) RETURNS text LANGUAGE java AS 'return \"f2\";'");
+        createFunctionOverload(fOverload,
+                               "text,text",
+                               "CREATE OR REPLACE FUNCTION %s(v1 text, v2 text) RETURNS text LANGUAGE java AS 'return \"f3\";'");
+        createFunctionOverload(fOverload,
+                               "ascii",
+                               "CREATE OR REPLACE FUNCTION %s(v ascii) RETURNS text LANGUAGE java AS 'return \"f1\";'");
 
         // text == varchar, so this should be considered as a duplicate
-        assertInvalid("CREATE FUNCTION "+KEYSPACE+".overloaded(v varchar) RETURNS text LANGUAGE java AS 'return \"f1\";'");
+        assertInvalid("CREATE FUNCTION " + fOverload + "(v varchar) RETURNS text LANGUAGE java AS 'return \"f1\";'");
 
-        assertRows(execute("SELECT "+KEYSPACE+".overloaded(k), "+KEYSPACE+".overloaded(v), "+KEYSPACE+".overloaded(k, k) FROM %s"),
+        assertRows(execute("SELECT " + fOverload + "(k), " + fOverload + "(v), " + fOverload + "(k, k) FROM %s"),
             row("f1", "f2", "f3")
         );
 
         forcePreparedValues();
         // This shouldn't work if we use preparation since there no way to know which overload to use
-        assertInvalid("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded(?)", "foo");
+        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "(?)", "foo");
         stopForcingPreparedValues();
 
         // but those should since we specifically cast
-        assertEmpty(execute("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded((text)?)", "foo"));
-        assertRows(execute("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded((int)?)", 3), row(1));
-        assertEmpty(execute("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded((ascii)?)", "foo"));
+        assertEmpty(execute("SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo"));
+        assertRows(execute("SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1));
+        assertEmpty(execute("SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo"));
         // And since varchar == text, this should work too
-        assertEmpty(execute("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded((varchar)?)", "foo"));
+        assertEmpty(execute("SELECT v FROM %s WHERE k = " + fOverload + "((varchar)?)", "foo"));
 
         // no such functions exist...
-        assertInvalid("DROP FUNCTION "+KEYSPACE+".overloaded(boolean)");
-        assertInvalid("DROP FUNCTION "+KEYSPACE+".overloaded(bigint)");
+        assertInvalid("DROP FUNCTION " + fOverload + "(boolean)");
+        assertInvalid("DROP FUNCTION " + fOverload + "(bigint)");
 
         // 'overloaded' has multiple overloads - so it has to fail (CASSANDRA-7812)
-        assertInvalid("DROP FUNCTION "+KEYSPACE+".overloaded");
-        execute("DROP FUNCTION " + KEYSPACE + ".overloaded(varchar)");
-        assertInvalid("SELECT v FROM %s WHERE k = " + KEYSPACE + ".overloaded((text)?)", "foo");
-        execute("DROP FUNCTION " + KEYSPACE + ".overloaded(text, text)");
-        assertInvalid("SELECT v FROM %s WHERE k = " + KEYSPACE + ".overloaded((text)?,(text)?)", "foo", "bar");
-        execute("DROP FUNCTION " + KEYSPACE + ".overloaded(ascii)");
-        assertInvalid("SELECT v FROM %s WHERE k = "+KEYSPACE+".overloaded((ascii)?)", "foo");
+        assertInvalid("DROP FUNCTION " + fOverload);
+        execute("DROP FUNCTION " + fOverload + "(varchar)");
+        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo");
+        execute("DROP FUNCTION " + fOverload + "(text, text)");
+        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((text)?,(text)?)", "foo", "bar");
+        execute("DROP FUNCTION " + fOverload + "(ascii)");
+        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo");
         // single-int-overload must still work
-        assertRows(execute("SELECT v FROM %s WHERE k = " + KEYSPACE + ".overloaded((int)?)", 3), row(1));
+        assertRows(execute("SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1));
         // overloaded has just one overload now - so the following DROP FUNCTION is not ambigious (CASSANDRA-7812)
-        execute("DROP FUNCTION "+KEYSPACE+".overloaded");
+        execute("DROP FUNCTION " + fOverload + "");
     }
 
