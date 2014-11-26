@@ -1,0 +1,43 @@
+    /**
+     * Returns a non-blacklisted data directory that _currently_ has {@code writeSize} bytes as usable space.
+     *
+     * @throws IOError if all directories are blacklisted.
+     */
+    public DataDirectory getWriteableLocation(long writeSize)
+    {
+        List<DataDirectoryCandidate> candidates = new ArrayList<>();
+
+        long totalAvailable = 0L;
+
+        // pick directories with enough space and so that resulting sstable dirs aren't blacklisted for writes.
+        boolean tooBig = false;
+        for (DataDirectory dataDir : dataFileLocations)
+        {
+            if (BlacklistedDirectories.isUnwritable(getLocationForDisk(dataDir)))
+                continue;
+            DataDirectoryCandidate candidate = new DataDirectoryCandidate(dataDir);
+            // exclude directory if its total writeSize does not fit to data directory
+            if (candidate.availableSpace < writeSize)
+            {
+                tooBig = true;
+                continue;
+            }
+            candidates.add(candidate);
+            totalAvailable += candidate.availableSpace;
+        }
+
+        if (candidates.isEmpty())
+            if (tooBig)
+                return null;
+            else
+                throw new IOError(new IOException("All configured data directories have been blacklisted as unwritable for erroring out"));
+
+        // shortcut for single data directory systems
+        if (candidates.size() == 1)
+            return candidates.get(0).dataDirectory;
+
+        sortWriteableCandidates(candidates, totalAvailable);
+
+        return pickWriteableDirectory(candidates);
+    }
+
