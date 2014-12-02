@@ -1,0 +1,87 @@
+    public StatementRestrictions(CFMetaData cfm,
+            List<Relation> whereClause,
+            VariableSpecifications boundNames,
+            boolean selectsOnlyStaticColumns,
+            boolean selectACollection) throws InvalidRequestException
+    {
+        this.cfm = cfm;
+        this.partitionKeyRestrictions = new SingleColumnPrimaryKeyRestrictions(cfm.getKeyValidatorAsCType());
+        this.clusteringColumnsRestrictions = new SingleColumnPrimaryKeyRestrictions(cfm.comparator);
+        this.nonPrimaryKeyRestrictions = new SingleColumnRestrictions();
+
+        /*
+         * WHERE clause. For a given entity, rules are: - EQ relation conflicts with anything else (including a 2nd EQ)
+         * - Can't have more than one LT(E) relation (resp. GT(E) relation) - IN relation are restricted to row keys
+         * (for now) and conflicts with anything else (we could allow two IN for the same entity but that doesn't seem
+         * very useful) - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value
+         * in CQL so far)
+         */
+        for (Relation relation : whereClause)
+            addRestriction(relation.toRestriction(cfm, boundNames));
+
+        ColumnFamilyStore cfs = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
+        SecondaryIndexManager secondaryIndexManager = cfs.indexManager;
+
+        boolean hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(secondaryIndexManager);
+        boolean hasQueriableIndex = hasQueriableClusteringColumnIndex
+                || partitionKeyRestrictions.hasSupportingIndex(secondaryIndexManager)
+                || nonPrimaryKeyRestrictions.hasSupportingIndex(secondaryIndexManager);
+
+        // At this point, the select statement if fully constructed, but we still have a few things to validate
+        processPartitionKeyRestrictions(hasQueriableIndex);
+
+        // Some but not all of the partition key columns have been specified;
+        // hence we need turn these restrictions into index expressions.
+        if (usesSecondaryIndexing)
+            indexRestrictions.add(partitionKeyRestrictions);
+
+        checkFalse(selectsOnlyStaticColumns && hasClusteringColumnsRestriction(),
+                   "Cannot restrict clustering columns when selecting only static columns");
+
+        processClusteringColumnsRestrictions(hasQueriableIndex, selectACollection);
+
+        // Covers indexes on the first clustering column (among others).
+        if (isKeyRange && hasQueriableClusteringColumnIndex)
+            usesSecondaryIndexing = true;
+
+        if (usesSecondaryIndexing)
+        {
+            indexRestrictions.add(clusteringColumnsRestrictions);
+        }
+        else if (clusteringColumnsRestrictions.isContains())
+        {
+            indexRestrictions.add(new ForwardingPrimaryKeyRestrictions() {
+
+                @Override
+                protected PrimaryKeyRestrictions getDelegate()
+                {
+                    return clusteringColumnsRestrictions;
+                }
+
+                @Override
+                public void addIndexExpressionTo(List<IndexExpression> expressions, QueryOptions options) throws InvalidRequestException
+                {
+                    List<IndexExpression> list = new ArrayList<>();
+                    super.addIndexExpressionTo(list, options);
+
+                    for (IndexExpression expression : list)
+                    {
+                        if (expression.isContains() || expression.isContainsKey())
+                            expressions.add(expression);
+                    }
+                }
+            });
+            usesSecondaryIndexing = true;
+        }
+        // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
+        // there is restrictions not covered by the PK.
+        if (!nonPrimaryKeyRestrictions.isEmpty())
+        {
+            usesSecondaryIndexing = true;
+            indexRestrictions.add(nonPrimaryKeyRestrictions);
+        }
+
+        if (usesSecondaryIndexing)
+            validateSecondaryIndexSelections(selectsOnlyStaticColumns);
+    }
+

@@ -7,106 +7,34 @@
                                 ? Selection.wildcard(cfm)
                                 : Selection.fromSelectors(cfm, selectClause);
 
-            SelectStatement stmt = new SelectStatement(cfm, boundNames.size(), parameters, selection, prepareLimit(boundNames));
-
-            /*
-             * WHERE clause. For a given entity, rules are:
-             *   - EQ relation conflicts with anything else (including a 2nd EQ)
-             *   - Can't have more than one LT(E) relation (resp. GT(E) relation)
-             *   - IN relation are restricted to row keys (for now) and conflicts with anything else
-             *     (we could allow two IN for the same entity but that doesn't seem very useful)
-             *   - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value in CQL so far)
-             */
-            boolean hasQueriableIndex = false;
-            boolean hasQueriableClusteringColumnIndex = false;
-            boolean hasSingleColumnRelations = false;
-            boolean hasMultiColumnRelations = false;
-
-            ColumnFamilyStore cfs = Keyspace.open(keyspace()).getColumnFamilyStore(columnFamily());
-            SecondaryIndexManager indexManager = cfs.indexManager;
-
-            for (Relation relation : whereClause)
-            {
-                if (relation.isMultiColumn())
-                {
-                    MultiColumnRelation rel = (MultiColumnRelation) relation;
-                    List<ColumnDefinition> names = new ArrayList<>(rel.getEntities().size());
-                    for (ColumnIdentifier.Raw rawEntity : rel.getEntities())
-                    {
-                        ColumnIdentifier entity = rawEntity.prepare(cfm);
-                        ColumnDefinition def = cfm.getColumnDefinition(entity);
-                        boolean[] queriable = processRelationEntity(stmt, indexManager, relation, entity, def);
-                        hasQueriableIndex |= queriable[0];
-                        hasQueriableClusteringColumnIndex |= queriable[1];
-                        names.add(def);
-                        hasMultiColumnRelations |= ColumnDefinition.Kind.CLUSTERING_COLUMN == def.kind;
-                    }
-                    updateRestrictionsForRelation(stmt, names, rel, boundNames);
-                }
-                else
-                {
-                    SingleColumnRelation rel = (SingleColumnRelation) relation;
-                    ColumnIdentifier entity = rel.getEntity().prepare(cfm);
-                    ColumnDefinition def = cfm.getColumnDefinition(entity);
-                    boolean[] queriable = processRelationEntity(stmt, indexManager, relation, entity, def);
-                    hasQueriableIndex |= queriable[0];
-                    hasQueriableClusteringColumnIndex |= queriable[1];
-                    hasSingleColumnRelations |= ColumnDefinition.Kind.CLUSTERING_COLUMN == def.kind;
-                    updateRestrictionsForRelation(stmt, def, rel, boundNames);
-                }
-            }
-            if (hasSingleColumnRelations && hasMultiColumnRelations)
-                throw new InvalidRequestException("Mixing single column relations and multi column relations on clustering columns is not allowed");
-
-             // At this point, the select statement if fully constructed, but we still have a few things to validate
-            processPartitionKeyRestrictions(stmt, hasQueriableIndex, cfm);
-
-            // All (or none) of the partition key columns have been specified;
-            // hence there is no need to turn these restrictions into index expressions.
-            if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedColumns.removeAll(cfm.partitionKeyColumns());
-
-            if (stmt.selectsOnlyStaticColumns && stmt.hasClusteringColumnsRestriction())
-                throw new InvalidRequestException("Cannot restrict clustering columns when selecting only static columns");
-
-            processColumnRestrictions(stmt, hasQueriableIndex, cfm);
-
-            // Covers indexes on the first clustering column (among others).
-            if (stmt.isKeyRange && hasQueriableClusteringColumnIndex)
-                stmt.usesSecondaryIndexing = true;
-
-            if (!stmt.usesSecondaryIndexing)
-            {
-                for (ColumnDefinition def : cfm.clusteringColumns())
-                {
-                    // Remove clustering column restrictions that can be handled by slices; the remainder will be
-                    // handled by filters (which may require a secondary index).
-                    Restriction restriction = stmt.columnRestrictions[def.position()];
-                    if (restriction != null)
-                    {
-                        if (restriction.canEvaluateWithSlices())
-                            stmt.restrictedColumns.remove(def);
-                        else
-                            stmt.usesSecondaryIndexing = true;
-                    }
-                }
-            }
-
-            // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
-            // there are restrictions not covered by the PK.
-            if (!stmt.metadataRestrictions.isEmpty())
-                stmt.usesSecondaryIndexing = true;
-
-            if (stmt.usesSecondaryIndexing)
-                validateSecondaryIndexSelections(stmt);
-
-            if (!stmt.parameters.orderings.isEmpty())
-                processOrderingClause(stmt, cfm);
-
-            checkNeedsFiltering(stmt);
+            StatementRestrictions restrictions = prepareRestrictions(cfm, boundNames, selection);
 
             if (parameters.isDistinct)
-                stmt.validateDistinctSelection();
+                validateDistinctSelection(cfm, selection, restrictions);
+
+            Comparator<List<ByteBuffer>> orderingComparator = null;
+            boolean isReversed = false;
+
+            if (!parameters.orderings.isEmpty())
+            {
+                verifyOrderingIsAllowed(restrictions);
+                orderingComparator = getOrderingComparator(cfm, selection, restrictions);
+                isReversed = isReversed(cfm);
+            }
+
+            if (isReversed)
+                restrictions.reverse();
+
+            checkNeedsFiltering(restrictions);
+
+            SelectStatement stmt = new SelectStatement(cfm,
+                                                        boundNames.size(),
+                                                        parameters,
+                                                        selection,
+                                                        restrictions,
+                                                        isReversed,
+                                                        orderingComparator,
+                                                        prepareLimit(boundNames));
 
             return new ParsedStatement.Prepared(stmt, boundNames);
         }

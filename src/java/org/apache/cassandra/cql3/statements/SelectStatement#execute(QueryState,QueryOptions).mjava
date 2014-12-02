@@ -1,8 +1,7 @@
     public ResultMessage.Rows execute(QueryState state, QueryOptions options) throws RequestExecutionException, RequestValidationException
     {
         ConsistencyLevel cl = options.getConsistency();
-        if (cl == null)
-            throw new InvalidRequestException("Invalid empty consistency level");
+        checkNotNull(cl, "Invalid empty consistency level");
 
         cl.validateForRead(keyspace());
 
@@ -24,13 +23,14 @@
         }
 
         QueryPager pager = QueryPagers.pager(command, cl, state.getClientState(), options.getPagingState());
+
         if (selection.isAggregate())
             return pageAggregateQuery(pager, options, pageSize, now);
 
         // We can't properly do post-query ordering if we page (see #6722)
-        if (needsPostQueryOrdering())
-            throw new InvalidRequestException("Cannot page queries with both ORDER BY and a IN restriction on the partition key; you must either remove the "
-                                            + "ORDER BY or the IN and sort client side, or disable paging for this query");
+        checkFalse(needsPostQueryOrdering(),
+                  "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
+                  + " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
 
         List<Row> page = pager.fetchPage(pageSize);
         ResultMessage.Rows msg = processResults(page, options, limit, now);
