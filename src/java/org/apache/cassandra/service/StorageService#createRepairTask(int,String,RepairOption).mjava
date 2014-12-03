@@ -9,10 +9,34 @@
         {
             protected void runMayThrow() throws Exception
             {
+                final TraceState traceState;
+
+                String[] columnFamilies = options.getColumnFamilies().toArray(new String[options.getColumnFamilies().size()]);
+                Iterable<ColumnFamilyStore> validColumnFamilies = getValidColumnFamilies(false, false, keyspace, columnFamilies);
+
                 final long startTime = System.currentTimeMillis();
                 String message = String.format("Starting repair command #%d, repairing keyspace %s with %s", cmd, keyspace, options);
                 logger.info(message);
                 sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.STARTED.ordinal()});
+                if (options.isTraced())
+                {
+                    StringBuilder cfsb = new StringBuilder();
+                    for (ColumnFamilyStore cfs : validColumnFamilies)
+                        cfsb.append(", ").append(cfs.keyspace.getName()).append(".").append(cfs.name);
+
+                    UUID sessionId = Tracing.instance.newSession(Tracing.TraceType.REPAIR);
+                    traceState = Tracing.instance.begin("repair", ImmutableMap.of("keyspace", keyspace, "columnFamilies", cfsb.substring(2)));
+                    Tracing.traceRepair(message);
+                    traceState.enableActivityNotification();
+                    traceState.setNotificationHandle(new int[]{ cmd, ActiveRepairService.Status.RUNNING.ordinal() });
+                    Thread queryThread = createQueryThread(cmd, sessionId);
+                    queryThread.setName("RepairTracePolling");
+                    queryThread.start();
+                }
+                else
+                {
+                    traceState = null;
+                }
 
                 final Set<InetAddress> allNeighbors = new HashSet<>();
                 Map<Range, Set<InetAddress>> rangeToNeighbors = new HashMap<>();
@@ -34,10 +58,9 @@
 
                 // Validate columnfamilies
                 List<ColumnFamilyStore> columnFamilyStores = new ArrayList<>();
-                String[] columnFamilies = options.getColumnFamilies().toArray(new String[options.getColumnFamilies().size()]);
                 try
                 {
-                    Iterables.addAll(columnFamilyStores, getValidColumnFamilies(false, false, keyspace, columnFamilies));
+                    Iterables.addAll(columnFamilyStores, validColumnFamilies);
                 }
                 catch (IllegalArgumentException e)
                 {
@@ -138,12 +161,23 @@
 
                     private void repairComplete()
                     {
-                        String duration = DurationFormatUtils.formatDurationWords(System.currentTimeMillis() - startTime,
-                                                                                  true, true);
+                        String duration = DurationFormatUtils.formatDurationWords(System.currentTimeMillis() - startTime, true, true);
                         String message = String.format("Repair command #%d finished in %s", cmd, duration);
                         sendNotification("repair", message,
                                          new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
                         logger.info(message);
+                        if (options.isTraced())
+                        {
+                            traceState.setNotificationHandle(null);
+                            // Because DebuggableThreadPoolExecutor#afterExecute and this callback
+                            // run in a nondeterministic order (within the same thread), the
+                            // TraceState may have been nulled out at this point. The TraceState
+                            // should be traceState, so just set it without bothering to check if it
+                            // actually was nulled out.
+                            Tracing.instance.set(traceState);
+                            Tracing.traceRepair(message);
+                            Tracing.instance.stopSession();
+                        }
                         executor.shutdownNow();
                     }
                 });

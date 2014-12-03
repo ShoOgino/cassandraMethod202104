@@ -8,14 +8,17 @@
      */
     public void start(ListeningExecutorService executor)
     {
+        String message;
         if (terminated)
             return;
 
         logger.info(String.format("[repair #%s] new session: will sync %s on range %s for %s.%s", getId(), repairedNodes(), range, keyspace, Arrays.toString(cfnames)));
+        Tracing.traceRepair("Syncing range {}", range);
 
         if (endpoints.isEmpty())
         {
-            logger.info(String.format("[repair #%s] No neighbors to repair with on range %s: session completed", getId(), range));
+            logger.info("[repair #{}] {}", getId(), message = String.format("No neighbors to repair with on range %s: session completed", range));
+            Tracing.traceRepair(message);
             set(new RepairSessionResult(id, keyspace, range, Lists.<RepairResult>newArrayList()));
             return;
         }
@@ -25,7 +28,7 @@
         {
             if (!FailureDetector.instance.isAlive(endpoint))
             {
-                String message = String.format("Cannot proceed on repair because a neighbor (%s) is dead: session failed", endpoint);
+                message = String.format("Cannot proceed on repair because a neighbor (%s) is dead: session failed", endpoint);
                 logger.error("[repair #{}] {}", getId(), message);
                 setException(new IOException(message));
                 return;
@@ -47,8 +50,10 @@
             public void onSuccess(List<RepairResult> results)
             {
                 // this repair session is completed
-                logger.info(String.format("[repair #%s] session completed successfully", getId()));
+                logger.info("[repair #{}] {}", getId(), "Session completed successfully");
+                Tracing.traceRepair("Completed sync of range {}", range);
                 set(new RepairSessionResult(id, keyspace, range, results));
+
                 taskExecutor.shutdown();
                 // mark this session as terminated
                 terminate();
@@ -56,7 +61,8 @@
 
             public void onFailure(Throwable t)
             {
-                logger.error("Repair job failed", t);
+                logger.error(String.format("[repair #%s] Session completed with the following error", getId()), t);
+                Tracing.traceRepair("Session completed with the following error: {}", t);
                 setException(t);
             }
         });
