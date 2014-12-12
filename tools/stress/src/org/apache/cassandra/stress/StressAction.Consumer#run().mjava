@@ -24,35 +24,11 @@
                         throw new IllegalStateException();
                 }
 
-                int maxBatchSize = operations.maxBatchSize();
-                Partition[] partitions = new Partition[maxBatchSize];
                 while (true)
                 {
-
-                    // TODO: Operation should be able to ecapsulate much of this behaviour
                     Operation op = operations.next();
-                    op.generator.reset();
-
-                    int batchSize = workManager.takePermits(Math.max(1, (int) op.partitionCount.next()));
-                    if (batchSize < 0)
+                    if (!op.ready(workManager, rateLimiter))
                         break;
-
-                    if (rateLimiter != null)
-                        rateLimiter.acquire(batchSize);
-
-                    int partitionCount = 0;
-                    while (partitionCount < batchSize)
-                    {
-                        Partition p = op.generator.generate(op);
-                        if (p == null)
-                            break;
-                        partitions[partitionCount++] = p;
-                    }
-
-                    if (partitionCount == 0)
-                        break;
-
-                    op.setPartitions(Arrays.asList(partitions).subList(0, partitionCount));
 
                     try
                     {
