@@ -1,0 +1,61 @@
+        // seek to the provided position (or the first entry if null)
+        private State seek(int scalar)
+        {
+            if (scalar == 0)
+            {
+                this.position[0] = -1;
+                clusteringComponents[0].addFirst(this);
+                return setHasNext(advance(0, true));
+            }
+
+            int[] position = this.position;
+            decompose(scalar, position);
+            boolean incremented = false;
+            for (int i = 0 ; i < position.length ; i++)
+            {
+                if (i != 0)
+                    fill(i);
+                for (int c = position[i] ; c > 0 ; c--)
+                    clusteringComponents[i].poll();
+
+                // we can have started from a position that does not exist, in which
+                // case we need to ascend back up our clustering components, advancing as we go
+                if (clusteringComponents[i].isEmpty())
+                {
+                    int j = i;
+                    while (--j >= 0)
+                    {
+                        clusteringComponents[j].poll();
+                        if (!clusteringComponents[j].isEmpty())
+                            break;
+                    }
+
+                    // if we've exhausted the whole partition, we're done
+                    if (j < 0)
+                        return setHasNext(false);
+
+                    // we don't check here to see if we've exceeded our limit,
+                    // because if we came to a non-existent position and generated a limit
+                    // we want to at least find the next real position, and set it on the seed
+                    // in this case we do then yield false and select a different seed to continue with
+                    position[j]++;
+                    Arrays.fill(position, j + 1, position.length, 0);
+                    while (j < i)
+                        fill(++j);
+                    incremented = true;
+                }
+                if (clusteringComponents[i].isEmpty())
+                    throw new IllegalStateException();
+                row.row[i] = clusteringComponents[i].peek();
+            }
+
+            if (incremented && compareToLastRow() > 0)
+                return setHasNext(false);
+
+            position[position.length - 1]--;
+            // call advance so we honour any select chance
+            clusteringComponents[position.length - 1].addFirst(this);
+
+            return setHasNext(advance(position.length - 1, true));
+        }
+

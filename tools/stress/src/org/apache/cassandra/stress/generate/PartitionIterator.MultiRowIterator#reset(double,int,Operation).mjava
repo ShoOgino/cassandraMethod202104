@@ -1,0 +1,66 @@
+        // if we're a write, the expected behaviour is that the requested batch count is compounded with the seed's visit
+        // count to decide how much we should return in one iteration
+        boolean reset(double useChance, int targetCount, Operation op)
+        {
+            if (this.useChance < 1d)
+            {
+                // we clear our prior roll-modifiers if the use chance was previously less-than zero
+                Arrays.fill(rollmodifier, 1d);
+                Arrays.fill(chancemodifier, 1d);
+            }
+
+            // set the seed for the first clustering component
+            generator.clusteringComponents.get(0).setSeed(idseed);
+
+            // calculate how many first clustering components we'll generate, and how many total rows this predicts
+            int firstComponentCount = (int) generator.clusteringComponents.get(0).clusteringDistribution.next();
+            int expectedRowCount;
+
+            int position = seed.position();
+            isWrite = op.isWrite();
+
+            if (isWrite)
+                expectedRowCount = firstComponentCount * generator.clusteringDescendantAverages[0];
+            else if (position != 0)
+                expectedRowCount = setLimit(position);
+            else
+                expectedRowCount = setNoLimit(firstComponentCount);
+
+            if (Double.isNaN(useChance))
+                useChance = Math.max(0d, Math.min(1d, targetCount / (double) expectedRowCount));
+            this.useChance = useChance;
+
+            while (true)
+            {
+                // TODO: we could avoid repopulating these each loop, by tracking our prior position
+                for (Queue<?> q : clusteringComponents)
+                    q.clear();
+                clusteringSeeds[0] = idseed;
+                fill(clusteringComponents[0], firstComponentCount, generator.clusteringComponents.get(0));
+
+                // we loop in case we have picked an entirely non-existent range, in which case
+                // we will reset the seed's position, then try again (until we exhaust it or find
+                // some real range) - this only happens for writes, so we only keep this logic in the loop
+
+                if (isWrite)
+                {
+                    position = seed.moveForwards(Math.max(1, expectedRowCount / seed.visits));
+                    isFirstWrite = position == 0;
+                }
+
+                // seek to our start position
+                switch (seek(isWrite ? position : null))
+                {
+                    case END_OF_PARTITION:
+                        return false;
+                    case SUCCESS:
+                        return true;
+                }
+
+                if (!isWrite)
+                    throw new IllegalStateException();
+
+                // TODO: recompose our real position into the nearest scalar position, and ensure the seed position is >= this
+            }
+        }
+
