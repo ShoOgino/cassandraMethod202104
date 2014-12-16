@@ -1,0 +1,23 @@
+    public void dropTable(String ksName, String tableName)
+    {
+        KSMetaData ksm = getKSMetaData(ksName);
+        assert ksm != null;
+        ColumnFamilyStore cfs = Keyspace.open(ksName).getColumnFamilyStore(tableName);
+        assert cfs != null;
+
+        // reinitialize the keyspace.
+        CFMetaData cfm = ksm.cfMetaData().get(tableName);
+
+        purge(cfm);
+        setKeyspaceDefinition(ksm.cloneWithTableRemoved(cfm));
+
+        CompactionManager.instance.interruptCompactionFor(Arrays.asList(cfm), true);
+
+        if (DatabaseDescriptor.isAutoSnapshot())
+            cfs.snapshot(Keyspace.getTimestampedSnapshotName(cfs.name));
+        Keyspace.open(ksm.name).dropCf(cfm.cfId);
+        MigrationManager.instance.notifyDropColumnFamily(cfm);
+
+        CommitLog.instance.forceRecycleAllSegments(Collections.singleton(cfm.cfId));
+    }
+

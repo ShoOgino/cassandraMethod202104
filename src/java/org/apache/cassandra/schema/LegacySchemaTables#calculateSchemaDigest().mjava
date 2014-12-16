@@ -1,0 +1,33 @@
+    /**
+     * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
+     * will be converted into UUID which would act as content-based version of the schema.
+     */
+    public static UUID calculateSchemaDigest()
+    {
+        MessageDigest digest;
+        try
+        {
+            digest = MessageDigest.getInstance("MD5");
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        for (String table : ALL)
+        {
+            for (Row partition : getSchemaPartitionsForTable(table))
+            {
+                if (isEmptySchemaPartition(partition) || isSystemKeyspaceSchemaPartition(partition))
+                    continue;
+
+                // we want to digest only live columns
+                ColumnFamilyStore.removeDeletedColumnsOnly(partition.cf, Integer.MAX_VALUE, SecondaryIndexManager.nullUpdater);
+                partition.cf.purgeTombstones(Integer.MAX_VALUE);
+                partition.cf.updateDigest(digest);
+            }
+        }
+
+        return UUID.nameUUIDFromBytes(digest.digest());
+    }
+
