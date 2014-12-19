@@ -1,39 +1,28 @@
     public void abort()
     {
         switchWriter(null);
-
         moveStarts(null, Functions.forMap(originalStarts), true);
 
-        List<SSTableReader> close = Lists.newArrayList(finishedOpenedEarly);
-
-        for (Pair<SSTableWriter, SSTableReader> w : finishedWriters)
-        {
-            // we should close the bloom filter if we have not opened an sstable reader from this
-            // writer (it will get closed when we release the sstable reference below):
-            w.left.abort(w.right == null);
-            if (isOffline && w.right != null)
-            {
-                // the pairs get removed from finishedWriters when they are closedAndOpened in finish(), the ones left need to be removed here:
-                w.right.markObsolete();
-                w.right.releaseReference();
-            }
-        }
-
-        // also remove already completed SSTables
-        for (SSTableReader sstable : close)
-            sstable.markObsolete();
-
+        // remove already completed SSTables
         for (SSTableReader sstable : finished)
         {
             sstable.markObsolete();
             sstable.releaseReference();
         }
 
-        // releases reference in replaceReaders
-        if (!isOffline)
+        // abort the writers
+        for (Finished finished : finishedEarly)
         {
-            dataTracker.replaceEarlyOpenedFiles(close, Collections.<SSTableReader>emptyList());
-            dataTracker.unmarkCompacting(close);
+            boolean opened = finished.reader != null;
+            finished.writer.abort(!opened);
+            if (opened)
+            {
+                // if we've already been opened, add ourselves to the discard pile
+                discard.add(finished.reader);
+                finished.reader.markObsolete();
+            }
         }
+
+        replaceWithFinishedReaders(Collections.<SSTableReader>emptyList());
     }
 
