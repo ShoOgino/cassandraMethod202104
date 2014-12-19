@@ -1,0 +1,30 @@
+    private Pair<Descriptor, StatsMetadata> close(FinishType type, long repairedAt)
+    {
+        switch (type)
+        {
+            case EARLY: case NORMAL:
+            iwriter.close();
+            dataFile.close();
+        }
+
+        // write sstable statistics
+        Map<MetadataType, MetadataComponent> metadataComponents ;
+        metadataComponents = sstableMetadataCollector
+                             .finalizeMetadata(partitioner.getClass().getCanonicalName(),
+                                               metadata.getBloomFilterFpChance(),repairedAt);
+
+        // remove the 'tmp' marker from all components
+        Descriptor descriptor = this.descriptor;
+        switch (type)
+        {
+            case NORMAL: case FINISH_EARLY:
+            dataFile.writeFullChecksum(descriptor);
+            writeMetadata(descriptor, metadataComponents);
+            // save the table of components
+            SSTable.appendTOC(descriptor, components);
+            descriptor = rename(descriptor, components);
+        }
+
+        return Pair.create(descriptor, (StatsMetadata) metadataComponents.get(MetadataType.STATS));
+    }
+

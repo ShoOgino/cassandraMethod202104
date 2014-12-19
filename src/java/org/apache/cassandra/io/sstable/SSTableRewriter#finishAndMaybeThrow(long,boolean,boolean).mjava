@@ -1,0 +1,38 @@
+    private List<SSTableReader> finishAndMaybeThrow(long repairedAt, boolean throwEarly, boolean throwLate)
+    {
+        List<SSTableReader> newReaders = new ArrayList<>();
+        switchWriter(null);
+
+        if (throwEarly)
+            throw new RuntimeException("exception thrown early in finish, for testing");
+
+        while (!finishedEarly.isEmpty())
+        {
+            Finished f = finishedEarly.poll();
+            if (f.writer.getFilePointer() > 0)
+            {
+                if (f.reader != null)
+                    discard.add(f.reader);
+
+                SSTableReader newReader = f.writer.finish(SSTableWriter.FinishType.FINISH_EARLY, maxAge, repairedAt);
+
+                if (f.reader != null)
+                    f.reader.setReplacedBy(newReader);
+
+                finished.add(newReader);
+                newReaders.add(newReader);
+            }
+            else
+            {
+                f.writer.abort(true);
+                assert f.reader == null;
+            }
+        }
+
+        if (throwLate)
+            throw new RuntimeException("exception thrown after all sstables finished, for testing");
+
+        replaceWithFinishedReaders(newReaders);
+        return finished;
+    }
+
