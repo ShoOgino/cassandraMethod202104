@@ -6,17 +6,14 @@
         // Restore standard behavior in case it was changed
         usePrepared = USE_PREPARED_VALUES;
 
-        if (currentTable == null)
-            return;
-
-        final String tableToDrop = currentTable;
-        final Set<String> typesToDrop = currentTypes.isEmpty() ? Collections.emptySet() : new HashSet(currentTypes);
-        final Set<String> functionsToDrop = currentFunctions.isEmpty() ? Collections.emptySet() : new HashSet(currentFunctions);
-        final Set<String> aggregatesToDrop = currentAggregates.isEmpty() ? Collections.emptySet() : new HashSet(currentAggregates);
-        currentTable = null;
-        currentTypes.clear();
-        currentFunctions.clear();
-        currentAggregates.clear();
+        final List<String> tablesToDrop = copy(tables);
+        final List<String> typesToDrop = copy(types);
+        final List<String> functionsToDrop = copy(functions);
+        final List<String> aggregatesToDrop = copy(aggregates);
+        tables = null;
+        types = null;
+        functions = null;
+        aggregates = null;
 
         // We want to clean up after the test, but dropping a table is rather long so just do that asynchronously
         ScheduledExecutors.optionalTasks.execute(new Runnable()
@@ -25,16 +22,17 @@
             {
                 try
                 {
-                    schemaChange(String.format("DROP TABLE IF EXISTS %s.%s", KEYSPACE, tableToDrop));
+                    for (int i = tablesToDrop.size() - 1; i >=0; i--)
+                        schemaChange(String.format("DROP TABLE IF EXISTS %s.%s", KEYSPACE, tablesToDrop.get(i)));
 
-                    for (String aggregateName : aggregatesToDrop)
-                        schemaChange(String.format("DROP AGGREGATE IF EXISTS %s.%s", KEYSPACE, aggregateName));
+                    for (int i = aggregatesToDrop.size() - 1; i >=0; i--)
+                        schemaChange(String.format("DROP AGGREGATE IF EXISTS %s", aggregatesToDrop.get(i)));
 
-                    for (String functionName : functionsToDrop)
-                        schemaChange(String.format("DROP FUNCTION IF EXISTS %s.%s", KEYSPACE, functionName));
+                    for (int i = functionsToDrop.size() - 1; i >=0; i--)
+                        schemaChange(String.format("DROP FUNCTION IF EXISTS %s", functionsToDrop.get(i)));
 
-                    for (String typeName : typesToDrop)
-                        schemaChange(String.format("DROP TYPE IF EXISTS %s.%s", KEYSPACE, typeName));
+                    for (int i = typesToDrop.size() - 1; i >=0; i--)
+                        schemaChange(String.format("DROP TYPE IF EXISTS %s.%s", KEYSPACE, typesToDrop.get(i)));
 
                     // Dropping doesn't delete the sstables. It's not a huge deal but it's cleaner to cleanup after us
                     // Thas said, we shouldn't delete blindly before the SSTableDeletingTask for the table we drop
@@ -51,7 +49,7 @@
                     });
                     latch.await(2, TimeUnit.SECONDS);
 
-                    removeAllSSTables(KEYSPACE, tableToDrop);
+                    removeAllSSTables(KEYSPACE, tablesToDrop);
                 }
                 catch (Exception e)
                 {
