@@ -3,18 +3,24 @@
      *
      * @param sequenceNumber sequence number of file
      */
-    public synchronized void complete(int sequenceNumber)
+    public void complete(int sequenceNumber)
     {
-        OutgoingFileMessage file = files.remove(sequenceNumber);
-        if (file != null)
+        boolean signalComplete;
+        synchronized (this)
         {
-            file.sstable.releaseReference();
-            // all file sent, notify session this task is complete.
-            if (files.isEmpty())
-            {
-                timeoutExecutor.shutdownNow();
-                session.taskCompleted(this);
-            }
+            ScheduledFuture timeout = timeoutTasks.remove(sequenceNumber);
+            if (timeout != null)
+                timeout.cancel(false);
+
+            OutgoingFileMessage file = files.remove(sequenceNumber);
+            if (file != null)
+                file.sstable.releaseReference();
+
+            signalComplete = files.isEmpty();
         }
+
+        // all file sent, notify session this task is complete.
+        if (signalComplete)
+            session.taskCompleted(this);
     }
 
