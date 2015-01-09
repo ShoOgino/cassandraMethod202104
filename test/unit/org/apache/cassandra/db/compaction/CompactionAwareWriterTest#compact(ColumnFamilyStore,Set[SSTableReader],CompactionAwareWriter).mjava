@@ -1,0 +1,20 @@
+    private int compact(ColumnFamilyStore cfs, Set<SSTableReader> sstables, CompactionAwareWriter writer)
+    {
+        assert sstables.size() == 1;
+        int rowsWritten = 0;
+        try (AbstractCompactionStrategy.ScannerList scanners = cfs.getCompactionStrategy().getScanners(sstables))
+        {
+            CompactionController controller = new CompactionController(cfs, sstables, cfs.gcBefore(System.currentTimeMillis()));
+            ISSTableScanner scanner = scanners.scanners.get(0);
+            while(scanner.hasNext())
+            {
+                AbstractCompactedRow row = new LazilyCompactedRow(controller, Arrays.asList(scanner.next()));
+                if (writer.append(row))
+                    rowsWritten++;
+            }
+        }
+        Collection<SSTableReader> newSSTables = writer.finish();
+        cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newSSTables, OperationType.COMPACTION);
+        return rowsWritten;
+    }
+
