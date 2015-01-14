@@ -1,15 +1,20 @@
     public void setup()
     {
-        Auth.setupTable(PERMISSIONS_CF, PERMISSIONS_CF_SCHEMA);
+        authorizeRoleStatement = prepare(ROLE, AuthKeyspace.ROLE_PERMISSIONS);
 
-        try
+        // If old user permissions table exists, migrate the legacy authz data to the new table
+        // The delay is to give the node a chance to see its peers before attempting the conversion
+        if (Schema.instance.getCFMetaData(AuthKeyspace.NAME, "permissions") != null)
         {
-            String query = String.format("SELECT permissions FROM %s.%s WHERE username = ? AND resource = ?", Auth.AUTH_KS, PERMISSIONS_CF);
-            authorizeStatement = (SelectStatement) QueryProcessor.parseStatement(query).prepare().statement;
-        }
-        catch (RequestValidationException e)
-        {
-            throw new AssertionError(e); // not supposed to happen
+            legacyAuthorizeRoleStatement = prepare(USERNAME, USER_PERMISSIONS);
+
+            ScheduledExecutors.optionalTasks.schedule(new Runnable()
+            {
+                public void run()
+                {
+                    convertLegacyData();
+                }
+            }, AuthKeyspace.SUPERUSER_SETUP_DELAY, TimeUnit.MILLISECONDS);
         }
     }
 

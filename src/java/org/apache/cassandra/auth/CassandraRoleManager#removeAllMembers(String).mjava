@@ -1,0 +1,26 @@
+    /*
+     * Clear the membership list of the given role
+     */
+    private void removeAllMembers(String role) throws RequestValidationException, RequestExecutionException
+    {
+        // Get the membership list of the the given role
+        UntypedResultSet rows = process(String.format("SELECT member FROM %s.%s WHERE role = '%s'",
+                                                      AuthKeyspace.NAME,
+                                                      AuthKeyspace.ROLE_MEMBERS,
+                                                      escape(role)),
+                                        consistencyForRole(role));
+        if (rows.isEmpty())
+            return;
+
+        // Update each member in the list, removing this role from its own list of granted roles
+        for (UntypedResultSet.Row row : rows)
+            modifyRoleMembership(row.getString("member"), role, "-");
+
+        // Finally, remove the membership list for the dropped role
+        process(String.format("DELETE FROM %s.%s WHERE role = '%s'",
+                              AuthKeyspace.NAME,
+                              AuthKeyspace.ROLE_MEMBERS,
+                              escape(role)),
+                consistencyForRole(role));
+    }
+

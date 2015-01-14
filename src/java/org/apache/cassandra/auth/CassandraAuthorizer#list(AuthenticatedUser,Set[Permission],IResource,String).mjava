@@ -1,30 +1,24 @@
     // 'of' can be null - in that case everyone's permissions have been requested. Otherwise only single user's.
-    // If the user requesting 'LIST PERMISSIONS' is not a superuser OR his username doesn't match 'of', we
+    // If the user requesting 'LIST PERMISSIONS' is not a superuser OR their username doesn't match 'of', we
     // throw UnauthorizedException. So only a superuser can view everybody's permissions. Regular users are only
     // allowed to see their own permissions.
-    public Set<PermissionDetails> list(AuthenticatedUser performer, Set<Permission> permissions, IResource resource, String of)
+    public Set<PermissionDetails> list(AuthenticatedUser performer,
+                                       Set<Permission> permissions,
+                                       IResource resource,
+                                       String grantee)
     throws RequestValidationException, RequestExecutionException
     {
-        if (!performer.isSuper() && !performer.getName().equals(of))
+        if (!performer.isSuper() && ! performer.getRoles().contains(grantee))
             throw new UnauthorizedException(String.format("You are not authorized to view %s's permissions",
-                                                          of == null ? "everyone" : of));
+                                                          grantee == null ? "everyone" : grantee));
 
-        Set<PermissionDetails> details = new HashSet<PermissionDetails>();
+        if (null == grantee)
+            return listPermissionsForRole(permissions, resource, grantee);
 
-        for (UntypedResultSet.Row row : process(buildListQuery(resource, of)))
-        {
-            if (row.has(PERMISSIONS))
-            {
-                for (String p : row.getSet(PERMISSIONS, UTF8Type.instance))
-                {
-                    Permission permission = Permission.valueOf(p);
-                    if (permissions.contains(permission))
-                        details.add(new PermissionDetails(row.getString(USERNAME),
-                                                          DataResource.fromName(row.getString(RESOURCE)),
-                                                          permission));
-                }
-            }
-        }
+        Set<String> roles = DatabaseDescriptor.getRoleManager().getRoles(grantee, true);
+        Set<PermissionDetails> details = new HashSet<>();
+        for (String role : roles)
+            details.addAll(listPermissionsForRole(permissions, resource, role));
 
         return details;
     }
