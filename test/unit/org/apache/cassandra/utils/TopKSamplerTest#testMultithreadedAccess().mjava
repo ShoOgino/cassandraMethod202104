@@ -1,0 +1,60 @@
+    /**
+     * checking for exceptions from SS/HLL which are not thread safe
+     */
+    @Test
+    public void testMultithreadedAccess() throws Exception
+    {
+        final AtomicBoolean running = new AtomicBoolean(true);
+        final CountDownLatch latch = new CountDownLatch(1);
+        final TopKSampler<String> sampler = new TopKSampler<String>();
+
+        new Thread(new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    while (running.get())
+                    {
+                        insert(sampler);
+                    }
+                } finally
+                {
+                    latch.countDown();
+                }
+            }
+
+        }
+        ,"inserter").start();
+        try
+        {
+            // start/stop in fast iterations
+            for(int i = 0; i<100; i++)
+            {
+                sampler.beginSampling(i);
+                sampler.finishSampling(i);
+            }
+            // start/stop with pause to let it build up past capacity
+            for(int i = 0; i<3; i++)
+            {
+                sampler.beginSampling(i);
+                Thread.sleep(250);
+                sampler.finishSampling(i);
+            }
+
+            // with empty results
+            running.set(false);
+            latch.await(1, TimeUnit.SECONDS);
+            waitForEmpty(1000);
+            for(int i = 0; i<10; i++)
+            {
+                sampler.beginSampling(i);
+                Thread.sleep(i);
+                sampler.finishSampling(i);
+            }
+        } finally
+        {
+            running.set(false);
+        }
+    }
+
