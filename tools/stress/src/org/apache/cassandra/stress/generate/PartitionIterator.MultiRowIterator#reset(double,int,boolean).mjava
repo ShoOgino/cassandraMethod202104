@@ -1,7 +1,19 @@
-        // if we're a write, the expected behaviour is that the requested batch count is compounded with the seed's visit
-        // count to decide how much we should return in one iteration
-        boolean reset(double useChance, int targetCount, Operation op)
+        /**
+         * initialise the iterator state
+         *
+         * if we're a write, the expected behaviour is that the requested
+         * batch count is compounded with the seed's visit count to decide
+         * how much we should return in one iteration
+         *
+         * @param useChance uniform chance of visiting any single row (NaN if targetCount provided)
+         * @param targetCount number of rows we would like to visit (0 if useChance provided)
+         * @param isWrite true if the action requires write semantics
+         *
+         * @return true if there is data to return, false otherwise
+         */
+        boolean reset(double useChance, int targetCount, boolean isWrite)
         {
+            this.isWrite = isWrite;
             if (this.useChance < 1d)
             {
                 // we clear our prior roll-modifiers if the use chance was previously less-than zero
@@ -17,14 +29,13 @@
             int expectedRowCount;
 
             int position = seed.position();
-            isWrite = op.isWrite();
 
             if (isWrite)
                 expectedRowCount = firstComponentCount * generator.clusteringDescendantAverages[0];
             else if (position != 0)
-                expectedRowCount = setLimit(position);
+                expectedRowCount = setLastRow(position - 1);
             else
-                expectedRowCount = setNoLimit(firstComponentCount);
+                expectedRowCount = setNoLastRow(firstComponentCount);
 
             if (Double.isNaN(useChance))
                 useChance = Math.max(0d, Math.min(1d, targetCount / (double) expectedRowCount));
@@ -32,35 +43,36 @@
 
             while (true)
             {
-                // TODO: we could avoid repopulating these each loop, by tracking our prior position
+                // we loop in case we have picked an entirely non-existent range, in which case
+                // we will reset the seed's position, then try again (until we exhaust it or find
+                // some real range)
+
                 for (Queue<?> q : clusteringComponents)
                     q.clear();
                 clusteringSeeds[0] = idseed;
                 fill(clusteringComponents[0], firstComponentCount, generator.clusteringComponents.get(0));
 
-                // we loop in case we have picked an entirely non-existent range, in which case
-                // we will reset the seed's position, then try again (until we exhaust it or find
-                // some real range) - this only happens for writes, so we only keep this logic in the loop
-
-                if (isWrite)
+                if (!isWrite)
                 {
-                    position = seed.moveForwards(Math.max(1, expectedRowCount / seed.visits));
-                    isFirstWrite = position == 0;
+                    if (seek(0) != State.SUCCESS)
+                        throw new IllegalStateException();
+                    return true;
                 }
 
+
+                int count = Math.max(1, expectedRowCount / seed.visits);
+                position = seed.moveForwards(count);
+                isFirstWrite = position == 0;
+                setLastRow(position + count - 1);
+
                 // seek to our start position
-                switch (seek(isWrite ? position : 0))
+                switch (seek(position))
                 {
                     case END_OF_PARTITION:
                         return false;
                     case SUCCESS:
                         return true;
                 }
-
-                if (!isWrite)
-                    throw new IllegalStateException();
-
-                // TODO: recompose our real position into the nearest scalar position, and ensure the seed position is >= this
             }
         }
 
