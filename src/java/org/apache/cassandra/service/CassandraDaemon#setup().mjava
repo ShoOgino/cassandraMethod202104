@@ -5,74 +5,27 @@
      */
     protected void setup()
     {
+        logSystemInfo();
+
         try
         {
-            logger.info("Hostname: {}", InetAddress.getLocalHost().getHostName());
+            startupChecks.verify();
         }
-        catch (UnknownHostException e1)
+        catch (StartupException e)
         {
-            logger.info("Could not resolve local host");
-        }
-
-        long now = System.currentTimeMillis();
-        if (now < EARLIEST_LAUNCH_DATE)
-        {
-            String msg = String.format("current machine time is %s, but that is seemingly incorrect. exiting now.", new Date(now).toString());
-            logger.error(msg);
-            throw new IllegalStateException(msg);
-        }
-
-        // log warnings for different kinds of sub-optimal JVMs.  tldr use 64-bit Oracle >= 1.6u32
-        if (!DatabaseDescriptor.hasLargeAddressSpace())
-            logger.info("32bit JVM detected.  It is recommended to run Cassandra on a 64bit JVM for better performance.");
-        String javaVersion = System.getProperty("java.version");
-        String javaVmName = System.getProperty("java.vm.name");
-        logger.info("JVM vendor/version: {}/{}", javaVmName, javaVersion);
-        if (javaVmName.contains("OpenJDK"))
-        {
-            // There is essentially no QA done on OpenJDK builds, and
-            // clusters running OpenJDK have seen many heap and load issues.
-            logger.warn("OpenJDK is not recommended. Please upgrade to the newest Oracle Java release");
-        }
-        else if (!javaVmName.contains("HotSpot"))
-        {
-            logger.warn("Non-Oracle JVM detected.  Some features, such as immediate unmap of compacted SSTables, may not work as intended");
-        }
-     /*   else
-        {
-            String[] java_version = javaVersion.split("_");
-            String java_major = java_version[0];
-            int java_minor;
-            try
-            {
-                java_minor = (java_version.length > 1) ? Integer.parseInt(java_version[1]) : 0;
-            }
-            catch (NumberFormatException e)
-            {
-                // have only seen this with java7 so far but no doubt there are other ways to break this
-                logger.info("Unable to parse java version {}", Arrays.toString(java_version));
-                java_minor = 32;
-            }
-        }
-     */
-        logger.info("Heap size: {}/{}", Runtime.getRuntime().totalMemory(), Runtime.getRuntime().maxMemory());
-        for(MemoryPoolMXBean pool: ManagementFactory.getMemoryPoolMXBeans())
-            logger.info("{} {}: {}", pool.getName(), pool.getType(), pool.getPeakUsage());
-        logger.info("Classpath: {}", System.getProperty("java.class.path"));
-
-        // Fail-fast if JNA is not available or failing to initialize properly
-        // except with -Dcassandra.boot_without_jna=true. See CASSANDRA-6575.
-        if (!CLibrary.jnaAvailable())
-        {
-            boolean jnaRequired = !Boolean.getBoolean("cassandra.boot_without_jna");
-
-            if (jnaRequired)
-            {
-                exitOrFail(3, "JNA failing to initialize properly. Use -Dcassandra.boot_without_jna=true to bootstrap even so.");
-            }
+            exitOrFail(e.returnCode, e.getMessage(), e.getCause());
         }
 
         CLibrary.tryMlockall();
+
+        try
+        {
+            SystemKeyspace.snapshotOnVersionChange();
+        }
+        catch (IOException e)
+        {
+            exitOrFail(3, e.getMessage(), e.getCause());
+        }
 
         maybeInitJmx();
 
@@ -103,59 +56,6 @@
                 }
             }
         });
-
-        // check all directories(data, commitlog, saved cache) for existence and permission
-        Iterable<String> dirs = Iterables.concat(Arrays.asList(DatabaseDescriptor.getAllDataFileLocations()),
-                                                 Arrays.asList(DatabaseDescriptor.getCommitLogLocation(),
-                                                               DatabaseDescriptor.getSavedCachesLocation()));
-
-        SigarLibrary sigarLibrary = new SigarLibrary();
-        if (sigarLibrary.initialized())
-            sigarLibrary.warnIfRunningInDegradedMode();
-        else
-            logger.info("Sigar could not be initialized");
-
-        for (String dataDir : dirs)
-        {
-            logger.debug("Checking directory {}", dataDir);
-            File dir = new File(dataDir);
-
-            // check that directories exist.
-            if (!dir.exists())
-            {
-                logger.error("Directory {} doesn't exist", dataDir);
-                // if they don't, failing their creation, stop cassandra.
-                if (!dir.mkdirs())
-                {
-                    exitOrFail(3, "Has no permission to create directory "+ dataDir);
-                }
-            }
-            // if directories exist verify their permissions
-            if (!Directories.verifyFullPermissions(dir, dataDir))
-            {
-                // if permissions aren't sufficient, stop cassandra.
-                exitOrFail(3, "Insufficient permissions on directory " + dataDir);
-            }
-
-
-        }
-
-        if (CacheService.instance == null) // should never happen
-            throw new RuntimeException("Failed to initialize Cache Service.");
-
-        // check the system keyspace to keep user from shooting self in foot by changing partitioner, cluster name, etc.
-        // we do a one-off scrub of the system keyspace first; we can't load the list of the rest of the keyspaces,
-        // until system keyspace is opened.
-        for (CFMetaData cfm : Schema.instance.getKeyspaceMetaData(SystemKeyspace.NAME).values())
-            ColumnFamilyStore.scrubDataDirectories(cfm);
-        try
-        {
-            SystemKeyspace.checkHealth();
-        }
-        catch (ConfigurationException e)
-        {
-            exitOrFail(100, "Fatal exception during initialization", e);
-        }
 
         // load schema from disk
         Schema.instance.loadFromDisk();
