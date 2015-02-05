@@ -1,0 +1,31 @@
+    private void recordSizeEstimates(ColumnFamilyStore table, Collection<Range<Token>> localRanges)
+    {
+        // for each local primary range, estimate (crudely) mean partition size and partitions count.
+        Map<Range<Token>, Pair<Long, Long>> estimates = new HashMap<>(localRanges.size());
+        for (Range<Token> range : localRanges)
+        {
+            // filter sstables that have partitions in this range.
+            List<SSTableReader> sstables = null;
+            Refs<SSTableReader> refs = null;
+            while (refs == null)
+                refs = Refs.tryRef(table.viewFilter(range.toRowBounds()).apply(table.getDataTracker().getView()));
+
+            long partitionsCount, meanPartitionSize;
+            try
+            {
+                // calculate the estimates.
+                partitionsCount = estimatePartitionsCount(sstables, range);
+                meanPartitionSize = estimateMeanPartitionSize(sstables);
+            }
+            finally
+            {
+                refs.release();
+            }
+
+            estimates.put(range, Pair.create(partitionsCount, meanPartitionSize));
+        }
+
+        // atomically update the estimates.
+        SystemKeyspace.updateSizeEstimates(table.metadata.ksName, table.metadata.cfName, estimates);
+    }
+

@@ -1,0 +1,29 @@
+    /**
+     * Writes the current partition count and size estimates into SIZE_ESTIMATES_CF
+     */
+    public static void updateSizeEstimates(String keyspace, String table, Map<Range<Token>, Pair<Long, Long>> estimates)
+    {
+        long timestamp = FBUtilities.timestampMicros();
+        Mutation mutation = new Mutation(NAME, UTF8Type.instance.decompose(keyspace));
+
+        // delete all previous values with a single range tombstone.
+        mutation.deleteRange(SIZE_ESTIMATES,
+                             SizeEstimates.comparator.make(table).start(),
+                             SizeEstimates.comparator.make(table).end(),
+                             timestamp - 1);
+
+        // add a CQL row for each primary token range.
+        ColumnFamily cells = mutation.addOrGet(SizeEstimates);
+        for (Map.Entry<Range<Token>, Pair<Long, Long>> entry : estimates.entrySet())
+        {
+            Range<Token> range = entry.getKey();
+            Pair<Long, Long> values = entry.getValue();
+            Composite prefix = SizeEstimates.comparator.make(table, range.left.toString(), range.right.toString());
+            CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
+            adder.add("partitions_count", values.left)
+                 .add("mean_partition_size", values.right);
+        }
+
+        mutation.apply();
+    }
+
