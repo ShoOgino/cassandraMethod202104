@@ -67,7 +67,7 @@
             // All (or none) of the partition key columns have been specified;
             // hence there is no need to turn these restrictions into index expressions.
             if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedNames.removeAll(cfDef.partitionKeys());
+                stmt.restrictedNames.keySet().removeAll(cfDef.partitionKeys());
 
             if (stmt.selectsOnlyStaticColumns && stmt.hasClusteringColumnsRestriction())
                 throw new InvalidRequestException("Cannot restrict clustering columns when selecting only static columns");
@@ -78,8 +78,17 @@
             if (stmt.isKeyRange && hasQueriableClusteringColumnIndex)
                 stmt.usesSecondaryIndexing = true;
 
-            if (!stmt.usesSecondaryIndexing)
-                stmt.restrictedNames.removeAll(cfDef.clusteringColumns());
+            // The clustering columns that can be used to perform a slice filtering on the secondary index do not
+            // need to be converted into IndexExpressions. Therefore, if they are not indexed by an index that support
+            // the relation in which they have been specified, we can removes them from the restrictedNames map.
+            for (Name clusteringColumn : cfDef.clusteringColumns())
+            {
+                Boolean indexed = stmt.restrictedNames.get(clusteringColumn);
+                if (indexed == null)
+                    break;
+                if (!indexed)
+                    stmt.restrictedNames.remove(clusteringColumn);
+            }
 
             // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
             // there is restrictions not covered by the PK.
