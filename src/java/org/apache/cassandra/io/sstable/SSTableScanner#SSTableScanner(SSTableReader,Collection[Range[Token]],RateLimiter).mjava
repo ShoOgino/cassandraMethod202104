@@ -15,9 +15,21 @@
         List<Range<Token>> normalized = Range.normalize(tokenRanges);
         List<AbstractBounds<RowPosition>> boundsList = new ArrayList<>(normalized.size());
         for (Range<Token> range : normalized)
-            boundsList.add(new Range<RowPosition>(range.left.maxKeyBound(sstable.partitioner),
-                                                  range.right.maxKeyBound(sstable.partitioner),
-                                                  sstable.partitioner));
+        {
+            // cap our ranges by the start/end of the sstable
+            RowPosition right = range.right.maxKeyBound(sstable.partitioner);
+            if (right.compareTo(sstable.last) > 0)
+                right = sstable.last;
+
+            RowPosition left = range.left.maxKeyBound(sstable.partitioner);
+            if (left.compareTo(sstable.first) < 0)
+            {
+                if (sstable.first.compareTo(right) <= 0)
+                    boundsList.add(new Bounds<>(sstable.first, right, sstable.partitioner));
+            }
+            else if (left.compareTo(right) < 0)
+                boundsList.add(new Range<>(left, right, sstable.partitioner));
+        }
 
         this.rangeIterator = boundsList.iterator();
     }
