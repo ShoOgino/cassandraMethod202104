@@ -5,10 +5,11 @@
                                                   repairedAt).get(MetadataType.STATS);
 
         // find the max (exclusive) readable key
-        DecoratedKey exclusiveUpperBoundOfReadableIndex = iwriter.getMaxReadableKey(0);
-        if (exclusiveUpperBoundOfReadableIndex == null)
+        IndexSummaryBuilder.ReadableBoundary boundary = iwriter.getMaxReadable();
+        if (boundary == null)
             return null;
 
+        assert boundary.indexLength > 0 && boundary.dataLength > 0;
         Descriptor link = makeTmpLinks();
         // open the reader early, giving it a FINAL descriptor type so that it is indistinguishable for other consumers
         SegmentedFile ifile = iwriter.builder.complete(link.filenameFor(Component.PRIMARY_INDEX), FinishType.EARLY);
@@ -16,33 +17,12 @@
         SSTableReader sstable = SSTableReader.internalOpen(descriptor.asType(Descriptor.Type.FINAL),
                                                            components, metadata,
                                                            partitioner, ifile,
-                                                           dfile, iwriter.summary.build(partitioner, exclusiveUpperBoundOfReadableIndex),
+                                                           dfile, iwriter.summary.build(partitioner, boundary.lastKey),
                                                            iwriter.bf.sharedCopy(), maxDataAge, sstableMetadata, SSTableReader.OpenReason.EARLY);
 
         // now it's open, find the ACTUAL last readable key (i.e. for which the data file has also been flushed)
         sstable.first = getMinimalKey(first);
-        sstable.last = getMinimalKey(exclusiveUpperBoundOfReadableIndex);
-        DecoratedKey inclusiveUpperBoundOfReadableData = iwriter.getMaxReadableKey(1);
-        if (inclusiveUpperBoundOfReadableData == null)
-        {
-            // Prevent leaving tmplink files on disk
-            sstable.selfRef().release();
-            return null;
-        }
-        int offset = 2;
-        while (true)
-        {
-            RowIndexEntry indexEntry = sstable.getPosition(inclusiveUpperBoundOfReadableData, SSTableReader.Operator.GT);
-            if (indexEntry != null && indexEntry.position <= dataFile.getLastFlushOffset())
-                break;
-            inclusiveUpperBoundOfReadableData = iwriter.getMaxReadableKey(offset++);
-            if (inclusiveUpperBoundOfReadableData == null)
-            {
-                sstable.selfRef().release();
-                return null;
-            }
-        }
-        sstable.last = getMinimalKey(inclusiveUpperBoundOfReadableData);
+        sstable.last = getMinimalKey(boundary.lastKey);
         return sstable;
     }
 
