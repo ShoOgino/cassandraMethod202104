@@ -21,7 +21,8 @@
                                "CREATE OR REPLACE FUNCTION %s(v ascii) RETURNS text LANGUAGE java AS 'return \"f1\";'");
 
         // text == varchar, so this should be considered as a duplicate
-        assertInvalid("CREATE FUNCTION " + fOverload + "(v varchar) RETURNS text LANGUAGE java AS 'return \"f1\";'");
+        assertInvalidMessage("already exists",
+                             "CREATE FUNCTION " + fOverload + "(v varchar) RETURNS text LANGUAGE java AS 'return \"f1\";'");
 
         assertRows(execute("SELECT " + fOverload + "(k), " + fOverload + "(v), " + fOverload + "(k, k) FROM %s"),
             row("f1", "f2", "f3")
@@ -29,7 +30,7 @@
 
         forcePreparedValues();
         // This shouldn't work if we use preparation since there no way to know which overload to use
-        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "(?)", "foo");
+        assertInvalidMessage("Ambiguous call to function", "SELECT v FROM %s WHERE k = " + fOverload + "(?)", "foo");
         stopForcingPreparedValues();
 
         // but those should since we specifically cast
@@ -40,17 +41,17 @@
         assertEmpty(execute("SELECT v FROM %s WHERE k = " + fOverload + "((varchar)?)", "foo"));
 
         // no such functions exist...
-        assertInvalid("DROP FUNCTION " + fOverload + "(boolean)");
-        assertInvalid("DROP FUNCTION " + fOverload + "(bigint)");
+        assertInvalidMessage("non existing function", "DROP FUNCTION " + fOverload + "(boolean)");
+        assertInvalidMessage("non existing function", "DROP FUNCTION " + fOverload + "(bigint)");
 
         // 'overloaded' has multiple overloads - so it has to fail (CASSANDRA-7812)
-        assertInvalid("DROP FUNCTION " + fOverload);
+        assertInvalidMessage("matches multiple function definitions", "DROP FUNCTION " + fOverload);
         execute("DROP FUNCTION " + fOverload + "(varchar)");
-        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo");
+        assertInvalidMessage("none of its type signatures match", "SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo");
         execute("DROP FUNCTION " + fOverload + "(text, text)");
-        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((text)?,(text)?)", "foo", "bar");
+        assertInvalidMessage("none of its type signatures match", "SELECT v FROM %s WHERE k = " + fOverload + "((text)?,(text)?)", "foo", "bar");
         execute("DROP FUNCTION " + fOverload + "(ascii)");
-        assertInvalid("SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo");
+        assertInvalidMessage("cannot be passed as argument 0 of function", "SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo");
         // single-int-overload must still work
         assertRows(execute("SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1));
         // overloaded has just one overload now - so the following DROP FUNCTION is not ambigious (CASSANDRA-7812)
