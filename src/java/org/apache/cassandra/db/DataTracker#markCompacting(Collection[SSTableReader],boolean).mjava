@@ -1,0 +1,27 @@
+    public boolean markCompacting(Collection<SSTableReader> sstables, boolean newTables)
+    {
+        assert sstables != null && !Iterables.isEmpty(sstables);
+        while (true)
+        {
+            final View currentView = view.get();
+            if (Iterables.any(sstables, Predicates.in(currentView.compacting)))
+                return false;
+
+            Predicate live = new Predicate<SSTableReader>()
+            {
+                public boolean apply(SSTableReader sstable)
+                {
+                    return currentView.sstablesMap.get(sstable) == sstable && !sstable.isMarkedCompacted();
+                }
+            };
+            if (newTables)
+                assert !Iterables.any(sstables, Predicates.in(currentView.sstables));
+            else if (!Iterables.all(sstables, live))
+                return false;
+
+            View newView = currentView.markCompacting(sstables);
+            if (view.compareAndSet(currentView, newView))
+                return true;
+        }
+    }
+
