@@ -1,28 +1,77 @@
     public void abort()
     {
-        switchWriter(null, true);
-        moveStarts(null, null, true);
+        switch (state)
+        {
+            case ABORTED:
+                return;
+            case FINISHED:
+                throw new IllegalStateException("Cannot abort - changes have already been committed");
+        }
+        state = State.ABORTED;
+
+        Throwable fail = null;
+        try
+        {
+            moveStarts(null, null, true);
+        }
+        catch (Throwable t)
+        {
+            fail = merge(fail, t);
+        }
 
         // remove already completed SSTables
         for (SSTableReader sstable : finished)
         {
-            sstable.markObsolete();
-            sstable.selfRef().release();
+            try
+            {
+                sstable.markObsolete();
+                sstable.selfRef().release();
+            }
+            catch (Throwable t)
+            {
+                fail = merge(fail, t);
+            }
         }
+
+        if (writer != null)
+            finishedEarly.add(new Finished(writer, currentlyOpenedEarly));
 
         // abort the writers
         for (Finished finished : finishedEarly)
         {
-            boolean opened = finished.reader != null;
-            finished.writer.abort();
-            if (opened)
+            try
             {
-                // if we've already been opened, add ourselves to the discard pile
-                discard.add(finished.reader);
-                finished.reader.markObsolete();
+                finished.writer.abort();
+            }
+            catch (Throwable t)
+            {
+                fail = merge(fail, t);
+            }
+            try
+            {
+                if (finished.reader != null)
+                {
+                    // if we've already been opened, add ourselves to the discard pile
+                    discard.add(finished.reader);
+                    finished.reader.markObsolete();
+                }
+            }
+            catch (Throwable t)
+            {
+                fail = merge(fail, t);
             }
         }
 
-        replaceWithFinishedReaders(Collections.<SSTableReader>emptyList());
+        try
+        {
+            replaceWithFinishedReaders(Collections.<SSTableReader>emptyList());
+        }
+        catch (Throwable t)
+        {
+            fail = merge(fail, t);
+        }
+
+        if (fail != null)
+            throw Throwables.propagate(fail);
     }
 
