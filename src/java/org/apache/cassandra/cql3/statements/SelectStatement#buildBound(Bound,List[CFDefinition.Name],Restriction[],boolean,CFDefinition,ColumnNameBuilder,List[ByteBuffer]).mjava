@@ -1,0 +1,100 @@
+    @VisibleForTesting
+    static List<ByteBuffer> buildBound(Bound bound,
+                                        List<CFDefinition.Name> names,
+                                        Restriction[] restrictions,
+                                        boolean isReversed,
+                                        CFDefinition cfDef,
+                                        ColumnNameBuilder builder,
+                                        List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        // The end-of-component of composite doesn't depend on whether the
+        // component type is reversed or not (i.e. the ReversedType is applied
+        // to the component comparator but not to the end-of-component itself),
+        // it only depends on whether the slice is reversed
+        Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
+        for (int i = 0; i < names.size(); i++)
+        {
+            CFDefinition.Name name = names.get(i);
+
+            // In a restriction, we always have Bound.START < Bound.END for the "base" comparator.
+            // So if we're doing a reverse slice, we must inverse the bounds when giving them as start and end of the slice filter.
+            // But if the actual comparator itself is reversed, we must inversed the bounds too.
+            Bound b = isReversed == isReversedType(name) ? bound : Bound.reverse(bound);
+            Restriction r = restrictions[name.position];
+            if (isNullRestriction(r, b))
+            {
+                // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
+                // For composites, if there was preceding component and we're computing the end, we must change the last component
+                // End-Of-Component, otherwise we would be selecting only one record.
+                return Collections.singletonList(builder.componentCount() > 0 && eocBound == Bound.END
+                                                 ? builder.buildAsEndOfRange()
+                                                 : builder.build());
+            }
+            if (r.isSlice())
+            {
+                if (r.isMultiColumn())
+                {
+                    List<ByteBuffer> values = ((MultiColumnRestriction.Slice) r).componentBounds(b, variables);
+                    List<Name> columns = subList(names, i, values.size());
+                    addComponents(builder, columns, values);
+                }
+                else
+                {
+                    addComponent(builder, name, getSliceValue(r, b, variables));
+                }
+
+                Relation.Type relType = ((Restriction.Slice)r).getRelation(eocBound, b);
+                return Collections.singletonList(builder.buildForRelation(relType));
+            }
+
+            if (r.isIN())
+            {
+                // The IN query might not have listed the values in comparator order, so we need to re-sort
+                // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
+                TreeSet<ByteBuffer> inValues = new TreeSet<>(isReversed ? cfDef.cfm.comparator.reverseComparator : cfDef.cfm.comparator);
+
+                if (r.isMultiColumn())
+                {
+                    List<List<ByteBuffer>> splitInValues = ((MultiColumnRestriction.IN) r).splitValues(variables);
+                    for (List<ByteBuffer> components : splitInValues)
+                    {
+                        ColumnNameBuilder copy = builder.copy();
+                        List<Name> columns = subList(names, i, components.size());
+                        addComponents(copy, columns, components);
+
+                        inValues.add(buildColumnName(copy, eocBound));
+                    }
+                    return new ArrayList<>(inValues);
+                }
+
+                List<ByteBuffer> values = r.values(variables);
+                if (values.size() != 1)
+                {
+                    // IN query, we only support it on the clustering columns
+                    assert name.position == names.size() - 1;
+
+                    for (ByteBuffer val : values)
+                    {
+                        ColumnNameBuilder copy = builder.copy();
+                        addComponent(copy, name, val);
+                        inValues.add(buildColumnName(copy, eocBound));
+                    }
+                    return new ArrayList<>(inValues);
+                }
+            }
+
+            List<ByteBuffer> values = r.values(variables);
+            if (r.isMultiColumn())
+            {
+                List<Name> columns = subList(names, i, values.size());
+                addComponents(builder, columns, values);
+                i += values.size() - 1;
+            }
+            else
+            {
+                addComponent(builder, name, values.get(0));
+            }
+        }
+        return Collections.singletonList(buildColumnName(builder, eocBound));
+    }
+

@@ -6,18 +6,35 @@
 
         ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
         Iterator<CFDefinition.Name> idIter = cfDef.clusteringColumns().iterator();
-        for (Restriction r : columnRestrictions)
+        while (idIter.hasNext())
         {
             CFDefinition.Name name = idIter.next();
+            Restriction r = columnRestrictions[name.position];
             assert r != null && !r.isSlice();
 
             if (r.isEQ())
             {
                 List<ByteBuffer> values = r.values(variables);
-                ByteBuffer val = values.get(0);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", name.name));
-                builder.add(val);
+                if (r.isMultiColumn())
+                {
+                    for (int i = 0, m = values.size(); i < m; i++)
+                    {
+                        if (i != 0)
+                            name = idIter.next();
+
+                        ByteBuffer val = values.get(i);
+                        if (val == null)
+                            throw new InvalidRequestException(String.format("Invalid null value in condition for column %s", name));
+                        builder.add(val);
+                    }
+                }
+                else
+                {
+                    ByteBuffer val = values.get(0);
+                    if (val == null)
+                        throw new InvalidRequestException(String.format("Invalid null value for clustering key part %s", name.name));
+                    builder.add(val);
+                }
             }
             else
             {
