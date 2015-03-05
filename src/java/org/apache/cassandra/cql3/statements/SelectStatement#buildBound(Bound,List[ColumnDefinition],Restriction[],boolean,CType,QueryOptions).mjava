@@ -1,35 +1,21 @@
-    private static List<Composite> buildBound(Bound bound,
-                                              List<ColumnDefinition> defs,
-                                              Restriction[] restrictions,
-                                              boolean isReversed,
-                                              CType type,
-                                              QueryOptions options) throws InvalidRequestException
+    @VisibleForTesting
+    static List<Composite> buildBound(Bound bound,
+                                      List<ColumnDefinition> defs,
+                                      Restriction[] restrictions,
+                                      boolean isReversed,
+                                      CType type,
+                                      QueryOptions options) throws InvalidRequestException
     {
         CBuilder builder = type.builder();
-
-        // check the first restriction to see if we're dealing with a multi-column restriction
-        if (!defs.isEmpty())
-        {
-            Restriction firstRestriction = restrictions[0];
-            if (firstRestriction != null && firstRestriction.isMultiColumn())
-            {
-                if (firstRestriction.isSlice())
-                    return buildMultiColumnSliceBound(bound, defs, (MultiColumnRestriction.Slice) firstRestriction, isReversed, builder, options);
-                else if (firstRestriction.isIN())
-                    return buildMultiColumnInBound(bound, defs, (MultiColumnRestriction.IN) firstRestriction, isReversed, builder, type, options);
-                else
-                    return buildMultiColumnEQBound(bound, defs, (MultiColumnRestriction.EQ) firstRestriction, isReversed, builder, options);
-            }
-        }
 
         // The end-of-component of composite doesn't depend on whether the
         // component type is reversed or not (i.e. the ReversedType is applied
         // to the component comparator but not to the end-of-component itself),
         // it only depends on whether the slice is reversed
         Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
-        for (Iterator<ColumnDefinition> iter = defs.iterator(); iter.hasNext();)
+        for (int i = 0, m = defs.size(); i < m; i++)
         {
-            ColumnDefinition def = iter.next();
+            ColumnDefinition def = defs.get(i);
 
             // In a restriction, we always have Bound.START < Bound.END for the "base" comparator.
             // So if we're doing a reverse slice, we must inverse the bounds when giving them as start and end of the slice filter.
@@ -46,36 +32,82 @@
             }
             if (r.isSlice())
             {
-                builder.add(getSliceValue(r, b, options));
+                if (r.isMultiColumn())
+                {
+                    MultiColumnRestriction.Slice slice = (MultiColumnRestriction.Slice) r;
+
+                    if (!slice.hasBound(b))
+                    {
+                        Composite prefix = builder.build();
+                        return Collections.singletonList(builder.remainingCount() > 0 && eocBound == Bound.END
+                                ? prefix.end()
+                                : prefix);
+                    }
+
+                    List<ByteBuffer> vals = slice.componentBounds(b, options);
+
+                    for (int j = 0, n = vals.size(); j < n; j++)
+                        addValue(builder, defs.get(i + j), vals.get(j)) ;
+                }
+                else
+                {
+                    builder.add(getSliceValue(r, b, options));
+                }
                 Operator relType = ((Restriction.Slice)r).getRelation(eocBound, b);
                 return Collections.singletonList(builder.build().withEOC(eocForRelation(relType)));
             }
-            else
+
+            if (r.isIN())
             {
-                // IN or EQ
+                // The IN query might not have listed the values in comparator order, so we need to re-sort
+                // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
+                TreeSet<Composite> inValues = new TreeSet<>(isReversed ? type.reverseComparator() : type);
+
+                if (r.isMultiColumn())
+                {
+                    List<List<ByteBuffer>> splitInValues = ((MultiColumnRestriction.IN) r).splitValues(options);
+
+                    for (List<ByteBuffer> components : splitInValues)
+                    {
+                        for (int j = 0; j < components.size(); j++)
+                            if (components.get(j) == null)
+                                throw new InvalidRequestException("Invalid null value in condition for column " + defs.get(i + j).name);
+
+                        Composite prefix = builder.buildWith(components);
+                        inValues.add(builder.remainingCount() == 0 ? prefix : addEOC(prefix, eocBound));
+                    }
+                    return new ArrayList<>(inValues);
+                }
+
                 List<ByteBuffer> values = r.values(options);
                 if (values.size() != 1)
                 {
                     // IN query, we only support it on the clustering columns
                     assert def.position() == defs.size() - 1;
-                    // The IN query might not have listed the values in comparator order, so we need to re-sort
-                    // the bounds lists to make sure the slices works correctly (also, to avoid duplicates).
-                    TreeSet<Composite> s = new TreeSet<>(isReversed ? type.reverseComparator() : type);
                     for (ByteBuffer val : values)
                     {
                         if (val == null)
-                            throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
+                            throw new InvalidRequestException(String.format("Invalid null value in condition for column %s",
+                                                                            def.name));
                         Composite prefix = builder.buildWith(val);
                         // See below for why this
-                        s.add(builder.remainingCount() == 0 ? prefix : (eocBound == Bound.END ? prefix.end() : prefix.start()));
+                        inValues.add(builder.remainingCount() == 0 ? prefix : addEOC(prefix, eocBound));
                     }
-                    return new ArrayList<>(s);
+                    return new ArrayList<>(inValues);
                 }
+            }
 
-                ByteBuffer val = values.get(0);
-                if (val == null)
-                    throw new InvalidRequestException(String.format("Invalid null clustering key part %s", def.name));
-                builder.add(val);
+            List<ByteBuffer> values = r.values(options);
+
+            if (r.isMultiColumn())
+            {
+                for (int j = 0; j < values.size(); j++)
+                    addValue(builder, defs.get(i + j), values.get(j));
+                i += values.size() - 1; // skips the processed columns
+            }
+            else
+            {
+                addValue(builder, def, values.get(0));
             }
         }
         // Means no relation at all or everything was an equal
@@ -85,6 +117,6 @@
         // case using the eoc would be bad, since for the random partitioner we have no guarantee that
         // prefix.end() will sort after prefix (see #5240).
         Composite prefix = builder.build();
-        return Collections.singletonList(builder.remainingCount() == 0 ? prefix : (eocBound == Bound.END ? prefix.end() : prefix.start()));
+        return Collections.singletonList(builder.remainingCount() == 0 ? prefix : addEOC(prefix, eocBound));
     }
 
