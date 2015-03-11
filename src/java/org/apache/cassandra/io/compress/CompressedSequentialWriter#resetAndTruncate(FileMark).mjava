@@ -6,46 +6,54 @@
         CompressedFileWriterMark realMark = (CompressedFileWriterMark) mark;
 
         // reset position
-        current = realMark.uncDataOffset;
+        long truncateTarget = realMark.uncDataOffset;
 
-        if (realMark.chunkOffset == chunkOffset) // current buffer
+        if (realMark.chunkOffset == chunkOffset)
         {
-            // just reset a buffer offset and return
-            validBufferBytes = realMark.bufferOffset;
+            // simply drop bytes to the right of our mark
+            buffer.position(realMark.validBufferBytes);
             return;
         }
 
-        // synchronize current buffer with disk
-        // because we don't want any data loss
+        // synchronize current buffer with disk - we don't want any data loss
         syncInternal();
 
-        // setting marker as a current offset
         chunkOffset = realMark.chunkOffset;
 
         // compressed chunk size (- 4 bytes reserved for checksum)
         int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset - 4);
-        if (compressed.buffer.length < chunkSize)
-            compressed.buffer = new byte[chunkSize];
+        if (compressed.buffer.capacity() < chunkSize)
+            compressed.buffer = compressor.useDirectOutputByteBuffers()
+                    ? ByteBuffer.allocateDirect(chunkSize)
+                    : ByteBuffer.allocate(chunkSize);
 
         try
         {
-            out.seek(chunkOffset);
-            out.readFully(compressed.buffer, 0, chunkSize);
+            compressed.buffer.clear();
+            compressed.buffer.limit(chunkSize);
+            channel.position(chunkOffset);
+            channel.read(compressed.buffer);
 
             try
             {
-                // repopulate buffer
-                compressor.uncompress(compressed.buffer, 0, chunkSize, buffer, 0);
+                // Repopulate buffer from compressed data
+                buffer.clear();
+                compressed.buffer.flip();
+                compressor.uncompress(compressed.buffer, buffer);
             }
             catch (IOException e)
             {
                 throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
             }
 
-            Checksum checksum = new Adler32();
-            checksum.update(compressed.buffer, 0, chunkSize);
+            Adler32 checksum = new Adler32();
 
-            if (out.readInt() != (int) checksum.getValue())
+            FBUtilities.directCheckSum(checksum, compressed.buffer);
+
+            crcCheckBuffer.clear();
+            channel.read(crcCheckBuffer);
+            crcCheckBuffer.flip();
+            if (crcCheckBuffer.getInt() != (int) checksum.getValue())
                 throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
         }
         catch (CorruptBlockException e)
@@ -61,9 +69,11 @@
             throw new FSReadError(e, getPath());
         }
 
-        // reset buffer
-        validBufferBytes = realMark.bufferOffset;
-        bufferOffset = current - validBufferBytes;
+        // Mark as dirty so we can guarantee the newly buffered bytes won't be lost on a rebuffer
+        buffer.position(realMark.validBufferBytes);
+        isDirty = true;
+
+        bufferOffset = truncateTarget - buffer.position();
         chunkCount = realMark.nextChunkIndex - 1;
 
         // truncate data and index file

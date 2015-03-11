@@ -3,16 +3,18 @@
                                       CompressionParameters parameters,
                                       MetadataCollector sstableMetadataCollector)
     {
-        super(file, parameters.chunkLength());
+        super(file, parameters.chunkLength(), parameters.sstableCompressor.useDirectOutputByteBuffers());
         this.compressor = parameters.sstableCompressor;
 
         // buffer for compression should be the same size as buffer itself
-        compressed = new ICompressor.WrappedArray(new byte[compressor.initialCompressedBufferLength(buffer.length)]);
+        compressed = compressor.useDirectOutputByteBuffers()
+            ? new ICompressor.WrappedByteBuffer(ByteBuffer.allocateDirect(compressor.initialCompressedBufferLength(buffer.capacity())))
+            : new ICompressor.WrappedByteBuffer(ByteBuffer.allocate(compressor.initialCompressedBufferLength(buffer.capacity())));
 
         /* Index File (-CompressionInfo.db component) and it's header */
         metadataWriter = CompressionMetadata.Writer.open(parameters, offsetsPath);
 
         this.sstableMetadataCollector = sstableMetadataCollector;
-        crcMetadata = new DataIntegrityMetadata.ChecksumWriter(out);
+        crcMetadata = new DataIntegrityMetadata.ChecksumWriter(new DataOutputStreamAndChannel(channel));
     }
 

@@ -7,14 +7,19 @@
         try
         {
             // compressing data with buffer re-use
-            compressedLength = compressor.compress(buffer, 0, validBufferBytes, compressed, 0);
+            buffer.flip();
+            compressed.buffer.clear();
+            compressedLength = compressor.compress(buffer, compressed);
+
+            // Compressors don't modify sentinels in our BB - we rely on buffer.position() for bufferOffset adjustment
+            buffer.position(buffer.limit());
         }
         catch (IOException e)
         {
             throw new RuntimeException("Compression exception", e); // shouldn't happen
         }
 
-        originalSize += validBufferBytes;
+        uncompressedSize += buffer.position();
         compressedSize += compressedLength;
 
         try
@@ -23,13 +28,19 @@
             metadataWriter.addOffset(chunkOffset);
             chunkCount++;
 
-            assert compressedLength <= compressed.buffer.length;
+            assert compressedLength <= compressed.buffer.capacity();
 
-            // write data itself
-            out.write(compressed.buffer, 0, compressedLength);
+            // write out the compressed data
+            compressed.buffer.flip();
+            channel.write(compressed.buffer);
+
             // write corresponding checksum
-            crcMetadata.append(compressed.buffer, 0, compressedLength, true);
+            compressed.buffer.rewind();
+            crcMetadata.appendDirect(compressed.buffer);
             lastFlushOffset += compressedLength + 4;
+
+            // adjust our bufferOffset to account for the new uncompressed data we've now written out
+            resetBuffer();
         }
         catch (IOException e)
         {
