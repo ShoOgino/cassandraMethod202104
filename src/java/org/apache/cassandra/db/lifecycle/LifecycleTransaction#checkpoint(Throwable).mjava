@@ -1,0 +1,33 @@
+    private Throwable checkpoint(Throwable accumulate)
+    {
+        if (logger.isDebugEnabled())
+            logger.debug("Checkpointing update:{}, obsolete:{}", staged.update, staged.obsolete);
+
+        if (staged.isEmpty())
+            return accumulate;
+
+        Set<SSTableReader> toUpdate = toUpdate();
+        Set<SSTableReader> fresh = copyOf(fresh());
+
+        // check the current versions of the readers we're replacing haven't somehow been replaced by someone else
+        checkNotReplaced(filterIn(toUpdate, staged.update));
+
+        // ensure any new readers are in the compacting set, since we aren't done with them yet
+        // and don't want anyone else messing with them
+        // apply atomically along with updating the live set of readers
+        tracker.apply(compose(updateCompacting(emptySet(), fresh),
+                              updateLiveSet(toUpdate, staged.update)));
+
+        // log the staged changes and our newly marked readers
+        marked.addAll(fresh);
+        logged.log(staged);
+
+        // setup our tracker, and mark our prior versions replaced, also releasing our references to them
+        // we do not replace/release obsoleted readers, since we may need to restore them on rollback
+        accumulate = setReplaced(filterOut(toUpdate, staged.obsolete), accumulate);
+        accumulate = release(selfRefs(filterOut(toUpdate, staged.obsolete)), accumulate);
+
+        staged.clear();
+        return accumulate;
+    }
+

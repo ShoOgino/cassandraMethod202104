@@ -20,20 +20,24 @@
         overrideWithGarbage(sstable, ByteBufferUtil.bytes("0"), ByteBufferUtil.bytes("1"));
 
         // with skipCorrupted == false, the scrub is expected to fail
-        Scrubber scrubber = new Scrubber(cfs, sstable, false, false, true);
-        try
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
+             Scrubber scrubber = new Scrubber(cfs, txn, false, false, true))
         {
+            // with skipCorrupted == true, the corrupt row will be skipped
             scrubber.scrub();
             fail("Expected a CorruptSSTableException to be thrown");
         }
         catch (IOError err) {}
 
-        // with skipCorrupted == true, the corrupt row will be skipped
-        scrubber = new Scrubber(cfs, sstable, true, false, true);
-        scrubber.scrub();
-        scrubber.close();
-        assertEquals(1, cfs.getSSTables().size());
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
+             Scrubber scrubber = new Scrubber(cfs, txn, true, false, true))
+        {
+            // with skipCorrupted == true, the corrupt row will be skipped
+            scrubber.scrub();
+            scrubber.close();
+        }
 
+        assertEquals(1, cfs.getSSTables().size());
         // verify that we can read all of the rows, and there is now one less row
         rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
         assertEquals(1, rows.size());

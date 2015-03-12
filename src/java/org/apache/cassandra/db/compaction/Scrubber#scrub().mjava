@@ -1,9 +1,7 @@
     public void scrub()
     {
         outputHandler.output(String.format("Scrubbing %s (%s bytes)", sstable, dataFile.length()));
-        Set<SSTableReader> oldSSTable = Sets.newHashSet(sstable);
-
-        try (SSTableRewriter writer = new SSTableRewriter(cfs, oldSSTable, sstable.maxDataAge, isOffline);)
+        try (SSTableRewriter writer = new SSTableRewriter(cfs, transaction, sstable.maxDataAge, isOffline);)
         {
             nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
             {
@@ -152,8 +150,7 @@
                         inOrderWriter.append(row.key, row.cf);
                     newInOrderSstable = inOrderWriter.finish(-1, sstable.maxDataAge, true);
                 }
-                if (!isOffline)
-                    cfs.getDataTracker().addSSTables(Collections.singleton(newInOrderSstable));
+                transaction.update(newInOrderSstable, false);
                 outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrderRows.size(), sstable, newInOrderSstable));
             }
 
@@ -161,8 +158,6 @@
             List<SSTableReader> finished = writer.setRepairedAt(badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt).finish();
             if (!finished.isEmpty())
                 newSstable = finished.get(0);
-            if (!isOffline)
-                cfs.getDataTracker().markCompactedSSTablesReplaced(oldSSTable, finished, OperationType.SCRUB);
         }
         catch (IOException e)
         {

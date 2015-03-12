@@ -1,0 +1,28 @@
+    /**
+     * removes all sstables that are not busy compacting.
+     */
+    public Throwable dropSSTables(final Predicate<SSTableReader> remove, OperationType operationType, Throwable accumulate)
+    {
+        Pair<View, View> result = apply(new Function<View, View>()
+        {
+            public View apply(View view)
+            {
+                Set<SSTableReader> toremove = copyOf(filter(view.sstables, and(remove, notIn(view.compacting))));
+                return updateLiveSet(toremove, emptySet()).apply(view);
+            }
+        });
+
+        Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
+        assert Iterables.all(removed, remove);
+
+        if (!removed.isEmpty())
+        {
+            // notifySSTablesChanged -> LeveledManifest.promote doesn't like a no-op "promotion"
+            accumulate = notifySSTablesChanged(removed, Collections.<SSTableReader>emptySet(), operationType, accumulate);
+            accumulate = updateSizeTracking(removed, emptySet(), accumulate);
+            accumulate = markObsolete(removed, accumulate);
+            accumulate = release(selfRefs(removed), accumulate);
+        }
+        return accumulate;
+    }
+
