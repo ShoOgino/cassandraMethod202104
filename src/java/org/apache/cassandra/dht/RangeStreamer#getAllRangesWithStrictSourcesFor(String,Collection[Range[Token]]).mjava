@@ -2,22 +2,23 @@
      * Get a map of all ranges and the source that will be cleaned up once this bootstrapped node is added for the given ranges.
      * For each range, the list should only contain a single source. This allows us to consistently migrate data without violating
      * consistency.
+     *
+     * @throws java.lang.IllegalStateException when there is no source to get data streamed, or more than 1 source found.
      */
-    private Multimap<Range<Token>, InetAddress> getAllRangesWithStrictSourcesFor(String table, Collection<Range<Token>> desiredRanges)
+    private Multimap<Range<Token>, InetAddress> getAllRangesWithStrictSourcesFor(String keyspace, Collection<Range<Token>> desiredRanges)
     {
-
         assert tokens != null;
-        AbstractReplicationStrategy strat = Keyspace.open(table).getReplicationStrategy();
+        AbstractReplicationStrategy strat = Keyspace.open(keyspace).getReplicationStrategy();
 
-        //Active ranges
+        // Active ranges
         TokenMetadata metadataClone = metadata.cloneOnlyTokenMap();
-        Multimap<Range<Token>,InetAddress> addressRanges = strat.getRangeAddresses(metadataClone);
+        Multimap<Range<Token>, InetAddress> addressRanges = strat.getRangeAddresses(metadataClone);
 
-        //Pending ranges
+        // Pending ranges
         metadataClone.updateNormalTokens(tokens, address);
-        Multimap<Range<Token>,InetAddress> pendingRangeAddresses = strat.getRangeAddresses(metadataClone);
+        Multimap<Range<Token>, InetAddress> pendingRangeAddresses = strat.getRangeAddresses(metadataClone);
 
-        //Collects the source that will have its range moved to the new node
+        // Collects the source that will have its range moved to the new node
         Multimap<Range<Token>, InetAddress> rangeSources = ArrayListMultimap.create();
 
         for (Range<Token> desiredRange : desiredRanges)
@@ -29,8 +30,8 @@
                     Set<InetAddress> oldEndpoints = Sets.newHashSet(preEntry.getValue());
                     Set<InetAddress> newEndpoints = Sets.newHashSet(pendingRangeAddresses.get(desiredRange));
 
-                    //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
-                    //So we need to be careful to only be strict when endpoints == RF
+                    // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                    // So we need to be careful to only be strict when endpoints == RF
                     if (oldEndpoints.size() == strat.getReplicationFactor())
                     {
                         oldEndpoints.removeAll(newEndpoints);
@@ -41,7 +42,7 @@
                 }
             }
 
-            //Validate
+            // Validate
             Collection<InetAddress> addressList = rangeSources.get(desiredRange);
             if (addressList == null || addressList.isEmpty())
                 throw new IllegalStateException("No sources found for " + desiredRange);
@@ -52,7 +53,8 @@
             InetAddress sourceIp = addressList.iterator().next();
             EndpointState sourceState = Gossiper.instance.getEndpointStateForEndpoint(sourceIp);
             if (Gossiper.instance.isEnabled() && (sourceState == null || !sourceState.isAlive()))
-                throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
+                throw new RuntimeException("A node required to move the data consistently is down (" + sourceIp + "). " +
+                                           "If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
         }
 
         return rangeSources;
