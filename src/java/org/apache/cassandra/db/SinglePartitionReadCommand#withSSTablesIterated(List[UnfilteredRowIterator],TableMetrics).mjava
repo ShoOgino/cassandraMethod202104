@@ -1,0 +1,33 @@
+    /**
+     * Return a wrapped iterator that when closed will update the sstables iterated and READ sample metrics.
+     * Note that we cannot use the Transformations framework because they greedily get the static row, which
+     * would cause all iterators to be initialized and hence all sstables to be accessed.
+     */
+    private UnfilteredRowIterator withSSTablesIterated(List<UnfilteredRowIterator> iterators,
+                                                       TableMetrics metrics)
+    {
+        @SuppressWarnings("resource") //  Closed through the closing of the result of the caller method.
+        UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());
+
+        if (!merged.isEmpty())
+        {
+            DecoratedKey key = merged.partitionKey();
+            metrics.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
+        }
+
+        class UpdateSstablesIterated extends Transformation
+        {
+           public void onPartitionClose()
+           {
+               int sstablesIterated = (int)iterators.stream()
+                                                    .filter(it -> it instanceof LazilyInitializedUnfilteredRowIterator)
+                                                    .filter(it -> ((LazilyInitializedUnfilteredRowIterator)it).initialized())
+                                                    .count();
+
+               metrics.updateSSTableIterated(sstablesIterated);
+               Tracing.trace("Merged data from memtables and {} sstables", sstablesIterated);
+           }
+        };
+        return Transformation.apply(merged, new UpdateSstablesIterated());
+    }
+

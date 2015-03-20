@@ -54,8 +54,8 @@
                 // however: if it is set, it impacts everything and must be included. Getting that top-level partition deletion costs us
                 // some seek in general however (unless the partition is indexed and is in the key cache), so we first check if the sstable
                 // has any tombstone at all as a shortcut.
-                if (sstable.getSSTableMetadata().maxLocalDeletionTime == Integer.MAX_VALUE)
-                    continue; // Means no tombstone at all, we can skip that sstable
+                if (!sstable.hasTombstones())
+                    continue; // no tombstone at all, we can skip that sstable
 
                 // We need to get the partition deletion and include it if it's live. In any case though, we're done with that sstable.
                 sstable.incrementReadCount();
@@ -72,7 +72,7 @@
 
             Tracing.trace("Merging data from sstable {}", sstable.descriptor.generation);
             sstable.incrementReadCount();
-            try (UnfilteredRowIterator iter = sstable.iterator(partitionKey(), filter.getSlices(metadata()), columnFilter(), filter.isReversed(), isForThrift());)
+            try (UnfilteredRowIterator iter = sstable.iterator(partitionKey(), filter.getSlices(metadata()), columnFilter(), filter.isReversed(), isForThrift()))
             {
                 if (iter.isEmpty())
                     continue;
@@ -102,13 +102,9 @@
             try (UnfilteredRowIterator iter = result.unfilteredIterator(columnFilter(), Slices.ALL, false))
             {
                 final Mutation mutation = new Mutation(PartitionUpdate.fromIterator(iter, columnFilter()));
-                StageManager.getStage(Stage.MUTATION).execute(new Runnable()
-                {
-                    public void run()
-                    {
-                        // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
-                        Keyspace.open(mutation.getKeyspaceName()).apply(mutation, false, false);
-                    }
+                StageManager.getStage(Stage.MUTATION).execute(() -> {
+                    // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
+                    Keyspace.open(mutation.getKeyspaceName()).apply(mutation, false, false);
                 });
             }
         }

@@ -4,63 +4,7 @@
     @Test
     public void testStaticColumns() throws Throwable
     {
-        createTable("CREATE TABLE %s ( k int, p int, s int static, v int, PRIMARY KEY (k, p))");
-
-        execute("INSERT INTO %s(k, s) VALUES (0, 42)");
-
-        assertRows(execute("SELECT * FROM %s"), row(0, null, 42, null));
-
-        // Check that writetime works (//7081) -- we can't predict the exact value easily so
-        // we just check that it's non zero
-        Object[][] row = getRows(execute("SELECT s, writetime(s) FROM %s WHERE k=0"));
-        assertEquals(42, row[0][0]);
-        assertTrue((Long)row[0][1] > 0);
-
-        execute("INSERT INTO %s (k, p, s, v) VALUES (0, 0, 12, 0)");
-        execute("INSERT INTO %s (k, p, s, v) VALUES (0, 1, 24, 1)");
-
-        // Check the static columns in indeed "static"
-        assertRows(execute("SELECT * FROM %s"), row(0, 0, 24, 0), row(0, 1, 24, 1));
-
-        // Check we do correctly get the static column value with a SELECT *, even
-        // if we're only slicing part of the partition
-        assertRows(execute("SELECT * FROM %s WHERE k=0 AND p=0"), row(0, 0, 24, 0));
-        assertRows(execute("SELECT * FROM %s WHERE k=0 AND p=1"), row(0, 1, 24, 1));
-
-        // Test for IN on the clustering key (//6769)
-        assertRows(execute("SELECT * FROM %s WHERE k=0 AND p IN (0, 1)"), row(0, 0, 24, 0), row(0, 1, 24, 1));
-
-        // Check things still work if we don't select the static column. We also want
-        // this to not request the static columns internally at all, though that part
-        // require debugging to assert
-        assertRows(execute("SELECT p, v FROM %s WHERE k=0 AND p=1"), row(1, 1));
-
-        // Check selecting only a static column with distinct only yield one value
-        // (as we only query the static columns)
-        assertRows(execute("SELECT DISTINCT s FROM %s WHERE k=0"), row(24));
-        // But without DISTINCT, we still get one result per row
-        assertRows(execute("SELECT s FROM %s WHERE k=0"),row(24),row(24));
-        // but that querying other columns does correctly yield the full partition
-        assertRows(execute("SELECT s, v FROM %s WHERE k=0"),row(24, 0),row(24, 1));
-        assertRows(execute("SELECT s, v FROM %s WHERE k=0 AND p=1"),row(24, 1));
-        assertRows(execute("SELECT p, s FROM %s WHERE k=0 AND p=1"), row(1, 24));
-        assertRows(execute("SELECT k, p, s FROM %s WHERE k=0 AND p=1"),row(0, 1, 24));
-
-        // Check that deleting a row don't implicitely deletes statics
-        execute("DELETE FROM %s WHERE k=0 AND p=0");
-        assertRows(execute("SELECT * FROM %s"),row(0, 1, 24, 1));
-
-        // But that explicitely deleting the static column does remove it
-        execute("DELETE s FROM %s WHERE k=0");
-        assertRows(execute("SELECT * FROM %s"), row(0, 1, null, 1));
-
-        // Check we can add a static column ...
-        execute("ALTER TABLE %s ADD s2 int static");
-        assertRows(execute("SELECT * FROM %s"), row(0, 1, null, null, 1));
-        execute("INSERT INTO %s (k, p, s2, v) VALUES(0, 2, 42, 2)");
-        assertRows(execute("SELECT * FROM %s"), row(0, 1, null, 42, 1), row(0, 2, null, 42, 2));
-        // ... and that we can drop it
-        execute("ALTER TABLE %s DROP s2");
-        assertRows(execute("SELECT * FROM %s"), row(0, 1, null, 1), row(0, 2, null, 2));
+        testStaticColumns(false);
+        testStaticColumns(true);
     }
 

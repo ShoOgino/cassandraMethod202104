@@ -1,0 +1,28 @@
+    /**
+     * @return the lower bound stored on the index entry for this partition, if available.
+     */
+    private RangeTombstone.Bound getPartitionIndexLowerBound()
+    {
+        // Creating the iterator ensures that rowIndexEntry is loaded if available (partitions bigger than
+        // DatabaseDescriptor.column_index_size_in_kb)
+        if (!canUseMetadataLowerBound())
+            maybeInit();
+
+        RowIndexEntry rowIndexEntry = sstable.getCachedPosition(partitionKey(), false);
+        if (rowIndexEntry == null)
+            return null;
+
+        List<IndexHelper.IndexInfo> columns = rowIndexEntry.columnsIndex();
+        if (columns.size() == 0)
+            return null;
+
+        IndexHelper.IndexInfo column = columns.get(filter.isReversed() ? columns.size() - 1 : 0);
+        ClusteringPrefix lowerBoundPrefix = filter.isReversed() ? column.lastName : column.firstName;
+        assert lowerBoundPrefix.getRawValues().length <= sstable.metadata.comparator.size() :
+            String.format("Unexpected number of clustering values %d, expected %d or fewer for %s",
+                          lowerBoundPrefix.getRawValues().length,
+                          sstable.metadata.comparator.size(),
+                          sstable.getFilename());
+        return RangeTombstone.Bound.inclusiveOpen(filter.isReversed(), lowerBoundPrefix.getRawValues());
+    }
+
