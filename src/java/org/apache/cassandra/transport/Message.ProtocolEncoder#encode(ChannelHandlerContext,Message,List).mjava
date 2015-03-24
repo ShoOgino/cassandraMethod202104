@@ -14,23 +14,41 @@
                 if (message instanceof Response)
                 {
                     UUID tracingId = ((Response)message).getTracingId();
+                    Map<String, byte[]> customPayload = message.getCustomPayload();
+                    if (tracingId != null)
+                        messageSize += CBUtil.sizeOfUUID(tracingId);
+                    if (customPayload != null)
+                    {
+                        if (version < Server.VERSION_4)
+                            throw new ProtocolException("Must not send frame with CUSTOM_PAYLOAD flag for native protocol version < 4");
+                        messageSize += CBUtil.sizeOfBytesMap(customPayload);
+                    }
+                    body = CBUtil.allocator.buffer(messageSize);
                     if (tracingId != null)
                     {
-                        body = CBUtil.allocator.buffer(CBUtil.sizeOfUUID(tracingId) + messageSize);
                         CBUtil.writeUUID(tracingId, body);
                         flags.add(Frame.Header.Flag.TRACING);
                     }
-                    else
+                    if (customPayload != null)
                     {
-                        body = CBUtil.allocator.buffer(messageSize);
+                        CBUtil.writeBytesMap(customPayload, body);
+                        flags.add(Frame.Header.Flag.CUSTOM_PAYLOAD);
                     }
                 }
                 else
                 {
                     assert message instanceof Request;
-                    body = CBUtil.allocator.buffer(messageSize);
                     if (((Request)message).isTracingRequested())
                         flags.add(Frame.Header.Flag.TRACING);
+                    Map<String, byte[]> payload = message.getCustomPayload();
+                    if (payload != null)
+                        messageSize += CBUtil.sizeOfBytesMap(payload);
+                    body = CBUtil.allocator.buffer(messageSize);
+                    if (payload != null)
+                    {
+                        CBUtil.writeBytesMap(payload, body);
+                        flags.add(Frame.Header.Flag.CUSTOM_PAYLOAD);
+                    }
                 }
 
                 try

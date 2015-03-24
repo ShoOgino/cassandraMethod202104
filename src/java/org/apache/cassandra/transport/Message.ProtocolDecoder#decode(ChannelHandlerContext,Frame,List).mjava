@@ -2,14 +2,20 @@
         {
             boolean isRequest = frame.header.type.direction == Direction.REQUEST;
             boolean isTracing = frame.header.flags.contains(Frame.Header.Flag.TRACING);
+            boolean isCustomPayload = frame.header.flags.contains(Frame.Header.Flag.CUSTOM_PAYLOAD);
 
             UUID tracingId = isRequest || !isTracing ? null : CBUtil.readUUID(frame.body);
+            Map<String, byte[]> customPayload = !isCustomPayload ? null : CBUtil.readBytesMap(frame.body);
 
             try
             {
+                if (isCustomPayload && frame.header.version < Server.VERSION_4)
+                    throw new ProtocolException("Received frame with CUSTOM_PAYLOAD flag for native protocol version < 4");
+
                 Message message = frame.header.type.codec.decode(frame.body, frame.header.version);
                 message.setStreamId(frame.header.streamId);
                 message.setSourceFrame(frame);
+                message.setCustomPayload(customPayload);
 
                 if (isRequest)
                 {
