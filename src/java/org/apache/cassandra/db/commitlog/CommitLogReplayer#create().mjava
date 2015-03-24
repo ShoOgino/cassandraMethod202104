@@ -1,0 +1,24 @@
+    public static CommitLogReplayer create()
+    {
+        // compute per-CF and global replay positions
+        Map<UUID, ReplayPosition> cfPositions = new HashMap<UUID, ReplayPosition>();
+        Ordering<ReplayPosition> replayPositionOrdering = Ordering.from(ReplayPosition.comparator);
+        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
+        {
+            // it's important to call RP.gRP per-cf, before aggregating all the positions w/ the Ordering.min call
+            // below: gRP will return NONE if there are no flushed sstables, which is important to have in the
+            // list (otherwise we'll just start replay from the first flush position that we do have, which is not correct).
+            ReplayPosition rp = ReplayPosition.getReplayPosition(cfs.getSSTables());
+
+            // but, if we've truncted the cf in question, then we need to need to start replay after the truncation
+            ReplayPosition truncatedAt = SystemKeyspace.getTruncatedPosition(cfs.metadata.cfId);
+            if (truncatedAt != null)
+                rp = replayPositionOrdering.max(Arrays.asList(rp, truncatedAt));
+
+            cfPositions.put(cfs.metadata.cfId, rp);
+        }
+        ReplayPosition globalPosition = replayPositionOrdering.min(cfPositions.values());
+        logger.debug("Global replay position is {} from columnfamilies {}", globalPosition, FBUtilities.toString(cfPositions));
+        return new CommitLogReplayer(globalPosition, cfPositions);
+    }
+

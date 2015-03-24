@@ -1,11 +1,23 @@
-    static void writeHeader(ByteBuffer out, CommitLogDescriptor descriptor)
+    public static void writeHeader(ByteBuffer out, CommitLogDescriptor descriptor)
     {
-        out.putInt(0, descriptor.version);
-        out.putLong(4, descriptor.id);
         ICRC32 crc = CRC32Factory.instance.create();
+        out.putInt(descriptor.version);
         crc.updateInt(descriptor.version);
+        out.putLong(descriptor.id);
         crc.updateInt((int) (descriptor.id & 0xFFFFFFFFL));
         crc.updateInt((int) (descriptor.id >>> 32));
-        out.putInt(12, crc.getCrc());
+        if (descriptor.version >= VERSION_30) {
+            String parametersString = constructParametersString(descriptor);
+            byte[] parametersBytes = parametersString.getBytes(StandardCharsets.UTF_8);
+            if (parametersBytes.length != (((short) parametersBytes.length) & 0xFFFF))
+                throw new ConfigurationException(String.format("Compression parameters too long, length %d cannot be above 65535.",
+                                                               parametersBytes.length));
+            out.putShort((short) parametersBytes.length);
+            crc.updateInt(parametersBytes.length);
+            out.put(parametersBytes);
+            crc.update(parametersBytes, 0, parametersBytes.length);
+        } else
+            assert descriptor.compression == null;
+        out.putInt(crc.getCrc());
     }
 

@@ -1,0 +1,42 @@
+    @Override
+    void write(int startMarker, int nextMarker)
+    {
+        int contentStart = startMarker + SYNC_MARKER_SIZE;
+        int length = nextMarker - contentStart;
+        // The length may be 0 when the segment is being closed.
+        assert length > 0 || length == 0 && !isStillAllocating();
+
+        try {
+
+            int compressedLength = compressor.initialCompressedBufferLength(length);
+            WrappedByteBuffer wrappedCompressedBuffer = compressedBufferHolder.get();
+            ByteBuffer compressedBuffer = wrappedCompressedBuffer.buffer;
+            if (compressedBuffer.isDirect() != compressor.useDirectOutputByteBuffers() ||
+                compressedBuffer.capacity() < compressedLength + COMPRESSED_MARKER_SIZE)
+            {
+                compressedBuffer = allocate(compressedLength + COMPRESSED_MARKER_SIZE);
+                FileUtils.clean(wrappedCompressedBuffer.buffer);
+                wrappedCompressedBuffer.buffer = compressedBuffer;
+            }
+
+            ByteBuffer inputBuffer = buffer.duplicate();
+            inputBuffer.limit(contentStart + length).position(contentStart);
+            compressedBuffer.limit(compressedBuffer.capacity()).position(COMPRESSED_MARKER_SIZE);
+            compressedLength = compressor.compress(inputBuffer, wrappedCompressedBuffer);
+
+            compressedBuffer.position(0);
+            compressedBuffer.limit(COMPRESSED_MARKER_SIZE + compressedLength);
+            compressedBuffer.putInt(SYNC_MARKER_SIZE, length);
+
+            // Only one thread can be here at a given time.
+            // Protected by synchronization on CommitLogSegment.sync().
+            writeSyncMarker(compressedBuffer, 0, (int) channel.position(), (int) channel.position() + compressedBuffer.remaining());
+            channel.write(compressedBuffer);
+            channel.force(true);
+        }
+        catch (Exception e)
+        {
+            throw new FSWriteError(e, getPath());
+        }
+    }
+

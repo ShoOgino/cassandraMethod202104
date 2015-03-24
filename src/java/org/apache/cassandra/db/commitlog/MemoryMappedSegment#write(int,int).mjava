@@ -1,0 +1,25 @@
+    @Override
+    void write(int startMarker, int nextMarker)
+    {
+        // if there's room in the discard section to write an empty header,
+        // zero out the next sync marker so replayer can cleanly exit
+        if (nextMarker <= buffer.capacity() - SYNC_MARKER_SIZE)
+        {
+            buffer.putInt(nextMarker, 0);
+            buffer.putInt(nextMarker + 4, 0);
+        }
+
+        // write previous sync marker to point to next sync marker
+        // we don't chain the crcs here to ensure this method is idempotent if it fails
+        writeSyncMarker(buffer, startMarker, startMarker, nextMarker);
+
+        try {
+            ((MappedByteBuffer) buffer).force();
+        }
+        catch (Exception e) // MappedByteBuffer.force() does not declare IOException but can actually throw it
+        {
+            throw new FSWriteError(e, getPath());
+        }
+        CLibrary.trySkipCache(fd, startMarker, nextMarker);
+    }
+
