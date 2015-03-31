@@ -1,0 +1,38 @@
+    /*
+     * Makes a defensive copy of the incoming ByteBuffer and don't modify the position or limit
+     * even temporarily so it is thread-safe WRT to the incoming buffer
+     * (non-Javadoc)
+     * @see org.apache.cassandra.io.util.DataOutputPlus#write(java.nio.ByteBuffer)
+     */
+    @Override
+    public void write(ByteBuffer toWrite) throws IOException
+    {
+        if (toWrite.hasArray())
+        {
+            write(toWrite.array(), toWrite.arrayOffset() + toWrite.position(), toWrite.remaining());
+        }
+        else
+        {
+            assert toWrite.isDirect();
+            if (toWrite.remaining() > buffer.remaining())
+            {
+                doFlush();
+                MemoryUtil.duplicateDirectByteBuffer(toWrite, hollowBuffer);
+                if (toWrite.remaining() > buffer.remaining())
+                {
+                    while (hollowBuffer.hasRemaining())
+                        channel.write(hollowBuffer);
+                }
+                else
+                {
+                    buffer.put(hollowBuffer);
+                }
+            }
+            else
+            {
+                MemoryUtil.duplicateDirectByteBuffer(toWrite, hollowBuffer);
+                buffer.put(hollowBuffer);
+            }
+        }
+    }
+
