@@ -1,0 +1,88 @@
+    /**
+     * @param keyspace the current keyspace
+     * @param name the name of the function
+     * @param providedArgs the arguments provided for the function call
+     * @param receiverKs the receiver's keyspace
+     * @param receiverCf the receiver's table
+     * @param receiverType if the receiver type is known (during inserts, for example), this should be the type of
+     *                     the receiver
+     * @throws InvalidRequestException
+     */
+    public static Function get(String keyspace,
+                               FunctionName name,
+                               List<? extends AssignmentTestable> providedArgs,
+                               String receiverKs,
+                               String receiverCf,
+                               AbstractType<?> receiverType)
+    throws InvalidRequestException
+    {
+        if (name.equalsNativeFunction(TOKEN_FUNCTION_NAME))
+            return new TokenFct(Schema.instance.getCFMetaData(receiverKs, receiverCf));
+
+        // The toJson() function can accept any type of argument, so instances of it are not pre-declared.  Instead,
+        // we create new instances as needed while handling selectors (which is the only place that toJson() is supported,
+        // due to needing to know the argument types in advance).
+        if (name.equalsNativeFunction(ToJsonFct.NAME))
+            throw new InvalidRequestException("toJson() may only be used within the selection clause of SELECT statements");
+
+        // Similarly, we can only use fromJson when we know the receiver type (such as inserts)
+        if (name.equalsNativeFunction(FromJsonFct.NAME))
+        {
+            if (receiverType == null)
+                throw new InvalidRequestException("fromJson() cannot be used in the selection clause of a SELECT statement");
+            return FromJsonFct.getInstance(receiverType);
+        }
+
+        List<Function> candidates;
+        if (!name.hasKeyspace())
+        {
+            // function name not fully qualified
+            candidates = new ArrayList<>();
+            // add 'SYSTEM' (native) candidates
+            candidates.addAll(declared.get(name.asNativeFunction()));
+            // add 'current keyspace' candidates
+            candidates.addAll(declared.get(new FunctionName(keyspace, name.name)));
+        }
+        else
+            // function name is fully qualified (keyspace + name)
+            candidates = declared.get(name);
+
+        if (candidates.isEmpty())
+            return null;
+
+        // Fast path if there is only one choice
+        if (candidates.size() == 1)
+        {
+            Function fun = candidates.get(0);
+            validateTypes(keyspace, fun, providedArgs, receiverKs, receiverCf);
+            return fun;
+        }
+
+        List<Function> compatibles = null;
+        for (Function toTest : candidates)
+        {
+            AssignmentTestable.TestResult r = matchAguments(keyspace, toTest, providedArgs, receiverKs, receiverCf);
+            switch (r)
+            {
+                case EXACT_MATCH:
+                    // We always favor exact matches
+                    return toTest;
+                case WEAKLY_ASSIGNABLE:
+                    if (compatibles == null)
+                        compatibles = new ArrayList<>();
+                    compatibles.add(toTest);
+                    break;
+            }
+        }
+
+        if (compatibles == null || compatibles.isEmpty())
+            throw new InvalidRequestException(String.format("Invalid call to function %s, none of its type signatures match (known type signatures: %s)",
+                                                            name, toString(candidates)));
+
+        if (compatibles.size() > 1)
+            throw new InvalidRequestException(String.format("Ambiguous call to function %s (can be matched by following signatures: %s): use type casts to disambiguate",
+                        name, toString(compatibles)));
+
+        return compatibles.get(0);
+    }
+
