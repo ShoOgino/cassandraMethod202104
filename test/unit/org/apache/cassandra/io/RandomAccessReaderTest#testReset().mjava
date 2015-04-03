@@ -1,0 +1,62 @@
+    @Test
+    public void testReset() throws IOException
+    {
+        File f = File.createTempFile("testMark", "1");
+        final String expected = "The quick brown fox jumps over the lazy dog";
+        final int numIterations = 10;
+
+        SequentialWriter writer = new SequentialWriter(f, CompressionParameters.DEFAULT_CHUNK_LENGTH, false);
+        for (int i = 0; i < numIterations; i++)
+            writer.write(expected.getBytes());
+        writer.close();
+
+        assert f.exists();
+
+        ChannelProxy channel = new ChannelProxy(f);
+        RandomAccessReader reader = RandomAccessReader.open(channel);
+        assertEquals(expected.length() * numIterations, reader.length());
+
+        ByteBuffer b = reader.readBytes(expected.length());
+        assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+
+        assertFalse(reader.isEOF());
+        assertEquals((numIterations - 1) * expected.length(), reader.bytesRemaining());
+
+        FileMark mark = reader.mark();
+        assertEquals(0, reader.bytesPastMark());
+        assertEquals(0, reader.bytesPastMark(mark));
+
+        for (int i = 0; i < (numIterations - 1); i++)
+        {
+            b = reader.readBytes(expected.length());
+            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+        }
+        assertTrue(reader.isEOF());
+        assertEquals(expected.length() * (numIterations -1), reader.bytesPastMark());
+        assertEquals(expected.length() * (numIterations - 1), reader.bytesPastMark(mark));
+
+        reader.reset(mark);
+        assertEquals(0, reader.bytesPastMark());
+        assertEquals(0, reader.bytesPastMark(mark));
+        assertFalse(reader.isEOF());
+        for (int i = 0; i < (numIterations - 1); i++)
+        {
+            b = reader.readBytes(expected.length());
+            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+        }
+
+        reader.reset();
+        assertEquals(0, reader.bytesPastMark());
+        assertEquals(0, reader.bytesPastMark(mark));
+        assertFalse(reader.isEOF());
+        for (int i = 0; i < (numIterations - 1); i++)
+        {
+            b = reader.readBytes(expected.length());
+            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+        }
+
+        assertTrue(reader.isEOF());
+        reader.close();
+        channel.close();
+    }
+

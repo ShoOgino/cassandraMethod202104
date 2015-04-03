@@ -1,0 +1,81 @@
+    private void testSeek(int numThreads) throws IOException, InterruptedException
+    {
+        final File f = File.createTempFile("testMark", "1");
+        final String[] expected = new String[10];
+        int len = 0;
+        for (int i = 0; i < expected.length; i++)
+        {
+            expected[i] = UUID.randomUUID().toString();
+            len += expected[i].length();
+        }
+        final int totalLength = len;
+
+        SequentialWriter writer = new SequentialWriter(f, CompressionParameters.DEFAULT_CHUNK_LENGTH, false);
+        for (int i = 0; i < expected.length; i++)
+            writer.write(expected[i].getBytes());
+        writer.close();
+
+        assert f.exists();
+
+        final ChannelProxy channel = new ChannelProxy(f);
+
+        final Runnable worker = new Runnable() {
+
+            @Override
+            public void run()
+            {
+                try
+                {
+                    RandomAccessReader reader = RandomAccessReader.open(channel);
+                    assertEquals(totalLength, reader.length());
+
+                    ByteBuffer b = reader.readBytes(expected[0].length());
+                    assertEquals(expected[0], new String(b.array(), Charset.forName("UTF-8")));
+
+                    assertFalse(reader.isEOF());
+                    assertEquals(totalLength - expected[0].length(), reader.bytesRemaining());
+
+                    long filePointer = reader.getFilePointer();
+
+                    for (int i = 1; i < expected.length; i++)
+                    {
+                        b = reader.readBytes(expected[i].length());
+                        assertEquals(expected[i], new String(b.array(), Charset.forName("UTF-8")));
+                    }
+                    assertTrue(reader.isEOF());
+
+                    reader.seek(filePointer);
+                    assertFalse(reader.isEOF());
+                    for (int i = 1; i < expected.length; i++)
+                    {
+                        b = reader.readBytes(expected[i].length());
+                        assertEquals(expected[i], new String(b.array(), Charset.forName("UTF-8")));
+                    }
+
+                    assertTrue(reader.isEOF());
+                    reader.close();
+                }
+                catch (Exception ex)
+                {
+                    ex.printStackTrace();
+                    fail(ex.getMessage());
+                }
+            }
+        };
+
+        if(numThreads == 1)
+        {
+            worker.run();
+            return;
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        for (int i = 0; i < numThreads; i++)
+            executor.submit(worker);
+
+        executor.shutdown();
+        executor.awaitTermination(1, TimeUnit.MINUTES);
+
+        channel.close();
+    }
+
