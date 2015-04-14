@@ -1,0 +1,35 @@
+    @Test
+    public void revokeExecutePermissionsOnAggregateComponents() throws Throwable
+    {
+        String sFunc = createSimpleStateFunction();
+        String fFunc = createSimpleFinalFunction();
+        String aggDef = aggregateCql(sFunc, fFunc);
+        grantExecuteOnFunction(sFunc);
+        grantExecuteOnFunction(fFunc);
+
+        String aggregate = createAggregate(KEYSPACE, "int", aggDef);
+        grantExecuteOnFunction(aggregate);
+
+        String cql = String.format("SELECT %s(v1) FROM %s",
+                                   aggregate,
+                                   KEYSPACE + "." + currentTable());
+        getStatement(cql).checkAccess(clientState);
+
+        // check that revoking EXECUTE permission on any one of the
+        // component functions means we lose the ability to execute it
+        revokeExecuteOnFunction(aggregate);
+        assertUnauthorized(cql, aggregate, "int");
+        grantExecuteOnFunction(aggregate);
+        getStatement(cql).checkAccess(clientState);
+
+        revokeExecuteOnFunction(sFunc);
+        assertUnauthorized(cql, sFunc, "int, int");
+        grantExecuteOnFunction(sFunc);
+        getStatement(cql).checkAccess(clientState);
+
+        revokeExecuteOnFunction(fFunc);
+        assertUnauthorized(cql, fFunc, "int");
+        grantExecuteOnFunction(fFunc);
+        getStatement(cql).checkAccess(clientState);
+    }
+
