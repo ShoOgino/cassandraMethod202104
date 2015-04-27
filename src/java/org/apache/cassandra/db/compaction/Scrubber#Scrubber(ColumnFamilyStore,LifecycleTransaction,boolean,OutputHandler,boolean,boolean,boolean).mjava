@@ -1,0 +1,59 @@
+    @SuppressWarnings("resource")
+    public Scrubber(ColumnFamilyStore cfs,
+                    LifecycleTransaction transaction,
+                    boolean skipCorrupted,
+                    OutputHandler outputHandler,
+                    boolean isOffline,
+                    boolean checkData,
+                    boolean keepOriginals) throws IOException
+    {
+        this.cfs = cfs;
+        this.transaction = transaction;
+        this.sstable = transaction.onlyOne();
+        this.outputHandler = outputHandler;
+        this.skipCorrupted = skipCorrupted;
+        this.isOffline = isOffline;
+        this.keepOriginals = keepOriginals;
+        this.rowIndexEntrySerializer = sstable.descriptor.version.getSSTableFormat().getIndexSerializer(sstable.metadata,
+                                                                                                        sstable.descriptor.version,
+                                                                                                        sstable.header);
+
+        List<SSTableReader> toScrub = Collections.singletonList(sstable);
+
+        // Calculate the expected compacted filesize
+        this.destination = cfs.directories.getWriteableLocationAsFile(cfs.getExpectedCompactedFileSize(toScrub, OperationType.SCRUB));
+        if (destination == null)
+            throw new IOException("disk full");
+
+        this.isCommutative = cfs.metadata.isCounter();
+
+        boolean hasIndexFile = (new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX))).exists();
+        this.isIndex = cfs.isIndex();
+        if (!hasIndexFile)
+        {
+            // if there's any corruption in the -Data.db then rows can't be skipped over. but it's worth a shot.
+            outputHandler.warn("Missing component: " + sstable.descriptor.filenameFor(Component.PRIMARY_INDEX));
+        }
+        this.checkData = checkData && !this.isIndex; //LocalByPartitionerType does not support validation
+        this.expectedBloomFilterSize = Math.max(
+            cfs.metadata.getMinIndexInterval(),
+            hasIndexFile ? (int)(SSTableReader.getApproximateKeyCount(toScrub)) : 0);
+
+        // loop through each row, deserializing to check for damage.
+        // we'll also loop through the index at the same time, using the position from the index to recover if the
+        // row header (key or data size) is corrupt. (This means our position in the index file will be one row
+        // "ahead" of the data file.)
+        this.dataFile = isOffline
+                        ? sstable.openDataReader()
+                        : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
+
+        this.indexFile = hasIndexFile
+                ? RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)))
+                : null;
+
+        this.scrubInfo = new ScrubInfo(dataFile, sstable);
+
+        this.currentRowPositionFromIndex = 0;
+        this.nextRowPositionFromIndex = 0;
+    }
+

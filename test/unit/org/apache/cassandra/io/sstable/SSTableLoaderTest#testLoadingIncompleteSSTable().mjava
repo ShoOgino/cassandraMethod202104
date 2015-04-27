@@ -1,0 +1,47 @@
+    @Test
+    public void testLoadingIncompleteSSTable() throws Exception
+    {
+        File dataDir = new File(tmpdir.getAbsolutePath() + File.separator + KEYSPACE1 + File.separator + CF_STANDARD2);
+        assert dataDir.mkdirs();
+
+        //make sure we have no tables...
+        assertTrue(dataDir.listFiles().length == 0);
+
+        String schema = "CREATE TABLE %s.%s (key ascii, name ascii, val ascii, val1 ascii, PRIMARY KEY (key, name))";
+        String query = "INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)";
+
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .withPartitioner(StorageService.getPartitioner())
+                                                  .forTable(String.format(schema, KEYSPACE1, CF_STANDARD2))
+                                                  .using(String.format(query, KEYSPACE1, CF_STANDARD2))
+                                                  .withBufferSizeInMB(1)
+                                                  .build();
+
+        for (int i = 0; i < 1000; i++) // make sure to write more than 1 MB
+        {
+            for (int j = 0; j < 100; j++)
+                writer.addRow(String.format("key%d", i), String.format("col%d", j), "100");
+        }
+
+        //make sure we have some tables...
+        assertTrue(dataDir.listFiles().length > 0);
+
+        //writer is still open so loader should not load anything
+        SSTableLoader loader = new SSTableLoader(dataDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
+        loader.stream().get();
+
+        List<FilteredPartition> partitions = Util.getAll(Util.cmd(Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD2)).build());
+
+        assertTrue(partitions.size() > 0 && partitions.size() < 1000);
+
+        // now we complete the write and the second loader should load the last sstable as well
+        writer.close();
+
+        loader = new SSTableLoader(dataDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
+        loader.stream().get();
+
+        partitions = Util.getAll(Util.cmd(Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD2)).build());
+        assertEquals(1000, partitions.size());
+    }
+

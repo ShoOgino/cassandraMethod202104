@@ -6,45 +6,20 @@
     {
         Directories directories = new Directories(metadata);
 
-        // clear ephemeral snapshots that were not properly cleared last session (CASSANDRA-7357)
+         // clear ephemeral snapshots that were not properly cleared last session (CASSANDRA-7357)
         clearEphemeralSnapshots(directories);
 
-        // remove any left-behind SSTables from failed/stalled streaming
-        FileFilter filter = new FileFilter()
-        {
-            public boolean accept(File pathname)
-            {
-                return pathname.getPath().endsWith(StreamLockfile.FILE_EXT);
-            }
-        };
-        for (File dir : directories.getCFDirectories())
-        {
-            File[] lockfiles = dir.listFiles(filter);
-            // lock files can be null if I/O error happens
-            if (lockfiles == null || lockfiles.length == 0)
-                continue;
-            logger.info("Removing SSTables from failed streaming session. Found {} files to cleanup.", lockfiles.length);
+        logger.debug("Removing temporary or obsoleted files from unfinished operations for table", metadata.cfName);
+        LifecycleTransaction.removeUnfinishedLeftovers(metadata);
 
-            for (File lockfile : lockfiles)
-            {
-                StreamLockfile streamLockfile = new StreamLockfile(lockfile);
-                streamLockfile.cleanup();
-                streamLockfile.delete();
-            }
-        }
-
-        logger.debug("Removing compacted SSTable files from {} (see http://wiki.apache.org/cassandra/MemtableSSTable)", metadata.cfName);
-
+        logger.debug("Further extra check for orphan sstable files for {}", metadata.cfName);
         for (Map.Entry<Descriptor,Set<Component>> sstableFiles : directories.sstableLister().list().entrySet())
         {
             Descriptor desc = sstableFiles.getKey();
             Set<Component> components = sstableFiles.getValue();
 
-            if (desc.type.isTemporary)
-            {
-                SSTable.delete(desc, components);
-                continue;
-            }
+            for (File tmpFile : desc.getTemporaryFiles())
+                tmpFile.delete();
 
             File dataFile = new File(desc.filenameFor(Component.DATA));
             if (components.contains(Component.DATA) && dataFile.length() > 0)
@@ -55,7 +30,9 @@
             logger.warn("Removing orphans for {}: {}", desc, components);
             for (Component component : components)
             {
-                FileUtils.deleteWithConfirm(desc.filenameFor(component));
+                File file = new File(desc.filenameFor(component));
+                if (file.exists())
+                    FileUtils.deleteWithConfirm(desc.filenameFor(component));
             }
         }
 

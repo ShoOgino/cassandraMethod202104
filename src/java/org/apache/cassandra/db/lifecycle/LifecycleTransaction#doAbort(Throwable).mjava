@@ -6,15 +6,20 @@
         if (logger.isDebugEnabled())
             logger.debug("Aborting transaction over {}, with ({},{}) logged and ({},{}) staged", originals, logged.update, logged.obsolete, staged.update, staged.obsolete);
 
+        accumulate = abortObsoletion(obsoletions, accumulate);
+
         if (logged.isEmpty() && staged.isEmpty())
-            return accumulate;
+            return transactionLogs.abort(accumulate);
 
         // mark obsolete all readers that are not versions of those present in the original set
         Iterable<SSTableReader> obsolete = filterOut(concatUniq(staged.update, logged.update), originals);
         logger.debug("Obsoleting {}", obsolete);
-        // we don't pass the tracker in for the obsoletion, since these readers have never been notified externally
-        // nor had their size accounting affected
-        accumulate = markObsolete(null, obsolete, accumulate);
+
+        accumulate = prepareForObsoletion(obsolete, transactionLogs, obsoletions = new ArrayList<>(), accumulate);
+        // it's safe to abort even if committed, see maybeFail in doCommit() above, in this case it will just report
+        // a failure to abort, which is useful information to have for debug
+        accumulate = transactionLogs.abort(accumulate);
+        accumulate = markObsolete(obsoletions, accumulate);
 
         // replace all updated readers with a version restored to its original state
         accumulate = tracker.apply(updateLiveSet(logged.update, restoreUpdatedOriginals()), accumulate);
@@ -25,6 +30,7 @@
         // any _staged_ obsoletes should either be in staged.update already, and dealt with there,
         // or is still in its original form (so left as is); in either case no extra action is needed
         accumulate = release(selfRefs(concat(staged.update, logged.update, logged.obsolete)), accumulate);
+
         logged.clear();
         staged.clear();
         return accumulate;

@@ -4,16 +4,23 @@
     public Throwable doCommit(Throwable accumulate)
     {
         assert staged.isEmpty() : "must be no actions introduced between prepareToCommit and a commit";
-
         logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
+
+        // accumulate must be null if we have been used correctly, so fail immediately if it is not
+        maybeFail(accumulate);
+
+        // transaction log commit failure means we must abort; safe commit is not possible
+        maybeFail(transactionLogs.commit(null));
 
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
         // and notification status for the obsolete and new files
-        accumulate = markObsolete(tracker, logged.obsolete, accumulate);
+
+        accumulate = markObsolete(obsoletions, accumulate);
         accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);
         accumulate = release(selfRefs(logged.obsolete), accumulate);
-        accumulate = tracker.notifySSTablesChanged(originals, logged.update, operationType, accumulate);
+        accumulate = tracker.notifySSTablesChanged(originals, logged.update, transactionLogs.getType(), accumulate);
+
         return accumulate;
     }
 

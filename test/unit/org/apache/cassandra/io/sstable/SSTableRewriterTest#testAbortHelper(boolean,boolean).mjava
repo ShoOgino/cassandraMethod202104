@@ -15,13 +15,13 @@
              CompactionIterator ci = new CompactionIterator(OperationType.COMPACTION, Collections.singletonList(scanner), controller, FBUtilities.nowInSeconds(), UUIDGen.getTimeUUID())
         )
         {
-            rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
+            rewriter.switchWriter(getWriter(cfs, s.descriptor.directory, txn));
             while (ci.hasNext())
             {
                 rewriter.append(ci.next());
                 if (rewriter.currentWriter().getOnDiskFilePointer() > 25000000)
                 {
-                    rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
+                    rewriter.switchWriter(getWriter(cfs, s.descriptor.directory, txn));
                 }
             }
             try
@@ -40,9 +40,9 @@
                 s.selfRef().release();
         }
 
-        SSTableDeletingTask.waitForDeletions();
+        TransactionLogs.waitForDeletions();
 
-        int filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        int filecount = assertFileCounts(s.descriptor.directory.list());
         assertEquals(filecount, 1);
         if (!offline)
         {
@@ -55,7 +55,7 @@
             assertEquals(0, cfs.getSSTables().size());
             cfs.truncateBlocking();
         }
-        filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        filecount = assertFileCounts(s.descriptor.directory.list());
         if (offline)
         {
             // the file is not added to the CFS, therefore not truncated away above
@@ -64,7 +64,7 @@
             {
                 FileUtils.deleteRecursive(f);
             }
-            filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
+            filecount = assertFileCounts(s.descriptor.directory.list());
         }
 
         assertEquals(0, filecount);

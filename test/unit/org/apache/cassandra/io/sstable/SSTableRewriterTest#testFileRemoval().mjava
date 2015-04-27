@@ -6,7 +6,8 @@
         truncate(cfs);
 
         File dir = cfs.directories.getDirectoryForNewSSTables();
-        try (SSTableWriter writer = getWriter(cfs, dir))
+        LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE, cfs.metadata);
+        try (SSTableWriter writer = getWriter(cfs, dir, txn))
         {
             for (int i = 0; i < 10000; i++)
             {
@@ -18,7 +19,7 @@
 
             SSTableReader s = writer.setMaxDataAge(1000).openEarly();
             assert s != null;
-            assertFileCounts(dir.list(), 2, 2);
+            assertFileCounts(dir.list());
             for (int i = 10000; i < 20000; i++)
             {
                 UpdateBuilder builder = UpdateBuilder.create(cfs.metadata, random(i, 10)).withTimestamp(1);
@@ -28,20 +29,20 @@
             }
             SSTableReader s2 = writer.setMaxDataAge(1000).openEarly();
             assertTrue(s.last.compareTo(s2.last) < 0);
-            assertFileCounts(dir.list(), 2, 2);
-            s.markObsolete(cfs.getTracker());
+            assertFileCounts(dir.list());
             s.selfRef().release();
             s2.selfRef().release();
             // These checks don't work on Windows because the writer has the channel still
             // open till .abort() is called (via the builder)
             if (!FBUtilities.isWindows())
             {
-                SSTableDeletingTask.waitForDeletions();
-                assertFileCounts(dir.list(), 0, 2);
+                TransactionLogs.waitForDeletions();
+                assertFileCounts(dir.list());
             }
             writer.abort();
-            SSTableDeletingTask.waitForDeletions();
-            int datafiles = assertFileCounts(dir.list(), 0, 0);
+            txn.abort();
+            TransactionLogs.waitForDeletions();
+            int datafiles = assertFileCounts(dir.list());
             assertEquals(datafiles, 0);
             validateCFS(cfs);
         }
