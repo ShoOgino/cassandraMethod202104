@@ -5,7 +5,7 @@
         SSTableRewriter writer = new SSTableRewriter(cfs, oldSSTable, sstable.maxDataAge, isOffline);
         try
         {
-            ByteBuffer nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
+            nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
             {
                 // throw away variable so we don't have a side effect in the assert
                 long firstRowPositionFromIndex = rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
@@ -20,6 +20,7 @@
             {
                 if (scrubInfo.isStopRequested())
                     throw new CompactionInterruptedException(scrubInfo.getCompactionInfo());
+
                 long rowStart = dataFile.getFilePointer();
                 outputHandler.debug("Reading row at " + rowStart);
 
@@ -34,28 +35,17 @@
                     // check for null key below
                 }
 
-                ByteBuffer currentIndexKey = nextIndexKey;
-                long nextRowPositionFromIndex;
-                try
-                {
-                    nextIndexKey = indexFile.isEOF() ? null : ByteBufferUtil.readWithShortLength(indexFile);
-                    nextRowPositionFromIndex = indexFile.isEOF()
-                                             ? dataFile.length()
-                                             : rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
-                }
-                catch (Throwable th)
-                {
-                    JVMStabilityInspector.inspectThrowable(th);
-                    outputHandler.warn("Error reading index file", th);
-                    nextIndexKey = null;
-                    nextRowPositionFromIndex = dataFile.length();
-                }
+                updateIndexKey();
 
                 long dataStart = dataFile.getFilePointer();
-                long dataStartFromIndex = currentIndexKey == null
-                                        ? -1
-                                        : rowStart + 2 + currentIndexKey.remaining();
-                long dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+
+                long dataStartFromIndex = -1;
+                long dataSizeFromIndex = -1;
+                if (currentIndexKey != null)
+                {
+                    dataStartFromIndex = currentRowPositionFromIndex + 2 + currentIndexKey.remaining();
+                    dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+                }
 
                 long dataSize = dataSizeFromIndex;
                 // avoid an NPE if key is null
@@ -68,10 +58,24 @@
                 {
                     if (key == null)
                         throw new IOError(new IOException("Unable to read row key from data file"));
+
+                    if (!key.getKey().equals(currentIndexKey))
+                    {
+                        throw new IOError(new IOException(String.format("Key from data file (%s) does not match key from index file (%s)",
+                                ByteBufferUtil.bytesToHex(key.getKey()), ByteBufferUtil.bytesToHex(currentIndexKey))));
+                    }
+
                     if (dataSize > dataFile.length())
                         throw new IOError(new IOException("Impossible row size " + dataSize));
 
+                    if (dataStart != dataStartFromIndex)
+                        outputHandler.warn(String.format("Data file row position %d different from index file row position %d", dataStart, dataSizeFromIndex));
+
+                    if (dataSize != dataSizeFromIndex)
+                        outputHandler.warn(String.format("Data file row size %d different from index file row size %d", dataSize, dataSizeFromIndex));
+
                     SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, checkData);
+
                     if (prevKey != null && prevKey.compareTo(key) > 0)
                     {
                         saveOutOfOrderRow(prevKey, key, atoms);
@@ -83,9 +87,8 @@
                         emptyRows++;
                     else
                         goodRows++;
+
                     prevKey = key;
-                    if (!key.getKey().equals(currentIndexKey) || dataStart != dataStartFromIndex)
-                        outputHandler.warn("Index file contained a different key or row size; using key from data file");
                 }
                 catch (Throwable th)
                 {
@@ -100,6 +103,8 @@
                         key = sstable.partitioner.decorateKey(currentIndexKey);
                         try
                         {
+                            dataFile.seek(dataStartFromIndex);
+
                             SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, checkData);
                             if (prevKey != null && prevKey.compareTo(key) > 0)
                             {
@@ -112,6 +117,7 @@
                                 emptyRows++;
                             else
                                 goodRows++;
+
                             prevKey = key;
                         }
                         catch (Throwable th2)
@@ -120,8 +126,8 @@
                             throwIfCannotContinue(key, th2);
 
                             outputHandler.warn("Retry failed too. Skipping to next row (retry's stacktrace follows)", th2);
-                            dataFile.seek(nextRowPositionFromIndex);
                             badRows++;
+                            seekToNextRow();
                         }
                     }
                     else
@@ -129,9 +135,9 @@
                         throwIfCannotContinue(key, th);
 
                         outputHandler.warn("Row starting at position " + dataStart + " is unreadable; skipping to next");
-                        if (currentIndexKey != null)
-                            dataFile.seek(nextRowPositionFromIndex);
                         badRows++;
+                        if (currentIndexKey != null)
+                            seekToNextRow();
                     }
                 }
             }
