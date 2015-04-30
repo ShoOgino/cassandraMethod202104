@@ -8,6 +8,8 @@
         this.replayedCount = new AtomicInteger();
         this.checksum = new PureJavaCrc32();
 
+        replayFilter = ReplayFilter.create();
+
         // compute per-CF and global replay positions
         cfPositions = new HashMap<UUID, ReplayPosition>();
         Ordering<ReplayPosition> replayPositionOrdering = Ordering.from(ReplayPosition.comparator);
@@ -21,7 +23,27 @@
             // but, if we've truncted the cf in question, then we need to need to start replay after the truncation
             ReplayPosition truncatedAt = SystemKeyspace.getTruncatedPosition(cfs.metadata.cfId);
             if (truncatedAt != null)
-                rp = replayPositionOrdering.max(Arrays.asList(rp, truncatedAt));
+            {
+                // Point in time restore is taken to mean that the tables need to be recovered even if they were
+                // deleted at a later point in time. Any truncation record after that point must thus be cleared prior
+                // to recovery (CASSANDRA-9195).
+                long restoreTime = CommitLog.instance.archiver.restorePointInTime;
+                long truncatedTime = SystemKeyspace.getTruncatedAt(cfs.metadata.cfId);
+                if (truncatedTime > restoreTime)
+                {
+                    if (replayFilter.includes(cfs.metadata))
+                    {
+                        logger.info("Restore point in time is before latest truncation of table {}.{}. Clearing truncation record.",
+                                    cfs.metadata.ksName,
+                                    cfs.metadata.cfName);
+                        SystemKeyspace.removeTruncationRecord(cfs.metadata.cfId);
+                    }
+                }
+                else
+                {
+                    rp = replayPositionOrdering.max(Arrays.asList(rp, truncatedAt));
+                }
+            }
 
             cfPositions.put(cfs.metadata.cfId, rp);
         }
