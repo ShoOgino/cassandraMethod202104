@@ -1,0 +1,43 @@
+    @Test
+    public void testTruncatePointInTime() throws IOException
+    {
+        Keyspace keyspace = Keyspace.open("Keyspace1");
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore("Standard1");
+
+        Mutation rm;
+        ColumnFamily cf;
+
+        // add a single cell
+        cf = ArrayBackedSortedColumns.factory.create("Keyspace1", "Standard1");
+        cf.addColumn(column("col2", "val1", 1L));
+        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("keymulti"), cf);
+        rm.apply();
+
+        // Make sure data was written
+        long time = System.currentTimeMillis();
+        assertNotNull(getFromTable(keyspace, "Standard1", "keymulti", "col2"));
+
+        // and now truncate it
+        cfs.truncateBlocking();
+
+        // verify truncation
+        assertNull(getFromTable(keyspace, "Standard1", "keymulti", "col2"));
+
+        try
+        {
+            // Restore to point in time.
+            CommitLog.instance.archiver.restorePointInTime = time;
+            CommitLog.instance.resetUnsafe();
+            CommitLog.instance.recover();
+        }
+        finally
+        {
+            CommitLog.instance.archiver.restorePointInTime = Long.MAX_VALUE;
+        }
+
+        // Validate pre-truncation data was restored.
+        assertNotNull(getFromTable(keyspace, "Standard1", "keymulti", "col2"));
+        // And that we don't have a truncation record after restore time.
+        assertFalse(SystemKeyspace.getTruncatedAt(cfs.metadata.cfId) > time);
+    }
+
