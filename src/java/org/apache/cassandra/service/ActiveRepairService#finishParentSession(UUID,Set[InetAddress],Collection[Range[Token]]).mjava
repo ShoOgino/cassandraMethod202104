@@ -1,19 +1,21 @@
-    public void finishParentSession(UUID parentSession, Set<InetAddress> neighbors, Collection<Range<Token>> successfulRanges)
+    /**
+     * Run final process of repair.
+     * This removes all resources held by parent repair session, after performing anti compaction if necessary.
+     *
+     * @param parentSession Parent session ID
+     * @param neighbors Repair participants (not including self)
+     * @param successfulRanges Ranges that repaired successfully
+     * @throws InterruptedException
+     * @throws ExecutionException
+     */
+    public synchronized void finishParentSession(UUID parentSession, Set<InetAddress> neighbors, Collection<Range<Token>> successfulRanges) throws InterruptedException, ExecutionException
     {
-        try
+        for (InetAddress neighbor : neighbors)
         {
-            for (InetAddress neighbor : neighbors)
-            {
-                AnticompactionRequest acr = new AnticompactionRequest(parentSession, successfulRanges);
-                MessageOut<RepairMessage> req = acr.createMessage();
-                MessagingService.instance().sendOneWay(req, neighbor);
-            }
-            List<Future<?>> futures = doAntiCompaction(parentSession, successfulRanges);
-            FBUtilities.waitOnFutures(futures);
+            AnticompactionRequest acr = new AnticompactionRequest(parentSession, successfulRanges);
+            MessageOut<RepairMessage> req = acr.createMessage();
+            MessagingService.instance().sendOneWay(req, neighbor);
         }
-        finally
-        {
-            parentRepairSessions.remove(parentSession);
-        }
+        doAntiCompaction(parentSession, successfulRanges).get();
     }
 
