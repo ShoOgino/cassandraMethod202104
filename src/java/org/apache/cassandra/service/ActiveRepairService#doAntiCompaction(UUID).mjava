@@ -1,9 +1,16 @@
-    public List<Future<?>> doAntiCompaction(UUID parentRepairSession) throws InterruptedException, ExecutionException, IOException
+    /**
+     * Submit anti-compaction jobs to CompactionManager.
+     * When all jobs are done, parent repair session is removed whether those are suceeded or not.
+     *
+     * @param parentRepairSession parent repair session ID
+     * @return Future result of all anti-compaction jobs.
+     */
+    public ListenableFuture<List<Object>> doAntiCompaction(final UUID parentRepairSession)
     {
         assert parentRepairSession != null;
         ParentRepairSession prs = getParentRepairSession(parentRepairSession);
 
-        List<Future<?>> futures = new ArrayList<>();
+        List<ListenableFuture<?>> futures = new ArrayList<>();
         for (Map.Entry<UUID, ColumnFamilyStore> columnFamilyStoreEntry : prs.columnFamilyStores.entrySet())
         {
             Refs<SSTableReader> sstables = prs.getAndReferenceSSTables(columnFamilyStoreEntry.getKey());
@@ -11,6 +18,16 @@
             futures.add(CompactionManager.instance.submitAntiCompaction(cfs, prs.ranges, sstables, prs.repairedAt));
         }
 
-        return futures;
+        ListenableFuture<List<Object>> allAntiCompactionResults = Futures.successfulAsList(futures);
+        allAntiCompactionResults.addListener(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                removeParentRepairSession(parentRepairSession);
+            }
+        }, MoreExecutors.sameThreadExecutor());
+
+        return allAntiCompactionResults;
     }
 
