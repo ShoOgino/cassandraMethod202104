@@ -1,0 +1,44 @@
+    public void checkDelayedValuesCorrectlyIdentifyFunctionsInUse(boolean dropKeyspace) throws Throwable
+    {
+        // prepare a statement which doesn't use any function for a control
+        createTable("CREATE TABLE %s (" +
+                    " key int PRIMARY KEY," +
+                    " val double)");
+        ResultMessage.Prepared control = QueryProcessor.prepare(
+                                                               String.format("INSERT INTO %s.%s (key, val) VALUES (?, ?)",
+                                                                            KEYSPACE,
+                                                                            currentTable()),
+                                                               ClientState.forInternalCalls(), false);
+        Assert.assertNotNull(QueryProcessor.instance.getPrepared(control.statementId));
+
+        // a function that we'll drop and verify that statements which use it to
+        // provide a DelayedValue are removed from the cache in QueryProcessor
+        String function = createFunction(KEYSPACE_PER_TEST, "double",
+                                        "CREATE FUNCTION %s ( input double ) " +
+                                        "RETURNS double " +
+                                        "LANGUAGE javascript " +
+                                        "AS 'input'");
+        Assert.assertEquals(1, Functions.find(parseFunctionName(function)).size());
+
+        List<ResultMessage.Prepared> prepared = new ArrayList<>();
+        // prepare statements which use the function to provide a DelayedValue
+        prepared.add(prepareStatementWithDelayedValue(CollectionType.Kind.LIST, function));
+        prepared.add(prepareStatementWithDelayedValue(CollectionType.Kind.SET, function));
+        prepared.add(prepareStatementWithDelayedValue(CollectionType.Kind.MAP, function));
+        prepared.add(prepareStatementWithDelayedValueTuple(function));
+
+        // what to drop - the function is scoped to the per-test keyspace, but the prepared statements
+        // select from the per-fixture keyspace. So if we drop the per-test keyspace, the function
+        // should be removed along with the statements that reference it. The control statement should
+        // remain present in the cache. Likewise, if we actually drop the function itself the control
+        // statement should not be removed, but the others should be
+        if (dropKeyspace)
+            dropPerTestKeyspace();
+        else
+            execute("DROP FUNCTION " + function);
+
+        Assert.assertNotNull(QueryProcessor.instance.getPrepared(control.statementId));
+        for (ResultMessage.Prepared removed : prepared)
+            Assert.assertNull(QueryProcessor.instance.getPrepared(removed.statementId));
+    }
+
