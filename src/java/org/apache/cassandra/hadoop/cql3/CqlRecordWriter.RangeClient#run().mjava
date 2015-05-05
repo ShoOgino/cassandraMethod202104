@@ -17,25 +17,54 @@
                     continue;
                 }
 
-                Iterator<InetAddress> iter = endpoints.iterator();
+                ListIterator<InetAddress> iter = endpoints.listIterator();
                 while (true)
                 {
                     // send the mutation to the last-used endpoint.  first time through, this will NPE harmlessly.
+
+                    // attempt to connect to a different endpoint
+                    try
+                    {
+                        InetAddress address = iter.next();
+                        String host = address.getHostName();
+                        client = CqlConfigHelper.getOutputCluster(host, conf).connect();
+                    }
+                    catch (Exception e)
+                    {
+                        //If connection died due to Interrupt, just try connecting to the endpoint again.
+                        if (Thread.interrupted()) {
+                            lastException = new IOException(e);
+                            iter.previous();
+                        }
+                        closeInternal();
+
+                        // Most exceptions mean something unexpected went wrong to that endpoint, so
+                        // we should try again to another.  Other exceptions (auth or invalid request) are fatal.
+                        if ((e instanceof AuthenticationException || e instanceof InvalidQueryException) || !iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+
                     try
                     {
                         int i = 0;
-                        int itemId = preparedStatement(client);
+                        PreparedStatement statement = preparedStatement(client);
                         while (bindVariables != null)
                         {
-                            client.execute_prepared_cql3_query(itemId, bindVariables, ConsistencyLevel.ONE);
+                            BoundStatement boundStatement = new BoundStatement(statement);
+                            for (int columnPosition = 0; columnPosition < bindVariables.size(); columnPosition++)
+                            {
+                                boundStatement.setBytesUnsafe(columnPosition, bindVariables.get(columnPosition));
+                            }
+                            client.execute(boundStatement);
                             i++;
                             
                             if (i >= batchThreshold)
                                 break;
-                            
                             bindVariables = queue.poll();
                         }
-                        
                         break;
                     }
                     catch (Exception e)
@@ -48,28 +77,8 @@
                         }
                     }
 
-                    // attempt to connect to a different endpoint
-                    try
-                    {
-                        InetAddress address = iter.next();
-                        String host = address.getHostName();
-                        int port = ConfigHelper.getOutputRpcPort(conf);
-                        client = CqlOutputFormat.createAuthenticatedClient(host, port, conf);
-                    }
-                    catch (Exception e)
-                    {
-                        closeInternal();
-                        // TException means something unexpected went wrong to that endpoint, so
-                        // we should try again to another.  Other exceptions (auth or invalid request) are fatal.
-                        if ((!(e instanceof TException)) || !iter.hasNext())
-                        {
-                            lastException = new IOException(e);
-                            break outer;
-                        }
-                    }
                 }
             }
-
             // close all our connections once we are done.
             closeInternal();
         }

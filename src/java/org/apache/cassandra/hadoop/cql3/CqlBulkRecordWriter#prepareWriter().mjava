@@ -1,36 +1,30 @@
     private void prepareWriter() throws IOException
     {
-        try
+        if (writer == null)
         {
-            if (writer == null)
-            {
-                writer = CQLSSTableWriter.builder()
-                    .forTable(schema)
-                    .using(insertStatement)
-                    .withPartitioner(ConfigHelper.getOutputPartitioner(conf))
-                    .inDirectory(outputDir)
-                    .withBufferSizeInMB(Integer.parseInt(conf.get(BUFFER_SIZE_IN_MB, "64")))
-                    .build();
-            }
-            if (loader == null)
-            {
-                ExternalClient externalClient = new ExternalClient(conf);
-                
-                externalClient.addKnownCfs(keyspace, schema);
-
-                this.loader = new SSTableLoader(outputDir, externalClient, new BulkRecordWriter.NullOutputHandler()) {
-                    @Override
-                    public void onSuccess(StreamState finalState)
-                    {
-                        if (deleteSrc)
-                            FileUtils.deleteRecursive(outputDir);
-                    }
-                };
-            }
+            writer = CQLSSTableWriter.builder()
+                                     .forTable(schema)
+                                     .using(insertStatement)
+                                     .withPartitioner(ConfigHelper.getOutputPartitioner(conf))
+                                     .inDirectory(outputDir)
+                                     .withBufferSizeInMB(Integer.parseInt(conf.get(BUFFER_SIZE_IN_MB, "64")))
+                                     .build();
         }
-        catch (Exception e)
+
+        if (loader == null)
         {
-            throw new IOException(e);
-        }      
+            ExternalClient externalClient = new ExternalClient(conf);
+            externalClient.setTableMetadata(CFMetaData.compile(schema, keyspace));
+
+            loader = new SSTableLoader(outputDir, externalClient, new BulkRecordWriter.NullOutputHandler())
+            {
+                @Override
+                public void onSuccess(StreamState finalState)
+                {
+                    if (deleteSrc)
+                        FileUtils.deleteRecursive(outputDir);
+                }
+            };
+        }
     }
 

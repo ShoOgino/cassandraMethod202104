@@ -1,6 +1,6 @@
     /**
      * If the key is to be associated with a valid value, a mutation is created
-     * for it with the given column family and columns. In the event the value
+     * for it with the given table and columns. In the event the value
      * in the column is missing (i.e., null), then it is marked for
      * {@link Deletion}. Similarly, if the entire value for a key is missing
      * (i.e., null), then the entire key is marked for {@link Deletion}.
@@ -15,25 +15,25 @@
     @Override
     public void write(Map<String, ByteBuffer> keyColumns, List<ByteBuffer> values) throws IOException
     {
-        Range<Token> range = ringCache.getRange(getPartitionKey(keyColumns));
+        TokenRange range = ringCache.getRange(getPartitionKey(keyColumns));
 
         // get the client for the given range, or create a new one
-	final InetAddress address = ringCache.getEndpoint(range).get(0);
+	final InetAddress address = ringCache.getEndpoints(range).get(0);
         RangeClient client = clients.get(address);
         if (client == null)
         {
             // haven't seen keys for this range: create new client
-            client = new RangeClient(ringCache.getEndpoint(range));
+            client = new RangeClient(ringCache.getEndpoints(range));
             client.start();
             clients.put(address, client);
         }
 
         // add primary key columns to the bind variables
         List<ByteBuffer> allValues = new ArrayList<ByteBuffer>(values);
-        for (String column : partitionKeyColumns)
-            allValues.add(keyColumns.get(column));
-        for (String column : clusterColumns)
-            allValues.add(keyColumns.get(column));
+        for (ColumnMetadata column : partitionKeyColumns)
+            allValues.add(keyColumns.get(column.getName()));
+        for (ColumnMetadata column : clusterColumns)
+            allValues.add(keyColumns.get(column.getName()));
 
         client.put(allValues);
 
