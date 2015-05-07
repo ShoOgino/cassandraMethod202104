@@ -10,11 +10,11 @@
         boolean isEmpty = true;
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(cfs.viewFilter(filter.key));
+        DeletionInfo returnDeletionInfo = container.deletionInfo();
 
         try
         {
             Tracing.trace("Merging memtable contents");
-            long mostRecentRowTombstone = Long.MIN_VALUE;
             for (Memtable memtable : view.memtables)
             {
                 ColumnFamily cf = memtable.getColumnFamily(filter.key);
@@ -31,7 +31,6 @@
                         container.addColumn(cell);
                     }
                 }
-                mostRecentRowTombstone = container.deletionInfo().getTopLevelDeletion().markedForDeleteAt;
             }
 
             // avoid changing the filter columns of the original filter
@@ -49,7 +48,7 @@
                 // if we've already seen a row tombstone with a timestamp greater
                 // than the most recent update to this sstable, we're done, since the rest of the sstables
                 // will also be older
-                if (sstable.getMaxTimestamp() < mostRecentRowTombstone)
+                if (sstable.getMaxTimestamp() < returnDeletionInfo.getTopLevelDeletion().markedForDeleteAt)
                     break;
 
                 long currentMaxTs = sstable.getMaxTimestamp();
@@ -69,7 +68,6 @@
                     while (iter.hasNext())
                         container.addAtom(iter.next());
                 }
-                mostRecentRowTombstone = container.deletionInfo().getTopLevelDeletion().markedForDeleteAt;
             }
 
             // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
