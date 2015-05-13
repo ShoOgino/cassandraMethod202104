@@ -1,0 +1,46 @@
+    private LoadingCache<RoleResource, Set<RoleResource>> initCache(LoadingCache<RoleResource, Set<RoleResource>> existing)
+    {
+        if (DatabaseDescriptor.getAuthenticator() instanceof AllowAllAuthenticator)
+            return null;
+
+        if (DatabaseDescriptor.getRolesValidity() <= 0)
+            return null;
+
+        LoadingCache<RoleResource, Set<RoleResource>> newcache = CacheBuilder.newBuilder()
+                .refreshAfterWrite(DatabaseDescriptor.getRolesUpdateInterval(), TimeUnit.MILLISECONDS)
+                .expireAfterWrite(DatabaseDescriptor.getRolesValidity(), TimeUnit.MILLISECONDS)
+                .maximumSize(DatabaseDescriptor.getRolesCacheMaxEntries())
+                .build(new CacheLoader<RoleResource, Set<RoleResource>>()
+                {
+                    public Set<RoleResource> load(RoleResource primaryRole)
+                    {
+                        return roleManager.getRoles(primaryRole, true);
+                    }
+
+                    public ListenableFuture<Set<RoleResource>> reload(final RoleResource primaryRole,
+                                                                      final Set<RoleResource> oldValue)
+                    {
+                        ListenableFutureTask<Set<RoleResource>> task;
+                        task = ListenableFutureTask.create(new Callable<Set<RoleResource>>()
+                        {
+                            public Set<RoleResource> call() throws Exception
+                            {
+                                try
+                                {
+                                    return roleManager.getRoles(primaryRole, true);
+                                } catch (Exception e)
+                                {
+                                    logger.debug("Error performing async refresh of user roles", e);
+                                    throw e;
+                                }
+                            }
+                        });
+                        cacheRefreshExecutor.execute(task);
+                        return task;
+                    }
+                });
+        if (existing != null)
+            newcache.putAll(existing.asMap());
+        return newcache;
+    }
+
