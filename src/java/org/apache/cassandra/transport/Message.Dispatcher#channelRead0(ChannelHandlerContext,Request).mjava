@@ -9,12 +9,15 @@
             {
                 assert request.connection() instanceof ServerConnection;
                 connection = (ServerConnection)request.connection();
+                if (connection.getVersion() >= Server.VERSION_4)
+                    ClientWarn.captureWarnings();
+
                 QueryState qstate = connection.validateNewMessage(request.type, connection.getVersion(), request.getStreamId());
 
                 logger.debug("Received: {}, v={}", request, connection.getVersion());
-
                 response = request.execute(qstate);
                 response.setStreamId(request.getStreamId());
+                response.setWarnings(ClientWarn.getWarnings());
                 response.attach(connection);
                 connection.applyStateTransition(request.type, response.type);
             }
@@ -24,6 +27,10 @@
                 UnexpectedChannelExceptionHandler handler = new UnexpectedChannelExceptionHandler(ctx.channel(), true);
                 flush(new FlushItem(ctx, ErrorMessage.fromException(t, handler).setStreamId(request.getStreamId()), request.getSourceFrame()));
                 return;
+            }
+            finally
+            {
+                ClientWarn.resetWarnings();
             }
 
             logger.debug("Responding: {}, v={}", response, connection.getVersion());
