@@ -10,13 +10,22 @@
         // simple creation
         String fSin = createFunction(KEYSPACE_PER_TEST, "double",
                                      "CREATE FUNCTION %s ( input double ) " +
+                                     "CALLED ON NULL INPUT " +
                                      "RETURNS double " +
                                      "LANGUAGE java " +
                                      "AS 'return Math.sin(input);'");
         // check we can't recreate the same function
-        assertInvalidMessage("already exists", "CREATE FUNCTION " + fSin + " ( input double ) RETURNS double LANGUAGE java AS 'return Math.sin(input);'");
+        assertInvalidMessage("already exists",
+                             "CREATE FUNCTION " + fSin + " ( input double ) " +
+                             "CALLED ON NULL INPUT " +
+                             "RETURNS double " +
+                             "LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
+
         // but that it doesn't comply with "IF NOT EXISTS"
-        execute("CREATE FUNCTION IF NOT EXISTS " + fSin + " ( input double ) RETURNS double LANGUAGE java AS 'return Math.sin(input);'");
+        execute("CREATE FUNCTION IF NOT EXISTS " + fSin + " ( input double ) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS double " +
+                "LANGUAGE java AS 'return Double.valueOf(Math.sin(input.doubleValue()));'");
 
         // Validate that it works as expected
         assertRows(execute("SELECT key, " + fSin + "(d) FROM %s"),
@@ -27,9 +36,16 @@
 
         // Replace the method with incompatible return type
         assertInvalidMessage("the new return type text is not compatible with the return type double of existing function",
-                             "CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) RETURNS text LANGUAGE java AS 'return Double.valueOf(42d);'");
+                             "CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) " +
+                             "CALLED ON NULL INPUT " +
+                             "RETURNS text " +
+                             "LANGUAGE java AS 'return Double.valueOf(42d);'");
+
         // proper replacement
-        execute("CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) RETURNS double LANGUAGE java AS 'return Double.valueOf(42d);'");
+        execute("CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS double " +
+                "LANGUAGE java AS 'return Double.valueOf(42d);'");
 
         // Validate the method as been replaced
         assertRows(execute("SELECT key, " + fSin + "(d) FROM %s"),
@@ -41,6 +57,7 @@
         // same function but other keyspace
         String fSin2 = createFunction(KEYSPACE, "double",
                                       "CREATE FUNCTION %s ( input double ) " +
+                                      "RETURNS NULL ON NULL INPUT " +
                                       "RETURNS double " +
                                       "LANGUAGE java " +
                                       "AS 'return Math.sin(input);'");
