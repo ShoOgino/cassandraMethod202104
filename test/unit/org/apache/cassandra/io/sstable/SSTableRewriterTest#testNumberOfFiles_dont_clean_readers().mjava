@@ -10,13 +10,14 @@
 
         Set<SSTableReader> compacting = Sets.newHashSet(s);
         SSTableRewriter.overrideOpenInterval(10000000);
-        SSTableRewriter rewriter = new SSTableRewriter(cfs, compacting, 1000, false);
-        rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
 
+        List<SSTableReader> sstables;
         int files = 1;
-        try (ISSTableScanner scanner = s.getScanner();
+        try (SSTableRewriter rewriter = new SSTableRewriter(cfs, compacting, 1000, false);
+             ISSTableScanner scanner = s.getScanner();
              CompactionController controller = new CompactionController(cfs, compacting, 0))
         {
+            rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
             while(scanner.hasNext())
             {
                 rewriter.append(new LazilyCompactedRow(controller, Arrays.asList(scanner.next())));
@@ -27,14 +28,9 @@
                     assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
                 }
             }
-        }
-        catch (Throwable t)
-        {
-            rewriter.abort();
-            throw t;
+            sstables = rewriter.finish();
         }
 
-        List<SSTableReader> sstables = rewriter.finish();
         assertEquals(files, sstables.size());
         assertEquals(files, cfs.getSSTables().size());
         assertEquals(1, cfs.getDataTracker().getView().shadowed.size());

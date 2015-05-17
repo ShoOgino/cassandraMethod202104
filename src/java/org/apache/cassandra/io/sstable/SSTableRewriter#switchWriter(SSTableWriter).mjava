@@ -1,32 +1,23 @@
     public void switchWriter(SSTableWriter newWriter)
     {
-        if (writer == null)
+        if (writer == null || writer.getFilePointer() == 0)
         {
+            if (writer != null)
+                writer.abort();
             writer = newWriter;
             return;
         }
 
-        if (writer.getFilePointer() != 0)
+        SSTableReader reader = null;
+        if (preemptiveOpenInterval != Long.MAX_VALUE)
         {
-            // If early re-open is disabled, simply finalize the writer and store it
-            if (preemptiveOpenInterval == Long.MAX_VALUE)
-            {
-                SSTableReader reader = writer.finish(SSTableWriter.FinishType.NORMAL, maxAge, -1);
-                finishedReaders.add(reader);
-            }
-            else
-            {
-                // we leave it as a tmp file, but we open it and add it to the dataTracker
-                SSTableReader reader = writer.finish(SSTableWriter.FinishType.EARLY, maxAge, -1);
-                replaceEarlyOpenedFile(currentlyOpenedEarly, reader);
-                moveStarts(reader, reader.last, false);
-                finishedEarly.add(new Finished(writer, reader));
-            }
+            // we leave it as a tmp file, but we open it and add it to the dataTracker
+            reader = writer.setMaxDataAge(maxAge).openFinalEarly();
+            replaceEarlyOpenedFile(currentlyOpenedEarly, reader);
+            moveStarts(reader, reader.last, false);
         }
-        else
-        {
-            writer.abort();
-        }
+        finishedWriters.add(new Finished(writer, reader));
+
         currentlyOpenedEarly = null;
         currentlyOpenedEarlyAt = 0;
         writer = newWriter;
