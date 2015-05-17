@@ -1,0 +1,34 @@
+    /**
+     * Save index summary to Summary.db file.
+     */
+    public static void saveSummary(Descriptor descriptor, DecoratedKey first, DecoratedKey last,
+                                   SegmentedFile.Builder ibuilder, SegmentedFile.Builder dbuilder, IndexSummary summary)
+    {
+        File summariesFile = new File(descriptor.filenameFor(Component.SUMMARY));
+        if (summariesFile.exists())
+            FileUtils.deleteWithConfirm(summariesFile);
+
+        DataOutputStreamPlus oStream = null;
+        try
+        {
+            oStream = new BufferedDataOutputStreamPlus(new FileOutputStream(summariesFile));
+            IndexSummary.serializer.serialize(summary, oStream, descriptor.version.hasSamplingLevel());
+            ByteBufferUtil.writeWithLength(first.getKey(), oStream);
+            ByteBufferUtil.writeWithLength(last.getKey(), oStream);
+            ibuilder.serializeBounds(oStream);
+            dbuilder.serializeBounds(oStream);
+        }
+        catch (IOException e)
+        {
+            logger.debug("Cannot save SSTable Summary: ", e);
+
+            // corrupted hence delete it and let it load it now.
+            if (summariesFile.exists())
+                FileUtils.deleteWithConfirm(summariesFile);
+        }
+        finally
+        {
+            FileUtils.closeQuietly(oStream);
+        }
+    }
+
