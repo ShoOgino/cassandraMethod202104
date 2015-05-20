@@ -1,3 +1,4 @@
+    @SuppressWarnings("resource")
     private AllSSTableOpStatus parallelAllSSTableOperation(final ColumnFamilyStore cfs, final OneSSTableOperation operation, OperationType operationType) throws ExecutionException, InterruptedException
     {
         try (LifecycleTransaction compacting = cfs.markAllCompacting(operationType);)
@@ -14,7 +15,8 @@
             }
 
             Iterable<SSTableReader> sstables = operation.filterSSTables(compacting.originals());
-            List<Future<Object>> futures = new ArrayList<>();
+            List<Pair<LifecycleTransaction,Future<Object>>> futures = new ArrayList<>();
+
 
             for (final SSTableReader sstable : sstables)
             {
@@ -25,7 +27,7 @@
                 }
 
                 final LifecycleTransaction txn = compacting.split(singleton(sstable));
-                futures.add(executor.submit(new Callable<Object>()
+                futures.add(Pair.create(txn,executor.submit(new Callable<Object>()
                 {
                     @Override
                     public Object call() throws Exception
@@ -33,13 +35,37 @@
                         operation.execute(txn);
                         return this;
                     }
-                }));
+                })));
             }
 
             assert compacting.originals().isEmpty();
 
-            for (Future<Object> f : futures)
-                f.get();
+
+            //Collect all exceptions
+            Exception exception = null;
+
+            for (Pair<LifecycleTransaction, Future<Object>> f : futures)
+            {
+                try
+                {
+                    f.right.get();
+                }
+                catch (InterruptedException | ExecutionException e)
+                {
+                    if (exception == null)
+                        exception = new Exception();
+
+                    exception.addSuppressed(e);
+                }
+                finally
+                {
+                    f.left.close();
+                }
+            }
+
+            if (exception != null)
+                Throwables.propagate(exception);
+
             return AllSSTableOpStatus.SUCCESSFUL;
         }
     }
