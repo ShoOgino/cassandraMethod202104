@@ -1,0 +1,40 @@
+    public Scrubber(ColumnFamilyStore cfs, LifecycleTransaction transaction, boolean skipCorrupted, OutputHandler outputHandler, boolean isOffline, boolean checkData) throws IOException
+    {
+        this.cfs = cfs;
+        this.transaction = transaction;
+        this.sstable = transaction.onlyOne();
+        this.outputHandler = outputHandler;
+        this.skipCorrupted = skipCorrupted;
+        this.isOffline = isOffline;
+        this.rowIndexEntrySerializer = sstable.descriptor.version.getSSTableFormat().getIndexSerializer(sstable.metadata);
+
+        List<SSTableReader> toScrub = Collections.singletonList(sstable);
+
+        // Calculate the expected compacted filesize
+        this.destination = cfs.directories.getWriteableLocationAsFile(cfs.getExpectedCompactedFileSize(toScrub, OperationType.SCRUB));
+        if (destination == null)
+            throw new IOException("disk full");
+
+        // If we run scrub offline, we should never purge tombstone, as we cannot know if other sstable have data that the tombstone deletes.
+        this.controller = isOffline
+                        ? new ScrubController(cfs)
+                        : new CompactionController(cfs, Collections.singleton(sstable), CompactionManager.getDefaultGcBefore(cfs));
+        this.isCommutative = cfs.metadata.isCounter();
+        this.isIndex = cfs.isIndex();
+        this.checkData = checkData && !this.isIndex; //LocalByPartitionerType does not support validation
+        this.expectedBloomFilterSize = Math.max(cfs.metadata.getMinIndexInterval(), (int)(SSTableReader.getApproximateKeyCount(toScrub)));
+
+        // loop through each row, deserializing to check for damage.
+        // we'll also loop through the index at the same time, using the position from the index to recover if the
+        // row header (key or data size) is corrupt. (This means our position in the index file will be one row
+        // "ahead" of the data file.)
+        this.dataFile = isOffline
+                        ? sstable.openDataReader()
+                        : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
+        this.indexFile = RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)));
+        this.scrubInfo = new ScrubInfo(dataFile, sstable);
+
+        this.currentRowPositionFromIndex = 0;
+        this.nextRowPositionFromIndex = 0;
+    }
+

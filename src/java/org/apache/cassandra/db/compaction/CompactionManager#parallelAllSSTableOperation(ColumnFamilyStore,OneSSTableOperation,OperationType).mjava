@@ -1,0 +1,46 @@
+    private AllSSTableOpStatus parallelAllSSTableOperation(final ColumnFamilyStore cfs, final OneSSTableOperation operation, OperationType operationType) throws ExecutionException, InterruptedException
+    {
+        try (LifecycleTransaction compacting = cfs.markAllCompacting(operationType);)
+        {
+            if (compacting == null)
+            {
+                logger.info("Aborting operation on {}.{} after failing to interrupt other compaction operations", cfs.keyspace.getName(), cfs.name);
+                return AllSSTableOpStatus.ABORTED;
+            }
+            if (compacting.originals().isEmpty())
+            {
+                logger.info("No sstables for {}.{}", cfs.keyspace.getName(), cfs.name);
+                return AllSSTableOpStatus.SUCCESSFUL;
+            }
+
+            Iterable<SSTableReader> sstables = operation.filterSSTables(compacting.originals());
+            List<Future<Object>> futures = new ArrayList<>();
+
+            for (final SSTableReader sstable : sstables)
+            {
+                if (executor.isShutdown())
+                {
+                    logger.info("Executor has shut down, not submitting task");
+                    return AllSSTableOpStatus.ABORTED;
+                }
+
+                final LifecycleTransaction txn = compacting.split(singleton(sstable));
+                futures.add(executor.submit(new Callable<Object>()
+                {
+                    @Override
+                    public Object call() throws Exception
+                    {
+                        operation.execute(txn);
+                        return this;
+                    }
+                }));
+            }
+
+            assert compacting.originals().isEmpty();
+
+            for (Future<Object> f : futures)
+                f.get();
+            return AllSSTableOpStatus.SUCCESSFUL;
+        }
+    }
+

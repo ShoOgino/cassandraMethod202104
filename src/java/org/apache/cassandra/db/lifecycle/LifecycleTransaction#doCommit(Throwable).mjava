@@ -1,0 +1,20 @@
+    /**
+     * point of no return: commit all changes, but leave all readers marked as compacting
+     */
+    public Throwable doCommit(Throwable accumulate)
+    {
+        assert staged.isEmpty() : "must be no actions introduced between prepareToCommit and a commit";
+
+        logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
+
+        // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
+        // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
+        // and notification status for the obsolete and new files
+        accumulate = setupDeleteNotification(logged.update, tracker, accumulate);
+        accumulate = markObsolete(logged.obsolete, accumulate);
+        accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);
+        accumulate = release(selfRefs(logged.obsolete), accumulate);
+        accumulate = tracker.notifySSTablesChanged(originals, logged.update, operationType, accumulate);
+        return accumulate;
+    }
+

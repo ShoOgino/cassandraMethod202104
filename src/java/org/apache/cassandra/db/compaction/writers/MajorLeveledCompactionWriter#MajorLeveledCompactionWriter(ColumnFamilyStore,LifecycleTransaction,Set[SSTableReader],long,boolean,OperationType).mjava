@@ -1,0 +1,23 @@
+    public MajorLeveledCompactionWriter(ColumnFamilyStore cfs, LifecycleTransaction txn, Set<SSTableReader> nonExpiredSSTables, long maxSSTableSize, boolean offline, OperationType compactionType)
+    {
+        super(cfs, txn, nonExpiredSSTables, offline);
+        this.maxSSTableSize = maxSSTableSize;
+        this.allSSTables = txn.originals();
+        expectedWriteSize = Math.min(maxSSTableSize, cfs.getExpectedCompactedFileSize(nonExpiredSSTables, compactionType));
+        long estimatedSSTables = Math.max(1, SSTableReader.getTotalBytes(nonExpiredSSTables) / maxSSTableSize);
+        long keysPerSSTable = estimatedTotalKeys / estimatedSSTables;
+        File sstableDirectory = cfs.directories.getLocationForDisk(getWriteDirectory(expectedWriteSize));
+        skipAncestors = estimatedSSTables * allSSTables.size() > 200000; // magic number, avoid storing too much ancestor information since allSSTables are ancestors to *all* resulting sstables
+
+        if (skipAncestors)
+            logger.warn("Many sstables involved in compaction, skipping storing ancestor information to avoid running out of memory");
+
+        SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(sstableDirectory)),
+                                                    keysPerSSTable,
+                                                    minRepairedAt,
+                                                    cfs.metadata,
+                                                    cfs.partitioner,
+                                                    new MetadataCollector(allSSTables, cfs.metadata.comparator, currentLevel, skipAncestors));
+        sstableWriter.switchWriter(writer);
+    }
+

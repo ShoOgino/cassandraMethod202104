@@ -1,43 +1,10 @@
     protected Throwable doAbort(Throwable accumulate)
     {
-        try
-        {
-            moveStarts(null, null, true);
-        }
-        catch (Throwable t)
-        {
-            accumulate = merge(accumulate, t);
-        }
-
-        // cleanup any sstables we prepared for commit
-        for (SSTableReader sstable : preparedForCommit)
-        {
-            try
-            {
-                sstable.markObsolete();
-                sstable.selfRef().release();
-            }
-            catch (Throwable t)
-            {
-                accumulate = merge(accumulate , t);
-            }
-        }
-
-        // abort the writers, and add the early opened readers to our discard pile
-
-        if (writer != null)
-            finishedWriters.add(new Finished(writer, currentlyOpenedEarly));
-
-        for (Finished finished : finishedWriters)
-        {
-            accumulate = finished.writer.abort(accumulate);
-
-            // if we've already been opened, add ourselves to the discard pile
-            if (finished.reader != null)
-                discard.add(finished.reader);
-        }
-
-        accumulate = replaceWithFinishedReaders(Collections.<SSTableReader>emptyList(), accumulate);
+        // abort the writers
+        for (SSTableWriter writer : writers)
+            accumulate = writer.abort(accumulate);
+        // abort the lifecycle transaction
+        accumulate = transaction.abort(accumulate);
         return accumulate;
     }
 

@@ -3,7 +3,7 @@
     {
         Keyspace keyspace = Keyspace.open(KEYSPACE);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF);
-        cfs.truncateBlocking();
+        truncate(cfs);
 
         SSTableReader s = writeFile(cfs, 1000);
         cfs.addSSTable(s);
@@ -13,9 +13,10 @@
 
         List<SSTableReader> sstables;
         int files = 1;
-        try (SSTableRewriter rewriter = new SSTableRewriter(cfs, compacting, 1000, false);
-             ISSTableScanner scanner = s.getScanner();
-             CompactionController controller = new CompactionController(cfs, compacting, 0))
+        try (ISSTableScanner scanner = s.getScanner();
+             CompactionController controller = new CompactionController(cfs, compacting, 0);
+             LifecycleTransaction txn = cfs.getTracker().tryModify(compacting, OperationType.UNKNOWN);
+             SSTableRewriter rewriter = new SSTableRewriter(cfs, txn, 1000, false);)
         {
             rewriter.switchWriter(getWriter(cfs, s.descriptor.directory));
             while(scanner.hasNext())
@@ -33,10 +34,6 @@
 
         assertEquals(files, sstables.size());
         assertEquals(files, cfs.getSSTables().size());
-        assertEquals(1, cfs.getDataTracker().getView().shadowed.size());
-        cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
-        assertEquals(files, cfs.getSSTables().size());
-        assertEquals(0, cfs.getDataTracker().getView().shadowed.size());
         SSTableDeletingTask.waitForDeletions();
 
         assertFileCounts(s.descriptor.directory.list(), 0, 0);

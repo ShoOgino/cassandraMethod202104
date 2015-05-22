@@ -1,0 +1,40 @@
+    @Test
+    public void testApply()
+    {
+        final Tracker tracker = new Tracker(null, false);
+        final View resultView = ViewTest.fakeView(0, 0);
+        final AtomicInteger count = new AtomicInteger();
+        tracker.apply(new Predicate<View>()
+        {
+            public boolean apply(View view)
+            {
+                // confound the CAS by swapping the view, and check we retry
+                if (count.incrementAndGet() < 3)
+                    tracker.view.set(ViewTest.fakeView(0, 0));
+                return true;
+            }
+        }, new Function<View, View>()
+        {
+            @Nullable
+            public View apply(View view)
+            {
+                return resultView;
+            }
+        });
+        Assert.assertEquals(3, count.get());
+        Assert.assertEquals(resultView, tracker.getView());
+
+        count.set(0);
+        // check that if the predicate returns false, we stop immediately and return null
+        Assert.assertNull(tracker.apply(new Predicate<View>()
+        {
+            public boolean apply(View view)
+            {
+                count.incrementAndGet();
+                return false;
+            }
+        }, null));
+        Assert.assertEquals(1, count.get());
+        Assert.assertEquals(resultView, tracker.getView());
+    }
+
