@@ -8,33 +8,32 @@
             CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
 
             if (compressed.capacity() < chunk.length)
-                compressed = ByteBuffer.wrap(new byte[chunk.length]);
+                compressed = allocateBuffer(chunk.length, metadata.compressor().preferredBufferType());
             else
                 compressed.clear();
             compressed.limit(chunk.length);
 
             if (channel.read(compressed, chunk.offset) != chunk.length)
                 throw new CorruptBlockException(getPath(), chunk);
-
-            // technically flip() is unnecessary since all the remaining work uses the raw array, but if that changes
-            // in the future this will save a lot of hair-pulling
             compressed.flip();
             buffer.clear();
-            int decompressedBytes;
+
             try
             {
-                decompressedBytes = metadata.compressor().uncompress(compressed, buffer);
-                buffer.limit(decompressedBytes);
+                metadata.compressor().uncompress(compressed, buffer);
             }
             catch (IOException e)
             {
-                buffer.limit(0);
                 throw new CorruptBlockException(getPath(), chunk);
+            }
+            finally
+            {
+                buffer.flip();
             }
 
             if (metadata.parameters.getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
             {
-                compressed.position(0);
+                compressed.rewind();
                 FBUtilities.directCheckSum(checksum, compressed);
 
                 if (checksum(chunk) != (int) checksum.getValue())
