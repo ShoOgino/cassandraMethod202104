@@ -22,24 +22,22 @@
 
         // compressed chunk size (- 4 bytes reserved for checksum)
         int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset - 4);
-        if (compressed.buffer.capacity() < chunkSize)
-            compressed.buffer = compressor.useDirectOutputByteBuffers()
-                    ? ByteBuffer.allocateDirect(chunkSize)
-                    : ByteBuffer.allocate(chunkSize);
+        if (compressed.capacity() < chunkSize)
+            compressed = compressor.preferredBufferType().allocate(chunkSize);
 
         try
         {
-            compressed.buffer.clear();
-            compressed.buffer.limit(chunkSize);
+            compressed.clear();
+            compressed.limit(chunkSize);
             channel.position(chunkOffset);
-            channel.read(compressed.buffer);
+            channel.read(compressed);
 
             try
             {
                 // Repopulate buffer from compressed data
                 buffer.clear();
-                compressed.buffer.flip();
-                compressor.uncompress(compressed.buffer, buffer);
+                compressed.flip();
+                compressor.uncompress(compressed, buffer);
             }
             catch (IOException e)
             {
@@ -47,8 +45,8 @@
             }
 
             Adler32 checksum = new Adler32();
-
-            FBUtilities.directCheckSum(checksum, compressed.buffer);
+            compressed.rewind();
+            FBUtilities.directCheckSum(checksum, compressed);
 
             crcCheckBuffer.clear();
             channel.read(crcCheckBuffer);

@@ -3,22 +3,19 @@
     {
         seekToChunkStart(); // why is this necessary? seems like it should always be at chunk start in normal operation
 
-        int compressedLength;
         try
         {
             // compressing data with buffer re-use
             buffer.flip();
-            compressed.buffer.clear();
-            compressedLength = compressor.compress(buffer, compressed);
-
-            // Compressors don't modify sentinels in our BB - we rely on buffer.position() for bufferOffset adjustment
-            buffer.position(buffer.limit());
+            compressed.clear();
+            compressor.compress(buffer, compressed);
         }
         catch (IOException e)
         {
             throw new RuntimeException("Compression exception", e); // shouldn't happen
         }
 
+        int compressedLength = compressed.position();
         uncompressedSize += buffer.position();
         compressedSize += compressedLength;
 
@@ -28,15 +25,13 @@
             metadataWriter.addOffset(chunkOffset);
             chunkCount++;
 
-            assert compressedLength <= compressed.buffer.capacity();
-
             // write out the compressed data
-            compressed.buffer.flip();
-            channel.write(compressed.buffer);
+            compressed.flip();
+            channel.write(compressed);
 
             // write corresponding checksum
-            compressed.buffer.rewind();
-            crcMetadata.appendDirect(compressed.buffer, true);
+            compressed.rewind();
+            crcMetadata.appendDirect(compressed, true);
             lastFlushOffset += compressedLength + 4;
 
             // adjust our bufferOffset to account for the new uncompressed data we've now written out

@@ -1,0 +1,46 @@
+    private void testByteBuffers(BufferType typeIn, BufferType typeComp, BufferType typeOut) throws IOException
+    {
+        try
+        {
+            int n = RandomAccessReader.DEFAULT_BUFFER_SIZE;
+            byte[] srcData = new byte[n];
+            new Random().nextBytes(srcData);
+
+            final int inOffset = 2;
+            ByteBuffer src = typeIn.allocate(inOffset + n + inOffset);
+            src.position(inOffset);
+            src.put(srcData, 0, n);
+            src.flip().position(inOffset);
+
+            int outOffset = 5;
+            ByteBuffer compressed = typeComp.allocate(outOffset + compressor.initialCompressedBufferLength(srcData.length) + outOffset);
+            byte[] garbage = new byte[compressed.capacity()];
+            new Random().nextBytes(garbage);
+            compressed.put(garbage);
+            compressed.position(outOffset).limit(compressed.capacity() - outOffset);
+
+            compressor.compress(src, compressed);
+            assertEquals(inOffset + n, src.position());
+            assertEquals(inOffset + n, src.limit());
+            assertEquals(compressed.capacity() - outOffset, compressed.limit());
+            compressed.flip().position(outOffset);
+            int len = compressed.remaining();
+
+            ByteBuffer result = typeOut.allocate(inOffset + n + inOffset);
+            result.position(inOffset).limit(result.capacity() - inOffset);
+            compressor.uncompress(compressed, result);
+            assertEquals(outOffset + len, compressed.position());
+            assertEquals(outOffset + len, compressed.limit());
+            assertEquals(result.capacity() - inOffset, result.limit());
+
+            int decompressed = result.position() - inOffset;
+            assert decompressed == n : "Failed uncompressed size";
+            for (int i = 0; i < n; ++i)
+                assert srcData[i] == result.get(inOffset + i) : "Failed comparison on index: " + i;
+        }
+        catch (Throwable e)
+        {
+            throw new AssertionError("Failed testing compressor " + compressor.getClass().getSimpleName() + " with buffer types in:" + typeIn + " compressed:" + typeComp + " out:" + typeOut, e);
+        }
+    }
+
