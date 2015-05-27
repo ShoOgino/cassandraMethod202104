@@ -7,19 +7,37 @@
             ByteBuffer newStart = equals(startKey(), key) && firstPartitionColumnStart.hasRemaining() ? firstPartitionColumnStart : null;
             ByteBuffer newFinish = equals(stopKey(), key) && lastPartitionColumnFinish.hasRemaining() ? lastPartitionColumnFinish : null;
 
-            List<ColumnSlice> newSlices = new ArrayList<ColumnSlice>(sliceFilter.slices.length); // in the common case, we'll have the same number of slices
+            // in the common case, we'll have the same number of slices
+            List<ColumnSlice> newSlices = new ArrayList<>(sliceFilter.slices.length);
 
+            // Check our slices to see if any fall before the page start (in which case they can be removed) or
+            // if they contain the page start (in which case they should start from the page start).  However, if the
+            // slices would include static columns, we need to ensure they are also fetched, and so a separate
+            // slice for the static columns may be required.
+            // Note that if the query is reversed, we can't handle statics by simply adding a separate slice here, so
+            // the reversed case is handled by SliceFromReadCommand instead. See CASSANDRA-8502 for more details.
             for (ColumnSlice slice : sliceFilter.slices)
             {
                 if (newStart != null)
                 {
                     if (slice.isBefore(comparator, newStart))
-                        continue; // we skip that slice
+                    {
+                        if (!sliceFilter.reversed && sliceIncludesStatics(slice, false, cfm))
+                            newSlices.add(new ColumnSlice(ByteBufferUtil.EMPTY_BYTE_BUFFER, cfm.getStaticColumnNameBuilder().buildAsEndOfRange()));
+
+                        continue;
+                    }
 
                     if (slice.includes(comparator, newStart))
-                        slice = new ColumnSlice(newStart, slice.finish);
+                    {
+                        if (!sliceFilter.reversed && sliceIncludesStatics(slice, false, cfm) && !newStart.equals(ByteBufferUtil.EMPTY_BYTE_BUFFER))
+                            newSlices.add(new ColumnSlice(ByteBufferUtil.EMPTY_BYTE_BUFFER, cfm.getStaticColumnNameBuilder().buildAsEndOfRange()));
 
-                    // Whether we've updated the slice or not, we don't have to bother about newStart anymore
+                        slice = new ColumnSlice(newStart, slice.finish);
+                    }
+
+                    // once we see a slice that either includes the page start or is after it, we can stop checking
+                    // against the page start (because the slices are ordered)
                     newStart = null;
                 }
 

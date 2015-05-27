@@ -1,0 +1,28 @@
+    /**
+     * Splits this filter into two SliceQueryFilters: one that slices only the static columns, and one that slices the
+     * remainder of the normal data.
+     *
+     * This should only be called when the filter is reversed and the filter is known to cover static columns (through
+     * hasStaticSlice()).
+     *
+     * @return a pair of (static, normal) SliceQueryFilters
+     */
+    public Pair<SliceQueryFilter, SliceQueryFilter> splitOutStaticSlice(CFMetaData cfm)
+    {
+        assert reversed;
+
+        ByteBuffer staticSliceEnd = cfm.getStaticColumnNameBuilder().buildAsEndOfRange();
+        List<ColumnSlice> nonStaticSlices = new ArrayList<>(slices.length);
+        for (ColumnSlice slice : slices)
+        {
+            if (sliceIncludesStatics(slice, cfm))
+                nonStaticSlices.add(new ColumnSlice(slice.start, staticSliceEnd));
+            else
+                nonStaticSlices.add(slice);
+        }
+
+        return Pair.create(
+            new SliceQueryFilter(staticSliceEnd, ByteBufferUtil.EMPTY_BYTE_BUFFER, true, count, compositesToGroup),
+            new SliceQueryFilter(nonStaticSlices.toArray(new ColumnSlice[nonStaticSlices.size()]), true, count, compositesToGroup));
+    }
+
