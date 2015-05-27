@@ -1,4 +1,4 @@
-    private IDiskAtomFilter makeFilter(List<ByteBuffer> variables, int limit)
+    private IDiskAtomFilter makeFilter(CFDefinition cfDef, List<ByteBuffer> variables, int limit)
     throws InvalidRequestException
     {
         int toGroup = cfDef.isCompact ? -1 : cfDef.clusteringColumnsCount();
@@ -13,14 +13,14 @@
             toGroup = selectsStaticColumns ? toGroup : SliceQueryFilter.IGNORE_TOMBSTONED_PARTITIONS;
             return new SliceQueryFilter(ColumnSlice.ALL_COLUMNS_ARRAY, false, 1, toGroup);
         }
-        else if (isColumnRange())
+        else if (isColumnRange(cfDef))
         {
             // For sparse, we used to ask for 'defined columns' * 'asked limit' (where defined columns includes the row marker)
             // to account for the grouping of columns.
             // Since that doesn't work for maps/sets/lists, we now use the compositesToGroup option of SliceQueryFilter.
             // But we must preserve backward compatibility too (for mixed version cluster that is).
-            List<ByteBuffer> startBounds = getRequestedBound(Bound.START, variables);
-            List<ByteBuffer> endBounds = getRequestedBound(Bound.END, variables);
+            List<ByteBuffer> startBounds = getRequestedBound(cfDef, Bound.START, variables);
+            List<ByteBuffer> endBounds = getRequestedBound(cfDef, Bound.END, variables);
             assert startBounds.size() == endBounds.size();
 
             // Handles fetching static columns. Note that for 2i, the filter is just used to restrict
@@ -34,18 +34,18 @@
             if (startBounds.size() == 1)
             {
                 ColumnSlice slice = new ColumnSlice(startBounds.get(0), endBounds.get(0));
-                if (slice.isAlwaysEmpty(cfDef.cfm.comparator, isReversed))
+                if (slice.isAlwaysEmpty(cfm.comparator, isReversed))
                     return staticSlice == null ? null : sliceFilter(staticSlice, limit, toGroup);
 
                 if (staticSlice == null)
                     return sliceFilter(slice, limit, toGroup);
 
                 if (isReversed)
-                    return slice.includes(cfDef.cfm.comparator.reverseComparator, staticSlice.start)
+                    return slice.includes(cfm.comparator.reverseComparator, staticSlice.start)
                             ? sliceFilter(new ColumnSlice(slice.start, staticSlice.finish), limit, toGroup)
                             : sliceFilter(new ColumnSlice[]{ slice, staticSlice }, limit, toGroup);
                 else
-                    return slice.includes(cfDef.cfm.comparator, staticSlice.finish)
+                    return slice.includes(cfm.comparator, staticSlice.finish)
                             ? sliceFilter(new ColumnSlice(staticSlice.start, slice.finish), limit, toGroup)
                             : sliceFilter(new ColumnSlice[]{ staticSlice, slice }, limit, toGroup);
             }
@@ -54,7 +54,7 @@
             for (int i = 0; i < startBounds.size(); i++)
             {
                 ColumnSlice slice = new ColumnSlice(startBounds.get(i), endBounds.get(i));
-                if (!slice.isAlwaysEmpty(cfDef.cfm.comparator, isReversed))
+                if (!slice.isAlwaysEmpty(cfm.comparator, isReversed))
                     l.add(slice);
             }
 
@@ -69,7 +69,7 @@
             ColumnSlice[] slices;
             if (isReversed)
             {
-                if (l.get(l.size() - 1).includes(cfDef.cfm.comparator.reverseComparator, staticSlice.start))
+                if (l.get(l.size() - 1).includes(cfm.comparator.reverseComparator, staticSlice.start))
                 {
                     slices = l.toArray(new ColumnSlice[l.size()]);
                     slices[slices.length-1] = new ColumnSlice(slices[slices.length-1].start, ByteBufferUtil.EMPTY_BYTE_BUFFER);
@@ -82,7 +82,7 @@
             }
             else
             {
-                if (l.get(0).includes(cfDef.cfm.comparator, staticSlice.finish))
+                if (l.get(0).includes(cfm.comparator, staticSlice.finish))
                 {
                     slices = new ColumnSlice[l.size()];
                     slices[0] = new ColumnSlice(ByteBufferUtil.EMPTY_BYTE_BUFFER, l.get(0).finish);
@@ -101,7 +101,7 @@
         }
         else
         {
-            SortedSet<ByteBuffer> cellNames = getRequestedColumns(variables);
+            SortedSet<ByteBuffer> cellNames = getRequestedColumns(cfDef, variables);
             if (cellNames == null) // in case of IN () for the last column of the key
                 return null;
             QueryProcessor.validateCellNames(cellNames);
