@@ -1,0 +1,44 @@
+    public SliceQueryFilter withUpdatedStart(Composite newStart, CFMetaData cfm)
+    {
+        Comparator<Composite> cmp = reversed ? cfm.comparator.reverseComparator() : cfm.comparator;
+
+        // Check our slices to see if any fall before the new start (in which case they can be removed) or
+        // if they contain the new start (in which case they should start from the page start).  However, if the
+        // slices would include static columns, we need to ensure they are also fetched, and so a separate
+        // slice for the static columns may be required.
+        // Note that if the query is reversed, we can't handle statics by simply adding a separate slice here, so
+        // the reversed case is handled by SliceFromReadCommand instead. See CASSANDRA-8502 for more details.
+        List<ColumnSlice> newSlices = new ArrayList<>();
+        boolean pastNewStart = false;
+        for (ColumnSlice slice : slices)
+        {
+            if (pastNewStart)
+            {
+                newSlices.add(slice);
+                continue;
+            }
+
+            if (slice.isBefore(cmp, newStart))
+            {
+                if (!reversed && sliceIncludesStatics(slice, cfm))
+                    newSlices.add(new ColumnSlice(Composites.EMPTY, cfm.comparator.staticPrefix().end()));
+
+                continue;
+            }
+            else if (slice.includes(cmp, newStart))
+            {
+                if (!reversed && sliceIncludesStatics(slice, cfm) && !newStart.equals(ByteBufferUtil.EMPTY_BYTE_BUFFER))
+                    newSlices.add(new ColumnSlice(Composites.EMPTY, cfm.comparator.staticPrefix().end()));
+
+                newSlices.add(new ColumnSlice(newStart, slice.finish));
+            }
+            else
+            {
+                newSlices.add(slice);
+            }
+
+            pastNewStart = true;
+        }
+        return withUpdatedSlices(newSlices.toArray(new ColumnSlice[newSlices.size()]));
+    }
+
