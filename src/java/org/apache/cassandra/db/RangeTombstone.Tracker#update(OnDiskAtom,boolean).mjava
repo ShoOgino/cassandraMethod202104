@@ -1,52 +1,75 @@
         /**
          * Update this tracker given an {@code atom}.
-         * If column is a Column, check if any tracked range is useless and
-         * can be removed. If it is a RangeTombstone, add it to this tracker.
+         * <p>
+         * This method first test if some range tombstone can be discarded due
+         * to the knowledge of that new atom. Then, if it's a range tombstone,
+         * it adds it to the tracker.
+         * <p>
+         * Note that this method should be called on *every* atom of a partition for
+         * the tracker to work as efficiently as possible (#9486).
          */
         public void update(OnDiskAtom atom, boolean isExpired)
         {
+            // Get rid of now useless RTs
+            ListIterator<RangeTombstone> iterator = openedTombstones.listIterator();
+            while (iterator.hasNext())
+            {
+                // If this tombstone stops before the new atom, it is now useless since it cannot cover this or any future
+                // atoms. Otherwise, if a RT ends after the new atom, then we know that's true of any following atom too
+                // since maxOrderingSet is sorted by end bounds
+                RangeTombstone t = iterator.next();
+                if (comparator.compare(atom.name(), t.max) > 0)
+                {
+                    iterator.remove();
+                }
+                else
+                {
+                    // If the atom is a RT, we'll add it next and for that we want to start by looking at the atom we just
+                    // returned, so rewind the iterator.
+                    iterator.previous();
+                    break;
+                }
+            }
+
+            // If it's a RT, adds it.
             if (atom instanceof RangeTombstone)
             {
-                RangeTombstone t = (RangeTombstone)atom;
-                // This could be a repeated marker already. If so, we already have a range in which it is
-                // fully included. While keeping both would be ok functionaly, we could end up with a lot of
-                // useless marker after a few compaction, so avoid this.
-                for (RangeTombstone tombstone : maxOrderingSet.tailSet(t))
-                {
-                    // We only care about tombstone have the same max than t
-                    if (comparator.compare(t.max, tombstone.max) > 0)
-                        break;
-
-                    // Since it is assume tombstones are passed to this method in growing min order, it's enough to
-                    // check for the data to know is the current tombstone is included in a previous one
-                    if (tombstone.data.equals(t.data))
-                        return;
-                }
-                ranges.addLast(t);
-                maxOrderingSet.add(t);
+                RangeTombstone toAdd = (RangeTombstone)atom;
                 if (isExpired)
-                    expired.add(t);
-            }
-            else
-            {
-                assert atom instanceof Column;
-                Iterator<RangeTombstone> iter = maxOrderingSet.iterator();
-                while (iter.hasNext())
+                    toAdd = new ExpiredRangeTombstone(toAdd);
+
+                // We want to maintain openedTombstones in end bounds order so we find where to insert the new element
+                // and add it. While doing so, we also check if that new tombstone fully shadow or is fully shadowed
+                // by an existing tombstone so we avoid tracking more tombstone than necessary (and we know this will
+                // at least happend for start-of-index-block repeated range tombstones).
+                while (iterator.hasNext())
                 {
-                    RangeTombstone tombstone = iter.next();
-                    if (comparator.compare(atom.name(), tombstone.max) > 0)
+                    RangeTombstone existing = iterator.next();
+                    int cmp = comparator.compare(toAdd.max, existing.max);
+                    if (cmp > 0)
                     {
-                        // That tombstone is now useless
-                        iter.remove();
-                        ranges.remove(tombstone);
+                        // the new one covers more than the existing one. If the new one happens to also supersedes
+                        // the existing one, remove the existing one. In any case, we're not done yet.
+                        if (toAdd.data.supersedes(existing.data))
+                            iterator.remove();
                     }
                     else
                     {
-                        // Since we're iterating by growing end bound, if the current range
-                        // includes the column, so does all the next ones
+                        // the new one is included in the existing one. If the new one supersedes the existing one,
+                        // then we add the new one (and if the new one ends like the existing one, we can actually remove
+                        // the existing one), otherwise we can actually ignore it. In any case, we're done.
+                        if (toAdd.data.supersedes(existing.data))
+                        {
+                            if (cmp == 0)
+                                iterator.set(toAdd);
+                            else
+                                insertBefore(toAdd, iterator);
+                        }
                         return;
                     }
                 }
+                // If we reach here, either we had no tombstones and the new one ends after all existing ones.
+                iterator.add(toAdd);
             }
         }
 
