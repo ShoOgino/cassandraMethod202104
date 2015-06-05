@@ -1,5 +1,5 @@
     public void testLog(CommitLog commitLog) throws IOException, InterruptedException {
-        System.out.format("\nTesting commit log size %dmb, compressor %s, sync %s%s%s\n",
+        System.out.format("\nTesting commit log size %.0fmb, compressor %s, sync %s%s%s\n",
                            mb(DatabaseDescriptor.getCommitLogSegmentSize()),
                            commitLog.compressor != null ? commitLog.compressor.getClass().getSimpleName() : "none",
                            commitLog.executor.getClass().getSimpleName(),
@@ -21,13 +21,16 @@
             for (CommitlogExecutor t: threads)
             {
                 t.join();
-                CommitLog.instance.discardCompletedSegments( Schema.instance.getCFMetaData("Keyspace1", "Standard1").cfId, t.rp);
                 if (t.rp.compareTo(discardedPos) > 0)
                     discardedPos = t.rp;
             }
+            verifySizes(commitLog);
+
+            commitLog.discardCompletedSegments(Schema.instance.getCFMetaData("Keyspace1", "Standard1").cfId, discardedPos);
             threads.clear();
             System.out.format("Discarded at %s\n", discardedPos);
-
+            verifySizes(commitLog);
+            
             scheduled = startThreads(commitLog, threads);
         }
 
@@ -44,6 +47,7 @@
             hash += t.hash;
             cells += t.cells;
         }
+        verifySizes(commitLog);
         
         commitLog.shutdownBlocking();
 
