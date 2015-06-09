@@ -1,0 +1,43 @@
+        /**
+         * Release a buffer. Return:
+         *    0L if the buffer must be recycled after the call;
+         *   -1L if it is free (and so we should tryRecycle if owner is now null)
+         *    some other value otherwise
+         **/
+        long free(ByteBuffer buffer, boolean tryRelease)
+        {
+            if (!releaseAttachment(buffer))
+                return 1L;
+
+            long address = MemoryUtil.getAddress(buffer);
+            assert (address >= baseAddress) & (address <= baseAddress + capacity());
+
+            int position = (int)(address - baseAddress);
+            int size = roundUp(buffer.capacity());
+
+            position >>= shift;
+            int slotCount = size >> shift;
+
+            long slotBits = (1L << slotCount) - 1;
+            long shiftedSlotBits = (slotBits << position);
+
+            if (slotCount == 64)
+            {
+                assert size == capacity();
+                assert position == 0;
+                shiftedSlotBits = -1L;
+            }
+
+            long next;
+            while (true)
+            {
+                long cur = freeSlots;
+                next = cur | shiftedSlotBits;
+                assert next == (cur ^ shiftedSlotBits); // ensure no double free
+                if (tryRelease & (next == -1L))
+                    next = 0L;
+                if (freeSlotsUpdater.compareAndSet(this, cur, next))
+                    return next;
+            }
+        }
+
