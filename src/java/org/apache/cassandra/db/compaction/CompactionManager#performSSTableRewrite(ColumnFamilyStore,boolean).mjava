@@ -3,16 +3,20 @@
         return parallelAllSSTableOperation(cfs, new OneSSTableOperation()
         {
             @Override
-            public Iterable<SSTableReader> filterSSTables(Iterable<SSTableReader> input)
+            public Iterable<SSTableReader> filterSSTables(LifecycleTransaction transaction)
             {
-                return Iterables.filter(input, new Predicate<SSTableReader>()
+                Iterable<SSTableReader> sstables = new ArrayList<>(transaction.originals());
+                Iterator<SSTableReader> iter = sstables.iterator();
+                while (iter.hasNext())
                 {
-                    @Override
-                    public boolean apply(SSTableReader sstable)
+                    SSTableReader sstable = iter.next();
+                    if (excludeCurrentVersion && sstable.descriptor.version.equals(sstable.descriptor.getFormat().getLatestVersion()))
                     {
-                        return !(excludeCurrentVersion && sstable.descriptor.version.equals(sstable.descriptor.getFormat().getLatestVersion()));
+                        transaction.cancel(sstable);
+                        iter.remove();
                     }
-                });
+                }
+                return sstables;
             }
 
             @Override
