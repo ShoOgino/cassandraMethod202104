@@ -3,7 +3,8 @@
         outputHandler.output(String.format("Scrubbing %s (%s bytes)", sstable, dataFile.length()));
         try
         {
-            nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
+            nextIndexKey = indexAvailable() ? ByteBufferUtil.readWithShortLength(indexFile) : null;
+            if (indexAvailable())
             {
                 // throw away variable so we don't have a side effect in the assert
                 long firstRowPositionFromIndex = RowIndexEntry.serializer.deserialize(indexFile, sstable.descriptor.version).position;
@@ -67,7 +68,7 @@
                         outputHandler.debug(String.format("Index doublecheck: row %s is %s bytes", ByteBufferUtil.bytesToHex(currentIndexKey),  dataSizeFromIndex));
                 }
 
-                assert currentIndexKey != null || indexFile.isEOF();
+                assert currentIndexKey != null || !indexAvailable();
 
                 writer.mark();
                 try
@@ -84,10 +85,10 @@
                     if (dataSize > dataFile.length())
                         throw new IOError(new IOException("Impossible row size (greater than file length): " + dataSize));
 
-                    if (dataStart != dataStartFromIndex)
+                    if (indexFile != null && dataStart != dataStartFromIndex)
                         outputHandler.warn(String.format("Data file row position %d differs from index file row position %d", dataStart, dataStartFromIndex));
 
-                    if (dataSize != dataSizeFromIndex)
+                    if (indexFile != null && dataSize != dataSizeFromIndex)
                         outputHandler.warn(String.format("Data file row size %d differs from index file row size %d", dataSize, dataSizeFromIndex));
 
                     SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, dataSize, validateColumns);
