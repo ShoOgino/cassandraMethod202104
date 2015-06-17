@@ -1,16 +1,23 @@
         void serializeValuesWithoutSize(ClusteringPrefix clustering, DataOutputPlus out, int version, List<AbstractType<?>> types) throws IOException
         {
-            if (clustering.size() == 0)
-                return;
-
-            writeHeader(clustering, out);
-            for (int i = 0; i < clustering.size(); i++)
+            int offset = 0;
+            int clusteringSize = clustering.size();
+            // serialize in batches of 32, to avoid garbage when deserializing headers
+            while (offset < clusteringSize)
             {
-                ByteBuffer v = clustering.get(i);
-                if (v == null || !v.hasRemaining())
-                    continue; // handled in the header
-
-                types.get(i).writeValue(v, out);
+                // we micro-batch the headers, so that we can incur fewer method calls,
+                // and generate no garbage on deserialization;
+                // we piggyback on vint encoding so that, typically, only 1 byte is used per 32 clustering values,
+                // i.e. more than we ever expect to see
+                int limit = Math.min(clusteringSize, offset + 32);
+                out.writeUnsignedVInt(makeHeader(clustering, offset, limit));
+                while (offset < limit)
+                {
+                    ByteBuffer v = clustering.get(offset);
+                    if (v != null && v.hasRemaining())
+                        types.get(offset).writeValue(v, out);
+                    offset++;
+                }
             }
         }
 
