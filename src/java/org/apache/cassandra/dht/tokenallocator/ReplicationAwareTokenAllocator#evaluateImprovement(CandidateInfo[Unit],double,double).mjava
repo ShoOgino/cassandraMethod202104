@@ -1,0 +1,37 @@
+    /**
+     * Evaluates the improvement in variance for both units and individual tokens when candidate is inserted into the
+     * ring.
+     */
+    private double evaluateImprovement(CandidateInfo<Unit> candidate, double optTokenOwnership, double newUnitMult)
+    {
+        double tokenChange = 0;
+
+        UnitInfo<Unit> candidateUnit = candidate.owningUnit;
+        Token candidateEnd = candidate.token;
+
+        // Form a chain of units affected by the insertion to be able to qualify change of unit ownership.
+        // A unit may be affected more than once.
+        UnitAdjustmentTracker<Unit> unitTracker = new UnitAdjustmentTracker<>(candidateUnit);
+
+        // Reflect change in ownership of the splitting token (candidate).
+        tokenChange += applyOwnershipAdjustment(candidate, candidateUnit, candidate.replicationStart, candidateEnd, optTokenOwnership, unitTracker);
+
+        // Loop through all vnodes that replicate candidate or split and update their ownership.
+        ReplicationVisitor replicationVisitor = new ReplicationVisitor();
+        for (TokenInfo<Unit> curr = candidate.split; !replicationVisitor.visitedAll(); curr = curr.next)
+        {
+            UnitInfo<Unit> currUnit = curr.owningUnit;
+
+            if (!replicationVisitor.add(currUnit.group))
+                continue;    // If this group is already seen, the token cannot be affected.
+
+            Token replicationEnd = curr.token;
+            Token replicationStart = findUpdatedReplicationStart(curr, candidate);
+            tokenChange += applyOwnershipAdjustment(curr, currUnit, replicationStart, replicationEnd, optTokenOwnership, unitTracker);
+        }
+        replicationVisitor.clean();
+
+        double nodeChange = unitTracker.calculateUnitChange(newUnitMult, optTokenOwnership);
+        return -(tokenChange + nodeChange);
+    }
+

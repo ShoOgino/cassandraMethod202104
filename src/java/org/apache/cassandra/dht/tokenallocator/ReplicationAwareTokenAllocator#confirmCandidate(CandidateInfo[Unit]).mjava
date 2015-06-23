@@ -1,0 +1,42 @@
+    /**
+     * Incorporates the selected candidate into the ring, adjusting ownership information and calculated token
+     * information.
+     */
+    private void confirmCandidate(CandidateInfo<Unit> candidate)
+    {
+        // This process is less efficient than it could be (loops through each vnode's replication span instead
+        // of recalculating replicationStart, replicationThreshold from existing data + new token data in an O(1)
+        // case analysis similar to evaluateImprovement). This is fine as the method does not dominate processing
+        // time.
+
+        // Put the accepted candidate in the token list.
+        UnitInfo<Unit> newUnit = candidate.owningUnit;
+        Token newToken = candidate.token;
+        sortedTokens.put(newToken, newUnit.unit);
+        unitToTokens.put(newUnit.unit, newToken);
+
+        TokenInfo<Unit> prev = candidate.prevInRing();
+        TokenInfo<Unit> newTokenInfo = new TokenInfo<>(newToken, newUnit);
+        newTokenInfo.replicatedOwnership = candidate.replicatedOwnership;
+        newTokenInfo.insertAfter(prev, prev);   // List is not empty so this won't need to change head of list.
+
+        // Update data for candidate.
+        populateTokenInfoAndAdjustUnit(newTokenInfo, newUnit.group);
+
+        ReplicationVisitor replicationVisitor = new ReplicationVisitor();
+        assert newTokenInfo.next == candidate.split;
+        for (TokenInfo<Unit> curr = newTokenInfo.next; !replicationVisitor.visitedAll(); curr = curr.next)
+        {
+            // update the candidate between curr and next
+            candidate = candidate.next;
+            populateCandidate(candidate);
+
+            if (!replicationVisitor.add(curr.owningUnit.group))
+                continue;    // If we've already seen this group, the token cannot be affected.
+
+            populateTokenInfoAndAdjustUnit(curr, newUnit.group);
+        }
+
+        replicationVisitor.clean();
+    }
+
