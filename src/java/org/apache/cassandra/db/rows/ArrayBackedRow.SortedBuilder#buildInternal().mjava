@@ -1,0 +1,62 @@
+        protected Row buildInternal()
+        {
+            if (cells.isEmpty())
+                return buildNoCells();
+
+            int minDeletionTime = Math.min(minDeletionTime(primaryKeyLivenessInfo), minDeletionTime(deletion));
+
+            ColumnData[] data = new ColumnData[columnCount];
+            int complexIdx = 0;
+            int i = 0;
+            int size = 0;
+            while (i < cells.size())
+            {
+                Cell cell = cells.get(i);
+                ColumnDefinition column = cell.column();
+                if (column.isSimple())
+                {
+                    data[size++] = cell;
+                    minDeletionTime = Math.min(minDeletionTime, minDeletionTime(cell));
+                    ++i;
+                }
+                else
+                {
+                    while (columns.getComplex(complexIdx).compareTo(column) < 0)
+                    {
+                        if (complexDeletions[complexIdx] != null)
+                        {
+                            data[size++] = new ComplexColumnData(columns.getComplex(complexIdx), ComplexColumnData.NO_CELLS, complexDeletions[complexIdx]);
+                            minDeletionTime = Integer.MIN_VALUE;
+                        }
+                        ++complexIdx;
+                    }
+
+                    DeletionTime complexDeletion = complexDeletions[complexIdx];
+                    if (complexDeletion != null)
+                        minDeletionTime = Integer.MIN_VALUE;
+                    int cellCount = complexColumnCellsCount[complexIdx];
+                    Cell[] complexCells = new Cell[cellCount];
+                    for (int j = 0; j < cellCount; j++)
+                    {
+                        Cell complexCell = cells.get(i + j);
+                        complexCells[j] = complexCell;
+                        minDeletionTime = Math.min(minDeletionTime, minDeletionTime(complexCell));
+                    }
+                    i += cellCount;
+
+                    data[size++] = new ComplexColumnData(column, complexCells, complexDeletion == null ? DeletionTime.LIVE : complexDeletion);
+                    ++complexIdx;
+                }
+            }
+            for (int j = complexIdx; j < complexDeletions.length; j++)
+            {
+                if (complexDeletions[j] != null)
+                {
+                    data[size++] = new ComplexColumnData(columns.getComplex(j), ComplexColumnData.NO_CELLS, complexDeletions[j]);
+                    minDeletionTime = Integer.MIN_VALUE;
+                }
+            }
+            assert size == data.length;
+            return new ArrayBackedRow(clustering, columns, primaryKeyLivenessInfo, deletion, size, data, minDeletionTime);
+        }
+

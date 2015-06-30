@@ -1,122 +1,29 @@
     public static UnfilteredRowIterator cloningIterator(UnfilteredRowIterator iterator, final AbstractAllocator allocator)
     {
-        return new WrappingUnfilteredRowIterator(iterator)
+        return new AlteringUnfilteredRowIterator(iterator)
         {
-            private final CloningRow cloningRow = new CloningRow();
-            private final RangeTombstoneMarker.Builder markerBuilder = new RangeTombstoneMarker.Builder(iterator.metadata().comparator.size());
+            private Row.Builder regularBuilder;
 
-            public Unfiltered next()
+            @Override
+            protected Row computeNextStatic(Row row)
             {
-                Unfiltered next = super.next();
-                return next.kind() == Unfiltered.Kind.ROW
-                     ? cloningRow.setTo((Row)next)
-                     : clone((RangeTombstoneMarker)next);
+                Row.Builder staticBuilder = allocator.cloningArrayBackedRowBuilder(columns().statics);
+                return Rows.copy(row, staticBuilder).build();
             }
 
-            private RangeTombstoneMarker clone(RangeTombstoneMarker marker)
+            @Override
+            protected Row computeNext(Row row)
             {
-                markerBuilder.reset();
+                if (regularBuilder == null)
+                    regularBuilder = allocator.cloningArrayBackedRowBuilder(columns().regulars);
 
-                RangeTombstone.Bound bound = marker.clustering();
-                for (int i = 0; i < bound.size(); i++)
-                    markerBuilder.writeClusteringValue(allocator.clone(bound.get(i)));
-                markerBuilder.writeBoundKind(bound.kind());
-                if (marker.isBoundary())
-                {
-                    RangeTombstoneBoundaryMarker bm = (RangeTombstoneBoundaryMarker)marker;
-                    markerBuilder.writeBoundaryDeletion(bm.endDeletionTime(), bm.startDeletionTime());
-                }
-                else
-                {
-                    markerBuilder.writeBoundDeletion(((RangeTombstoneBoundMarker)marker).deletionTime());
-                }
-                markerBuilder.endOfMarker();
-                return markerBuilder.build();
+                return Rows.copy(row, regularBuilder).build();
             }
 
-            class CloningRow extends WrappingRow
+            @Override
+            protected RangeTombstoneMarker computeNext(RangeTombstoneMarker marker)
             {
-                private final CloningClustering cloningClustering = new CloningClustering();
-                private final CloningCell cloningCell = new CloningCell();
-
-                protected Cell filterCell(Cell cell)
-                {
-                    return cloningCell.setTo(cell);
-                }
-
-                @Override
-                public Clustering clustering()
-                {
-                    return cloningClustering.setTo(super.clustering());
-                }
-            }
-
-            class CloningClustering extends Clustering
-            {
-                private Clustering wrapped;
-
-                public Clustering setTo(Clustering wrapped)
-                {
-                    this.wrapped = wrapped;
-                    return this;
-                }
-
-                public int size()
-                {
-                    return wrapped.size();
-                }
-
-                public ByteBuffer get(int i)
-                {
-                    ByteBuffer value = wrapped.get(i);
-                    return value == null ? null : allocator.clone(value);
-                }
-
-                public ByteBuffer[] getRawValues()
-                {
-                    throw new UnsupportedOperationException();
-                }
-            }
-
-            class CloningCell extends AbstractCell
-            {
-                private Cell wrapped;
-
-                public Cell setTo(Cell wrapped)
-                {
-                    this.wrapped = wrapped;
-                    return this;
-                }
-
-                public ColumnDefinition column()
-                {
-                    return wrapped.column();
-                }
-
-                public boolean isCounterCell()
-                {
-                    return wrapped.isCounterCell();
-                }
-
-                public ByteBuffer value()
-                {
-                    return allocator.clone(wrapped.value());
-                }
-
-                public LivenessInfo livenessInfo()
-                {
-                    return wrapped.livenessInfo();
-                }
-
-                public CellPath path()
-                {
-                    CellPath path = wrapped.path();
-                    if (path == null)
-                        return null;
-
-                    assert path.size() == 1;
-                    return CellPath.create(allocator.clone(path.get(0)));
-                }
+                return marker.copy(allocator);
             }
         };
     }

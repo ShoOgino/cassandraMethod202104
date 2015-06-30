@@ -4,51 +4,33 @@
         final Holder current = ref;
         return new SearchIterator<Clustering, Row>()
         {
-            private final SearchIterator<Clustering, MemtableRowData> rawIter = new BTreeSearchIterator<>(current.tree, metadata.comparator, !reversed);
-            private final MemtableRowData.ReusableRow row = allocator.newReusableRow();
-            private final ReusableFilteringRow filter = new ReusableFilteringRow(columns.fetchedColumns().regulars, columns);
-            private final long partitionDeletion = current.deletionInfo.getPartitionDeletion().markedForDeleteAt();
+            private final SearchIterator<Clustering, Row> rawIter = new BTreeSearchIterator<>(current.tree, metadata.comparator, !reversed);
+            private final DeletionTime partitionDeletion = current.deletionInfo.getPartitionDeletion();
 
             public boolean hasNext()
             {
                 return rawIter.hasNext();
             }
 
-            public Row next(Clustering key)
+            public Row next(Clustering clustering)
             {
-                if (key == Clustering.STATIC_CLUSTERING)
-                    return makeStatic(columns, current, allocator);
+                if (clustering == Clustering.STATIC_CLUSTERING)
+                    return staticRow(current, columns, true);
 
-                MemtableRowData data = rawIter.next(key);
-                // We also need to find if there is a range tombstone covering this key
-                RangeTombstone rt = current.deletionInfo.rangeCovering(key);
+                Row row = rawIter.next(clustering);
+                RangeTombstone rt = current.deletionInfo.rangeCovering(clustering);
 
-                if (data == null)
-                {
-                    // If we have a range tombstone but not data, "fake" the RT by return a row deletion
-                    // corresponding to the tombstone.
-                    if (rt != null && rt.deletionTime().markedForDeleteAt() > partitionDeletion)
-                        return filter.setRowDeletion(rt.deletionTime()).setTo(emptyDeletedRow(key, rt.deletionTime()));
-                    return null;
-                }
+                // A search iterator only return a row, so it doesn't allow to directly account for deletion that should apply to to row
+                // (the partition deletion or the deletion of a range tombstone that covers it). So if needs be, reuse the row deletion
+                // to carry the proper deletion on the row.
+                DeletionTime activeDeletion = partitionDeletion;
+                if (rt != null && rt.deletionTime().supersedes(activeDeletion))
+                    activeDeletion = rt.deletionTime();
 
-                row.setTo(data);
+                if (row == null)
+                    return activeDeletion.isLive() ? null : ArrayBackedRow.emptyDeletedRow(clustering, activeDeletion);
 
-                filter.setRowDeletion(null);
-                if (rt == null || rt.deletionTime().markedForDeleteAt() < partitionDeletion)
-                {
-                    filter.setDeletionTimestamp(partitionDeletion);
-                }
-                else
-                {
-                    filter.setDeletionTimestamp(rt.deletionTime().markedForDeleteAt());
-                    // If we have a range tombstone covering that row and it's bigger than the row deletion itself, then
-                    // we replace the row deletion by the tombstone deletion as a way to return the tombstone.
-                    if (rt.deletionTime().supersedes(row.deletion()))
-                        filter.setRowDeletion(rt.deletionTime());
-                }
-
-                return filter.setTo(row);
+                return row.filter(columns, activeDeletion, true, metadata);
             }
         };
     }

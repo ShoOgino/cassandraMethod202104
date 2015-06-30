@@ -1,0 +1,46 @@
+        @Override
+        public void setForSlice(Slice slice) throws IOException
+        {
+            super.setForSlice(slice);
+
+            isInit = true;
+
+            // if our previous slicing already got us the biggest row in the sstable, we're done
+            if (indexState.isDone())
+            {
+                sliceDone = true;
+                return;
+            }
+
+            // Find the first index block we'll need to read for the slice.
+            int startIdx = indexState.findBlockIndex(slice.start());
+            if (startIdx >= indexState.blocksCount())
+            {
+                sliceDone = true;
+                return;
+            }
+
+            // If that's the last block we were reading, we're already where we want to be. Otherwise,
+            // seek to that first block
+            if (startIdx != indexState.currentBlockIdx())
+                indexState.setToBlock(startIdx);
+
+            // Find the last index block we'll need to read for the slice.
+            lastBlockIdx = indexState.findBlockIndex(slice.end());
+
+            // The index search is based on the last name of the index blocks, so at that point we have that:
+            //   1) indexes[currentIdx - 1].lastName < slice.start <= indexes[currentIdx].lastName
+            //   2) indexes[lastBlockIdx - 1].lastName < slice.end <= indexes[lastBlockIdx].lastName
+            // so if currentIdx == lastBlockIdx and slice.end < indexes[currentIdx].firstName, we're guaranteed that the
+            // whole slice is between the previous block end and this block start, and thus has no corresponding
+            // data. One exception is if the previous block ends with an openMarker as it will cover our slice
+            // and we need to return it.
+            if (indexState.currentBlockIdx() == lastBlockIdx
+                && metadata().comparator.compare(slice.end(), indexState.currentIndex().firstName) < 0
+                && openMarker == null
+                && sstable.descriptor.version.storeRows())
+            {
+                sliceDone = true;
+            }
+        }
+

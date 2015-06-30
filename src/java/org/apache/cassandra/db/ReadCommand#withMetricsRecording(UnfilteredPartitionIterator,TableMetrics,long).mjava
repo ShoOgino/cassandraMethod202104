@@ -21,26 +21,33 @@
             {
                 currentKey = iter.partitionKey();
 
-                return new WrappingUnfilteredRowIterator(iter)
+                return new AlteringUnfilteredRowIterator(iter)
                 {
-                    public Unfiltered next()
+                    @Override
+                    protected Row computeNextStatic(Row row)
                     {
-                        Unfiltered unfiltered = super.next();
-                        if (unfiltered.kind() == Unfiltered.Kind.ROW)
-                        {
-                            Row row = (Row) unfiltered;
-                            if (row.hasLiveData(ReadCommand.this.nowInSec()))
-                                ++liveRows;
-                            for (Cell cell : row)
-                                if (!cell.isLive(ReadCommand.this.nowInSec()))
-                                    countTombstone(row.clustering());
-                        }
-                        else
-                        {
-                            countTombstone(unfiltered.clustering());
-                        }
+                        return computeNext(row);
+                    }
 
-                        return unfiltered;
+                    @Override
+                    protected Row computeNext(Row row)
+                    {
+                        if (row.hasLiveData(ReadCommand.this.nowInSec()))
+                            ++liveRows;
+
+                        for (Cell cell : row.cells())
+                        {
+                            if (!cell.isLive(ReadCommand.this.nowInSec()))
+                                countTombstone(row.clustering());
+                        }
+                        return row;
+                    }
+
+                    @Override
+                    protected RangeTombstoneMarker computeNext(RangeTombstoneMarker marker)
+                    {
+                        countTombstone(marker.clustering());
+                        return marker;
                     }
 
                     private void countTombstone(ClusteringPrefix clustering)

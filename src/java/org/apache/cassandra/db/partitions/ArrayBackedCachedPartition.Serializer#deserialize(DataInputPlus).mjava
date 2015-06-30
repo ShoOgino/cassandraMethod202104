@@ -8,17 +8,41 @@
             //      is slightly faster.
 
             int createdAtInSec = in.readInt();
+            int cachedLiveRows = in.readInt();
+            int rowsWithNonExpiringCells = in.readInt();
+            int nonTombstoneCellCount = in.readInt();
+            int nonExpiringLiveCells = in.readInt();
 
-            UnfilteredRowIteratorSerializer.Header h = UnfilteredRowIteratorSerializer.serializer.deserializeHeader(in, MessagingService.current_version, SerializationHelper.Flag.LOCAL);
-            assert !h.isReversed && h.rowEstimate >= 0;
+            UnfilteredRowIteratorSerializer.Header header = UnfilteredRowIteratorSerializer.serializer.deserializeHeader(in, MessagingService.current_version, SerializationHelper.Flag.LOCAL);
+            assert !header.isReversed && header.rowEstimate >= 0;
 
-            ArrayBackedCachedPartition partition = new ArrayBackedCachedPartition(h.metadata, h.key, h.partitionDeletion, h.sHeader.columns(), h.rowEstimate, false, createdAtInSec);
-            partition.staticRow = h.staticRow;
+            MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(header.partitionDeletion, header.metadata.comparator, false);
+            List<Row> rows = new ArrayList<>(header.rowEstimate);
 
-            Writer writer = partition.new Writer(createdAtInSec);
-            RangeTombstoneMarker.Writer markerWriter = partition.new RangeTombstoneCollector(false);
+            try (UnfilteredRowIterator partition = UnfilteredRowIteratorSerializer.serializer.deserialize(in, MessagingService.current_version, SerializationHelper.Flag.LOCAL, header))
+            {
+                while (partition.hasNext())
+                {
+                    Unfiltered unfiltered = partition.next();
+                    if (unfiltered.kind() == Unfiltered.Kind.ROW)
+                        rows.add((Row)unfiltered);
+                    else
+                        deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+                }
+            }
 
-            UnfilteredRowIteratorSerializer.serializer.deserialize(in, new SerializationHelper(MessagingService.current_version, SerializationHelper.Flag.LOCAL), h.sHeader, writer, markerWriter);
-            return partition;
+            return new ArrayBackedCachedPartition(header.metadata,
+                                                  header.key,
+                                                  header.sHeader.columns(),
+                                                  header.staticRow,
+                                                  rows,
+                                                  deletionBuilder.build(),
+                                                  header.sHeader.stats(),
+                                                  createdAtInSec,
+                                                  cachedLiveRows,
+                                                  rowsWithNonExpiringCells,
+                                                  nonTombstoneCellCount,
+                                                  nonExpiringLiveCells);
+
         }
 

@@ -12,21 +12,67 @@
      */
     public static ArrayBackedCachedPartition create(UnfilteredRowIterator iterator, int initialRowCapacity, int nowInSec)
     {
-        ArrayBackedCachedPartition partition = new ArrayBackedCachedPartition(iterator.metadata(),
-                                                                              iterator.partitionKey(),
-                                                                              iterator.partitionLevelDeletion(),
-                                                                              iterator.columns(),
-                                                                              initialRowCapacity,
-                                                                              iterator.isReverseOrder(),
-                                                                              nowInSec);
+        CFMetaData metadata = iterator.metadata();
+        boolean reversed = iterator.isReverseOrder();
 
-        partition.staticRow = iterator.staticRow().takeAlias();
+        List<Row> rows = new ArrayList<>(initialRowCapacity);
+        MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(iterator.partitionLevelDeletion(), metadata.comparator, reversed);
 
-        Writer writer = partition.new Writer(nowInSec);
-        RangeTombstoneCollector markerCollector = partition.new RangeTombstoneCollector(iterator.isReverseOrder());
+        int cachedLiveRows = 0;
+        int rowsWithNonExpiringCells = 0;
 
-        copyAll(iterator, writer, markerCollector, partition);
+        int nonTombstoneCellCount = 0;
+        int nonExpiringLiveCells = 0;
 
-        return partition;
+        while (iterator.hasNext())
+        {
+            Unfiltered unfiltered = iterator.next();
+            if (unfiltered.kind() == Unfiltered.Kind.ROW)
+            {
+                Row row = (Row)unfiltered;
+                rows.add(row);
+
+                // Collect stats
+                if (row.hasLiveData(nowInSec))
+                    ++cachedLiveRows;
+
+                boolean hasNonExpiringCell = false;
+                for (Cell cell : row.cells())
+                {
+                    if (!cell.isTombstone())
+                    {
+                        ++nonTombstoneCellCount;
+                        if (!cell.isExpiring())
+                        {
+                            hasNonExpiringCell = true;
+                            ++nonExpiringLiveCells;
+                        }
+                    }
+                }
+
+                if (hasNonExpiringCell)
+                    ++rowsWithNonExpiringCells;
+            }
+            else
+            {
+                deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+            }
+        }
+
+        if (reversed)
+            Collections.reverse(rows);
+
+        return new ArrayBackedCachedPartition(metadata,
+                                              iterator.partitionKey(),
+                                              iterator.columns(),
+                                              iterator.staticRow(),
+                                              rows,
+                                              deletionBuilder.build(),
+                                              iterator.stats(),
+                                              nowInSec,
+                                              cachedLiveRows,
+                                              rowsWithNonExpiringCells,
+                                              nonTombstoneCellCount,
+                                              nonExpiringLiveCells);
     }
 

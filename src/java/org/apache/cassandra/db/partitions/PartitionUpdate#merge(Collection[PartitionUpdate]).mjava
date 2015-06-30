@@ -8,17 +8,30 @@
     public static PartitionUpdate merge(Collection<PartitionUpdate> updates)
     {
         assert !updates.isEmpty();
-        if (updates.size() == 1)
+        final int size = updates.size();
+
+        if (size == 1)
             return Iterables.getOnlyElement(updates);
 
-        int totalSize = 0;
+        // Used when merging row to decide of liveness
+        int nowInSec = FBUtilities.nowInSeconds();
+
         PartitionColumns.Builder builder = PartitionColumns.builder();
         DecoratedKey key = null;
         CFMetaData metadata = null;
+        MutableDeletionInfo deletion = MutableDeletionInfo.live();
+        Row staticRow = Rows.EMPTY_STATIC_ROW;
+        List<Iterator<Row>> updateRowIterators = new ArrayList<>(size);
+        RowStats stats = RowStats.NO_STATS;
+
         for (PartitionUpdate update : updates)
         {
-            totalSize += update.rows;
             builder.addAll(update.columns());
+            deletion.add(update.deletionInfo());
+            if (!update.staticRow().isEmpty())
+                staticRow = staticRow == Rows.EMPTY_STATIC_ROW ? update.staticRow() : Rows.merge(staticRow, update.staticRow(), nowInSec);
+            updateRowIterators.add(update.iterator());
+            stats = stats.mergeWith(update.stats());
 
             if (key == null)
                 key = update.partitionKey();
@@ -31,22 +44,40 @@
                 assert metadata.cfId.equals(update.metadata().cfId);
         }
 
-        // Used when merging row to decide of liveness
-        int nowInSec = FBUtilities.nowInSeconds();
-        PartitionUpdate newUpdate = new PartitionUpdate(metadata, key, builder.build(), totalSize);
-        for (PartitionUpdate update : updates)
+        PartitionColumns columns = builder.build();
+
+        final Row.Merger merger = new Row.Merger(size, nowInSec, columns.regulars);
+
+        Iterator<Row> merged = MergeIterator.get(updateRowIterators, metadata.comparator, new MergeIterator.Reducer<Row, Row>()
         {
-            newUpdate.deletionInfo.add(update.deletionInfo);
-            if (!update.staticRow().isEmpty())
+            @Override
+            public boolean trivialReduceIsTrivial()
             {
-                if (newUpdate.staticRow().isEmpty())
-                    newUpdate.staticRow = update.staticRow().takeAlias();
-                else
-                    Rows.merge(newUpdate.staticRow(), update.staticRow(), newUpdate.columns().statics, newUpdate.staticWriter(), nowInSec, SecondaryIndexManager.nullUpdater);
+                return true;
             }
-            for (Row row : update)
-                row.copyTo(newUpdate.writer);
-        }
-        return newUpdate;
+
+            public void reduce(int idx, Row current)
+            {
+                merger.add(idx, current);
+            }
+
+            protected Row getReduced()
+            {
+                // Note that while merger.getRow() can theoretically return null, it won't in this case because
+                // we don't pass an "activeDeletion".
+                return merger.merge(DeletionTime.LIVE);
+            }
+
+            @Override
+            protected void onKeyChange()
+            {
+                merger.clear();
+            }
+        });
+
+        List<Row> rows = new ArrayList<>();
+        Iterators.addAll(rows, merged);
+
+        return new PartitionUpdate(metadata, key, columns, staticRow, rows, deletion, stats, true, true);
     }
 

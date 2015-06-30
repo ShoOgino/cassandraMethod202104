@@ -12,36 +12,45 @@
                 LegacyLayout.LegacyDeletionInfo info = LegacyLayout.LegacyDeletionInfo.serializer.deserialize(metadata, in, version);
                 int size = in.readInt();
                 Iterator<LegacyLayout.LegacyCell> cells = LegacyLayout.deserializeCells(metadata, in, flag, size);
-                SerializationHelper helper = new SerializationHelper(version, flag);
+                SerializationHelper helper = new SerializationHelper(metadata, version, flag);
                 try (UnfilteredRowIterator iterator = LegacyLayout.onWireCellstoUnfilteredRowIterator(metadata, key, info, cells, false, helper))
                 {
-                    return UnfilteredRowIterators.toUpdate(iterator);
+                    return PartitionUpdate.fromIterator(iterator);
                 }
             }
 
             assert key == null; // key is only there for the old format
 
-            UnfilteredRowIteratorSerializer.Header h = UnfilteredRowIteratorSerializer.serializer.deserializeHeader(in, version, flag);
-            if (h.isEmpty)
-                return emptyUpdate(h.metadata, h.key);
+            UnfilteredRowIteratorSerializer.Header header = UnfilteredRowIteratorSerializer.serializer.deserializeHeader(in, version, flag);
+            if (header.isEmpty)
+                return emptyUpdate(header.metadata, header.key);
 
-            assert !h.isReversed;
-            assert h.rowEstimate >= 0;
-            PartitionUpdate upd = new PartitionUpdate(h.metadata,
-                                                      h.key,
-                                                      new DeletionInfo(h.partitionDeletion),
-                                                      new RowDataBlock(h.sHeader.columns().regulars, h.rowEstimate, false, h.metadata.isCounter()),
-                                                      h.sHeader.columns(),
-                                                      h.rowEstimate);
+            assert !header.isReversed;
+            assert header.rowEstimate >= 0;
 
-            upd.staticRow = h.staticRow;
+            MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(header.partitionDeletion, header.metadata.comparator, false);
+            List<Row> rows = new ArrayList<>(header.rowEstimate);
 
-            RangeTombstoneMarker.Writer markerWriter = upd.markerWriter(false);
-            UnfilteredRowIteratorSerializer.serializer.deserialize(in, new SerializationHelper(version, flag), h.sHeader, upd.writer(), markerWriter);
+            try (UnfilteredRowIterator partition = UnfilteredRowIteratorSerializer.serializer.deserialize(in, version, flag, header))
+            {
+                while (partition.hasNext())
+                {
+                    Unfiltered unfiltered = partition.next();
+                    if (unfiltered.kind() == Unfiltered.Kind.ROW)
+                        rows.add((Row)unfiltered);
+                    else
+                        deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+                }
+            }
 
-            // Mark sorted after we're read it all since that's what we use in the writer() method to detect bad uses
-            upd.isSorted = true;
-
-            return upd;
+            return new PartitionUpdate(header.metadata,
+                                       header.key,
+                                       header.sHeader.columns(),
+                                       header.staticRow,
+                                       rows,
+                                       deletionBuilder.build(),
+                                       header.sHeader.stats(),
+                                       true,
+                                       false);
         }
 

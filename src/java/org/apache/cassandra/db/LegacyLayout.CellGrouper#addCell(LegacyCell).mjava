@@ -7,8 +7,8 @@
             }
             else if (clustering == null)
             {
-                clustering = cell.name.clustering.takeAlias();
-                clustering.writeTo(writer);
+                clustering = cell.name.clustering;
+                builder.newRow(clustering);
             }
             else if (!clustering.equals(cell.name.clustering))
             {
@@ -19,14 +19,12 @@
             if (rowDeletion != null && rowDeletion.deletionTime.deletes(cell.timestamp))
                 return true;
 
-            LivenessInfo info = livenessInfo(metadata, cell);
-
             ColumnDefinition column = cell.name.column;
             if (column == null)
             {
                 // It's the row marker
                 assert !cell.value.hasRemaining();
-                helper.writePartitionKeyLivenessInfo(writer, info.timestamp(), info.ttl(), info.localDeletionTime());
+                builder.addPrimaryKeyLivenessInfo(LivenessInfo.create(cell.timestamp, cell.ttl, cell.localDeletionTime));
             }
             else
             {
@@ -43,11 +41,15 @@
                         // practice and 2) is only used during upgrade, it's probably worth keeping things simple.
                         helper.startOfComplexColumn(column);
                         path = cell.name.collectionElement == null ? null : CellPath.create(cell.name.collectionElement);
+                        if (!helper.includes(path))
+                            return true;
                     }
-                    helper.writeCell(writer, column, cell.isCounter(), cell.value, info.timestamp(), info.localDeletionTime(), info.ttl(), path);
+                    Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
+                    if (!helper.isDropped(c, column.isComplex()))
+                        builder.addCell(c);
                     if (column.isComplex())
                     {
-                        helper.endOfComplexColumn(column);
+                        helper.endOfComplexColumn();
                     }
                 }
             }

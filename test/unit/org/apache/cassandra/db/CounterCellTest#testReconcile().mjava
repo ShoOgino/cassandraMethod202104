@@ -2,62 +2,59 @@
     public void testReconcile()
     {
         ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(COUNTER1);
-        ColumnDefinition cDef = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1).metadata.getColumnDefinition(ByteBufferUtil.bytes("val"));
-        ByteBuffer col = ByteBufferUtil.bytes("c1");
+        ByteBuffer col = ByteBufferUtil.bytes("val");
 
-        AbstractCell left;
-        AbstractCell right;
+        Cell left;
+        Cell right;
 
         // both deleted, diff deletion time, same ts
-        left = createLegacyCounterCell(cfs, col, 1, 2, 0, 5);
-        right = createLegacyCounterCell(cfs, col, 1, 2, 0, 10);
+        left = createDeleted(cfs, col, 2, 5);
+        right = createDeleted(cfs, col, 2, 10);
         assert Cells.reconcile(left, right, 10) == right;
 
         // diff ts
-        right = createLegacyCounterCell(cfs, col, 1, 1, 0, 10);
+        right = createLegacyCounterCell(cfs, col, 1, 10);
         assert Cells.reconcile(left, right, 10) == left;
 
         // < tombstone
-        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(6, 6));
-        right = createLegacyCounterCell(cfs, col, 1, 5, 0, 5);
+        left = createDeleted(cfs, col, 6, 6);
+        right = createLegacyCounterCell(cfs, col, 1, 5);
         assert Cells.reconcile(left, right, 10) == left;
 
         // > tombstone
-        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(1, 1));
-        right = createLegacyCounterCell(cfs, col, 1, 5, 0, Integer.MAX_VALUE);
+        left = createDeleted(cfs, col, 1, 1);
+        right = createLegacyCounterCell(cfs, col, 1, 5);
         assert Cells.reconcile(left, right, 10) == left;
 
         // == tombstone
-        left = new CellTest.TestCell(cDef, ByteBufferUtil.bytes(5L), SimpleLivenessInfo.forDeletion(8, 8));
-        right = createLegacyCounterCell(cfs, col, 1, 8, 0, Integer.MAX_VALUE);
+        left = createDeleted(cfs, col, 8, 8);
+        right = createLegacyCounterCell(cfs, col, 1, 8);
         assert Cells.reconcile(left, right, 10) == left;
 
         // live + live
-        left = createLegacyCounterCell(cfs, col, 1, 2, 0, Integer.MAX_VALUE);
-        right = createLegacyCounterCell(cfs, col, 3, 5, 0, Integer.MAX_VALUE);
+        left = createLegacyCounterCell(cfs, col, 1, 2);
+        right = createLegacyCounterCell(cfs, col, 3, 5);
         Cell reconciled = Cells.reconcile(left, right, 10);
         assertEquals(CounterContext.instance().total(reconciled.value()), 4);
-        assertEquals(reconciled.livenessInfo().timestamp(), 5L);
+        assertEquals(reconciled.timestamp(), 5L);
 
         // Add, don't change TS
-        Cell addTen = createLegacyCounterCell(cfs, col, 10, 4, 0, Integer.MAX_VALUE);
+        Cell addTen = createLegacyCounterCell(cfs, col, 10, 4);
         reconciled = Cells.reconcile(reconciled, addTen, 10);
         assertEquals(CounterContext.instance().total(reconciled.value()), 14);
-        assertEquals(reconciled.livenessInfo().timestamp(), 5L);
+        assertEquals(reconciled.timestamp(), 5L);
 
         // Add w/new TS
-        Cell addThree = createLegacyCounterCell(cfs, col, 3, 7, 0, Integer.MAX_VALUE);
+        Cell addThree = createLegacyCounterCell(cfs, col, 3, 7);
         reconciled = Cells.reconcile(reconciled, addThree, 10);
         assertEquals(CounterContext.instance().total(reconciled.value()), 17);
-        assertEquals(reconciled.livenessInfo().timestamp(), 7L);
+        assertEquals(reconciled.timestamp(), 7L);
 
         // Confirm no deletion time
-        assert reconciled.livenessInfo().localDeletionTime() == Integer.MAX_VALUE;
+        assert reconciled.localDeletionTime() == Integer.MAX_VALUE;
 
-        Cell deleted = createLegacyCounterCell(cfs, col, 2, 8, 0, 8);
+        Cell deleted = createDeleted(cfs, col, 8, 8);
         reconciled = Cells.reconcile(reconciled, deleted, 10);
-        assertEquals(2, CounterContext.instance().total(reconciled.value()));
-        assertEquals(reconciled.livenessInfo().timestamp(), 8L);
-        assert reconciled.livenessInfo().localDeletionTime() == 8;
+        assert reconciled.localDeletionTime() == 8;
     }
 

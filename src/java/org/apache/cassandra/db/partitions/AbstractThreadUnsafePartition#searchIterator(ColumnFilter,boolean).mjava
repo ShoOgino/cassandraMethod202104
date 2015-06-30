@@ -1,0 +1,38 @@
+    public SearchIterator<Clustering, Row> searchIterator(final ColumnFilter columns, boolean reversed)
+    {
+        final RowSearcher searcher = reversed ? new ReverseRowSearcher() : new ForwardRowSearcher();
+        return new SearchIterator<Clustering, Row>()
+        {
+            public boolean hasNext()
+            {
+                return !searcher.isDone();
+            }
+
+            public Row next(Clustering clustering)
+            {
+                if (clustering == Clustering.STATIC_CLUSTERING)
+                {
+                    Row staticRow = staticRow();
+                    return staticRow.isEmpty() || columns.fetchedColumns().statics.isEmpty()
+                         ? Rows.EMPTY_STATIC_ROW
+                         : staticRow.filter(columns, partitionLevelDeletion(), true, metadata);
+                }
+
+                Row row = searcher.search(clustering);
+                RangeTombstone rt = deletionInfo().rangeCovering(clustering);
+
+                // A search iterator only return a row, so it doesn't allow to directly account for deletion that should apply to to row
+                // (the partition deletion or the deletion of a range tombstone that covers it). So if needs be, reuse the row deletion
+                // to carry the proper deletion on the row.
+                DeletionTime activeDeletion = partitionLevelDeletion();
+                if (rt != null && rt.deletionTime().supersedes(activeDeletion))
+                    activeDeletion = rt.deletionTime();
+
+                if (row == null)
+                    return activeDeletion.isLive() ? null : ArrayBackedRow.emptyDeletedRow(clustering, activeDeletion);
+
+                return row.filter(columns, activeDeletion, true, metadata);
+            }
+        };
+    }
+

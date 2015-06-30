@@ -11,20 +11,24 @@
      */
     public static ArrayBackedPartition create(UnfilteredRowIterator iterator, int initialRowCapacity)
     {
-        ArrayBackedPartition partition = new ArrayBackedPartition(iterator.metadata(),
-                                                                  iterator.partitionKey(),
-                                                                  iterator.partitionLevelDeletion(),
-                                                                  iterator.columns(),
-                                                                  initialRowCapacity,
-                                                                  iterator.isReverseOrder());
+        CFMetaData metadata = iterator.metadata();
+        boolean reversed = iterator.isReverseOrder();
 
-        partition.staticRow = iterator.staticRow().takeAlias();
+        List<Row> rows = new ArrayList<>(initialRowCapacity);
+        MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(iterator.partitionLevelDeletion(), metadata.comparator, reversed);
 
-        Writer writer = partition.new Writer(true);
-        RangeTombstoneCollector markerCollector = partition.new RangeTombstoneCollector(iterator.isReverseOrder());
+        while (iterator.hasNext())
+        {
+            Unfiltered unfiltered = iterator.next();
+            if (unfiltered.kind() == Unfiltered.Kind.ROW)
+                rows.add((Row)unfiltered);
+            else
+                deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+        }
 
-        copyAll(iterator, writer, markerCollector, partition);
+        if (reversed)
+            Collections.reverse(rows);
 
-        return partition;
+        return new ArrayBackedPartition(metadata, iterator.partitionKey(), iterator.columns(), iterator.staticRow(), rows, deletionBuilder.build(), iterator.stats());
     }
 

@@ -1,0 +1,28 @@
+        public void execute(DecoratedKey partitionKey, UpdateParameters params) throws InvalidRequestException
+        {
+            assert column.type.isMultiCell() : "Attempted to set a value for a single key on a frozen map";
+            ByteBuffer key = k.bindAndGet(params.options);
+            ByteBuffer value = t.bindAndGet(params.options);
+            if (key == null)
+                throw new InvalidRequestException("Invalid null map key");
+            if (key == ByteBufferUtil.UNSET_BYTE_BUFFER)
+                throw new InvalidRequestException("Invalid unset map key");
+
+            CellPath path = CellPath.create(key);
+
+            if (value == null)
+            {
+                params.addTombstone(column, path);
+            }
+            else if (value != ByteBufferUtil.UNSET_BYTE_BUFFER)
+            {
+                // We don't support value > 64K because the serialization format encode the length as an unsigned short.
+                if (value.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
+                    throw new InvalidRequestException(String.format("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
+                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
+                                                                    value.remaining()));
+
+                params.addCell(column, path, value);
+            }
+        }
+

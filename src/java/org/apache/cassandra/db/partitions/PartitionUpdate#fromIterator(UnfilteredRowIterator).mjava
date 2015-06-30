@@ -1,0 +1,29 @@
+    /**
+     * Turns the given iterator into an update.
+     *
+     * Warning: this method does not close the provided iterator, it is up to
+     * the caller to close it.
+     */
+    public static PartitionUpdate fromIterator(UnfilteredRowIterator iterator)
+    {
+        CFMetaData metadata = iterator.metadata();
+        boolean reversed = iterator.isReverseOrder();
+
+        List<Row> rows = new ArrayList<>();
+        MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(iterator.partitionLevelDeletion(), metadata.comparator, reversed);
+
+        while (iterator.hasNext())
+        {
+            Unfiltered unfiltered = iterator.next();
+            if (unfiltered.kind() == Unfiltered.Kind.ROW)
+                rows.add((Row)unfiltered);
+            else
+                deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+        }
+
+        if (reversed)
+            Collections.reverse(rows);
+
+        return new PartitionUpdate(metadata, iterator.partitionKey(), iterator.columns(), iterator.staticRow(), rows, deletionBuilder.build(), iterator.stats(), true, false);
+    }
+

@@ -1,0 +1,120 @@
+        protected Row buildInternal()
+        {
+            // First, the easy cases
+            if (cells.isEmpty())
+                return buildNoCells();
+
+            // Cells have been added in an unsorted way, so sort them first
+            Collections.sort(cells, Cell.comparator);
+
+            // We now need to
+            //  1) merge equal cells together
+            //  2) group the cells for a given complex column together, and include their potential complex deletion time.
+            //     And this without forgetting that some complex columns may have a complex deletion but not cells.
+
+            int addedColumns = countAddedColumns();
+            ColumnData[] data = new ColumnData[addedColumns];
+
+            int nextComplexWithDeletion = findNextComplexWithDeletion(0);
+            ColumnDefinition previousColumn = null;
+
+            int minDeletionTime = Math.min(minDeletionTime(primaryKeyLivenessInfo), minDeletionTime(deletion));
+
+            int i = 0;
+            int size = 0;
+            while (i < cells.size())
+            {
+                Cell cell = cells.get(i++);
+                ColumnDefinition column = cell.column();
+                if (column.isSimple())
+                {
+                    // Either it's a cell for the same column than our previous cell and we merge them together, or it's a new column
+                    if (previousColumn != null && previousColumn.compareTo(column) == 0)
+                        data[size - 1] = Cells.reconcile((Cell)data[size - 1], cell, nowInSec);
+                    else
+                        data[size++] = cell;
+                }
+                else
+                {
+                    // First, collect the complex deletion time for the column we got the first complex column of. We'll
+                    // also find if there is columns that sorts before but had only a complex deletion and add them.
+                    DeletionTime complexDeletion = DeletionTime.LIVE;
+                    while (nextComplexWithDeletion >= 0)
+                    {
+                        int cmp = column.compareTo(columns.getComplex(nextComplexWithDeletion));
+                        if (cmp < 0)
+                        {
+                            // This is after the column we're gonna add cell for. We'll deal with it later
+                            break;
+                        }
+                        else if (cmp > 0)
+                        {
+                            // We have a column that only has a complex deletion and no column. Add its data first
+                            data[size++] = new ComplexColumnData(columns.getComplex(nextComplexWithDeletion), ComplexColumnData.NO_CELLS, complexDeletions[nextComplexWithDeletion]);
+                            minDeletionTime = Integer.MIN_VALUE;
+                            nextComplexWithDeletion = findNextComplexWithDeletion(nextComplexWithDeletion + 1);
+                        }
+                        else // cmp == 0
+                        {
+                            // This is the column we'll about to add cell for. Record the deletion time and break to the cell addition
+                            complexDeletion = complexDeletions[nextComplexWithDeletion];
+                            minDeletionTime = Integer.MIN_VALUE;
+                            nextComplexWithDeletion = findNextComplexWithDeletion(nextComplexWithDeletion + 1);
+                            break;
+                        }
+                    }
+
+                    // Find how many cells the complex column has (cellCount) and the index of the next cell that doesn't belong to it (nextColumnIdx).
+                    int nextColumnIdx = i; // i is on cell following the current one
+                    int cellCount = 1; // We have at least the current cell
+                    Cell previousCell = cell;
+                    while (nextColumnIdx < cells.size())
+                    {
+                        Cell newCell = cells.get(nextColumnIdx);
+                        if (column.compareTo(newCell.column()) != 0)
+                            break;
+
+                        ++nextColumnIdx;
+                        if (column.cellPathComparator().compare(previousCell.path(), newCell.path()) != 0)
+                            ++cellCount;
+                        previousCell = newCell;
+                    }
+                    Cell[] columnCells = new Cell[cellCount];
+                    int complexSize = 0;
+                    columnCells[complexSize++] = cell;
+                    previousCell = cell;
+                    for (int j = i; j < nextColumnIdx; j++)
+                    {
+                        Cell newCell = cells.get(j);
+                        // Either it's a cell for the same path than our previous cell and we merge them together, or it's a new path
+                        if (column.cellPathComparator().compare(previousCell.path(), newCell.path()) == 0)
+                            columnCells[complexSize - 1] = Cells.reconcile(previousCell, newCell, nowInSec);
+                        else
+                            columnCells[complexSize++] = newCell;
+                        previousCell = newCell;
+                    }
+                    i = nextColumnIdx;
+
+                    data[size++] = new ComplexColumnData(column, columnCells, complexDeletion);
+                }
+                previousColumn = column;
+            }
+            // We may still have some complex columns with only a complex deletion
+            while (nextComplexWithDeletion >= 0)
+            {
+                data[size++] = new ComplexColumnData(columns.getComplex(nextComplexWithDeletion), ComplexColumnData.NO_CELLS, complexDeletions[nextComplexWithDeletion]);
+                nextComplexWithDeletion = findNextComplexWithDeletion(nextComplexWithDeletion + 1);
+                minDeletionTime = Integer.MIN_VALUE;
+            }
+            assert size == addedColumns;
+
+            // Reconciliation made it harder to compute minDeletionTime for cells in the loop above, so just do it now if we need to.
+            if (minDeletionTime != Integer.MIN_VALUE)
+            {
+                for (ColumnData cd : data)
+                    minDeletionTime = Math.min(minDeletionTime, minDeletionTime(cd));
+            }
+
+            return new ArrayBackedRow(clustering, columns, primaryKeyLivenessInfo, deletion, size, data, minDeletionTime);
+        }
+

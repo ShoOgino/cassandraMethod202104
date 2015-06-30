@@ -10,7 +10,7 @@
         this.sstable = sstable;
         this.key = key;
         this.columns = columnFilter;
-        this.helper = new SerializationHelper(sstable.descriptor.version.correspondingMessagingVersion(), SerializationHelper.Flag.LOCAL, columnFilter);
+        this.helper = new SerializationHelper(sstable.metadata, sstable.descriptor.version.correspondingMessagingVersion(), SerializationHelper.Flag.LOCAL, columnFilter);
         this.isForThrift = isForThrift;
 
         if (indexEntry == null)
@@ -26,7 +26,7 @@
             {
                 // We seek to the beginning to the partition if either:
                 //   - the partition is not indexed; we then have a single block to read anyway
-                //     and we need to read the partition deletion time.
+                //     (and we need to read the partition deletion time).
                 //   - we're querying static columns.
                 boolean needSeekAtPartitionStart = !indexEntry.isIndexed() || !columns.fetchedColumns().statics.isEmpty();
 
@@ -49,24 +49,24 @@
 
                     // Note that this needs to be called after file != null and after the partitionDeletion has been set, but before readStaticRow
                     // (since it uses it) so we can't move that up (but we'll be able to simplify as soon as we drop support for the old file format).
-                    this.reader = needsReader ? createReader(indexEntry, file, needSeekAtPartitionStart, shouldCloseFile) : null;
+                    this.reader = needsReader ? createReader(indexEntry, file, true, shouldCloseFile) : null;
                     this.staticRow = readStaticRow(sstable, file, helper, columns.fetchedColumns().statics, isForThrift, reader == null ? null : reader.deserializer);
                 }
                 else
                 {
                     this.partitionLevelDeletion = indexEntry.deletionTime();
                     this.staticRow = Rows.EMPTY_STATIC_ROW;
-                    this.reader = needsReader ? createReader(indexEntry, file, needSeekAtPartitionStart, shouldCloseFile) : null;
+                    this.reader = needsReader ? createReader(indexEntry, file, false, shouldCloseFile) : null;
                 }
 
-                if (reader == null && shouldCloseFile)
+                if (reader == null && file != null && shouldCloseFile)
                     file.close();
             }
             catch (IOException e)
             {
                 sstable.markSuspect();
                 String filePath = file.getPath();
-                if (shouldCloseFile && file != null)
+                if (shouldCloseFile)
                 {
                     try
                     {
