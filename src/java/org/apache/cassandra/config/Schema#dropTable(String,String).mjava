@@ -1,21 +1,22 @@
     public void dropTable(String ksName, String tableName)
     {
-        KSMetaData ksm = getKSMetaData(ksName);
-        assert ksm != null;
+        KSMetaData oldKsm = getKSMetaData(ksName);
+        assert oldKsm != null;
         ColumnFamilyStore cfs = Keyspace.open(ksName).getColumnFamilyStore(tableName);
         assert cfs != null;
 
         // reinitialize the keyspace.
-        CFMetaData cfm = ksm.cfMetaData().get(tableName);
+        CFMetaData cfm = oldKsm.tables.get(tableName).get();
+        KSMetaData newKsm = oldKsm.cloneWith(oldKsm.tables.without(tableName));
 
         purge(cfm);
-        setKeyspaceDefinition(ksm.cloneWithTableRemoved(cfm));
+        setKeyspaceDefinition(newKsm);
 
-        CompactionManager.instance.interruptCompactionFor(Arrays.asList(cfm), true);
+        CompactionManager.instance.interruptCompactionFor(Collections.singleton(cfm), true);
 
         if (DatabaseDescriptor.isAutoSnapshot())
             cfs.snapshot(Keyspace.getTimestampedSnapshotName(cfs.name));
-        Keyspace.open(ksm.name).dropCf(cfm.cfId);
+        Keyspace.open(ksName).dropCf(cfm.cfId);
         MigrationManager.instance.notifyDropColumnFamily(cfm);
 
         CommitLog.instance.forceRecycleAllSegments(Collections.singleton(cfm.cfId));
