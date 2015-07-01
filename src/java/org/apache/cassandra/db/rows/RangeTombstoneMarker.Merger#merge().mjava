@@ -16,33 +16,29 @@
             if (previousDeletionTimeInMerged.equals(newDeletionTimeInMerged))
                 return null;
 
-            ByteBuffer[] values = bound.getRawValues();
+            boolean isBeforeClustering = bound.kind().comparedToClustering < 0;
+            if (reversed)
+                isBeforeClustering = !isBeforeClustering;
 
+            ByteBuffer[] values = bound.getRawValues();
             RangeTombstoneMarker merged;
-            switch (MergedKind.forBound(bound, reversed))
+            if (previousDeletionTimeInMerged.isLive())
             {
-                case INCL_OPEN:
-                    merged = previousDeletionTimeInMerged.isLive()
-                           ? RangeTombstoneBoundMarker.inclusiveOpen(reversed, values, newDeletionTimeInMerged)
-                           : RangeTombstoneBoundaryMarker.exclusiveCloseInclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
-                    break;
-                case EXCL_CLOSE:
-                    merged = newDeletionTimeInMerged.isLive()
-                           ? RangeTombstoneBoundMarker.exclusiveClose(reversed, values, previousDeletionTimeInMerged)
-                           : RangeTombstoneBoundaryMarker.exclusiveCloseInclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
-                    break;
-                case EXCL_OPEN:
-                    merged = previousDeletionTimeInMerged.isLive()
-                           ? RangeTombstoneBoundMarker.exclusiveOpen(reversed, values, newDeletionTimeInMerged)
-                           : RangeTombstoneBoundaryMarker.inclusiveCloseExclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
-                    break;
-                case INCL_CLOSE:
-                    merged = newDeletionTimeInMerged.isLive()
-                           ? RangeTombstoneBoundMarker.inclusiveClose(reversed, values, previousDeletionTimeInMerged)
-                           : RangeTombstoneBoundaryMarker.inclusiveCloseExclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
-                    break;
-                default:
-                    throw new AssertionError();
+                merged = isBeforeClustering
+                       ? RangeTombstoneBoundMarker.inclusiveOpen(reversed, values, newDeletionTimeInMerged)
+                       : RangeTombstoneBoundMarker.exclusiveOpen(reversed, values, newDeletionTimeInMerged);
+            }
+            else if (newDeletionTimeInMerged.isLive())
+            {
+                merged = isBeforeClustering
+                       ? RangeTombstoneBoundMarker.exclusiveClose(reversed, values, previousDeletionTimeInMerged)
+                       : RangeTombstoneBoundMarker.inclusiveClose(reversed, values, previousDeletionTimeInMerged);
+            }
+            else
+            {
+                merged = isBeforeClustering
+                       ? RangeTombstoneBoundaryMarker.exclusiveCloseInclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged)
+                       : RangeTombstoneBoundaryMarker.inclusiveCloseExclusiveOpen(reversed, values, previousDeletionTimeInMerged, newDeletionTimeInMerged);
             }
 
             if (listener != null)
