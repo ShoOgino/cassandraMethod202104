@@ -1,0 +1,32 @@
+        public Mutation deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag) throws IOException
+        {
+            String keyspaceName = null; // will always be set from cf.metadata but javac isn't smart enough to see that
+            if (version < MessagingService.VERSION_20)
+                keyspaceName = in.readUTF();
+
+            DecoratedKey key = null;
+            if (version < MessagingService.VERSION_30)
+                key = StorageService.getPartitioner().decorateKey(ByteBufferUtil.readWithShortLength(in));
+
+            int size = in.readInt();
+            assert size > 0;
+
+            if (size == 1)
+                return new Mutation(PartitionUpdate.serializer.deserialize(in, version, flag, key));
+
+            Map<UUID, PartitionUpdate> modifications = new HashMap<>(size);
+            PartitionUpdate update = null;
+            for (int i = 0; i < size; ++i)
+            {
+                update = PartitionUpdate.serializer.deserialize(in, version, flag, key);
+                modifications.put(update.metadata().cfId, update);
+            }
+
+            if (keyspaceName == null)
+                keyspaceName = update.metadata().ksName;
+            if (key == null)
+                key = update.partitionKey();
+
+            return new Mutation(keyspaceName, key, modifications);
+        }
+

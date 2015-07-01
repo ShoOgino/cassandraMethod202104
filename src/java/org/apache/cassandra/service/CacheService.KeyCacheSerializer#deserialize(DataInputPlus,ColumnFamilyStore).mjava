@@ -1,0 +1,24 @@
+        public Future<Pair<KeyCacheKey, RowIndexEntry>> deserialize(DataInputPlus input, ColumnFamilyStore cfs) throws IOException
+        {
+            int keyLength = input.readInt();
+            if (keyLength > FBUtilities.MAX_UNSIGNED_SHORT)
+            {
+                throw new IOException(String.format("Corrupted key cache. Key length of %d is longer than maximum of %d",
+                                                    keyLength, FBUtilities.MAX_UNSIGNED_SHORT));
+            }
+            ByteBuffer key = ByteBufferUtil.read(input, keyLength);
+            int generation = input.readInt();
+            SSTableReader reader = findDesc(generation, cfs.getSSTables());
+            input.readBoolean(); // backwards compatibility for "promoted indexes" boolean
+            if (reader == null)
+            {
+                RowIndexEntry.Serializer.skipPromotedIndex(input);
+                return null;
+            }
+            RowIndexEntry.IndexSerializer<?> indexSerializer = reader.descriptor.getFormat().getIndexSerializer(reader.metadata,
+                                                                                                                reader.descriptor.version,
+                                                                                                                SerializationHeader.forKeyCache(cfs.metadata));
+            RowIndexEntry entry = indexSerializer.deserialize(input);
+            return Futures.immediateFuture(Pair.create(new KeyCacheKey(cfs.metadata.cfId, reader.descriptor, key), entry));
+        }
+
