@@ -1,14 +1,19 @@
     public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException, InvalidRequestException
     {
         CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
-        if (cfm.removeTrigger(triggerName))
+        Triggers triggers = cfm.getTriggers();
+
+        if (!triggers.get(triggerName).isPresent())
         {
-            logger.info("Dropping trigger with name {}", triggerName);
-            MigrationManager.announceColumnFamilyUpdate(cfm, false, isLocalOnly);
-            return true;
+            if (ifExists)
+                return false;
+            else
+                throw new InvalidRequestException(String.format("Trigger %s was not found", triggerName));
         }
-        if (!ifExists)
-            throw new InvalidRequestException(String.format("Trigger %s was not found", triggerName));
-        return false;
+
+        logger.info("Dropping trigger with name {}", triggerName);
+        cfm.triggers(triggers.without(triggerName));
+        MigrationManager.announceColumnFamilyUpdate(cfm, false, isLocalOnly);
+        return true;
     }
 
