@@ -6,13 +6,15 @@
             cfs.clearUnsafe();
         Keyspace.clearSnapshot(null, SystemKeyspace.NAME);
 
+        int baseline = getDeferredDeletionCount();
+
         SystemKeyspace.snapshotOnVersionChange();
-        assertTrue(getSystemSnapshotFiles().isEmpty());
+        assertDeletedOrDeferred(baseline);
 
         // now setup system.local as if we're upgrading from a previous version
         setupReleaseVersion(getOlderVersionString());
         Keyspace.clearSnapshot(null, SystemKeyspace.NAME);
-        assertTrue(getSystemSnapshotFiles().isEmpty());
+        assertDeletedOrDeferred(baseline);
 
         // Compare versions again & verify that snapshots were created for all tables in the system ks
         SystemKeyspace.snapshotOnVersionChange();
@@ -24,6 +26,12 @@
         setupReleaseVersion(FBUtilities.getReleaseVersionString());
 
         SystemKeyspace.snapshotOnVersionChange();
-        assertTrue(getSystemSnapshotFiles().isEmpty());
+
+        // snapshotOnVersionChange for upgrade case will open a SSTR when the CFS is flushed. On Windows, we won't be
+        // able to delete hard-links to that file while segments are memory-mapped, so they'll be marked for deferred deletion.
+        // 10 files expected.
+        assertDeletedOrDeferred(baseline + 10);
+
+        Keyspace.clearSnapshot(null, SystemKeyspace.NAME);
     }
 
