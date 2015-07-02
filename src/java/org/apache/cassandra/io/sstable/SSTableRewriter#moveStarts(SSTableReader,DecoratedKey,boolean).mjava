@@ -31,7 +31,7 @@
         {
             // we call getCurrentReplacement() to support multiple rewriters operating over the same source readers at once.
             // note: only one such writer should be written to at any moment
-            final SSTableReader latest = sstable.getCurrentReplacement();
+            final SSTableReader latest = dataTracker.getCurrentVersion(sstable);
             SSTableReader replacement;
             if (reset)
             {
@@ -46,17 +46,7 @@
                 if (latest.first.compareTo(lowerbound) > 0)
                     continue;
 
-                final Runnable runOnClose = new Runnable()
-                {
-                    public void run()
-                    {
-                        // this is somewhat racey, in that we could theoretically be closing this old reader
-                        // when an even older reader is still in use, but it's not likely to have any major impact
-                        for (DecoratedKey key : invalidateKeys)
-                            latest.invalidateCacheKey(key);
-                    }
-                };
-
+                final Runnable runOnClose = new InvalidateKeys(latest, invalidateKeys);
                 if (lowerbound.compareTo(latest.last) >= 0)
                 {
                     replacement = latest.cloneAsShadowed(runOnClose);

@@ -1,24 +1,15 @@
+    // runOnClose must NOT be an anonymous or non-static inner class, nor must it retain a reference chain to this reader
     public SSTableReader cloneWithNewStart(DecoratedKey newStart, final Runnable runOnClose)
     {
         synchronized (tidy.global)
         {
             assert openReason != OpenReason.EARLY;
-            // TODO: make data/index start accurate for compressed files
             // TODO: merge with caller's firstKeyBeyond() work,to save time
             if (newStart.compareTo(first) > 0)
             {
                 final long dataStart = getPosition(newStart, Operator.EQ).position;
                 final long indexStart = getIndexScanPosition(newStart);
-                this.tidy.runOnClose = new Runnable()
-                {
-                    public void run()
-                    {
-                        dfile.dropPageCache(dataStart);
-                        ifile.dropPageCache(indexStart);
-                        if (runOnClose != null)
-                            runOnClose.run();
-                    }
-                };
+                this.tidy.runOnClose = new DropPageCache(dfile, dataStart, ifile, indexStart, runOnClose);
             }
 
             return cloneAndReplace(newStart, OpenReason.MOVED_START);
