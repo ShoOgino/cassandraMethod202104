@@ -4,27 +4,18 @@
      *
      * @param metadata metadata of ColumnFamily
      */
-    public Directories(CFMetaData metadata)
+    public Directories(final CFMetaData metadata)
     {
         this.metadata = metadata;
 
         String cfId = ByteBufferUtil.bytesToHex(ByteBufferUtil.bytes(metadata.cfId));
         int idx = metadata.cfName.indexOf(SECONDARY_INDEX_NAME_SEPARATOR);
-        // secondary indicies go in the same directory as the base cf
-        String directoryName;
-        if (idx >= 0)
-        {
-            directoryName = metadata.cfName.substring(0, idx) + "-" + cfId + File.separator + metadata.cfName.substring(idx);
-        }
-        else
-        {
-             directoryName = metadata.cfName + "-" + cfId;
-        }
+        String cfName = idx >= 0 ? metadata.cfName.substring(0, idx) : metadata.cfName;
+        String indexNameWithDot = idx >= 0 ? metadata.cfName.substring(idx) : null;
 
         this.dataPaths = new File[dataDirectories.length];
         // If upgraded from version less than 2.1, use existing directories
-        String oldSSTableRelativePath = join(metadata.ksName,
-                                         idx > 0 ? metadata.cfName.substring(0, idx) : metadata.cfName);
+        String oldSSTableRelativePath = join(metadata.ksName, cfName);
         for (int i = 0; i < dataDirectories.length; ++i)
         {
             // check if old SSTable directory exists
@@ -39,11 +30,16 @@
         });
         if (!olderDirectoryExists)
         {
-            // use 2.1-style path names
-        	
-        	String newSSTableRelativePath = join(metadata.ksName, directoryName);
+            // use 2.1+ style
+            String newSSTableRelativePath = join(metadata.ksName, cfName + '-' + cfId);
             for (int i = 0; i < dataDirectories.length; ++i)
                 dataPaths[i] = new File(dataDirectories[i].location, newSSTableRelativePath);
+        }
+        // if index, then move to its own directory
+        if (indexNameWithDot != null)
+        {
+            for (int i = 0; i < dataDirectories.length; ++i)
+                dataPaths[i] = new File(dataPaths[i], indexNameWithDot);
         }
 
         for (File dir : dataPaths)
@@ -57,6 +53,34 @@
                 // don't just let the default exception handler do this, we need the create loop to continue
                 logger.error("Failed to create {} directory", dir);
                 FileUtils.handleFSError(e);
+            }
+        }
+
+        // if index, move existing older versioned SSTable files to new directory
+        if (indexNameWithDot != null)
+        {
+            for (File dataPath : dataPaths)
+            {
+                File[] indexFiles = dataPath.getParentFile().listFiles(new FileFilter()
+                {
+                    @Override
+                    public boolean accept(File file)
+                    {
+                        if (file.isDirectory())
+                            return false;
+
+                        Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(),
+                                                                                            file.getName());
+                        return pair != null && pair.left.ksname.equals(metadata.ksName) && pair.left.cfname.equals(metadata.cfName);
+
+                    }
+                });
+                for (File indexFile : indexFiles)
+                {
+                    File destFile = new File(dataPath, indexFile.getName());
+                    logger.debug("Moving index file {} to {}", indexFile, destFile);
+                    FileUtils.renameWithConfirm(indexFile, destFile);
+                }
             }
         }
     }
