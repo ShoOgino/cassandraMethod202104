@@ -1,0 +1,40 @@
+    public static ReadExecutionController forCommand(ReadCommand command)
+    {
+        ColumnFamilyStore baseCfs = Keyspace.openAndGetStore(command.metadata());
+        ColumnFamilyStore indexCfs = maybeGetIndexCfs(baseCfs, command);
+
+        if (indexCfs == null)
+        {
+            return new ReadExecutionController(baseCfs.readOrdering.start(), null, null);
+        }
+        else
+        {
+            OpOrder.Group baseOp = null, indexOp = null, writeOp;
+            // OpOrder.start() shouldn't fail, but better safe than sorry.
+            try
+            {
+                baseOp = baseCfs.readOrdering.start();
+                indexOp = indexCfs.readOrdering.start();
+                // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
+                // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room being made
+                writeOp = baseCfs.keyspace.writeOrder.start();
+                return new ReadExecutionController(baseOp, indexOp, writeOp);
+            }
+            catch (RuntimeException e)
+            {
+                // Note that must have writeOp == null since ReadOrderGroup ctor can't fail
+                try
+                {
+                    if (baseOp != null)
+                        baseOp.close();
+                }
+                finally
+                {
+                    if (indexOp != null)
+                        indexOp.close();
+                }
+                throw e;
+            }
+        }
+    }
+

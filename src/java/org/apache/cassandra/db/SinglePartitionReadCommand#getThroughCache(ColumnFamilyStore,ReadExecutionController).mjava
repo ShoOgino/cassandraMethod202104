@@ -1,0 +1,108 @@
+    /**
+     * Fetch the rows requested if in cache; if not, read it from disk and cache it.
+     * <p>
+     * If the partition is cached, and the filter given is within its bounds, we return
+     * from cache, otherwise from disk.
+     * <p>
+     * If the partition is is not cached, we figure out what filter is "biggest", read
+     * that from disk, then filter the result and either cache that or return it.
+     */
+    private UnfilteredRowIterator getThroughCache(ColumnFamilyStore cfs, ReadExecutionController executionController)
+    {
+        assert !cfs.isIndex(); // CASSANDRA-5732
+        assert cfs.isRowCacheEnabled() : String.format("Row cache is not enabled on table [%s]", cfs.name);
+
+        RowCacheKey key = new RowCacheKey(metadata().ksAndCFName, partitionKey());
+
+        // Attempt a sentinel-read-cache sequence.  if a write invalidates our sentinel, we'll return our
+        // (now potentially obsolete) data, but won't cache it. see CASSANDRA-3862
+        // TODO: don't evict entire partitions on writes (#2864)
+        IRowCacheEntry cached = CacheService.instance.rowCache.get(key);
+        if (cached != null)
+        {
+            if (cached instanceof RowCacheSentinel)
+            {
+                // Some other read is trying to cache the value, just do a normal non-caching read
+                Tracing.trace("Row cache miss (race)");
+                cfs.metric.rowCacheMiss.inc();
+                return queryMemtableAndDisk(cfs, executionController);
+            }
+
+            CachedPartition cachedPartition = (CachedPartition)cached;
+            if (cfs.isFilterFullyCoveredBy(clusteringIndexFilter(), limits(), cachedPartition, nowInSec()))
+            {
+                cfs.metric.rowCacheHit.inc();
+                Tracing.trace("Row cache hit");
+                return clusteringIndexFilter().getUnfilteredRowIterator(columnFilter(), cachedPartition);
+            }
+
+            cfs.metric.rowCacheHitOutOfRange.inc();
+            Tracing.trace("Ignoring row cache as cached value could not satisfy query");
+            return queryMemtableAndDisk(cfs, executionController);
+        }
+
+        cfs.metric.rowCacheMiss.inc();
+        Tracing.trace("Row cache miss");
+
+        boolean cacheFullPartitions = metadata().params.caching.cacheAllRows();
+
+        // To be able to cache what we read, what we read must at least covers what the cache holds, that
+        // is the 'rowsToCache' first rows of the partition. We could read those 'rowsToCache' first rows
+        // systematically, but we'd have to "extend" that to whatever is needed for the user query that the
+        // 'rowsToCache' first rows don't cover and it's not trivial with our existing filters. So currently
+        // we settle for caching what we read only if the user query does query the head of the partition since
+        // that's the common case of when we'll be able to use the cache anyway. One exception is if we cache
+        // full partitions, in which case we just always read it all and cache.
+        if (cacheFullPartitions || clusteringIndexFilter().isHeadFilter())
+        {
+            RowCacheSentinel sentinel = new RowCacheSentinel();
+            boolean sentinelSuccess = CacheService.instance.rowCache.putIfAbsent(key, sentinel);
+            boolean sentinelReplaced = false;
+
+            try
+            {
+                int rowsToCache = metadata().params.caching.rowsPerPartitionToCache();
+                @SuppressWarnings("resource") // we close on exception or upon closing the result of this method
+                UnfilteredRowIterator iter = SinglePartitionReadCommand.fullPartitionRead(metadata(), nowInSec(), partitionKey()).queryMemtableAndDisk(cfs, executionController);
+                try
+                {
+                    // We want to cache only rowsToCache rows
+                    CachedPartition toCache = CachedBTreePartition.create(DataLimits.cqlLimits(rowsToCache).filter(iter, nowInSec()), nowInSec());
+                    if (sentinelSuccess && !toCache.isEmpty())
+                    {
+                        Tracing.trace("Caching {} rows", toCache.rowCount());
+                        CacheService.instance.rowCache.replace(key, sentinel, toCache);
+                        // Whether or not the previous replace has worked, our sentinel is not in the cache anymore
+                        sentinelReplaced = true;
+                    }
+
+                    // We then re-filter out what this query wants.
+                    // Note that in the case where we don't cache full partitions, it's possible that the current query is interested in more
+                    // than what we've cached, so we can't just use toCache.
+                    UnfilteredRowIterator cacheIterator = clusteringIndexFilter().getUnfilteredRowIterator(columnFilter(), toCache);
+                    if (cacheFullPartitions)
+                    {
+                        // Everything is guaranteed to be in 'toCache', we're done with 'iter'
+                        assert !iter.hasNext();
+                        iter.close();
+                        return cacheIterator;
+                    }
+                    return UnfilteredRowIterators.concat(cacheIterator, clusteringIndexFilter().filterNotIndexed(columnFilter(), iter));
+                }
+                catch (RuntimeException | Error e)
+                {
+                    iter.close();
+                    throw e;
+                }
+            }
+            finally
+            {
+                if (sentinelSuccess && !sentinelReplaced)
+                    cfs.invalidateCachedPartition(key);
+            }
+        }
+
+        Tracing.trace("Fetching data but not populating cache as query does not query from the start of the partition");
+        return queryMemtableAndDisk(cfs, executionController);
+    }
+
