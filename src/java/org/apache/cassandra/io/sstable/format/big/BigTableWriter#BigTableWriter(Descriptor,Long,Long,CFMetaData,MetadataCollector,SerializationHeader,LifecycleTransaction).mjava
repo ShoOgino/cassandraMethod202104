@@ -1,0 +1,31 @@
+    public BigTableWriter(Descriptor descriptor, 
+                          Long keyCount, 
+                          Long repairedAt, 
+                          CFMetaData metadata, 
+                          MetadataCollector metadataCollector, 
+                          SerializationHeader header,
+                          LifecycleTransaction txn)
+    {
+        super(descriptor, keyCount, repairedAt, metadata, metadataCollector, header);
+        txn.trackNew(this); // must track before any files are created
+
+        if (compression)
+        {
+            dataFile = SequentialWriter.open(getFilename(),
+                                             descriptor.filenameFor(Component.COMPRESSION_INFO),
+                                             metadata.compressionParameters(),
+                                             metadataCollector);
+            dbuilder = SegmentedFile.getCompressedBuilder((CompressedSequentialWriter) dataFile);
+        }
+        else
+        {
+            dataFile = SequentialWriter.open(new File(getFilename()), new File(descriptor.filenameFor(Component.CRC)));
+            dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode(), false);
+        }
+        iwriter = new IndexWriter(keyCount, dataFile);
+
+        // txnLogs will delete if safe to do so (early readers)
+        iwriter.indexFile.deleteFile(false);
+        dataFile.deleteFile(false);
+    }
+
