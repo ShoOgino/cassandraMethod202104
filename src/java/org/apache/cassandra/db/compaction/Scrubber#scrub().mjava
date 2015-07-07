@@ -2,9 +2,10 @@
     {
         outputHandler.output(String.format("Scrubbing %s (%s bytes)", sstable, dataFile.length()));
         int nowInSec = FBUtilities.nowInSeconds();
-        try (SSTableRewriter writer = new SSTableRewriter(cfs, transaction, sstable.maxDataAge, isOffline);)
+        try (SSTableRewriter writer = new SSTableRewriter(cfs, transaction, sstable.maxDataAge, isOffline))
         {
-            nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
+            nextIndexKey = indexAvailable() ? ByteBufferUtil.readWithShortLength(indexFile) : null;
+            if (indexAvailable())
             {
                 // throw away variable so we don't have a side effect in the assert
                 long firstRowPositionFromIndex = rowIndexEntrySerializer.deserialize(indexFile).position;
@@ -50,7 +51,7 @@
                 String keyName = key == null ? "(unreadable key)" : ByteBufferUtil.bytesToHex(key.getKey());
                 outputHandler.debug(String.format("row %s is %s bytes", keyName, dataSizeFromIndex));
 
-                assert currentIndexKey != null || indexFile.isEOF();
+                assert currentIndexKey != null || !indexAvailable();
 
                 try
                 {
@@ -64,10 +65,10 @@
                                 "_too big_", ByteBufferUtil.bytesToHex(currentIndexKey))));
                     }
 
-                    if (dataSizeFromIndex > dataFile.length())
+                    if (indexFile != null && dataSizeFromIndex > dataFile.length())
                         throw new IOError(new IOException("Impossible row size (greater than file length): " + dataSizeFromIndex));
 
-                    if (dataStart != dataStartFromIndex)
+                    if (indexFile != null && dataStart != dataStartFromIndex)
                         outputHandler.warn(String.format("Data file row position %d differs from index file row position %d", dataStart, dataStartFromIndex));
 
                     try (UnfilteredRowIterator iterator = withValidation(new SSTableIdentityIterator(sstable, dataFile, key), dataFile.getPath()))
