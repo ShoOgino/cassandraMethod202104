@@ -1,0 +1,95 @@
+    private static CFMetaData decodeTableMetadata(UntypedResultSet.Row tableRow,
+                                                  UntypedResultSet columnRows,
+                                                  UntypedResultSet triggerRows)
+    {
+        String ksName = tableRow.getString("keyspace_name");
+        String cfName = tableRow.getString("columnfamily_name");
+
+        AbstractType<?> rawComparator = TypeParser.parse(tableRow.getString("comparator"));
+        AbstractType<?> subComparator = tableRow.has("subcomparator") ? TypeParser.parse(tableRow.getString("subcomparator")) : null;
+
+        boolean isSuper = "super".equals(tableRow.getString("type").toLowerCase());
+        boolean isDense = tableRow.getBoolean("is_dense");
+        boolean isCompound = rawComparator instanceof CompositeType;
+
+        // We don't really use the default validator but as we have it for backward compatibility, we use it to know if it's a counter table
+        AbstractType<?> defaultValidator = TypeParser.parse(tableRow.getString("default_validator"));
+        boolean isCounter = defaultValidator instanceof CounterColumnType;
+
+        /*
+         * With CASSANDRA-5202 we stopped inferring the cf id from the combination of keyspace/table names,
+         * and started storing the generated uuids in system.schema_columnfamilies.
+         *
+         * In 3.0 we SHOULD NOT see tables like that (2.0-created, non-upgraded).
+         * But in the off-chance that we do, we generate the deterministic uuid here.
+         */
+        UUID cfId = tableRow.has("cf_id")
+                  ? tableRow.getUUID("cf_id")
+                  : CFMetaData.generateLegacyCfId(ksName, cfName);
+
+        boolean isCQLTable = !isSuper && !isDense && isCompound;
+        boolean isStaticCompactTable = !isDense && !isCompound;
+
+        // Internally, compact tables have a specific layout, see CompactTables. But when upgrading from
+        // previous versions, they may not have the expected schema, so detect if we need to upgrade and do
+        // it in createColumnsFromColumnRows.
+        // We can remove this once we don't support upgrade from versions < 3.0.
+        boolean needsUpgrade = !isCQLTable && checkNeedsUpgrade(columnRows, isSuper, isStaticCompactTable);
+
+        List<ColumnDefinition> columnDefs = createColumnsFromColumnRows(columnRows,
+                                                                        ksName,
+                                                                        cfName,
+                                                                        rawComparator,
+                                                                        subComparator,
+                                                                        isSuper,
+                                                                        isCQLTable,
+                                                                        isStaticCompactTable,
+                                                                        needsUpgrade);
+
+        if (needsUpgrade)
+            addDefinitionForUpgrade(columnDefs, ksName, cfName, isStaticCompactTable, isSuper, rawComparator, subComparator, defaultValidator);
+
+        CFMetaData cfm = CFMetaData.create(ksName, cfName, cfId, isDense, isCompound, isSuper, isCounter, columnDefs);
+
+        cfm.readRepairChance(tableRow.getDouble("read_repair_chance"));
+        cfm.dcLocalReadRepairChance(tableRow.getDouble("local_read_repair_chance"));
+        cfm.gcGraceSeconds(tableRow.getInt("gc_grace_seconds"));
+        cfm.minCompactionThreshold(tableRow.getInt("min_compaction_threshold"));
+        cfm.maxCompactionThreshold(tableRow.getInt("max_compaction_threshold"));
+        if (tableRow.has("comment"))
+            cfm.comment(tableRow.getString("comment"));
+        if (tableRow.has("memtable_flush_period_in_ms"))
+            cfm.memtableFlushPeriod(tableRow.getInt("memtable_flush_period_in_ms"));
+        cfm.caching(CachingOptions.fromString(tableRow.getString("caching")));
+        if (tableRow.has("default_time_to_live"))
+            cfm.defaultTimeToLive(tableRow.getInt("default_time_to_live"));
+        if (tableRow.has("speculative_retry"))
+            cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(tableRow.getString("speculative_retry")));
+        cfm.compactionStrategyClass(CFMetaData.createCompactionStrategy(tableRow.getString("compaction_strategy_class")));
+        cfm.compressionParameters(CompressionParameters.create(fromJsonMap(tableRow.getString("compression_parameters"))));
+        cfm.compactionStrategyOptions(fromJsonMap(tableRow.getString("compaction_strategy_options")));
+
+        if (tableRow.has("min_index_interval"))
+            cfm.minIndexInterval(tableRow.getInt("min_index_interval"));
+
+        if (tableRow.has("max_index_interval"))
+            cfm.maxIndexInterval(tableRow.getInt("max_index_interval"));
+
+        if (tableRow.has("bloom_filter_fp_chance"))
+            cfm.bloomFilterFpChance(tableRow.getDouble("bloom_filter_fp_chance"));
+        else
+            cfm.bloomFilterFpChance(cfm.getBloomFilterFpChance());
+
+        if (tableRow.has("dropped_columns"))
+        {
+            Map<String, String> types = tableRow.has("dropped_columns_types")
+                                      ? tableRow.getMap("dropped_columns_types", UTF8Type.instance, UTF8Type.instance)
+                                      : Collections.<String, String>emptyMap();
+            addDroppedColumns(cfm, tableRow.getMap("dropped_columns", UTF8Type.instance, LongType.instance), types);
+        }
+
+        triggerRows.forEach(row -> cfm.addTriggerDefinition(readTrigger(row)));
+
+        return cfm;
+    }
+

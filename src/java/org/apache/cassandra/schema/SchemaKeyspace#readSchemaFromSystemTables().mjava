@@ -1,0 +1,28 @@
+    public static List<KeyspaceMetadata> readSchemaFromSystemTables()
+    {
+        ReadCommand cmd = getReadCommandForTableSchema(KEYSPACES);
+        try (ReadOrderGroup orderGroup = cmd.startOrderGroup(); PartitionIterator schema = cmd.executeInternal(orderGroup))
+        {
+            List<KeyspaceMetadata> keyspaces = new ArrayList<>();
+
+            while (schema.hasNext())
+            {
+                try (RowIterator partition = schema.next())
+                {
+                    if (isSystemKeyspaceSchemaPartition(partition.partitionKey()))
+                        continue;
+
+                    DecoratedKey key = partition.partitionKey();
+
+                    readSchemaPartitionForKeyspaceAndApply(TYPES, key,
+                        types -> readSchemaPartitionForKeyspaceAndApply(TABLES, key,
+                        tables -> readSchemaPartitionForKeyspaceAndApply(FUNCTIONS, key,
+                        functions -> readSchemaPartitionForKeyspaceAndApply(AGGREGATES, key,
+                        aggregates -> keyspaces.add(createKeyspaceFromSchemaPartitions(partition, tables, types, functions, aggregates)))))
+                    );
+                }
+            }
+            return keyspaces;
+        }
+    }
+

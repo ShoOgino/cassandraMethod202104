@@ -1,0 +1,42 @@
+    private static ColumnDefinition createColumnFromColumnRow(UntypedResultSet.Row row,
+                                                              String keyspace,
+                                                              String table,
+                                                              AbstractType<?> rawComparator,
+                                                              AbstractType<?> rawSubComparator,
+                                                              boolean isSuper,
+                                                              boolean isCQLTable,
+                                                              boolean isStaticCompactTable,
+                                                              boolean needsUpgrade)
+    {
+        ColumnDefinition.Kind kind = deserializeKind(row.getString("type"));
+        if (needsUpgrade && isStaticCompactTable && kind == ColumnDefinition.Kind.REGULAR)
+            kind = ColumnDefinition.Kind.STATIC;
+
+        Integer componentIndex = null;
+        if (row.has("component_index"))
+            componentIndex = row.getInt("component_index");
+
+        // Note: we save the column name as string, but we should not assume that it is an UTF8 name, we
+        // we need to use the comparator fromString method
+        AbstractType<?> comparator = isCQLTable
+                                   ? UTF8Type.instance
+                                   : CompactTables.columnDefinitionComparator(kind, isSuper, rawComparator, rawSubComparator);
+        ColumnIdentifier name = ColumnIdentifier.getInterned(comparator.fromString(row.getString("column_name")), comparator);
+
+        AbstractType<?> validator = parseType(row.getString("validator"));
+
+        IndexType indexType = null;
+        if (row.has("index_type"))
+            indexType = IndexType.valueOf(row.getString("index_type"));
+
+        Map<String, String> indexOptions = null;
+        if (row.has("index_options"))
+            indexOptions = fromJsonMap(row.getString("index_options"));
+
+        String indexName = null;
+        if (row.has("index_name"))
+            indexName = row.getString("index_name");
+
+        return new ColumnDefinition(keyspace, table, name, validator, indexType, indexOptions, indexName, componentIndex, kind);
+    }
+

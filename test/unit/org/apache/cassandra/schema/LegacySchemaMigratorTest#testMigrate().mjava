@@ -1,0 +1,38 @@
+    /*
+     * 1. Write a variety of different keyspaces/tables/types/function in the legacy manner, using legacy schema tables
+     * 2. Run the migrator
+     * 3. Read all the keyspaces from the new schema tables
+     * 4. Make sure that we've read *exactly* the same set of keyspaces/tables/types/functions
+     * 5. Validate that the legacy schema tables are now empty
+     */
+    @Test
+    public void testMigrate()
+    {
+        List<KeyspaceMetadata> expected = keyspaceToMigrate();
+        expected.sort((k1, k2) -> k1.name.compareTo(k2.name));
+
+        // write the keyspaces into the legacy tables
+        expected.forEach(LegacySchemaMigratorTest::legacySerializeKeyspace);
+
+        // run the migration
+        LegacySchemaMigrator.migrate();
+
+        // read back all the metadata from the new schema tables
+        List<KeyspaceMetadata> actual = SchemaKeyspace.readSchemaFromSystemTables();
+        actual.sort((k1, k2) -> k1.name.compareTo(k2.name));
+
+        // make sure that we've read *exactly* the same set of keyspaces/tables/types/functions
+        assertEquals(expected, actual);
+
+        // need to load back CFMetaData of those tables (CFS instances will still be loaded)
+        loadLegacySchemaTables();
+
+        // verify that nothing's left in the old schema tables
+        for (CFMetaData table : LegacySchemaMigrator.LegacySchemaTables)
+        {
+            String query = format("SELECT * FROM %s.%s", SystemKeyspace.NAME, table.cfName);
+            //noinspection ConstantConditions
+            assertTrue(executeOnceInternal(query).isEmpty());
+        }
+    }
+
