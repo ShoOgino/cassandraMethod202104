@@ -18,7 +18,7 @@
         this.partitioner = partitioner;
         this.directories = directories;
         this.indexManager = new SecondaryIndexManager(this);
-        this.metric = new ColumnFamilyMetrics(this);
+        this.metric = new TableMetrics(this);
         fileIndexGenerator.set(generation);
         sampleLatencyNanos = DatabaseDescriptor.getReadRpcTimeout() / 2;
 
@@ -58,13 +58,20 @@
         if (registerBookkeeping)
         {
             // register the mbean
-            String type = this.partitioner instanceof LocalPartitioner ? "IndexColumnFamilies" : "ColumnFamilies";
-            mbeanName = "org.apache.cassandra.db:type=" + type + ",keyspace=" + this.keyspace.getName() + ",columnfamily=" + name;
+            mbeanName = String.format("org.apache.cassandra.db:type=%s,keyspace=%s,table=%s",
+                                         isIndex() ? "IndexTables" : "Tables",
+                                         keyspace.getName(), name);
+            oldMBeanName = String.format("org.apache.cassandra.db:type=%s,keyspace=%s,columnfamily=%s",
+                                         isIndex() ? "IndexColumnFamilies" : "ColumnFamilies",
+                                         keyspace.getName(), name);
             try
             {
                 MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-                ObjectName nameObj = new ObjectName(mbeanName);
-                mbs.registerMBean(this, nameObj);
+                ObjectName[] objectNames = {new ObjectName(mbeanName), new ObjectName(oldMBeanName)};
+                for (ObjectName objectName : objectNames)
+                {
+                    mbs.registerMBean(this, objectName);
+                }
             }
             catch (Exception e)
             {
@@ -97,6 +104,7 @@
         {
             latencyCalculator = ScheduledExecutors.optionalTasks.schedule(Runnables.doNothing(), 0, TimeUnit.NANOSECONDS);
             mbeanName = null;
+            oldMBeanName= null;
         }
     }
 

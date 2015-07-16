@@ -3,45 +3,46 @@
      *
      * @param cfs ColumnFamilyStore to measure metrics
      */
-    public ColumnFamilyMetrics(final ColumnFamilyStore cfs)
+    public TableMetrics(final ColumnFamilyStore cfs)
     {
-        factory = new ColumnFamilyMetricNameFactory(cfs);
+        factory = new TableMetricNameFactory(cfs, "Table");
+        aliasFactory = new TableMetricNameFactory(cfs, "ColumnFamily");
 
         samplers = Maps.newHashMap();
         for (Sampler sampler : Sampler.values())
         {
-            samplers.put(sampler, new TopKSampler<ByteBuffer>());
+            samplers.put(sampler, new TopKSampler<>());
         }
 
-        memtableColumnsCount = createColumnFamilyGauge("MemtableColumnsCount", new Gauge<Long>()
+        memtableColumnsCount = createTableGauge("MemtableColumnsCount", new Gauge<Long>()
         {
             public Long getValue()
             {
                 return cfs.getTracker().getView().getCurrentMemtable().getOperations();
             }
         });
-        memtableOnHeapSize = createColumnFamilyGauge("MemtableOnHeapSize", new Gauge<Long>()
+        memtableOnHeapSize = createTableGauge("MemtableOnHeapSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 return cfs.getTracker().getView().getCurrentMemtable().getAllocator().onHeap().owns();
             }
         });
-        memtableOffHeapSize = createColumnFamilyGauge("MemtableOffHeapSize", new Gauge<Long>()
+        memtableOffHeapSize = createTableGauge("MemtableOffHeapSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 return cfs.getTracker().getView().getCurrentMemtable().getAllocator().offHeap().owns();
             }
         });
-        memtableLiveDataSize = createColumnFamilyGauge("MemtableLiveDataSize", new Gauge<Long>()
+        memtableLiveDataSize = createTableGauge("MemtableLiveDataSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 return cfs.getTracker().getView().getCurrentMemtable().getLiveDataSize();
             }
         });
-        allMemtablesOnHeapSize = createColumnFamilyGauge("AllMemtablesHeapSize", new Gauge<Long>()
+        allMemtablesOnHeapSize = createTableGauge("AllMemtablesHeapSize", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -51,7 +52,7 @@
                 return size;
             }
         });
-        allMemtablesOffHeapSize = createColumnFamilyGauge("AllMemtablesOffHeapSize", new Gauge<Long>()
+        allMemtablesOffHeapSize = createTableGauge("AllMemtablesOffHeapSize", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -61,7 +62,7 @@
                 return size;
             }
         });
-        allMemtablesLiveDataSize = createColumnFamilyGauge("AllMemtablesLiveDataSize", new Gauge<Long>()
+        allMemtablesLiveDataSize = createTableGauge("AllMemtablesLiveDataSize", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -71,45 +72,51 @@
                 return size;
             }
         });
-        memtableSwitchCount = createColumnFamilyCounter("MemtableSwitchCount");
-        estimatedRowSizeHistogram = Metrics.register(factory.createMetricName("EstimatedRowSizeHistogram"), new Gauge<long[]>()
-        {
-            public long[] getValue()
-            {
-                return combineHistograms(cfs.getSSTables(), new GetHistogram()
-                {
-                    public EstimatedHistogram getHistogram(SSTableReader reader)
-                    {
-                        return reader.getEstimatedRowSize();
-                    }
-                });
+        memtableSwitchCount = createTableCounter("MemtableSwitchCount");
+        estimatedPartitionSizeHistogram = Metrics.register(factory.createMetricName("EstimatedPartitionSizeHistogram"),
+                                                           aliasFactory.createMetricName("EstimatedRowSizeHistogram"),
+                                                           new Gauge<long[]>()
+                                                           {
+                                                               public long[] getValue()
+                                                               {
+                                                                   return combineHistograms(cfs.getSSTables(), new GetHistogram()
+                                                                   {
+                                                                       public EstimatedHistogram getHistogram(SSTableReader reader)
+                                                                       {
+                                                                           return reader.getEstimatedPartitionSize();
+                                                                       }
+                                                                   });
+                                                               }
+                                                           });
+        estimatedPartitionCount = Metrics.register(factory.createMetricName("EstimatedPartitionCount"),
+                                                   aliasFactory.createMetricName("EstimatedRowCount"),
+                                                   new Gauge<Long>()
+                                                   {
+                                                       public Long getValue()
+                                                       {
+                                                           long memtablePartitions = 0;
+                                                           for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
+                                                               memtablePartitions += memtable.partitionCount();
+                                                           return SSTableReader.getApproximateKeyCount(cfs.getSSTables()) + memtablePartitions;
+                                                       }
+                                                   });
+        estimatedColumnCountHistogram = Metrics.register(factory.createMetricName("EstimatedColumnCountHistogram"),
+                                                         aliasFactory.createMetricName("EstimatedColumnCountHistogram"),
+                                                         new Gauge<long[]>()
+                                                         {
+                                                             public long[] getValue()
+                                                             {
+                                                                 return combineHistograms(cfs.getSSTables(), new GetHistogram()
+                                                                 {
+                                                                     public EstimatedHistogram getHistogram(SSTableReader reader)
+                                                                     {
+                                                                         return reader.getEstimatedColumnCount();
+                                                                     }
+                                                                 });
             }
         });
-        estimatedRowCount = Metrics.register(factory.createMetricName("EstimatedRowCount"), new Gauge<Long>()
-        {
-            public Long getValue()
-            {
-                long memtablePartitions = 0;
-                for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
-                    memtablePartitions += memtable.partitionCount();
-                return SSTableReader.getApproximateKeyCount(cfs.getSSTables()) + memtablePartitions;
-            }
-        });
-        estimatedColumnCountHistogram = Metrics.register(factory.createMetricName("EstimatedColumnCountHistogram"), new Gauge<long[]>()
-        {
-            public long[] getValue()
-            {
-                return combineHistograms(cfs.getSSTables(), new GetHistogram()
-                {
-                    public EstimatedHistogram getHistogram(SSTableReader reader)
-                    {
-                        return reader.getEstimatedColumnCount();
-                    }
-                });
-            }
-        });
-        sstablesPerReadHistogram = createColumnFamilyHistogram("SSTablesPerReadHistogram", cfs.keyspace.metric.sstablesPerReadHistogram);
-        compressionRatio = createColumnFamilyGauge("CompressionRatio", new Gauge<Double>()
+        sstablesPerReadHistogram = createTableHistogram("SSTablesPerReadHistogram", cfs.keyspace.metric.sstablesPerReadHistogram);
+        compressionRatio = createTableGauge("CompressionRatio", new Gauge<Double>()
         {
             public Double getValue()
             {
@@ -148,32 +155,32 @@
         readLatency = new LatencyMetrics(factory, "Read", cfs.keyspace.metric.readLatency, globalReadLatency);
         writeLatency = new LatencyMetrics(factory, "Write", cfs.keyspace.metric.writeLatency, globalWriteLatency);
         rangeLatency = new LatencyMetrics(factory, "Range", cfs.keyspace.metric.rangeLatency, globalRangeLatency);
-        pendingFlushes = createColumnFamilyCounter("PendingFlushes");
-        pendingCompactions = createColumnFamilyGauge("PendingCompactions", new Gauge<Integer>()
+        pendingFlushes = createTableCounter("PendingFlushes");
+        pendingCompactions = createTableGauge("PendingCompactions", new Gauge<Integer>()
         {
             public Integer getValue()
             {
                 return cfs.getCompactionStrategyManager().getEstimatedRemainingTasks();
             }
         });
-        liveSSTableCount = createColumnFamilyGauge("LiveSSTableCount", new Gauge<Integer>()
+        liveSSTableCount = createTableGauge("LiveSSTableCount", new Gauge<Integer>()
         {
             public Integer getValue()
             {
                 return cfs.getTracker().getSSTables().size();
             }
         });
-        liveDiskSpaceUsed = createColumnFamilyCounter("LiveDiskSpaceUsed");
-        totalDiskSpaceUsed = createColumnFamilyCounter("TotalDiskSpaceUsed");
-        minRowSize = createColumnFamilyGauge("MinRowSize", new Gauge<Long>()
+        liveDiskSpaceUsed = createTableCounter("LiveDiskSpaceUsed");
+        totalDiskSpaceUsed = createTableCounter("TotalDiskSpaceUsed");
+        minPartitionSize = createTableGauge("MinPartitionSize", "MinRowSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 long min = 0;
                 for (SSTableReader sstable : cfs.getSSTables())
                 {
-                    if (min == 0 || sstable.getEstimatedRowSize().min() < min)
-                        min = sstable.getEstimatedRowSize().min();
+                    if (min == 0 || sstable.getEstimatedPartitionSize().min() < min)
+                        min = sstable.getEstimatedPartitionSize().min();
                 }
                 return min;
             }
@@ -182,22 +189,22 @@
             public Long getValue()
             {
                 long min = Long.MAX_VALUE;
-                for (Metric cfGauge : allColumnFamilyMetrics.get("MinRowSize"))
+                for (Metric cfGauge : allTableMetrics.get("MinPartitionSize"))
                 {
                     min = Math.min(min, ((Gauge<? extends Number>) cfGauge).getValue().longValue());
                 }
                 return min;
             }
         });
-        maxRowSize = createColumnFamilyGauge("MaxRowSize", new Gauge<Long>()
+        maxPartitionSize = createTableGauge("MaxPartitionSize", "MaxRowSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 long max = 0;
                 for (SSTableReader sstable : cfs.getSSTables())
                 {
-                    if (sstable.getEstimatedRowSize().max() > max)
-                        max = sstable.getEstimatedRowSize().max();
+                    if (sstable.getEstimatedPartitionSize().max() > max)
+                        max = sstable.getEstimatedPartitionSize().max();
                 }
                 return max;
             }
@@ -206,14 +213,14 @@
             public Long getValue()
             {
                 long max = 0;
-                for (Metric cfGauge : allColumnFamilyMetrics.get("MaxRowSize"))
+                for (Metric cfGauge : allTableMetrics.get("MaxPartitionSize"))
                 {
                     max = Math.max(max, ((Gauge<? extends Number>) cfGauge).getValue().longValue());
                 }
                 return max;
             }
         });
-        meanRowSize = createColumnFamilyGauge("MeanRowSize", new Gauge<Long>()
+        meanPartitionSize = createTableGauge("MeanPartitionSize", "MeanRowSize", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -221,8 +228,8 @@
                 long count = 0;
                 for (SSTableReader sstable : cfs.getSSTables())
                 {
-                    long n = sstable.getEstimatedRowSize().count();
-                    sum += sstable.getEstimatedRowSize().mean() * n;
+                    long n = sstable.getEstimatedPartitionSize().count();
+                    sum += sstable.getEstimatedPartitionSize().mean() * n;
                     count += n;
                 }
                 return count > 0 ? sum / count : 0;
@@ -237,25 +244,25 @@
                 {
                     for (SSTableReader sstable : keyspace.getAllSSTables())
                     {
-                        long n = sstable.getEstimatedRowSize().count();
-                        sum += sstable.getEstimatedRowSize().mean() * n;
+                        long n = sstable.getEstimatedPartitionSize().count();
+                        sum += sstable.getEstimatedPartitionSize().mean() * n;
                         count += n;
                     }
                 }
                 return count > 0 ? sum / count : 0;
             }
         });
-        bloomFilterFalsePositives = createColumnFamilyGauge("BloomFilterFalsePositives", new Gauge<Long>()
+        bloomFilterFalsePositives = createTableGauge("BloomFilterFalsePositives", new Gauge<Long>()
         {
             public Long getValue()
             {
                 long count = 0L;
-                for (SSTableReader sstable: cfs.getSSTables())
+                for (SSTableReader sstable : cfs.getSSTables())
                     count += sstable.getBloomFilterFalsePositiveCount();
                 return count;
             }
         });
-        recentBloomFilterFalsePositives = createColumnFamilyGauge("RecentBloomFilterFalsePositives", new Gauge<Long>()
+        recentBloomFilterFalsePositives = createTableGauge("RecentBloomFilterFalsePositives", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -265,7 +272,7 @@
                 return count;
             }
         });
-        bloomFilterFalseRatio = createColumnFamilyGauge("BloomFilterFalseRatio", new Gauge<Double>()
+        bloomFilterFalseRatio = createTableGauge("BloomFilterFalseRatio", new Gauge<Double>()
         {
             public Double getValue()
             {
@@ -299,13 +306,13 @@
                 return (double) falseCount / (trueCount + falseCount);
             }
         });
-        recentBloomFilterFalseRatio = createColumnFamilyGauge("RecentBloomFilterFalseRatio", new Gauge<Double>()
+        recentBloomFilterFalseRatio = createTableGauge("RecentBloomFilterFalseRatio", new Gauge<Double>()
         {
             public Double getValue()
             {
                 long falseCount = 0L;
                 long trueCount = 0L;
-                for (SSTableReader sstable: cfs.getSSTables())
+                for (SSTableReader sstable : cfs.getSSTables())
                 {
                     falseCount += sstable.getRecentBloomFilterFalsePositiveCount();
                     trueCount += sstable.getRecentBloomFilterTruePositiveCount();
@@ -333,7 +340,7 @@
                 return (double) falseCount / (trueCount + falseCount);
             }
         });
-        bloomFilterDiskSpaceUsed = createColumnFamilyGauge("BloomFilterDiskSpaceUsed", new Gauge<Long>()
+        bloomFilterDiskSpaceUsed = createTableGauge("BloomFilterDiskSpaceUsed", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -343,7 +350,7 @@
                 return total;
             }
         });
-        bloomFilterOffHeapMemoryUsed = createColumnFamilyGauge("BloomFilterOffHeapMemoryUsed", new Gauge<Long>()
+        bloomFilterOffHeapMemoryUsed = createTableGauge("BloomFilterOffHeapMemoryUsed", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -353,7 +360,7 @@
                 return total;
             }
         });
-        indexSummaryOffHeapMemoryUsed = createColumnFamilyGauge("IndexSummaryOffHeapMemoryUsed", new Gauge<Long>()
+        indexSummaryOffHeapMemoryUsed = createTableGauge("IndexSummaryOffHeapMemoryUsed", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -363,7 +370,7 @@
                 return total;
             }
         });
-        compressionMetadataOffHeapMemoryUsed = createColumnFamilyGauge("CompressionMetadataOffHeapMemoryUsed", new Gauge<Long>()
+        compressionMetadataOffHeapMemoryUsed = createTableGauge("CompressionMetadataOffHeapMemoryUsed", new Gauge<Long>()
         {
             public Long getValue()
             {
@@ -373,8 +380,10 @@
                 return total;
             }
         });
-        speculativeRetries = createColumnFamilyCounter("SpeculativeRetries");
-        keyCacheHitRate = Metrics.register(factory.createMetricName("KeyCacheHitRate"), new RatioGauge()
+        speculativeRetries = createTableCounter("SpeculativeRetries");
+        keyCacheHitRate = Metrics.register(factory.createMetricName("KeyCacheHitRate"),
+                                           aliasFactory.createMetricName("KeyCacheHitRate"),
+                                           new RatioGauge()
         {
             @Override
             public Ratio getRatio()
@@ -398,23 +407,23 @@
                 return Math.max(requests, 1); // to avoid NaN.
             }
         });
-        tombstoneScannedHistogram = createColumnFamilyHistogram("TombstoneScannedHistogram", cfs.keyspace.metric.tombstoneScannedHistogram);
-        liveScannedHistogram = createColumnFamilyHistogram("LiveScannedHistogram", cfs.keyspace.metric.liveScannedHistogram);
-        colUpdateTimeDeltaHistogram = createColumnFamilyHistogram("ColUpdateTimeDeltaHistogram", cfs.keyspace.metric.colUpdateTimeDeltaHistogram);
+        tombstoneScannedHistogram = createTableHistogram("TombstoneScannedHistogram", cfs.keyspace.metric.tombstoneScannedHistogram);
+        liveScannedHistogram = createTableHistogram("LiveScannedHistogram", cfs.keyspace.metric.liveScannedHistogram);
+        colUpdateTimeDeltaHistogram = createTableHistogram("ColUpdateTimeDeltaHistogram", cfs.keyspace.metric.colUpdateTimeDeltaHistogram);
         coordinatorReadLatency = Metrics.timer(factory.createMetricName("CoordinatorReadLatency"));
         coordinatorScanLatency = Metrics.timer(factory.createMetricName("CoordinatorScanLatency"));
         waitingOnFreeMemtableSpace = Metrics.histogram(factory.createMetricName("WaitingOnFreeMemtableSpace"));
 
-        trueSnapshotsSize = createColumnFamilyGauge("SnapshotsSize", new Gauge<Long>()
+        trueSnapshotsSize = createTableGauge("SnapshotsSize", new Gauge<Long>()
         {
             public Long getValue()
             {
                 return cfs.trueSnapshotsSize();
             }
         });
-        rowCacheHitOutOfRange = createColumnFamilyCounter("RowCacheHitOutOfRange");
-        rowCacheHit = createColumnFamilyCounter("RowCacheHit");
-        rowCacheMiss = createColumnFamilyCounter("RowCacheMiss");
+        partitionCacheHitOutOfRange = createTableCounter("PartitionCacheHitOutOfRange", "RowCacheHitOutOfRange");
+        partitionCacheHit = createTableCounter("PartitionCacheHit", "RowCacheHit");
+        partitionCacheMiss = createTableCounter("PartitionCacheMiss", "RowCacheMiss");
 
         casPrepare = new LatencyMetrics(factory, "CasPrepare", cfs.keyspace.metric.casPrepare);
         casPropose = new LatencyMetrics(factory, "CasPropose", cfs.keyspace.metric.casPropose);
