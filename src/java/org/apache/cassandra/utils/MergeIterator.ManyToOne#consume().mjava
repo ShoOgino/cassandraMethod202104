@@ -1,17 +1,30 @@
-        /** Consume values by sending them to the reducer while they are equal. */
-        protected final Out consume()
+        /**
+         * Consume all items that sort like the current top of the heap. As we cannot advance the iterators to let
+         * equivalent items pop up, we walk the heap to find them and mark them as needing advance.
+         *
+         * This relies on the equalParent flag to avoid doing any comparisons.
+         */
+        private Out consume()
         {
-            reducer.onKeyChange();
-            Candidate<In> candidate = queue.peek();
-            if (candidate == null)
+            if (size == 0)
                 return endOfData();
-            do
-            {
-                candidate = queue.poll();
-                candidates.push(candidate);
-                reducer.reduce(candidate.idx, candidate.item);
+
+            reducer.onKeyChange();
+            assert !heap[0].equalParent;
+            reducer.reduce(heap[0].idx, heap[0].consume());
+            final int size = this.size;
+            final int sortedSectionSize = Math.min(size, SORTED_SECTION_SIZE);
+            int i;
+            consume: {
+                for (i = 1; i < sortedSectionSize; ++i)
+                {
+                    if (!heap[i].equalParent)
+                        break consume;
+                    reducer.reduce(heap[i].idx, heap[i].consume());
+                }
+                i = Math.max(i, consumeHeap(i) + 1);
             }
-            while (queue.peek() != null && queue.peek().compareTo(candidate) == 0);
+            needingAdvance = i;
             return reducer.getReduced();
         }
 
