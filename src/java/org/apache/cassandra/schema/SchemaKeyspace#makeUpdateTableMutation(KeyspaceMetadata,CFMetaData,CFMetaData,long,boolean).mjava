@@ -16,7 +16,7 @@
         {
             // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
             // are being deleted just because they are not here.
-            if (fromThrift && column.kind != ColumnDefinition.Kind.REGULAR)
+            if (fromThrift && column.kind != ColumnDefinition.Kind.REGULAR) // TODO FIXME
                 continue;
 
             dropColumnFromSchemaMutation(oldTable, column, timestamp, mutation);
@@ -29,6 +29,18 @@
         // old columns with updated attributes
         for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
             addColumnToSchemaMutation(newTable, newTable.getColumnDefinition(name), timestamp, mutation);
+
+        // dropped columns
+        MapDifference<ByteBuffer, CFMetaData.DroppedColumn> droppedColumnDiff =
+            Maps.difference(oldTable.getDroppedColumns(), newTable.getDroppedColumns());
+
+        // newly dropped columns
+        for (CFMetaData.DroppedColumn column : droppedColumnDiff.entriesOnlyOnRight().values())
+            addDroppedColumnToSchemaMutation(newTable, column, timestamp, mutation);
+
+        // columns added then dropped again
+        for (ByteBuffer name : droppedColumnDiff.entriesDiffering().keySet())
+            addDroppedColumnToSchemaMutation(newTable, newTable.getDroppedColumns().get(name), timestamp, mutation);
 
         MapDifference<String, TriggerMetadata> triggerDiff = triggersDiff(oldTable.getTriggers(), newTable.getTriggers());
 
