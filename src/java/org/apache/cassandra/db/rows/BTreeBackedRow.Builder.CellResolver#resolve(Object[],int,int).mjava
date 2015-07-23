@@ -1,0 +1,29 @@
+            public ColumnData resolve(Object[] cells, int lb, int ub)
+            {
+                Cell cell = (Cell) cells[lb];
+                ColumnDefinition column = cell.column;
+                if (cell.column.isSimple())
+                {
+                    assert lb + 1 == ub || nowInSec != Integer.MIN_VALUE;
+                    while (++lb < ub)
+                        cell = Cells.reconcile(cell, (Cell) cells[lb], nowInSec);
+                    return cell;
+                }
+
+                // TODO: relax this in the case our outer provider is sorted (want to delay until remaining changes are
+                // bedded in, as less important; galloping makes it pretty cheap anyway)
+                Arrays.sort(cells, lb, ub, (Comparator<Object>) column.cellComparator());
+                cell = (Cell) cells[lb];
+                DeletionTime deletion = DeletionTime.LIVE;
+                if (cell instanceof ComplexColumnDeletion)
+                {
+                    // TODO: do we need to be robust to multiple of these being provided?
+                    deletion = new DeletionTime(cell.timestamp(), cell.localDeletionTime());
+                    lb++;
+                }
+
+                List<Object> buildFrom = Arrays.asList(cells).subList(lb, ub);
+                Object[] btree = BTree.build(buildFrom, UpdateFunction.noOp());
+                return new ComplexColumnData(column, btree, deletion);
+            }
+
