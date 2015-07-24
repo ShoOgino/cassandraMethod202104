@@ -1,0 +1,29 @@
+    ScriptBasedUDFunction(FunctionName name,
+                          List<ColumnIdentifier> argNames,
+                          List<AbstractType<?>> argTypes,
+                          AbstractType<?> returnType,
+                          boolean calledOnNullInput,
+                          String language,
+                          String body)
+    {
+        super(name, argNames, argTypes, returnType, calledOnNullInput, language, body);
+
+        Compilable scriptEngine = scriptEngines.get(language);
+        if (scriptEngine == null)
+            throw new InvalidRequestException(String.format("Invalid language '%s' for function '%s'", language, name));
+
+        // execute compilation with no-permissions to prevent evil code e.g. via "static code blocks" / "class initialization"
+        try
+        {
+            this.script = AccessController.doPrivileged((PrivilegedExceptionAction<CompiledScript>) () -> scriptEngine.compile(body),
+                                                        accessControlContext);
+        }
+        catch (PrivilegedActionException x)
+        {
+            Throwable e = x.getCause();
+            logger.info("Failed to compile function '{}' for language {}: ", name, language, e);
+            throw new InvalidRequestException(
+                                             String.format("Failed to compile function '%s' for language %s: %s", name, language, e));
+        }
+    }
+
