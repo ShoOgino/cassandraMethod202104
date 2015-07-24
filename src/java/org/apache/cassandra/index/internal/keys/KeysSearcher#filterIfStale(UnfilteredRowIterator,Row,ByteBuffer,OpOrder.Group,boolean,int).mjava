@@ -1,0 +1,54 @@
+    private UnfilteredRowIterator filterIfStale(UnfilteredRowIterator iterator,
+                                                Row indexHit,
+                                                ByteBuffer indexedValue,
+                                                OpOrder.Group writeOp,
+                                                boolean isForThrift,
+                                                int nowInSec)
+    {
+        if (isForThrift)
+        {
+            // The data we got has gone though ThrifResultsMerger, so we're looking for the row whose clustering
+            // is the indexed name. Ans so we need to materialize the partition.
+            ImmutableBTreePartition result = ImmutableBTreePartition.create(iterator);
+            iterator.close();
+            Row data = result.getRow(new Clustering(index.getIndexedColumn().name.bytes));
+
+            // for thrift tables, we need to compare the index entry against the compact value column,
+            // not the column actually designated as the indexed column so we don't use the index function
+            // lib for the staleness check like we do in every other case
+            Cell baseData = data.getCell(index.baseCfs.metadata.compactValueColumn());
+            if (baseData == null || !baseData.isLive(nowInSec) || index.getIndexedColumn().type.compare(indexedValue, baseData.value()) != 0)
+            {
+                // Index is stale, remove the index entry and ignore
+                index.deleteStaleEntry(index.getIndexCfs().decorateKey(indexedValue),
+                                         new Clustering(index.getIndexedColumn().name.bytes),
+                                         new DeletionTime(indexHit.primaryKeyLivenessInfo().timestamp(), nowInSec),
+                                         writeOp);
+                return null;
+            }
+            else
+            {
+                return result.unfilteredIterator();
+            }
+        }
+        else
+        {
+            assert iterator.metadata().isCompactTable();
+            Row data = iterator.staticRow();
+            if (index.isStale(data, indexedValue, nowInSec))
+            {
+                // Index is stale, remove the index entry and ignore
+                index.deleteStaleEntry(index.getIndexCfs().decorateKey(indexedValue),
+                                         makeIndexClustering(iterator.partitionKey().getKey(), Clustering.EMPTY),
+                                         new DeletionTime(indexHit.primaryKeyLivenessInfo().timestamp(), nowInSec),
+                                         writeOp);
+                iterator.close();
+                return null;
+            }
+            else
+            {
+                return iterator;
+            }
+        }
+    }
+

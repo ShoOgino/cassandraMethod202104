@@ -10,21 +10,26 @@
         cfs.disableAutoCompaction();
 
         ColumnDefinition cd = cfs.metadata.getColumnDefinition(indexedColumnName).copy();
-        IndexMetadata indexDef = IndexMetadata.legacyIndex(cd,
-                                                           "test_index",
-                                                           IndexMetadata.IndexType.CUSTOM,
-                                                           ImmutableMap.of(SecondaryIndex.CUSTOM_INDEX_OPTION_NAME,
-                                                                           TestIndex.class.getName()));
+        IndexMetadata indexDef = IndexMetadata.singleColumnIndex(cd,
+                                                                 "test_index",
+                                                                 IndexMetadata.IndexType.CUSTOM,
+                                                                 ImmutableMap.of(IndexTarget.CUSTOM_INDEX_OPTION_NAME,
+                                                                                 StubIndex.class.getName()));
 
         if (!cfs.metadata.getIndexes().get("test_index").isPresent())
             cfs.metadata.indexes(cfs.metadata.getIndexes().with(indexDef));
 
-        Future<?> rebuild = cfs.indexManager.addIndexedColumn(indexDef);
+        Future<?> rebuild = cfs.indexManager.addIndex(indexDef);
         // If rebuild there is, wait for the rebuild to finish so it doesn't race with the following insertions
         if (rebuild != null)
             rebuild.get();
-        TestIndex index = ((TestIndex)cfs.indexManager.getIndexForColumn(cd));
-        index.resetCounts();
+
+        StubIndex index = (StubIndex)cfs.indexManager.listIndexes()
+                                                     .stream()
+                                                     .filter(i -> "test_index".equals(i.getIndexName()))
+                                                     .findFirst()
+                                                     .orElseThrow(() -> new RuntimeException(new AssertionError("Index not found")));
+        index.reset();
 
         UpdateBuilder.create(cfs.metadata, key).withTimestamp(0).newRow(1).add("val", 1).applyUnsafe();
 
@@ -38,7 +43,7 @@
 
         // We should have 1 insert and 1 update to the indexed "1" column
         // CASSANDRA-6640 changed index update to just update, not insert then delete
-        assertEquals(1, index.inserts.size());
-        assertEquals(1, index.updates.size());
+        assertEquals(1, index.rowsInserted.size());
+        assertEquals(1, index.rowsUpdated.size());
     }
 

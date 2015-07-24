@@ -1,0 +1,22 @@
+    /**
+     * Transaction for updates on the write path.
+     */
+    public UpdateTransaction newUpdateTransaction(PartitionUpdate update, OpOrder.Group opGroup, int nowInSec)
+    {
+        if (!hasIndexes())
+            return UpdateTransaction.NO_OP;
+
+        // todo : optimize lookup, we can probably cache quite a bit of stuff, rather than doing
+        // a linear scan every time. Holding off that though until CASSANDRA-7771 to figure out
+        // exactly how indexes are to be identified & associated with a given partition update
+        Index.Indexer[] indexers = indexes.values().stream()
+                                          .filter(i -> i.indexes(update.columns()))
+                                          .map(i -> i.indexerFor(update.partitionKey(),
+                                                                 nowInSec,
+                                                                 opGroup,
+                                                                 IndexTransaction.Type.UPDATE))
+                                          .toArray(Index.Indexer[]::new);
+
+        return indexers.length == 0 ? UpdateTransaction.NO_OP : new WriteTimeTransaction(indexers);
+    }
+
