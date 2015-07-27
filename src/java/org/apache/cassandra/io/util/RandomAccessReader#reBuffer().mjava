@@ -1,31 +1,19 @@
     /**
      * Read data from file starting from current currentOffset to populate buffer.
      */
-    protected void reBuffer()
+    public void reBuffer()
     {
-        bufferOffset += buffer.position();
-        buffer.clear();
-        assert bufferOffset < fileLength;
+        if (isEOF())
+            return;
 
-        long position = bufferOffset;
-        long limit = bufferOffset;
+        if (regions == null)
+            reBufferStandard();
+        else
+            reBufferMmap();
 
-        long pageAligedPos = position & ~4095;
-        // Because the buffer capacity is a multiple of the page size, we read less
-        // the first time and then we should read at page boundaries only,
-        // unless the user seeks elsewhere
-        long upperLimit = Math.min(fileLength, pageAligedPos + buffer.capacity());
-        buffer.limit((int)(upperLimit - position));
-        while (buffer.hasRemaining() && limit < upperLimit)
-        {
-            int n = channel.read(buffer, position);
-            if (n < 0)
-                break;
-            position += n;
-            limit = bufferOffset + buffer.position();
-        }
-        if (limit > fileLength)
-            buffer.position((int)(fileLength - bufferOffset));
-        buffer.flip();
+        if (limiter != null)
+            limiter.acquire(buffer.remaining());
+
+        assert buffer.order() == ByteOrder.BIG_ENDIAN : "Buffer must have BIG ENDIAN byte ordering";
     }
 

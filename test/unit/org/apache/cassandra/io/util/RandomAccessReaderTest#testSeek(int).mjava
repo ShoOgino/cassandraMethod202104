@@ -1,0 +1,76 @@
+    private static void testSeek(int numThreads) throws IOException, InterruptedException
+    {
+        final File f = File.createTempFile("testMark", "1");
+        final byte[] expected = new byte[1 << 16];
+
+        long seed = System.nanoTime();
+        //seed = 365238103404423L;
+        logger.info("Seed {}", seed);
+        Random r = new Random(seed);
+        r.nextBytes(expected);
+
+        try(SequentialWriter writer = SequentialWriter.open(f))
+        {
+            writer.write(expected);
+            writer.finish();
+        }
+
+        assert f.exists();
+
+        try(final ChannelProxy channel = new ChannelProxy(f))
+        {
+            final Runnable worker = () ->
+            {
+                try(RandomAccessReader reader = new RandomAccessReader.Builder(channel).build())
+                {
+                    assertEquals(expected.length, reader.length());
+
+                    ByteBuffer b = ByteBufferUtil.read(reader, expected.length);
+                    assertTrue(Arrays.equals(expected, b.array()));
+                    assertTrue(reader.isEOF());
+                    assertEquals(0, reader.bytesRemaining());
+
+                    reader.seek(0);
+                    b = ByteBufferUtil.read(reader, expected.length);
+                    assertTrue(Arrays.equals(expected, b.array()));
+                    assertTrue(reader.isEOF());
+                    assertEquals(0, reader.bytesRemaining());
+
+                    for (int i = 0; i < 10; i++)
+                    {
+                        int pos = r.nextInt(expected.length);
+                        reader.seek(pos);
+                        assertEquals(pos, reader.getPosition());
+
+                        ByteBuffer buf = ByteBuffer.wrap(expected, pos, expected.length - pos)
+                                                   .order(ByteOrder.BIG_ENDIAN);
+
+                        while (reader.bytesRemaining() > 4)
+                            assertEquals(buf.getInt(), reader.readInt());
+                    }
+
+                    reader.close();
+                }
+                catch (Exception ex)
+                {
+                    ex.printStackTrace();
+                    fail(ex.getMessage());
+                }
+            };
+
+            if (numThreads == 1)
+            {
+                worker.run();
+            }
+            else
+            {
+                ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+                for (int i = 0; i < numThreads; i++)
+                    executor.submit(worker);
+
+                executor.shutdown();
+                executor.awaitTermination(1, TimeUnit.MINUTES);
+            }
+        }
+    }
+
