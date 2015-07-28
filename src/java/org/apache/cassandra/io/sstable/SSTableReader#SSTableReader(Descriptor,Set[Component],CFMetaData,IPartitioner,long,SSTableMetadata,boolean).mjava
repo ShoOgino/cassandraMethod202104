@@ -1,0 +1,37 @@
+    private SSTableReader(final Descriptor desc,
+                          Set<Component> components,
+                          CFMetaData metadata,
+                          IPartitioner partitioner,
+                          long maxDataAge,
+                          SSTableMetadata sstableMetadata,
+                          boolean trackHotness)
+    {
+        super(desc, components, metadata, partitioner);
+        this.sstableMetadata = sstableMetadata;
+        this.maxDataAge = maxDataAge;
+
+        deletingTask = new SSTableDeletingTask(this);
+
+        if (trackHotness)
+        {
+            readMeter = SystemKeyspace.getSSTableReadMeter(desc.ksname, desc.cfname, desc.generation);
+            // sync the average read rate to system.sstable_activity every five minutes, starting one minute from now
+            readMeterSyncFuture = syncExecutor.scheduleAtFixedRate(new Runnable()
+            {
+                public void run()
+                {
+                    if (!isCompacted.get())
+                    {
+                        meterSyncThrottle.acquire();
+                        SystemKeyspace.persistSSTableReadMeter(desc.ksname, desc.cfname, desc.generation, readMeter);
+                    }
+                }
+            }, 1, 5, TimeUnit.MINUTES);
+        }
+        else
+        {
+            readMeter = null;
+            readMeterSyncFuture = null;
+        }
+    }
+
