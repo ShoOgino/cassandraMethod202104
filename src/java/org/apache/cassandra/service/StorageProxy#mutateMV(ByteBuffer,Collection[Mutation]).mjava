@@ -1,0 +1,74 @@
+    /**
+     * Use this method to have these Mutations applied
+     * across all replicas.
+     *
+     * @param mutations the mutations to be applied across the replicas
+     */
+    public static void mutateMV(ByteBuffer dataKey, Collection<Mutation> mutations)
+    throws UnavailableException, OverloadedException, WriteTimeoutException
+    {
+        Tracing.trace("Determining replicas for mutation");
+        final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
+
+        long startTime = System.nanoTime();
+        List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
+
+        try
+        {
+            Token baseToken = StorageService.getPartitioner().getToken(dataKey);
+
+            ConsistencyLevel consistencyLevel = ConsistencyLevel.ONE;
+
+            //Since the base -> view replication is 1:1 we only need to store the BL locally
+            final Collection<InetAddress> batchlogEndpoints = Collections.singleton(FBUtilities.getBroadcastAddress());
+            final UUID batchUUID = UUIDGen.getTimeUUID();
+            BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
+                                                                                                          () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
+
+            // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
+            for (Mutation mutation : mutations)
+            {
+                String keyspaceName = mutation.getKeyspaceName();
+                Token tk = mutation.key().getToken();
+                List<InetAddress> naturalEndpoints = Lists.newArrayList(MaterializedViewUtils.getViewNaturalEndpoint(keyspaceName, baseToken, tk));
+
+                WriteResponseHandlerWrapper wrapper = wrapMVBatchResponseHandler(mutation,
+                                                                                 consistencyLevel,
+                                                                                 consistencyLevel,
+                                                                                 naturalEndpoints,
+                                                                                 WriteType.BATCH,
+                                                                                 cleanup);
+
+                wrappers.add(wrapper);
+
+                //Apply to local batchlog memtable in this thread
+                BatchlogManager.getBatchlogMutationFor(mutations, batchUUID, MessagingService.current_version).apply();
+            }
+
+            // now actually perform the writes and wait for them to complete
+            asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.MATERIALIZED_VIEW_MUTATION);
+        }
+        catch (WriteTimeoutException ex)
+        {
+            mvWriteMetrics.timeouts.mark();
+            Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
+            throw ex;
+        }
+        catch (UnavailableException e)
+        {
+            mvWriteMetrics.unavailables.mark();
+            Tracing.trace("Unavailable");
+            throw e;
+        }
+        catch (OverloadedException e)
+        {
+            mvWriteMetrics.unavailables.mark();
+            Tracing.trace("Overloaded");
+            throw e;
+        }
+        finally
+        {
+            mvWriteMetrics.addNano(System.nanoTime() - startTime);
+        }
+    }
+
