@@ -1,0 +1,39 @@
+    private void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        TransactionLog transactionLog = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(transactionLog);
+
+        transactionLog.trackNew(sstableNew);
+        /*TransactionLog.SSTableTidier tidier =*/ transactionLog.obsoleted(sstableOld);
+
+        //modify the old sstable files
+        modifier.accept(sstableOld);
+
+        //Fake a commit
+        transactionLog.getData().getLogFile().commit();
+
+        //This should not remove the old files
+        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(
+                                                                                    sstableNew.getAllFilePaths(),
+                                                                                    sstableOld.getAllFilePaths(),
+                                                                                    Collections.singleton(transactionLog.getData().getLogFile().file.getPath()))));
+
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
+        // complete the transaction to avoid LEAK errors
+        assertNull(transactionLog.complete(null));
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(
+                                                                                    sstableNew.getAllFilePaths(),
+                                                                                    sstableOld.getAllFilePaths(),
+                                                                                    Collections.singleton(transactionLog.getData().getLogFile().file.getPath()))));
+    }
+
