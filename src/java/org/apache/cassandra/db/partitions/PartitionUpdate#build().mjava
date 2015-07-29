@@ -3,43 +3,17 @@
         if (isBuilt)
             return;
 
-        if (rows.size() <= 1)
-        {
-            finishBuild();
-            return;
-        }
+        Holder holder = this.holder;
+        Object[] cur = holder.tree;
+        Object[] add = rowBuilder.build();
+        Object[] merged = BTree.<Row>merge(cur, add, metadata.comparator,
+                                           UpdateFunction.Simple.of((a, b) -> Rows.merge(a, b, createdAtInSec)));
 
-        Comparator<Row> comparator = metadata.comparator.rowComparator();
-        // Sort the rows. Because the same row can have been added multiple times, we can still have duplicates after that
-        Collections.sort(rows, comparator);
+        assert deletionInfo == holder.deletionInfo;
+        EncodingStats newStats = EncodingStats.Collector.collect(holder.staticRow, BTree.<Row>iterator(merged), deletionInfo);
 
-        // Now find the duplicates and merge them together
-        int previous = 0; // The last element that was set
-        for (int current = 1; current < rows.size(); current++)
-        {
-            // There is really only 2 possible comparison: < 0 or == 0 since we've sorted already
-            Row previousRow = rows.get(previous);
-            Row currentRow = rows.get(current);
-            int cmp = comparator.compare(previousRow, currentRow);
-            if (cmp == 0)
-            {
-                // current and previous are the same row. Merge current into previous
-                // (and so previous + 1 will be "free").
-                rows.set(previous, Rows.merge(previousRow, currentRow, createdAtInSec));
-            }
-            else
-            {
-                // current != previous, so move current just after previous if needs be
-                ++previous;
-                if (previous != current)
-                    rows.set(previous, currentRow);
-            }
-        }
-
-        // previous is on the last value to keep
-        for (int j = rows.size() - 1; j > previous; j--)
-            rows.remove(j);
-
-        finishBuild();
+        this.holder = new Holder(merged, holder.deletionInfo, holder.staticRow, newStats);
+        rowBuilder = null;
+        isBuilt = true;
     }
 
