@@ -1,0 +1,26 @@
+        @Override
+        public RowIterator applyToPartition(RowIterator partition)
+        {
+            DecoratedKey key = partition.partitionKey();
+            if (lastKey == null || !lastKey.equals(key))
+                remainingInPartition = limits.perPartitionCount();
+            lastKey = key;
+
+            // If this is the first partition of this page, this could be the continuation of a partition we've started
+            // on the previous page. In which case, we could have the problem that the partition has no more "regular"
+            // rows (but the page size is such we didn't knew before) but it does has a static row. We should then skip
+            // the partition as returning it would means to the upper layer that the partition has "only" static columns,
+            // which is not the case (and we know the static results have been sent on the previous page).
+            if (isFirstPartition)
+            {
+                isFirstPartition = false;
+                if (isPreviouslyReturnedPartition(key) && !partition.hasNext())
+                {
+                    partition.close();
+                    return null;
+                }
+            }
+
+            return Transformation.apply(counter.applyTo(partition), this);
+        }
+
