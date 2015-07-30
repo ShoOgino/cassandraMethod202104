@@ -3,13 +3,14 @@
      *
      * @return Whether replay should continue with the next section.
      */
-    private boolean replaySyncSection(FileDataInput reader, int end, CommitLogDescriptor desc) throws IOException
+    private boolean replaySyncSection(FileDataInput reader, int end, CommitLogDescriptor desc, String errorContext, boolean tolerateErrors) throws IOException
     {
          /* read the logs populate Mutation and apply */
         while (reader.getFilePointer() < end && !reader.isEOF())
         {
+            long mutationStart = reader.getFilePointer();
             if (logger.isDebugEnabled())
-                logger.trace("Reading mutation at {}", reader.getFilePointer());
+                logger.trace("Reading mutation at {}", mutationStart);
 
             long claimedCRC32;
             int serializedSize;
@@ -28,7 +29,12 @@
                 // 2-byte length from writeUTF/writeWithShortLength) and 4 bytes for column count.
                 // This prevents CRC by being fooled by special-case garbage in the file; see CASSANDRA-2128
                 if (serializedSize < 10)
+                {
+                    handleReplayError(tolerateErrors,
+                                      "Invalid mutation size %d at %d in %s",
+                                      serializedSize, mutationStart, errorContext);
                     return false;
+                }
 
                 long claimedSizeChecksum;
                 if (desc.version < CommitLogDescriptor.VERSION_21)
@@ -42,7 +48,12 @@
                     checksum.updateInt(serializedSize);
 
                 if (checksum.getValue() != claimedSizeChecksum)
+                {
+                    handleReplayError(tolerateErrors,
+                                      "Mutation size checksum failure at %d in %s",
+                                      mutationStart, errorContext);
                     return false;
+                }
                 // ok.
 
                 if (serializedSize > buffer.length)
@@ -55,14 +66,18 @@
             }
             catch (EOFException eof)
             {
+                handleReplayError(tolerateErrors,
+                                  "Unexpected end of segment",
+                                  mutationStart, errorContext);
                 return false; // last CL entry didn't get completely written. that's ok.
             }
 
             checksum.update(buffer, 0, serializedSize);
             if (claimedCRC32 != checksum.getValue())
             {
-                // this entry must not have been fsynced. probably the rest is bad too,
-                // but just in case there is no harm in trying them (since we still read on an entry boundary)
+                handleReplayError(tolerateErrors,
+                                  "Mutation checksum failure at %d in %s",
+                                  mutationStart, errorContext);
                 continue;
             }
             replayMutation(buffer, serializedSize, reader.getFilePointer(), desc);
