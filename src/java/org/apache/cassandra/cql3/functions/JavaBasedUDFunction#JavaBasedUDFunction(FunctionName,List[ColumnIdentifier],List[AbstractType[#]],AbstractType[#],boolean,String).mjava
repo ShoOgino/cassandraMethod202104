@@ -13,6 +13,8 @@
         String pkgName = BASE_PACKAGE + '.' + generateClassName(name, 'p');
         String clsName = generateClassName(name, 'C');
 
+        String executeInternalName = generateClassName(name, 'x');
+
         StringBuilder javaSourceBuilder = new StringBuilder();
         int lineOffset = 1;
         for (int i = 0; i < javaSourceTemplate.length; i++)
@@ -42,6 +44,9 @@
                         break;
                     case "return_type":
                         s = javaSourceName(javaReturnType);
+                        break;
+                    case "execute_internal_name":
+                        s = executeInternalName;
                         break;
                 }
             }
@@ -103,6 +108,23 @@
                     throw new InvalidRequestException("Java source compilation failed:\n" + problems);
             }
 
+            // Verify the UDF bytecode against use of probably dangerous code
+            Set<String> errors = udfByteCodeVerifier.verify(targetClassLoader.classData(targetClassName));
+            String validDeclare = "not allowed method declared: " + executeInternalName + '(';
+            String validCall = "call to " + targetClassName.replace('.', '/') + '.' + executeInternalName + "()";
+            for (Iterator<String> i = errors.iterator(); i.hasNext();)
+            {
+                String error = i.next();
+                // we generate a random name of the private, internal execute method, which is detected by the byte-code verifier
+                if (error.startsWith(validDeclare) || error.equals(validCall))
+                {
+                    i.remove();
+                }
+            }
+            if (!errors.isEmpty())
+                throw new InvalidRequestException("Java UDF validation failed: " + errors);
+
+            // Load the class and create a new instance of it
             Thread thread = Thread.currentThread();
             ClassLoader orig = thread.getContextClassLoader();
             try
@@ -110,7 +132,7 @@
                 thread.setContextClassLoader(UDFunction.udfClassLoader);
                 // Execute UDF intiialization from UDF class loader
 
-                Class cls = targetClassLoader.loadClass(targetClassName);
+                Class cls = Class.forName(targetClassName, false, targetClassLoader);
 
                 if (cls.getDeclaredMethods().length != 2 || cls.getDeclaredConstructors().length != 1)
                     throw new InvalidRequestException("Check your source to not define additional Java methods or constructors");
