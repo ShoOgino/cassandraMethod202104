@@ -4,14 +4,15 @@
         long start = System.nanoTime();
 
         // modern format, allows both key and value (so key cache load can be purely sequential)
-        File path = getCachePath(cfs.metadata.cfId, CURRENT_VERSION);
-        if (path.exists())
+        File dataPath = getCacheDataPath(cfs.metadata.cfId, CURRENT_VERSION);
+        File crcPath = getCacheCrcPath(cfs.metadata.cfId, CURRENT_VERSION);
+        if (dataPath.exists() && crcPath.exists())
         {
             DataInputStream in = null;
             try
             {
-                logger.info(String.format("reading saved cache %s", path));
-                in = new DataInputStream(new LengthAvailableInputStream(new BufferedInputStream(streamFactory.getInputStream(path)), path.length()));
+                logger.info(String.format("reading saved cache %s", dataPath));
+                in = new DataInputStream(new LengthAvailableInputStream(new BufferedInputStream(streamFactory.getInputStream(dataPath, crcPath)), dataPath.length()));
                 List<Future<Pair<K, V>>> futures = new ArrayList<Future<Pair<K, V>>>();
                 while (in.available() > 0)
                 {
@@ -30,10 +31,15 @@
                         put(entry.left, entry.right);
                 }
             }
+            catch (CorruptFileException e)
+            {
+                JVMStabilityInspector.inspectThrowable(e);
+                logger.warn(String.format("Non-fatal checksum error reading saved cache %s", dataPath.getAbsolutePath()), e);
+            }
             catch (Exception e)
             {
                 JVMStabilityInspector.inspectThrowable(e);
-                logger.debug(String.format("harmless error reading saved cache %s", path.getAbsolutePath()), e);
+                logger.debug(String.format("harmless error reading saved cache %s", dataPath.getAbsolutePath()), e);
             }
             finally
             {
@@ -42,7 +48,7 @@
         }
         if (logger.isDebugEnabled())
             logger.debug("completed reading ({} ms; {} keys) saved cache {}",
-                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), count, path);
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), count, dataPath);
         return count;
     }
 
