@@ -1,0 +1,43 @@
+    public void prepare(ColumnFamilyStore cfs, MerkleTrees tree)
+    {
+        this.trees = tree;
+
+        if (!tree.partitioner().preservesOrder())
+        {
+            // You can't beat an even tree distribution for md5
+            tree.init();
+        }
+        else
+        {
+            for (Range<Token> range : tree.ranges())
+            {
+                List<DecoratedKey> keys = new ArrayList<>();
+                for (DecoratedKey sample : cfs.keySamples(range))
+                {
+                    assert range.contains(sample.getToken()) : "Token " + sample.getToken() + " is not within range " + desc.ranges;
+                    keys.add(sample);
+                }
+
+                if (keys.isEmpty())
+                {
+                    // use an even tree distribution
+                    tree.init(range);
+                }
+                else
+                {
+                    int numKeys = keys.size();
+                    Random random = new Random();
+                    // sample the column family using random keys from the index
+                    while (true)
+                    {
+                        DecoratedKey dk = keys.get(random.nextInt(numKeys));
+                        if (!tree.split(dk.getToken()))
+                            break;
+                    }
+                }
+            }
+        }
+        logger.debug("Prepared AEService trees of size {} for {}", trees.size(), desc);
+        ranges = tree.invalids();
+    }
+

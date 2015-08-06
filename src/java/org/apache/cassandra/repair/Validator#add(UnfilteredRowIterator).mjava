@@ -6,7 +6,7 @@
      */
     public void add(UnfilteredRowIterator partition)
     {
-        assert desc.range.contains(partition.partitionKey().getToken()) : partition.partitionKey().getToken() + " is not contained in " + desc.range;
+        assert Range.isInRanges(partition.partitionKey().getToken(), desc.ranges) : partition.partitionKey().getToken() + " is not contained in " + desc.ranges;
         assert lastKey == null || lastKey.compareTo(partition.partitionKey()) < 0
                : "partition " + partition.partitionKey() + " received out of order wrt " + lastKey;
         lastKey = partition.partitionKey();
@@ -15,13 +15,14 @@
             range = ranges.next();
 
         // generate new ranges as long as case 1 is true
-        while (!range.contains(lastKey.getToken()))
+        if (!findCorrectRange(lastKey.getToken()))
         {
             // add the empty hash, and move to the next range
-            range.ensureHashInitialised();
-            range = ranges.next();
+            ranges = trees.invalids();
+            findCorrectRange(lastKey.getToken());
         }
 
+        assert range.contains(lastKey.getToken()) : "Token not in MerkleTree: " + lastKey.getToken();
         // case 3 must be true: mix in the hashed row
         RowHash rowHash = rowHash(partition);
         if (rowHash != null)
