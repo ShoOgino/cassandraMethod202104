@@ -1,4 +1,4 @@
-    private void replayAllFailedBatches() throws ExecutionException, InterruptedException
+    private void replayAllFailedBatches()
     {
         logger.debug("Started replayAllFailedBatches");
 
@@ -7,27 +7,17 @@
         int throttleInKB = DatabaseDescriptor.getBatchlogReplayThrottleInKB() / StorageService.instance.getTokenMetadata().getAllEndpoints().size();
         RateLimiter rateLimiter = RateLimiter.create(throttleInKB == 0 ? Double.MAX_VALUE : throttleInKB * 1024);
 
-        UntypedResultSet page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s LIMIT %d",
-                                                              SystemKeyspace.NAME,
-                                                              SystemKeyspace.BATCHLOG,
-                                                              PAGE_SIZE));
-
-        while (!page.isEmpty())
-        {
-            UUID id = processBatchlogPage(page, rateLimiter);
-
-            if (page.size() < PAGE_SIZE)
-                break; // we've exhausted the batchlog, next query would be empty.
-
-            page = executeInternal(String.format("SELECT id, data, written_at, version FROM %s.%s WHERE token(id) > token(?) LIMIT %d",
-                                                 SystemKeyspace.NAME,
-                                                 SystemKeyspace.BATCHLOG,
-                                                 PAGE_SIZE),
-                                                 id);
-        }
-
-        cleanup();
-
+        UUID limitUuid = UUIDGen.maxTimeUUID(System.currentTimeMillis() - getBatchlogTimeout());
+        int pageSize = calculatePageSize();
+        // There cannot be any live content where token(id) <= token(lastReplayedUuid) as every processed batch is
+        // deleted, but the tombstoned content may still be present in the tables. To avoid walking over it we specify
+        // token(id) > token(lastReplayedUuid) as part of the query.
+        String query = String.format("SELECT id, data, version FROM %s.%s WHERE token(id) > token(?) AND token(id) <= token(?)",
+                                     SystemKeyspace.NAME,
+                                     SystemKeyspace.BATCHES);
+        UntypedResultSet batches = executeInternalWithPaging(query, pageSize, lastReplayedUuid, limitUuid);
+        processBatchlogEntries(batches, pageSize, rateLimiter);
+        lastReplayedUuid = limitUuid;
         logger.debug("Finished replayAllFailedBatches");
     }
 

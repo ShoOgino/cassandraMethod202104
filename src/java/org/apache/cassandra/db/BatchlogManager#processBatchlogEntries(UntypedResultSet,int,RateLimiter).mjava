@@ -1,0 +1,40 @@
+    private void processBatchlogEntries(UntypedResultSet batches, int pageSize, RateLimiter rateLimiter)
+    {
+        int positionInPage = 0;
+        ArrayList<Batch> unfinishedBatches = new ArrayList<>(pageSize);
+
+        // Sending out batches for replay without waiting for them, so that one stuck batch doesn't affect others
+        for (UntypedResultSet.Row row : batches)
+        {
+            UUID id = row.getUUID("id");
+            int version = row.getInt("version");
+            Batch batch = new Batch(id, row.getBytes("data"), version);
+            try
+            {
+                if (batch.replay(rateLimiter) > 0)
+                {
+                    unfinishedBatches.add(batch);
+                }
+                else
+                {
+                    deleteBatch(id); // no write mutations were sent (either expired or all CFs involved truncated).
+                    ++totalBatchesReplayed;
+                }
+            }
+            catch (IOException e)
+            {
+                logger.warn("Skipped batch replay of {} due to {}", id, e);
+                deleteBatch(id);
+            }
+
+            if (++positionInPage == pageSize)
+            {
+                // We have reached the end of a batch. To avoid keeping more than a page of mutations in memory,
+                // finish processing the page before requesting the next row.
+                finishAndClearBatches(unfinishedBatches);
+                positionInPage = 0;
+            }
+        }
+        finishAndClearBatches(unfinishedBatches);
+    }
+
