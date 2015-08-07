@@ -1,0 +1,56 @@
+        public ReadCommand deserialize(DataInputPlus in, int version) throws IOException
+        {
+            assert version < MessagingService.VERSION_30;
+
+            String keyspace = in.readUTF();
+            String columnFamily = in.readUTF();
+
+            CFMetaData metadata = Schema.instance.getCFMetaData(keyspace, columnFamily);
+            if (metadata == null)
+            {
+                String message = String.format("Got legacy range command for nonexistent table %s.%s.", keyspace, columnFamily);
+                throw new UnknownColumnFamilyException(message, null);
+            }
+
+            int nowInSec = (int) (in.readLong() / 1000);  // convert from millis to seconds
+
+            ClusteringIndexFilter filter;
+            ColumnFilter selection;
+            int compositesToGroup = 0;
+            int perPartitionLimit = -1;
+            byte readType = in.readByte();  // 0 for slices, 1 for names
+            if (readType == 1)
+            {
+                Pair<ColumnFilter, ClusteringIndexNamesFilter> selectionAndFilter = LegacyReadCommandSerializer.deserializeNamesSelectionAndFilter(in, metadata);
+                selection = selectionAndFilter.left;
+                filter = selectionAndFilter.right;
+            }
+            else
+            {
+                filter = LegacyReadCommandSerializer.deserializeSlicePartitionFilter(in, metadata);
+                perPartitionLimit = in.readInt();
+                compositesToGroup = in.readInt();
+                selection = getColumnSelectionForSlice((ClusteringIndexSliceFilter) filter, compositesToGroup, metadata);
+            }
+
+            RowFilter rowFilter = deserializeRowFilter(in, metadata);
+
+            AbstractBounds<PartitionPosition> keyRange = AbstractBounds.rowPositionSerializer.deserialize(in, metadata.partitioner, version);
+            int maxResults = in.readInt();
+
+            in.readBoolean();  // countCQL3Rows (not needed)
+            in.readBoolean();  // isPaging (not needed)
+
+            boolean selectsStatics = (!selection.fetchedColumns().statics.isEmpty() || filter.selects(Clustering.STATIC_CLUSTERING));
+            boolean isDistinct = compositesToGroup == -2 || (perPartitionLimit == 1 && selectsStatics);
+            DataLimits limits;
+            if (isDistinct)
+                limits = DataLimits.distinctLimits(maxResults);
+            else if (compositesToGroup == -1)
+                limits = DataLimits.thriftLimits(maxResults, perPartitionLimit);
+            else
+                limits = DataLimits.cqlLimits(maxResults);
+
+            return new PartitionRangeReadCommand(false, true, metadata, nowInSec, selection, rowFilter, limits, new DataRange(keyRange, filter));
+        }
+

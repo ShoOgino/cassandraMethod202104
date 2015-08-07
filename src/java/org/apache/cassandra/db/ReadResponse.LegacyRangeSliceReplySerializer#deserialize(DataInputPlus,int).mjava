@@ -1,11 +1,16 @@
         public ReadResponse deserialize(DataInputPlus in, int version) throws IOException
         {
-            // TODO
-            throw new UnsupportedOperationException();
-            //        int rowCount = in.readInt();
-            //        List<Row> rows = new ArrayList<Row>(rowCount);
-            //        for (int i = 0; i < rowCount; i++)
-            //            rows.add(Row.serializer.deserialize(in, version));
-            //        return new RangeSliceReply(rows);
+            // Contrarily to serialize, we have to read the number of serialized partitions here.
+            int partitionCount = in.readInt();
+            ArrayList<ArrayBackedPartition> partitions = new ArrayList<>(partitionCount);
+            for (int i = 0; i < partitionCount; i++)
+            {
+                ByteBuffer key = ByteBufferUtil.readWithShortLength(in);
+                try (UnfilteredRowIterator partition = LegacyLayout.deserializeLegacyPartition(in, version, SerializationHelper.Flag.FROM_REMOTE, key))
+                {
+                    partitions.add(ArrayBackedPartition.create(partition));
+                }
+            }
+            return new LegacyRemoteDataResponse(partitions);
         }
 
