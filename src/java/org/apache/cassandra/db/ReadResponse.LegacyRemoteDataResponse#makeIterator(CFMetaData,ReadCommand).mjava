@@ -1,0 +1,37 @@
+        public UnfilteredPartitionIterator makeIterator(CFMetaData metadata, final ReadCommand command)
+        {
+            return new AbstractUnfilteredPartitionIterator()
+            {
+                private int idx;
+
+                public boolean isForThrift()
+                {
+                    return true;
+                }
+
+                public CFMetaData metadata()
+                {
+                    return metadata;
+                }
+
+                public boolean hasNext()
+                {
+                    return idx < partitions.size();
+                }
+
+                public UnfilteredRowIterator next()
+                {
+                    ArrayBackedPartition partition = partitions.get(idx++);
+
+                    ClusteringIndexFilter filter = command.clusteringIndexFilter(partition.partitionKey());
+
+                    // Pre-3.0, we didn't have a way to express exclusivity for non-composite comparators, so all slices were
+                    // inclusive on both ends. If we have exclusive slice ends, we need to filter the results here.
+                    if (!command.metadata().isCompound())
+                        return filter.filter(partition.sliceableUnfilteredIterator(command.columnFilter(), filter.isReversed()));
+
+                    return partition.unfilteredIterator(command.columnFilter(), Slices.ALL, filter.isReversed());
+                }
+            };
+        }
+

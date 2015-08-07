@@ -1,10 +1,20 @@
         public long serializedSize(ReadResponse response, int version)
         {
-            // TODO
-            throw new UnsupportedOperationException();
-            //        int size = TypeSizes.sizeof(rsr.rows.size());
-            //        for (Row row : rsr.rows)
-            //            size += Row.serializer.serializedSize(row, version);
-            //        return size;
+            assert version < MessagingService.VERSION_30;
+            long size = TypeSizes.sizeof(0);  // number of partitions
+
+            assert !(response instanceof LegacyRemoteDataResponse); // we only use those on the receiving side
+            try (UnfilteredPartitionIterator iterator = response.makeIterator(response.metadata, null))
+            {
+                while (iterator.hasNext())
+                {
+                    try (UnfilteredRowIterator partition = iterator.next())
+                    {
+                        size += ByteBufferUtil.serializedSizeWithShortLength(partition.partitionKey().getKey());
+                        size += LegacyLayout.serializedSizeAsLegacyPartition(partition, version);
+                    }
+                }
+            }
+            return size;
         }
 

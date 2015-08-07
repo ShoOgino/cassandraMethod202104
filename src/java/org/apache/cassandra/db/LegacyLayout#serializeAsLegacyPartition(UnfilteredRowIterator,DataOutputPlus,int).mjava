@@ -1,0 +1,48 @@
+    public static void serializeAsLegacyPartition(UnfilteredRowIterator partition, DataOutputPlus out, int version) throws IOException
+    {
+        assert version < MessagingService.VERSION_30;
+
+        out.writeBoolean(true);
+
+        LegacyLayout.LegacyUnfilteredPartition legacyPartition = LegacyLayout.fromUnfilteredRowIterator(partition);
+
+        UUIDSerializer.serializer.serialize(partition.metadata().cfId, out, version);
+        DeletionTime.serializer.serialize(legacyPartition.partitionDeletion, out);
+
+        legacyPartition.rangeTombstones.serialize(out, partition.metadata());
+
+        // begin cell serialization
+        out.writeInt(legacyPartition.cells.size());
+        for (LegacyLayout.LegacyCell cell : legacyPartition.cells)
+        {
+            ByteBufferUtil.writeWithShortLength(cell.name.encode(partition.metadata()), out);
+            if (cell.kind == LegacyLayout.LegacyCell.Kind.EXPIRING)
+            {
+                out.writeByte(LegacyLayout.EXPIRATION_MASK);  // serialization flags
+                out.writeInt(cell.ttl);
+                out.writeInt(cell.localDeletionTime);
+            }
+            else if (cell.kind == LegacyLayout.LegacyCell.Kind.DELETED)
+            {
+                out.writeByte(LegacyLayout.DELETION_MASK);  // serialization flags
+                out.writeLong(cell.timestamp);
+                out.writeInt(TypeSizes.sizeof(cell.localDeletionTime));
+                out.writeInt(cell.localDeletionTime);
+                continue;
+            }
+            else if (cell.kind == LegacyLayout.LegacyCell.Kind.COUNTER)
+            {
+                out.writeByte(LegacyLayout.COUNTER_MASK);  // serialization flags
+                out.writeLong(Long.MIN_VALUE);  // timestampOfLastDelete (not used, and MIN_VALUE is the default)
+            }
+            else
+            {
+                // normal cell
+                out.writeByte(0);  // serialization flags
+            }
+
+            out.writeLong(cell.timestamp);
+            ByteBufferUtil.writeWithLength(cell.value, out);
+        }
+    }
+

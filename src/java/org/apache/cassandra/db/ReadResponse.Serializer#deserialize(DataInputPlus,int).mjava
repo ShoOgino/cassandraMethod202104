@@ -2,8 +2,35 @@
         {
             if (version < MessagingService.VERSION_30)
             {
-                // TODO
-                throw new UnsupportedOperationException();
+                byte[] digest = null;
+                int digestSize = in.readInt();
+                if (digestSize > 0)
+                {
+                    digest = new byte[digestSize];
+                    in.readFully(digest, 0, digestSize);
+                }
+                boolean isDigest = in.readBoolean();
+                assert isDigest == digestSize > 0;
+                if (isDigest)
+                {
+                    assert digest != null;
+                    return new DigestResponse(ByteBuffer.wrap(digest));
+                }
+
+                // ReadResponses from older versions are always single-partition (ranges are handled by RangeSliceReply)
+                ByteBuffer key = ByteBufferUtil.readWithShortLength(in);
+                UnfilteredRowIterator rowIterator = LegacyLayout.deserializeLegacyPartition(in, version, SerializationHelper.Flag.FROM_REMOTE, key);
+                if (rowIterator == null)
+                    return new LegacyRemoteDataResponse(Collections.emptyList());
+
+                try
+                {
+                    return new LegacyRemoteDataResponse(Collections.singletonList(ArrayBackedPartition.create(rowIterator)));
+                }
+                finally
+                {
+                    rowIterator.close();
+                }
             }
 
             ByteBuffer digest = ByteBufferUtil.readWithVIntLength(in);
