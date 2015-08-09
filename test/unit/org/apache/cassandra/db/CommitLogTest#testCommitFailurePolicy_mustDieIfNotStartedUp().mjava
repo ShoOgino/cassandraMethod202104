@@ -1,0 +1,25 @@
+    @Test
+    public void testCommitFailurePolicy_mustDieIfNotStartedUp()
+    {
+        //startup was not completed successfuly (since method completeSetup() was not called)
+        CassandraDaemon daemon = new CassandraDaemon();
+        StorageService.instance.registerDaemon(daemon);
+
+        KillerForTests killerForTests = new KillerForTests();
+        JVMStabilityInspector.Killer originalKiller = JVMStabilityInspector.replaceKiller(killerForTests);
+        Config.CommitFailurePolicy oldPolicy = DatabaseDescriptor.getCommitFailurePolicy();
+        try
+        {
+            //even though policy is ignore, JVM must die because Daemon has not finished initializing
+            DatabaseDescriptor.setCommitFailurePolicy(Config.CommitFailurePolicy.ignore);
+            CommitLog.handleCommitError("Testing die policy", new Throwable());
+            Assert.assertTrue(killerForTests.wasKilled());
+            Assert.assertTrue(killerForTests.wasKilledQuietly()); //killed quietly due to startup failure
+        }
+        finally
+        {
+            DatabaseDescriptor.setCommitFailurePolicy(oldPolicy);
+            JVMStabilityInspector.replaceKiller(originalKiller);
+        }
+    }
+
