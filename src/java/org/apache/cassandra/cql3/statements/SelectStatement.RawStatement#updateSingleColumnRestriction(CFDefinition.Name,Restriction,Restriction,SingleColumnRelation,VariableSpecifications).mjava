@@ -1,4 +1,4 @@
-        Restriction updateSingleColumnRestriction(CFDefinition.Name name, Restriction existingRestriction, SingleColumnRelation newRel, VariableSpecifications boundNames) throws InvalidRequestException
+        Restriction updateSingleColumnRestriction(CFDefinition.Name name, Restriction existingRestriction, Restriction previousRestriction, SingleColumnRelation newRel, VariableSpecifications boundNames) throws InvalidRequestException
         {
             ColumnSpecification receiver = name;
             if (newRel.onToken)
@@ -59,6 +59,10 @@
                 case LT:
                 case LTE:
                 {
+                    // A slice restriction can be merged with another one under some conditions:
+                    // 1) both restrictions are on a token function or non of them are
+                    //    (e.g. token(partitionKey) > token(?) AND token(partitionKey) <= token(?) or clustering1 > 1 AND clustering1 <= 2).
+                    // 2) both restrictions needs to start with the same column (e.g clustering1 > 0 AND (clustering1, clustering2) <= (2, 1)).
                     if (existingRestriction == null)
                         existingRestriction = new SingleColumnRestriction.Slice(newRel.onToken);
                     else if (!existingRestriction.isSlice())
@@ -68,8 +72,12 @@
                         // processPartitionKeysRestrictions, we shouldn't update the existing restriction by the new one if the old one was using token()
                         // and the new one isn't since that would bypass that later test.
                         throw new InvalidRequestException("Only EQ and IN relation are supported on the partition key (unless you use the token() function)");
-                    else if (existingRestriction.isMultiColumn())
-                        throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by both a tuple notation inequality and a single column inequality (%s)", name, newRel));
+
+                    if (name.position != 0 && previousRestriction == existingRestriction)
+                        throw new InvalidRequestException(String.format(
+                                "Column \"%s\" cannot be restricted by two inequalities not starting with the same column: %s",
+                                name, newRel));
+
                     Term t = newRel.getValue().prepare(receiver);
                     t.collectMarkerSpecification(boundNames);
                     ((SingleColumnRestriction.Slice)existingRestriction).setBound(newRel.operator(), t);
