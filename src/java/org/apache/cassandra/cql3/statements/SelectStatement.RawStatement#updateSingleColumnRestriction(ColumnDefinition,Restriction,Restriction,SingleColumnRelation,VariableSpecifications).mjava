@@ -1,4 +1,4 @@
-        Restriction updateSingleColumnRestriction(ColumnDefinition def, Restriction existingRestriction, SingleColumnRelation newRel, VariableSpecifications boundNames) throws InvalidRequestException
+        Restriction updateSingleColumnRestriction(ColumnDefinition def, Restriction existingRestriction, Restriction previousRestriction, SingleColumnRelation newRel, VariableSpecifications boundNames) throws InvalidRequestException
         {
             ColumnSpecification receiver = def;
             if (newRel.onToken)
@@ -61,12 +61,14 @@
                 case LT:
                 case LTE:
                     {
+                        // A slice restriction can be merged with another one under some conditions:
+                        // 1) both restrictions are on a token function or non of them are
+                        // (e.g. token(partitionKey) > token(?) AND token(partitionKey) <= token(?) or clustering1 > 1 AND clustering1 <= 2).
+                        // 2) both restrictions needs to start with the same column (e.g clustering1 > 0 AND (clustering1, clustering2) <= (2, 1)).
                         if (existingRestriction == null)
                             existingRestriction = new SingleColumnRestriction.Slice(newRel.onToken);
                         else if (!existingRestriction.isSlice())
                             throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by both an equality and an inequality relation", def.name));
-                        else if (existingRestriction.isMultiColumn())
-                            throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by both a tuple notation inequality and a single column inequality (%s)", def.name, newRel));
                         else if (existingRestriction.isOnToken() != newRel.onToken)
                             // For partition keys, we shouldn't have slice restrictions without token(). And while this is rejected later by
                             // processPartitionKeysRestrictions, we shouldn't update the existing restriction by the new one if the old one was using token()
@@ -75,9 +77,14 @@
 
                         checkBound(existingRestriction, def, newRel.operator());
 
+                        if (def.position() != 0 && previousRestriction == existingRestriction)
+                            throw new InvalidRequestException(String.format("Column \"%s\" cannot be restricted by two inequalities not starting with the same column: %s",
+                                                                            def.name,
+                                                                            newRel));
+
                         Term t = newRel.getValue().prepare(keyspace(), receiver);
                         t.collectMarkerSpecification(boundNames);
-                        ((SingleColumnRestriction.Slice)existingRestriction).setBound(newRel.operator(), t);
+                        ((SingleColumnRestriction.Slice) existingRestriction).setBound(newRel.operator(), t);
                     }
                     break;
                 case CONTAINS_KEY:
@@ -97,6 +104,7 @@
                     boolean isKey = newRel.operator() == Operator.CONTAINS_KEY;
                     receiver = makeCollectionReceiver(receiver, isKey);
                     Term t = newRel.getValue().prepare(keyspace(), receiver);
+
                     t.collectMarkerSpecification(boundNames);
                     ((SingleColumnRestriction.Contains)existingRestriction).add(t, isKey);
                     break;
