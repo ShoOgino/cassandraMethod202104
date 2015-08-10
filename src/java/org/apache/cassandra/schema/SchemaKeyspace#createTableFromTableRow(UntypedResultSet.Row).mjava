@@ -20,8 +20,17 @@
         MaterializedViews views =
             readSchemaPartitionForTableAndApply(MATERIALIZED_VIEWS, keyspace, table, SchemaKeyspace::createMaterializedViewsFromMaterializedViewsPartition);
 
-        return createTableFromTableRowAndColumns(row, columns).droppedColumns(droppedColumns)
-                                                              .triggers(triggers)
-                                                              .materializedViews(views);
+        CFMetaData cfm = createTableFromTableRowAndColumns(row, columns).droppedColumns(droppedColumns)
+                                                                        .triggers(triggers)
+                                                                        .materializedViews(views);
+
+        // the CFMetaData itself is required to build the collection of indexes as
+        // the column definitions are needed because we store only the name each
+        // index's target columns and this is not enough to reconstruct a ColumnIdentifier
+        org.apache.cassandra.schema.Indexes indexes =
+            readSchemaPartitionForTableAndApply(INDEXES, keyspace, table, rowIterator -> createIndexesFromIndexesPartition(cfm, rowIterator));
+        cfm.indexes(indexes);
+
+        return cfm;
     }
 
