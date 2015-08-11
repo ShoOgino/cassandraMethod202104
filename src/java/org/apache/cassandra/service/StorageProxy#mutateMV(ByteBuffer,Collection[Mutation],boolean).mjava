@@ -5,6 +5,7 @@
      * @param mutations the mutations to be applied across the replicas
      */
     public static void mutateMV(ByteBuffer dataKey, Collection<Mutation> mutations, boolean writeCommitLog)
+    throws UnavailableException, OverloadedException, WriteTimeoutException
     {
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
@@ -29,15 +30,15 @@
             {
                 String keyspaceName = mutation.getKeyspaceName();
                 Token tk = mutation.key().getToken();
-                InetAddress pairedEndpoint = MaterializedViewUtils.getViewNaturalEndpoint(keyspaceName, baseToken, tk);
+                InetAddress pairedEndpoint = ViewUtils.getViewNaturalEndpoint(keyspaceName, baseToken, tk);
                 List<InetAddress> naturalEndpoints = Lists.newArrayList(pairedEndpoint);
 
-                WriteResponseHandlerWrapper wrapper = wrapMVBatchResponseHandler(mutation,
-                                                                                 consistencyLevel,
-                                                                                 consistencyLevel,
-                                                                                 naturalEndpoints,
-                                                                                 WriteType.BATCH,
-                                                                                 cleanup);
+                WriteResponseHandlerWrapper wrapper = wrapViewBatchResponseHandler(mutation,
+                                                                                   consistencyLevel,
+                                                                                   consistencyLevel,
+                                                                                   naturalEndpoints,
+                                                                                   WriteType.BATCH,
+                                                                                   cleanup);
 
                 // When local node is the endpoint and there are no pending nodes we can
                 // Just apply the mutation locally.
@@ -54,12 +55,12 @@
                                       writeCommitLog);
 
                 // now actually perform the writes and wait for them to complete
-                asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.MATERIALIZED_VIEW_MUTATION);
+                asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.VIEW_MUTATION);
             }
         }
         finally
         {
-            mvWriteMetrics.addNano(System.nanoTime() - startTime);
+            viewWriteMetrics.addNano(System.nanoTime() - startTime);
         }
     }
 
