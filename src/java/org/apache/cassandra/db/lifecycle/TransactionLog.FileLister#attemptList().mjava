@@ -1,0 +1,39 @@
+        List<File> attemptList() throws IOException
+        {
+            attempts++;
+
+            Map<File, FileType> files = new HashMap<>();
+            try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
+            {
+                if (!(in instanceof SecureDirectoryStream))
+                    noSpamLogger.error("This platform does not support atomic directory streams (SecureDirectoryStream); " +
+                                       "race conditions when loading sstable files could occurr");
+
+                in.forEach(path ->
+                           {
+                               File file = path.toFile();
+                               if (file.isDirectory())
+                                   return;
+
+                               if (TransactionData.isLogFile(file.getName()))
+                               {
+                                   Set<File> tmpFiles = getTemporaryFiles(file);
+                                   if (tmpFiles != null)
+                                   { // process the txn log file only if we can read it (tmpFiles != null)
+                                       tmpFiles.stream().forEach((f) -> files.put(f, FileType.TEMPORARY));
+                                       files.put(file, FileType.TXN_LOG);
+                                   }
+                               }
+                               else
+                               {
+                                   files.putIfAbsent(file, FileType.FINAL);
+                               }
+                           });
+            }
+
+            return files.entrySet().stream()
+                        .filter((e) -> filter.apply(e.getKey(), e.getValue()))
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+        }
+

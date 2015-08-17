@@ -1,0 +1,66 @@
+    @Test
+    public void testGetTemporaryFiles() throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstable1 = sstable(cfs, 0, 128);
+
+        File dataFolder = sstable1.descriptor.directory;
+
+        Set<File> tmpFiles = TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
+        assertNotNull(tmpFiles);
+        assertEquals(0, tmpFiles.size());
+
+        TransactionLog transactionLog = new TransactionLog(OperationType.WRITE, cfs.metadata);
+        Directories directories = new Directories(cfs.metadata);
+
+        File[] beforeSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
+
+        SSTableReader sstable2 = sstable(cfs, 1, 128);
+        transactionLog.trackNew(sstable2);
+
+        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
+        assertEquals(2, sstables.size());
+
+        // this should contain sstable1, sstable2 and the transaction log file
+        File[] afterSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
+
+        int numNewFiles = afterSecondSSTable.length - beforeSecondSSTable.length;
+        assertEquals(numNewFiles - 1, sstable2.getAllFilePaths().size()); // new files except for transaction log file
+
+        tmpFiles = TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
+        assertNotNull(tmpFiles);
+        assertEquals(numNewFiles, tmpFiles.size());
+
+        File ssTable2DataFile = new File(sstable2.descriptor.filenameFor(Component.DATA));
+        File ssTable2IndexFile = new File(sstable2.descriptor.filenameFor(Component.PRIMARY_INDEX));
+
+        assertTrue(tmpFiles.contains(ssTable2DataFile));
+        assertTrue(tmpFiles.contains(ssTable2IndexFile));
+
+        List<File> files = directories.sstableLister(Directories.OnTxnErr.THROW).listFiles();
+        List<File> filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
+        assertNotNull(files);
+        assertNotNull(filesNoTmp);
+
+        assertTrue(files.contains(ssTable2DataFile));
+        assertTrue(files.contains(ssTable2IndexFile));
+
+        assertFalse(filesNoTmp.contains(ssTable2DataFile));
+        assertFalse(filesNoTmp.contains(ssTable2IndexFile));
+
+        transactionLog.finish();
+
+        //Now it should be empty since the transaction has finished
+        tmpFiles = TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
+        assertNotNull(tmpFiles);
+        assertEquals(0, tmpFiles.size());
+
+        filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
+        assertNotNull(filesNoTmp);
+        assertTrue(filesNoTmp.contains(ssTable2DataFile));
+        assertTrue(filesNoTmp.contains(ssTable2IndexFile));
+
+        sstable1.selfRef().release();
+        sstable2.selfRef().release();
+    }
+

@@ -1,0 +1,31 @@
+    /**
+     * Called on startup to scan existing folders for any unfinished leftovers of
+     * operations that were ongoing when the process exited. Also called by the standalone
+     * sstableutil tool when the cleanup option is specified, @see StandaloneSSTableUtil.
+     *
+     */
+    static void removeUnfinishedLeftovers(CFMetaData metadata)
+    {
+        Throwable accumulate = null;
+
+        for (File dir : new Directories(metadata).getCFDirectories())
+        {
+            File[] logs = dir.listFiles((dir1, name) -> TransactionData.isLogFile(name));
+
+            for (File log : logs)
+            {
+                try (TransactionData data = TransactionData.make(log))
+                {
+                    accumulate = data.readLogFile(accumulate);
+                    if (accumulate == null)
+                        accumulate = data.removeUnfinishedLeftovers(accumulate);
+                    else
+                        logger.error("Possible disk corruption: failed to read transaction log {}", log, accumulate);
+                }
+            }
+        }
+
+        if (accumulate != null)
+            logger.error("Failed to remove unfinished transaction leftovers", accumulate);
+    }
+
