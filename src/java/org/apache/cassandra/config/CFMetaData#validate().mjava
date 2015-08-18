@@ -31,35 +31,23 @@
                     throw new ConfigurationException("Cannot add a counter column (" + def.name + ") in a non counter column family");
         }
 
+        if (!indexes.isEmpty() && isSuper())
+            throw new ConfigurationException("Secondary indexes are not supported on super column families");
+
         // initialize a set of names NOT in the CF under consideration
-        Set<String> indexNames = existingIndexNames(cfName);
-        for (ColumnDefinition c : allColumns())
+        KeyspaceMetadata ksm = Schema.instance.getKSMetaData(ksName);
+        Set<String> indexNames = ksm == null ? new HashSet<>() : ksm.existingIndexNames(cfName);
+        for (IndexMetadata index : indexes)
         {
-            if (c.getIndexType() == null)
-            {
-                if (c.getIndexName() != null)
-                    throw new ConfigurationException("Index name cannot be set without index type");
-            }
-            else
-            {
-                if (isSuper())
-                    throw new ConfigurationException("Secondary indexes are not supported on super column families");
-                if (!isIndexNameValid(c.getIndexName()))
-                    throw new ConfigurationException("Illegal index name " + c.getIndexName());
-                // check index names against this CF _and_ globally
-                if (indexNames.contains(c.getIndexName()))
-                    throw new ConfigurationException("Duplicate index name " + c.getIndexName());
-                indexNames.add(c.getIndexName());
+            index.validate();
 
-                if (c.getIndexType() == IndexType.CUSTOM)
-                {
-                    if (c.getIndexOptions() == null || !c.hasIndexOption(SecondaryIndex.CUSTOM_INDEX_OPTION_NAME))
-                        throw new ConfigurationException("Required index option missing: " + SecondaryIndex.CUSTOM_INDEX_OPTION_NAME);
-                }
+            // check index names against this CF _and_ globally
+            if (indexNames.contains(index.name))
+                throw new ConfigurationException("Duplicate index name " + index.name);
+            indexNames.add(index.name);
 
-                // This method validates the column metadata but does not intialize the index
-                SecondaryIndex.createInstance(null, c);
-            }
+            // This method validates any custom options in the index metadata but does not intialize the index
+            SecondaryIndex.validate(this, index);
         }
 
         return this;

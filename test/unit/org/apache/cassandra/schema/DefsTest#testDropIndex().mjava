@@ -6,19 +6,36 @@
         ColumnFamilyStore cfs = Keyspace.open(KEYSPACE6).getColumnFamilyStore(TABLE1i);
 
         // insert some data.  save the sstable descriptor so we can make sure it's marked for delete after the drop
-        QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (key, c1, birthdate, notbirthdate) VALUES (?, ?, ?, ?)",
-                                                     KEYSPACE6, TABLE1i),
+        QueryProcessor.executeInternal(String.format(
+                                                    "INSERT INTO %s.%s (key, c1, birthdate, notbirthdate) VALUES (?, ?, ?, ?)",
+                                                    KEYSPACE6,
+                                                    TABLE1i),
                                        "key0", "col0", 1L, 1L);
 
         cfs.forceBlockingFlush();
-        ColumnFamilyStore indexedCfs = cfs.indexManager.getIndexForColumn(cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("birthdate"))).getIndexCfs();
+        ColumnDefinition indexedColumn = cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("birthdate"));
+        SecondaryIndex index = cfs.indexManager.getIndexForColumn(indexedColumn);
+        ColumnFamilyStore indexedCfs = index.getIndexCfs();
         Descriptor desc = indexedCfs.getLiveSSTables().iterator().next().descriptor;
 
         // drop the index
         CFMetaData meta = cfs.metadata.copy();
-        ColumnDefinition cdOld = cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("birthdate"));
-        ColumnDefinition cdNew = ColumnDefinition.regularDef(meta, cdOld.name.bytes, cdOld.type);
-        meta.addOrReplaceColumnDefinition(cdNew);
+        // We currently have a mismatch between IndexMetadata.name (which is simply the name
+        // of the index) and what gets returned from SecondaryIndex#getIndexName() (usually, this
+        // defaults to <tablename>.<indexname>.
+        // IndexMetadata takes its lead from the prior implementation of ColumnDefinition.name
+        // which did not include the table name.
+        // This mismatch causes some other, long standing inconsistencies:
+        // nodetool rebuild_index <ks> <tbl> <idx>  - <idx> must be qualified, i.e. include the redundant table name
+        //                                            without it, the rebuild silently fails
+        // system.IndexInfo (which is also exposed over JMX as CF.BuildIndexes) uses the form <tbl>.<idx>
+        // cqlsh> describe index [<ks>.]<idx>  - here <idx> must not be qualified by the table name.
+        //
+        // This should get resolved as part of #9459 by better separating the index name from the
+        // name of it's underlying CFS (if it as one), as the comment in CFMetaData#indexColumnFamilyName promises
+        // Then we will be able to just use the value of SI#getIndexName() when removing an index from CFMetaData
+        IndexMetadata existing = meta.getIndexes().iterator().next();
+        meta.indexes(meta.getIndexes().without(existing.name));
         MigrationManager.announceColumnFamilyUpdate(meta, false);
 
         // check
