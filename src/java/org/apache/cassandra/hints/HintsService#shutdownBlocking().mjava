@@ -1,0 +1,25 @@
+    /**
+     * Gracefully and blockingly shut down the service.
+     *
+     * Will abort dispatch sessions that are currently in progress (which is okay, it's idempotent),
+     * and make sure the buffers are flushed, hints files written and fsynced.
+     */
+    public synchronized void shutdownBlocking()
+    {
+        if (isShutDown)
+            throw new IllegalStateException("HintsService has already been shut down");
+        isShutDown = true;
+
+        if (triggerDispatchFuture != null)
+            triggerDispatchFuture.cancel(false);
+        pauseDispatch();
+
+        triggerFlushingFuture.cancel(false);
+
+        writeExecutor.flushBufferPool(bufferPool);
+        writeExecutor.closeAllWriters();
+
+        dispatchExecutor.shutdownBlocking();
+        writeExecutor.shutdownBlocking();
+    }
+
