@@ -1,14 +1,18 @@
-        public SSTableReader write(int expectedSize, Appender appender) throws IOException
+        public Collection<SSTableReader> write(int expectedSize, Appender appender) throws IOException
         {
             File datafile = (dest == null) ? tempSSTableFile(ksname, cfname, generation) : new File(dest.filenameFor(Component.DATA));
-            SerializationHeader header = SerializationHeader.make(Schema.instance.getCFMetaData(ksname, cfname), Collections.EMPTY_LIST);
-            SSTableTxnWriter writer = SSTableTxnWriter.create(datafile.getAbsolutePath(), expectedSize, ActiveRepairService.UNREPAIRED_SSTABLE, 0, header);
+            CFMetaData cfm = Schema.instance.getCFMetaData(ksname, cfname);
+            ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(cfm.cfId);
+            SerializationHeader header = SerializationHeader.make(cfm, Collections.EMPTY_LIST);
+            SSTableTxnWriter writer = SSTableTxnWriter.create(cfs, datafile.getAbsolutePath(), expectedSize, ActiveRepairService.UNREPAIRED_SSTABLE, 0, header);
             while (appender.append(writer)) { /* pass */ }
-            SSTableReader reader = writer.finish(true);
+            Collection<SSTableReader> readers = writer.finish(true);
+
             // mark all components for removal
             if (cleanup)
-                for (Component component : reader.components)
-                    new File(reader.descriptor.filenameFor(component)).deleteOnExit();
-            return reader;
+                for (SSTableReader reader: readers)
+                    for (Component component : reader.components)
+                        new File(reader.descriptor.filenameFor(component)).deleteOnExit();
+            return readers;
         }
 
