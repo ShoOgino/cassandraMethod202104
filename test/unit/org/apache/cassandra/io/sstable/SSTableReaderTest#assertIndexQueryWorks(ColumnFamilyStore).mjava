@@ -6,15 +6,17 @@
         for (ColumnFamilyStore cfs : indexedCFS.concatWithIndexes())
             clearAndLoad(cfs);
 
-        ByteBuffer bBB = bytes("birthdate");
 
         // query using index to see if sstable for secondary index opens
         ReadCommand rc = Util.cmd(indexedCFS).fromKeyIncl("k1").toKeyIncl("k3")
                                              .columns("birthdate")
                                              .filterOn("birthdate", Operator.EQ, 1L)
                                              .build();
-        List<SecondaryIndexSearcher> searchers = indexedCFS.indexManager.getIndexSearchersFor(rc);
-        assertEquals(searchers.size(), 1);
-        assertEquals(1, Util.getAll(rc).size());
+        Index.Searcher searcher = indexedCFS.indexManager.getBestIndexFor(rc).searcherFor(rc);
+        assertNotNull(searcher);
+        try (ReadOrderGroup orderGroup = ReadOrderGroup.forCommand(rc))
+        {
+            assertEquals(1, Util.size(UnfilteredPartitionIterators.filter(searcher.search(orderGroup), rc.nowInSec())));
+        }
     }
 

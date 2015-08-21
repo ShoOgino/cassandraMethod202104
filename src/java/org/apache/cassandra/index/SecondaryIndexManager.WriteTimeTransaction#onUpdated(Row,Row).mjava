@@ -1,0 +1,39 @@
+        public void onUpdated(Row existing, Row updated)
+        {
+            final Row.Builder toRemove = BTreeRow.sortedBuilder(existing.columns());
+            toRemove.newRow(existing.clustering());
+            final Row.Builder toInsert = BTreeRow.sortedBuilder(updated.columns());
+            toInsert.newRow(updated.clustering());
+            // diff listener collates the columns to be added & removed from the indexes
+            RowDiffListener diffListener = new RowDiffListener()
+            {
+                public void onPrimaryKeyLivenessInfo(int i, Clustering clustering, LivenessInfo merged, LivenessInfo original)
+                {
+                    if (merged != null && merged != original)
+                        toInsert.addPrimaryKeyLivenessInfo(merged);
+                }
+
+                public void onDeletion(int i, Clustering clustering, DeletionTime merged, DeletionTime original)
+                {
+                }
+
+                public void onComplexDeletion(int i, Clustering clustering, ColumnDefinition column, DeletionTime merged, DeletionTime original)
+                {
+                }
+
+                public void onCell(int i, Clustering clustering, Cell merged, Cell original)
+                {
+                    if (merged != null && merged != original)
+                        toInsert.addCell(merged);
+
+                    if (merged == null || (original != null && shouldCleanupOldValue(original, merged)))
+                        toRemove.addCell(original);
+
+                }
+            };
+            Rows.diff(diffListener, updated, updated.columns().mergeTo(existing.columns()), existing);
+            Row oldRow = toRemove.build();
+            Row newRow = toInsert.build();
+            Arrays.stream(indexers).forEach(i -> i.updateRow(oldRow, newRow));
+        }
+

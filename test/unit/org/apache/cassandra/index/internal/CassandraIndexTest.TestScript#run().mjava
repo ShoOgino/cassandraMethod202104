@@ -1,0 +1,102 @@
+        void run() throws Throwable
+        {
+            // check minimum required setup
+            assertNotNull(indexName);
+            assertNotNull(indexTarget);
+            assertNotNull(queryExpression1);
+            assertNotNull(queryExpression2);
+            assertNotNull(firstRow);
+            assertNotNull(secondRow);
+            assertNotNull(tableDefinition);
+            if (updateExpression != null)
+                assertNotNull(postUpdateQueryExpression);
+
+            // first, create the table as we need the CFMetaData to build the other cql statements
+            createTable(tableDefinition);
+
+            // now setup the cql statements the test will run through. Some are dependent on
+            // the table definition, others are not.
+            String createIndexCql = String.format("CREATE INDEX %s ON %%s(%s)", indexName, indexTarget);
+            String dropIndexCql = String.format("DROP INDEX %s.%s", KEYSPACE, indexName);
+
+            String selectFirstRowCql = String.format("SELECT * FROM %%s WHERE %s", queryExpression1);
+            String selectSecondRowCql = String.format("SELECT * FROM %%s WHERE %s", queryExpression2);
+            String insertCql = getInsertCql();
+            String deleteRowCql = getDeleteRowCql();
+            String deletePartitionCql = getDeletePartitionCql();
+
+            // everything setup, run through the smoke test
+            execute(insertCql, firstRow);
+            // before creating the index, check we cannot query on the indexed column
+            assertInvalidThrowMessage(missingIndexMessage, InvalidRequestException.class, selectFirstRowCql);
+
+            // create the index, wait for it to be built then validate the indexed value
+            createIndex(createIndexCql);
+            waitForIndexBuild();
+            assertRows(execute(selectFirstRowCql), firstRow);
+            assertEmpty(execute(selectSecondRowCql));
+
+            // flush and check again
+            flush();
+            assertRows(execute(selectFirstRowCql), firstRow);
+            assertEmpty(execute(selectSecondRowCql));
+
+            // force major compaction and query again
+            compact();
+            assertRows(execute(selectFirstRowCql), firstRow);
+            assertEmpty(execute(selectSecondRowCql));
+
+            // drop the index and assert we can no longer query using it
+            execute(dropIndexCql);
+            assertInvalidThrowMessage(missingIndexMessage, InvalidRequestException.class, selectFirstRowCql);
+            flush();
+            compact();
+
+            // insert second row, re-create the index and query for both indexed values
+            execute(insertCql, secondRow);
+            createIndex(createIndexCql);
+            waitForIndexBuild();
+            assertRows(execute(selectFirstRowCql), firstRow);
+            assertRows(execute(selectSecondRowCql), secondRow);
+
+            // modify the indexed value in the first row, assert we can query by the new value & not the original one
+            // note: this is not possible if the indexed column is part of the primary key, so we skip it in that case
+            if (includesUpdate())
+            {
+                execute(getUpdateCql(), getPrimaryKeyValues(firstRow));
+                assertEmpty(execute(selectFirstRowCql));
+                // update the select statement to query using the updated value
+                selectFirstRowCql = String.format("SELECT * FROM %%s WHERE %s", postUpdateQueryExpression);
+                // we can't check the entire row b/c we've modified something.
+                // so we just check the primary key columns, as they cannot have changed
+                assertPrimaryKeyColumnsOnly(execute(selectFirstRowCql), firstRow);
+            }
+
+            // delete row, check that it cannot be found via index query
+            execute(deleteRowCql, getPrimaryKeyValues(firstRow));
+            assertEmpty(execute(selectFirstRowCql));
+
+            // delete partition, check that its rows cannot be retrieved via index query
+            execute(deletePartitionCql, getPartitionKeyValues(secondRow));
+            assertEmpty(execute(selectSecondRowCql));
+
+            // flush & compact, then verify that deleted values stay gone
+            flush();
+            compact();
+            assertEmpty(execute(selectFirstRowCql));
+            assertEmpty(execute(selectSecondRowCql));
+
+            // add back both rows, reset the select for the first row to query on the original value & verify
+            execute(insertCql, firstRow);
+            selectFirstRowCql = String.format("SELECT * FROM %%s WHERE %s", queryExpression1);
+            assertRows(execute(selectFirstRowCql), firstRow);
+            execute(insertCql, secondRow);
+            assertRows(execute(selectSecondRowCql), secondRow);
+
+            // flush and compact, verify again & we're done
+            flush();
+            compact();
+            assertRows(execute(selectFirstRowCql), firstRow);
+            assertRows(execute(selectSecondRowCql), secondRow);
+        }
+

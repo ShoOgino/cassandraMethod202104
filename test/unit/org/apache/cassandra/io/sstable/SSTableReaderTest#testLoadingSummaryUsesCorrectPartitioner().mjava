@@ -12,18 +12,22 @@
 
         store.forceBlockingFlush();
 
-        ColumnFamilyStore indexCfs = store.indexManager.getIndexForColumn(store.metadata.getColumnDefinition(bytes("birthdate"))).getIndexCfs();
-        assert indexCfs.isIndex();
-        SSTableReader sstable = indexCfs.getLiveSSTables().iterator().next();
-        assert sstable.first.getToken() instanceof LocalToken;
-
-        try(SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getIndexAccessMode(), false);
-            SegmentedFile.Builder dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode(), sstable.compression))
+        for(ColumnFamilyStore indexCfs : store.indexManager.getAllIndexColumnFamilyStores())
         {
-            sstable.saveSummary(ibuilder, dbuilder);
+            assert indexCfs.isIndex();
+            SSTableReader sstable = indexCfs.getLiveSSTables().iterator().next();
+            assert sstable.first.getToken() instanceof LocalToken;
+
+            try (SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getIndexAccessMode(),
+                                                                           false);
+                 SegmentedFile.Builder dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode(),
+                                                                           sstable.compression))
+            {
+                sstable.saveSummary(ibuilder, dbuilder);
+            }
+            SSTableReader reopened = SSTableReader.open(sstable.descriptor);
+            assert reopened.first.getToken() instanceof LocalToken;
+            reopened.selfRef().release();
         }
-        SSTableReader reopened = SSTableReader.open(sstable.descriptor);
-        assert reopened.first.getToken() instanceof LocalToken;
-        reopened.selfRef().release();
     }
 

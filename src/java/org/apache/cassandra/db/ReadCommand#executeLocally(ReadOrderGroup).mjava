@@ -1,6 +1,8 @@
     /**
      * Executes this command on the local host.
      *
+     * @param orderGroup the operation group spanning this command
+     *
      * @return an iterator over the result of executing this command locally.
      */
     @SuppressWarnings("resource") // The result iterator is closed upon exceptions (we know it's fine to potentially not close the intermediary
@@ -10,10 +12,12 @@
         long startTimeNanos = System.nanoTime();
 
         ColumnFamilyStore cfs = Keyspace.openAndGetStore(metadata());
-        SecondaryIndexSearcher searcher = getIndexSearcher(cfs);
+        Index index = getIndex(cfs, true);
+        Index.Searcher searcher = index == null ? null : index.searcherFor(this);
+
         UnfilteredPartitionIterator resultIterator = searcher == null
                                          ? queryStorage(cfs, orderGroup)
-                                         : searcher.search(this, orderGroup);
+                                         : searcher.search(orderGroup);
 
         try
         {
@@ -23,7 +27,7 @@
             // no point in checking it again.
             RowFilter updatedFilter = searcher == null
                                     ? rowFilter()
-                                    : rowFilter().without(searcher.primaryClause(this));
+                                    : index.getPostIndexQueryFilter(rowFilter());
 
             // TODO: We'll currently do filtering by the rowFilter here because it's convenient. However,
             // we'll probably want to optimize by pushing it down the layer (like for dropped columns) as it

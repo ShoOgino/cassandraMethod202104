@@ -8,12 +8,13 @@
         if (Strings.isNullOrEmpty(acceptedName))
             acceptedName = Indexes.getAvailableIndexName(keyspace(), columnFamily(), cd.name);
 
-        for (IndexMetadata existing : cfm.getIndexes())
-            if (existing.indexedColumn(cfm).equals(cd) || existing.name.equals(acceptedName))
-                if (ifNotExists)
-                    return false;
-                else
-                    throw new InvalidRequestException("Index already exists");
+        if (Schema.instance.getKSMetaData(keyspace()).existingIndexNames(null).contains(acceptedName))
+        {
+            if (ifNotExists)
+                return false;
+            else
+                throw new InvalidRequestException(String.format("Index %s already exists", acceptedName));
+        }
 
         IndexMetadata.IndexType indexType;
         Map<String, String> indexOptions;
@@ -39,12 +40,18 @@
             indexOptions = Collections.emptyMap();
         }
 
+        IndexMetadata index = IndexMetadata.singleColumnIndex(cd, acceptedName, indexType, indexOptions);
 
+        // check to disallow creation of an index which duplicates an existing one in all but name
+        Optional<IndexMetadata> existingIndex = Iterables.tryFind(cfm.getIndexes(), existing -> existing.equalsWithoutName(index));
+        if (existingIndex.isPresent())
+            throw new InvalidRequestException(String.format("Index %s is a duplicate of existing index %s",
+                                                            index.name,
+                                                            existingIndex.get().name));
 
         logger.debug("Updating index definition for {}", indexName);
-
-        IndexMetadata index = IndexMetadata.legacyIndex(cd, acceptedName, indexType, indexOptions);
         cfm.indexes(cfm.getIndexes().with(index));
+
         MigrationManager.announceColumnFamilyUpdate(cfm, false, isLocalOnly);
         return true;
     }
