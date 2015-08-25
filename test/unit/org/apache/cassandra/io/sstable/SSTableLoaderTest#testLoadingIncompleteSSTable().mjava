@@ -26,9 +26,10 @@
         //make sure we have some tables...
         assertTrue(dataDir.listFiles().length > 0);
 
+        final CountDownLatch latch = new CountDownLatch(2);
         //writer is still open so loader should not load anything
         SSTableLoader loader = new SSTableLoader(dataDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
-        loader.stream().get();
+        loader.stream(Collections.emptySet(), completionStreamListener(latch)).get();
 
         List<FilteredPartition> partitions = Util.getAll(Util.cmd(Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD2)).build());
 
@@ -38,9 +39,13 @@
         writer.close();
 
         loader = new SSTableLoader(dataDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
-        loader.stream().get();
+        loader.stream(Collections.emptySet(), completionStreamListener(latch)).get();
 
         partitions = Util.getAll(Util.cmd(Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD2)).build());
         assertEquals(1000, partitions.size());
+
+        // The stream future is signalled when the work is complete but before releasing references. Wait for release
+        // before cleanup (CASSANDRA-10118).
+        latch.await();
     }
 
