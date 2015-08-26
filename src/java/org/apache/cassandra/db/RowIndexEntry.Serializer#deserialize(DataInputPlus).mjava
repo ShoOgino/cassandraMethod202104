@@ -1,19 +1,52 @@
         public RowIndexEntry<IndexHelper.IndexInfo> deserialize(DataInputPlus in) throws IOException
         {
-            long position = in.readLong();
+            if (!version.storeRows())
+            {
+                long position = in.readLong();
 
-            int size = in.readInt();
+                int size = in.readInt();
+                if (size > 0)
+                {
+                    DeletionTime deletionTime = DeletionTime.serializer.deserialize(in);
+
+                    int entries = in.readInt();
+                    List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<>(entries);
+
+                    // The old format didn't saved the partition header length per-se, but rather for each entry it's
+                    // offset from the beginning of the row. We don't use that offset anymore, but we do need the
+                    // header length so we basically need the first entry offset. And so we inline the deserialization
+                    // of the first index entry to get that information. While this is a bit ugly, we'll get rid of that
+                    // code once pre-3.0 backward compatibility is dropped so it feels fine as a temporary hack.
+                    ClusteringPrefix firstName = idxSerializer.clusteringSerializer.deserialize(in);
+                    ClusteringPrefix lastName = idxSerializer.clusteringSerializer.deserialize(in);
+                    long headerLength = in.readLong();
+                    long width = in.readLong();
+
+                    columnsIndex.add(new IndexHelper.IndexInfo(firstName, lastName, width, null));
+                    for (int i = 1; i < entries; i++)
+                        columnsIndex.add(idxSerializer.deserialize(in));
+
+                    return new IndexedEntry(position, deletionTime, headerLength, columnsIndex);
+                }
+                else
+                {
+                    return new RowIndexEntry<>(position);
+                }
+            }
+
+            long position = in.readUnsignedVInt();
+
+            int size = (int)in.readUnsignedVInt();
             if (size > 0)
             {
+                long headerLength = in.readUnsignedVInt();
                 DeletionTime deletionTime = DeletionTime.serializer.deserialize(in);
-
-                int entries = in.readInt();
-                IndexHelper.IndexInfo.Serializer idxSerializer = metadata.serializers().indexSerializer(version);
+                int entries = (int)in.readUnsignedVInt();
                 List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<>(entries);
                 for (int i = 0; i < entries; i++)
-                    columnsIndex.add(idxSerializer.deserialize(in, header));
+                    columnsIndex.add(idxSerializer.deserialize(in));
 
-                return new IndexedEntry(position, deletionTime, columnsIndex);
+                return new IndexedEntry(position, deletionTime, headerLength, columnsIndex);
             }
             else
             {
