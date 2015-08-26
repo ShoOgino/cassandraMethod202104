@@ -1,6 +1,51 @@
-    // convenience method which doesn't emit tracing messages
+    /**
+     * Called at query time to find the most selective of the registered index implementation
+     * (i.e. the one likely to return the fewest results) from those registered.
+     * Implementation specific validation of the target expression by the most selective
+     * index should be performed in the searcherFor method to ensure that we pick the right
+     * index regardless of the validity of the expression.
+     *
+     * This method is only called once during the lifecycle of a ReadCommand and the result is
+     * cached for future use when obtaining a Searcher, getting the index's underlying CFS for
+     * ReadOrderGroup, or an estimate of the result size from an average index query.
+     *
+     * @param command ReadCommand to be executed
+     * @return an Index instance, ready to use during execution of the command, or null if none
+     * of the registered indexes can support the command.
+     */
     public Index getBestIndexFor(ReadCommand command)
     {
-        return getBestIndexFor(command, false);
+        if (indexes.isEmpty() || command.rowFilter().isEmpty())
+            return null;
+
+        Set<Index> searchableIndexes = new HashSet<>();
+        for (RowFilter.Expression expression : command.rowFilter())
+        {
+            indexes.values().stream()
+                            .filter(index -> index.supportsExpression(expression.column(), expression.operator()))
+                            .forEach(searchableIndexes::add);
+        }
+
+        if (searchableIndexes.isEmpty())
+        {
+            logger.debug("No applicable indexes found");
+            Tracing.trace("No applicable indexes found");
+            return null;
+        }
+
+        Index selected = searchableIndexes.stream()
+                                          .max((a, b) -> Longs.compare(a.getEstimatedResultRows(),
+                                                                       b.getEstimatedResultRows()))
+                                          .orElseThrow(() -> new AssertionError("Could not select most selective index"));
+
+        // pay for an additional threadlocal get() rather than build the strings unnecessarily
+        if (Tracing.isTracing())
+        {
+            Tracing.trace("Index mean cardinalities are {}. Scanning with {}.",
+                          searchableIndexes.stream().map(i -> i.getIndexName() + ':' + i.getEstimatedResultRows())
+                                           .collect(Collectors.joining(",")),
+                          selected.getIndexName());
+        }
+        return selected;
     }
 
