@@ -1,0 +1,39 @@
+    private static void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(log);
+
+        log.trackNew(sstableNew);
+        /*TransactionLog.SSTableTidier tidier =*/ log.obsoleted(sstableOld);
+
+        //modify the old sstable files
+        modifier.accept(sstableOld);
+
+        //Fake a commit
+        log.getLogFile().commit();
+
+        //This should not remove the old files
+        LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
+
+        assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
+                                                                                    sstableNew.getAllFilePaths(),
+                                                                                    sstableOld.getAllFilePaths(),
+                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
+
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
+        // complete the transaction to avoid LEAK errors
+        assertNull(log.complete(null));
+
+        assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
+                                                                                    sstableNew.getAllFilePaths(),
+                                                                                    sstableOld.getAllFilePaths(),
+                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
+    }
+
