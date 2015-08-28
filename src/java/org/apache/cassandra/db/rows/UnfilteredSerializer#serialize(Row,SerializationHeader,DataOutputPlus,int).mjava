@@ -4,9 +4,11 @@
         int flags = 0;
         boolean isStatic = row.isStatic();
 
+        Columns headerColumns = header.columns(isStatic);
         LivenessInfo pkLiveness = row.primaryKeyLivenessInfo();
         DeletionTime deletion = row.deletion();
         boolean hasComplexDeletion = row.hasComplexDeletion();
+        boolean hasAllColumns = (row.size() == headerColumns.size());
 
         if (isStatic)
             flags |= IS_STATIC;
@@ -18,6 +20,8 @@
             flags |= HAS_DELETION;
         if (hasComplexDeletion)
             flags |= HAS_COMPLEX_DELETION;
+        if (hasAllColumns)
+            flags |= HAS_ALL_COLUMNS;
 
         out.writeByte((byte)flags);
         if (!isStatic)
@@ -33,18 +37,15 @@
         if ((flags & HAS_DELETION) != 0)
             header.writeDeletionTime(deletion, out);
 
-        Columns columns = header.columns(isStatic);
-        int simpleCount = columns.simpleColumnCount();
-        boolean useSparse = header.useSparseColumnLayout(isStatic);
-        SearchIterator<ColumnDefinition, ColumnData> cells = row.searchIterator();
+        if (!hasAllColumns)
+            Columns.serializer.serializeSubset(Collections2.transform(row, ColumnData::column), headerColumns, out);
 
-        for (int i = 0; i < simpleCount; i++)
-            writeSimpleColumn(i, (Cell)cells.next(columns.getSimple(i)), pkLiveness, header, out, useSparse);
-
-        for (int i = simpleCount; i < columns.columnCount(); i++)
-            writeComplexColumn(i, (ComplexColumnData)cells.next(columns.getComplex(i - simpleCount)), hasComplexDeletion, pkLiveness, header, out, useSparse);
-
-        if (useSparse)
-            out.writeVInt(-1);
+        for (ColumnData data : row)
+        {
+            if (data.column.isSimple())
+                Cell.serializer.serialize((Cell) data, out, pkLiveness, header);
+            else
+                writeComplexColumn((ComplexColumnData) data, hasComplexDeletion, pkLiveness, header, out);
+        }
     }
 
