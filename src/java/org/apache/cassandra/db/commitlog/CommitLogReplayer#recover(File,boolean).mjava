@@ -1,6 +1,8 @@
     public void recover(File file, boolean tolerateTruncation) throws IOException
     {
+        // just transform from the file name (no reading of headers) to determine version
         CommitLogDescriptor desc = CommitLogDescriptor.fromFileName(file.getName());
+
         try(ChannelProxy channel = new ChannelProxy(file);
             RandomAccessReader reader = RandomAccessReader.open(channel))
         {
@@ -13,16 +15,16 @@
                 replaySyncSection(reader, (int) reader.length(), desc, desc.fileName(), tolerateTruncation);
                 return;
             }
-
             final long segmentId = desc.id;
             try
             {
-                desc = CommitLogDescriptor.readHeader(reader);
+                desc = CommitLogDescriptor.readHeader(reader, DatabaseDescriptor.getEncryptionContext());
             }
-            catch (IOException e)
+            catch (Exception e)
             {
                 desc = null;
             }
+
             if (desc == null) {
                 handleReplayError(false, "Could not read commit log descriptor in file %s", file);
                 return;
@@ -36,83 +38,39 @@
             if (logAndCheckIfShouldSkip(file, desc))
                 return;
 
-            ICompressor compressor = null;
-            if (desc.compression != null)
+            SegmentReader segmentReader;
+            try
             {
-                try
-                {
-                    compressor = CompressionParams.createCompressor(desc.compression);
-                }
-                catch (ConfigurationException e)
-                {
-                    handleReplayError(false, "Unknown compression: %s", e.getMessage());
-                    return;
-                }
+                segmentReader = new SegmentReader(desc, reader, tolerateTruncation);
+            }
+            catch(Exception e)
+            {
+                handleReplayError(false, "unable to create segment reader for commit log file: %s", e);
+                return;
             }
 
-            assert reader.length() <= Integer.MAX_VALUE;
-            int end = (int) reader.getFilePointer();
-            int replayEnd = end;
-
-            while ((end = readSyncMarker(desc, end, reader, tolerateTruncation)) >= 0)
+            try
             {
-                int replayPos = replayEnd + CommitLogSegment.SYNC_MARKER_SIZE;
-
-                if (logger.isTraceEnabled())
-                    logger.trace("Replaying {} between {} and {}", file, reader.getFilePointer(), end);
-                if (compressor != null)
-                {
-                    int uncompressedLength = reader.readInt();
-                    replayEnd = replayPos + uncompressedLength;
-                }
-                else
-                {
-                    replayEnd = end;
-                }
-
-                if (segmentId == globalPosition.segment && replayEnd < globalPosition.position)
-                    // Skip over flushed section.
-                    continue;
-
-                FileDataInput sectionReader = reader;
-                String errorContext = desc.fileName();
-                // In the uncompressed case the last non-fully-flushed section can be anywhere in the file.
                 boolean tolerateErrorsInSection = tolerateTruncation;
-                if (compressor != null)
+                for (SyncSegment syncSegment : segmentReader)
                 {
-                    // In the compressed case we know if this is the last section.
-                    tolerateErrorsInSection &= end == reader.length() || end < 0;
+                    tolerateErrorsInSection &= syncSegment.toleratesErrorsInSection;
 
-                    int start = (int) reader.getFilePointer();
-                    try
-                    {
-                        int compressedLength = end - start;
-                        if (logger.isTraceEnabled())
-                            logger.trace("Decompressing {} between replay positions {} and {}",
-                                         file,
-                                         replayPos,
-                                         replayEnd);
-                        if (compressedLength > buffer.length)
-                            buffer = new byte[(int) (1.2 * compressedLength)];
-                        reader.readFully(buffer, 0, compressedLength);
-                        int uncompressedLength = replayEnd - replayPos;
-                        if (uncompressedLength > uncompressedBuffer.length)
-                            uncompressedBuffer = new byte[(int) (1.2 * uncompressedLength)];
-                        compressor.uncompress(buffer, 0, compressedLength, uncompressedBuffer, 0);
-                        sectionReader = new FileSegmentInputStream(ByteBuffer.wrap(uncompressedBuffer), reader.getPath(), replayPos);
-                        errorContext = "compressed section at " + start + " in " + errorContext;
-                    }
-                    catch (IOException | ArrayIndexOutOfBoundsException e)
-                    {
-                        handleReplayError(tolerateErrorsInSection,
-                                          "Unexpected exception decompressing section at %d: %s",
-                                          start, e);
+                    // Skip over flushed section.
+                    if (desc.id == globalPosition.segment && syncSegment.endPosition < globalPosition.position)
                         continue;
-                    }
+                    String errorContext = String.format("next section at %d in %s", syncSegment.fileStartPosition, desc.fileName());
+                    if (!replaySyncSection(syncSegment.input, syncSegment.endPosition, desc, errorContext, tolerateErrorsInSection))
+                        break;
                 }
-
-                if (!replaySyncSection(sectionReader, replayEnd, desc, errorContext, tolerateErrorsInSection))
-                    break;
+            }
+            // unfortunately, AbstractIterator cannot throw a checked excpetion,
+            // so check to see if a RuntimeException is wrapping an IOException
+            catch (RuntimeException re)
+            {
+                if (re.getCause() instanceof IOException)
+                    throw (IOException) re.getCause();
+                throw re;
             }
             logger.debug("Finished reading {}", file);
         }

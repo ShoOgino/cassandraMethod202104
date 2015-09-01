@@ -1,0 +1,39 @@
+    /**
+     * Encrypt the input data, and writes out to the same input buffer; if the buffer is not big enough,
+     * deallocate current, and allocate a large enough buffer.
+     * Writes the cipher text and headers out to the channel, as well.
+     *
+     * Note: channel is a parameter as we cannot write header info to the output buffer as we assume the input and output
+     * buffers can be the same buffer (and writing the headers to a shared buffer will corrupt any input data). Hence,
+     * we write out the headers directly to the channel, and then the cipher text (once encrypted).
+     */
+    public static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, Cipher cipher) throws IOException
+    {
+        final int plainTextLength = inputBuffer.remaining();
+        final int encryptLength = cipher.getOutputSize(plainTextLength);
+        ByteBuffer outputBuffer = inputBuffer.duplicate();
+        outputBuffer = ByteBufferUtil.ensureCapacity(outputBuffer, encryptLength, allowBufferResize);
+
+        // it's unfortunate that we need to allocate a small buffer here just for the headers, but if we reuse the input buffer
+        // for the output, then we would overwrite the first n bytes of the real data with the header data.
+        ByteBuffer intBuf = ByteBuffer.allocate(ENCRYPTED_BLOCK_HEADER_SIZE);
+        intBuf.putInt(0, encryptLength);
+        intBuf.putInt(4, plainTextLength);
+        channel.write(intBuf);
+
+        try
+        {
+            cipher.doFinal(inputBuffer, outputBuffer);
+        }
+        catch (ShortBufferException | IllegalBlockSizeException | BadPaddingException e)
+        {
+            throw new IOException("failed to encrypt commit log block", e);
+        }
+
+        outputBuffer.position(0).limit(encryptLength);
+        channel.write(outputBuffer);
+        outputBuffer.position(0).limit(encryptLength);
+
+        return outputBuffer;
+    }
+

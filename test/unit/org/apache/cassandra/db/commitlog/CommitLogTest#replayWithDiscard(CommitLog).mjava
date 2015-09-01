@@ -1,0 +1,36 @@
+    private void replayWithDiscard(CommitLog commitLog) throws IOException
+    {
+        int cellCount = 0;
+        int max = 1024;
+        int discardPosition = (int)(max * .8); // an arbitrary number of entries that we'll skip on the replay
+        ReplayPosition replayPosition = null;
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
+
+        for (int i = 0; i < max; i++)
+        {
+            final Mutation rm1 = new RowUpdateBuilder(cfs.metadata, 0, "k" + 1)
+                                 .clustering("bytes")
+                                 .add("val", bytes("this is a string"))
+                                 .build();
+            ReplayPosition position = commitLog.add(rm1);
+
+            if (i == discardPosition)
+                replayPosition = position;
+            if (i > discardPosition)
+            {
+                cellCount += 1;
+            }
+        }
+
+        commitLog.sync(true);
+
+        Replayer replayer = new Replayer(commitLog, replayPosition);
+        List<String> activeSegments = commitLog.getActiveSegmentNames();
+        Assert.assertFalse(activeSegments.isEmpty());
+
+        File[] files = new File(commitLog.location).listFiles((file, name) -> activeSegments.contains(name));
+        replayer.recover(files);
+
+        assertEquals(cellCount, replayer.cells);
+    }
+

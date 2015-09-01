@@ -1,0 +1,28 @@
+    @Test
+    public void encrypt() throws BadPaddingException, ShortBufferException, IllegalBlockSizeException, IOException
+    {
+        byte[] buf = new byte[(1 << 12) - 7];
+        random.nextBytes(buf);
+
+        // encrypt
+        CipherFactory cipherFactory = new CipherFactory(tdeOptions);
+        Cipher encryptor = cipherFactory.getEncryptor(tdeOptions.cipher, tdeOptions.key_alias);
+
+        File f = File.createTempFile("commitlog-enc-utils-", ".tmp");
+        f.deleteOnExit();
+        FileChannel channel = new RandomAccessFile(f, "rw").getChannel();
+        EncryptionUtils.encryptAndWrite(ByteBuffer.wrap(buf), channel, true, encryptor);
+        channel.close();
+
+        // decrypt
+        Cipher decryptor = cipherFactory.getDecryptor(tdeOptions.cipher, tdeOptions.key_alias, encryptor.getIV());
+        ByteBuffer decryptedBuffer = EncryptionUtils.decrypt(RandomAccessReader.open(f), ByteBuffer.allocate(0), true, decryptor);
+
+        // normally, we'd just call BB.array(), but that gives you the *entire* backing array, not with any of the offsets (position,limit) applied.
+        // thus, just for this test, we copy the array and perform an array-level comparison with those offsets
+        decryptedBuffer.limit(buf.length);
+        byte[] b = new byte[buf.length];
+        System.arraycopy(decryptedBuffer.array(), 0, b, 0, buf.length);
+        Assert.assertArrayEquals(buf, b);
+    }
+

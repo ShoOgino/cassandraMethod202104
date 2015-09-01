@@ -1,0 +1,38 @@
+    private void compressedSegmenter(ICompressor compressor) throws IOException
+    {
+        int rawSize = (1 << 15) - 137;
+        ByteBuffer plainTextBuffer = compressor.preferredBufferType().allocate(rawSize);
+        byte[] b = new byte[rawSize];
+        random.nextBytes(b);
+        plainTextBuffer.put(b);
+        plainTextBuffer.flip();
+
+        int uncompressedHeaderSize = 4;  // need to add in the plain text size to the block we write out
+        int length = compressor.initialCompressedBufferLength(rawSize);
+        ByteBuffer compBuffer = ByteBufferUtil.ensureCapacity(null, length + uncompressedHeaderSize, true, compressor.preferredBufferType());
+        compBuffer.putInt(rawSize);
+        compressor.compress(plainTextBuffer, compBuffer);
+        compBuffer.flip();
+
+        File compressedFile = File.createTempFile("compressed-segment-", ".log");
+        compressedFile.deleteOnExit();
+        FileOutputStream fos = new FileOutputStream(compressedFile);
+        fos.getChannel().write(compBuffer);
+        fos.close();
+
+        try (RandomAccessReader reader = RandomAccessReader.open(compressedFile))
+        {
+            CompressedSegmenter segmenter = new CompressedSegmenter(compressor, reader);
+            int fileLength = (int) compressedFile.length();
+            SyncSegment syncSegment = segmenter.nextSegment(0, fileLength);
+            FileDataInput fileDataInput = syncSegment.input;
+            ByteBuffer fileBuffer = readBytes(fileDataInput, rawSize);
+
+            plainTextBuffer.flip();
+            Assert.assertEquals(plainTextBuffer, fileBuffer);
+
+            // CompressedSegmenter includes the Sync header length in the syncSegment.endPosition (value)
+            Assert.assertEquals(rawSize, syncSegment.endPosition - CommitLogSegment.SYNC_MARKER_SIZE);
+        }
+    }
+

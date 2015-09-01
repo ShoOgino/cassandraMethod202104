@@ -1,0 +1,44 @@
+    /**
+     * Decrypt the input data, as well as manage sizing of the {@code outputBuffer}; if the buffer is not big enough,
+     * deallocate current, and allocate a large enough buffer.
+     *
+     * @return the byte buffer that was actaully written to; it may be the {@code outputBuffer} if it had enough capacity,
+     * or it may be a new, larger instance. Callers should capture the return buffer (if calling multiple times).
+     */
+    public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher) throws IOException
+    {
+        ByteBuffer metadataBuffer = reusableBuffers.get();
+        if (metadataBuffer.capacity() < ENCRYPTED_BLOCK_HEADER_SIZE)
+        {
+            metadataBuffer = ByteBufferUtil.ensureCapacity(metadataBuffer, ENCRYPTED_BLOCK_HEADER_SIZE, true);
+            reusableBuffers.set(metadataBuffer);
+        }
+
+        metadataBuffer.position(0).limit(ENCRYPTED_BLOCK_HEADER_SIZE);
+        channel.read(metadataBuffer);
+        if (metadataBuffer.remaining() < ENCRYPTED_BLOCK_HEADER_SIZE)
+            throw new IllegalStateException("could not read encrypted blocked metadata header");
+        int encryptedLength = metadataBuffer.getInt();
+        // this is the length of the compressed data
+        int plainTextLength = metadataBuffer.getInt();
+
+        outputBuffer = ByteBufferUtil.ensureCapacity(outputBuffer, Math.max(plainTextLength, encryptedLength), allowBufferResize);
+        outputBuffer.position(0).limit(encryptedLength);
+        channel.read(outputBuffer);
+
+        ByteBuffer dupe = outputBuffer.duplicate();
+        dupe.clear();
+
+        try
+        {
+            cipher.doFinal(outputBuffer, dupe);
+        }
+        catch (ShortBufferException | IllegalBlockSizeException | BadPaddingException e)
+        {
+            throw new IOException("failed to decrypt commit log block", e);
+        }
+
+        dupe.position(0).limit(plainTextLength);
+        return dupe;
+    }
+

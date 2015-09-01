@@ -1,0 +1,39 @@
+    /**
+     * Create a temporary commit log file with an appropriate descriptor at the head.
+     *
+     * @return the commit log file reference and the first position after the descriptor in the file
+     * (so that subsequent writes happen at the correct file location).
+     */
+    protected Pair<File, Integer> tmpFile() throws IOException
+    {
+        EncryptionContext encryptionContext = DatabaseDescriptor.getEncryptionContext();
+        CommitLogDescriptor desc = new CommitLogDescriptor(CommitLogDescriptor.current_version,
+                                                           CommitLogSegment.getNextId(),
+                                                           DatabaseDescriptor.getCommitLogCompression(),
+                                                           encryptionContext);
+
+        // if we're testing encryption, we need to write out a cipher IV to the descriptor headers
+        Map<String, String> additionalHeaders = new HashMap<>();
+        if (encryptionContext.isEnabled())
+        {
+            byte[] buf = new byte[16];
+            new Random().nextBytes(buf);
+            additionalHeaders.put(EncryptionContext.ENCRYPTION_IV, Hex.bytesToHex(buf));
+        }
+
+        ByteBuffer buf = ByteBuffer.allocate(1024);
+        CommitLogDescriptor.writeHeader(buf, desc, additionalHeaders);
+        buf.flip();
+        int positionAfterHeader = buf.limit() + 1;
+
+        File logFile = new File(logDirectory, desc.fileName());
+        logFile.deleteOnExit();
+
+        try (OutputStream lout = new FileOutputStream(logFile))
+        {
+            lout.write(buf.array(), 0, buf.limit());
+        }
+
+        return Pair.create(logFile, positionAfterHeader);
+    }
+

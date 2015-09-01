@@ -1,0 +1,33 @@
+        @VisibleForTesting
+        EncryptedSegmenter(final RandomAccessReader reader, EncryptionContext encryptionContext)
+        {
+            this.reader = reader;
+            decryptedBuffer = ByteBuffer.allocate(0);
+            compressor = encryptionContext.getCompressor();
+            nextLogicalStart = reader.getFilePointer();
+
+            try
+            {
+                cipher = encryptionContext.getDecryptor();
+            }
+            catch (IOException ioe)
+            {
+                throw new FSReadError(ioe, reader.getPath());
+            }
+
+            chunkProvider = () -> {
+                if (reader.getFilePointer() >= currentSegmentEndPosition)
+                    return ByteBufferUtil.EMPTY_BYTE_BUFFER;
+                try
+                {
+                    decryptedBuffer = EncryptionUtils.decrypt(reader, decryptedBuffer, true, cipher);
+                    uncompressedBuffer = EncryptionUtils.uncompress(decryptedBuffer, uncompressedBuffer, true, compressor);
+                    return uncompressedBuffer;
+                }
+                catch (IOException e)
+                {
+                    throw new FSReadError(e, reader.getPath());
+                }
+            };
+        }
+
