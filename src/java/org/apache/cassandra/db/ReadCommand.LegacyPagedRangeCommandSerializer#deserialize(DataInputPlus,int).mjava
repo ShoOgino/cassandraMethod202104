@@ -50,9 +50,17 @@
 
             limits = limits.forPaging(maxResults);
 
-            // pre-3.0 nodes normally expect pages to include the last cell from the previous page, but they handle it
-            // missing without any problems, so we can safely always set "inclusive" to false in the data range
-            DataRange dataRange = new DataRange(keyRange, filter).forPaging(keyRange, metadata.comparator, startClustering, false);
-            return new PartitionRangeReadCommand(false, true, metadata, nowInSec, selection, rowFilter, limits, dataRange);
+            // The pagedRangeCommand is used in pre-3.0 for both the first page and the following ones. On the first page, the startBound will be
+            // the start of the overall slice and will not be a proper Clustering. So detect that case and just return a non-paging DataRange, which
+            // is what 3.0 does.
+            DataRange dataRange = new DataRange(keyRange, filter);
+            Slices slices = filter.requestedSlices();
+            if (startBound != LegacyLayout.LegacyBound.BOTTOM && !startBound.bound.equals(slices.get(0).start()))
+            {
+                // pre-3.0 nodes normally expect pages to include the last cell from the previous page, but they handle it
+                // missing without any problems, so we can safely always set "inclusive" to false in the data range
+                dataRange = dataRange.forPaging(keyRange, metadata.comparator, startBound.getAsClustering(metadata), false);
+            }
+            return new PartitionRangeReadCommand(false, 0, true, metadata, nowInSec, selection, rowFilter, limits, dataRange);
         }
 
