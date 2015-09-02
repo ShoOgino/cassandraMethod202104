@@ -1,35 +1,15 @@
     private static void asyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
     {
-        AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
-                                                                        Collections.<InetAddress>emptyList(),
-                                                                        ConsistencyLevel.ANY,
-                                                                        Keyspace.open(SystemKeyspace.NAME),
-                                                                        null,
-                                                                        WriteType.SIMPLE);
-        Mutation mutation = new Mutation(
-                PartitionUpdate.fullPartitionDelete(SystemKeyspace.Batches,
-                                                    UUIDType.instance.decompose(uuid),
-                                                    FBUtilities.timestampMicros(),
-                                                    FBUtilities.nowInSeconds()));
-        MessageOut<Mutation> message = mutation.createMessage(MessagingService.Verb.BATCHLOG_MUTATION);
+        MessageOut<UUID> message = new MessageOut<>(MessagingService.Verb.BATCH_REMOVE, uuid, UUIDSerializer.serializer);
         for (InetAddress target : endpoints)
         {
-            int targetVersion = MessagingService.instance().getVersion(target);
+            if (logger.isDebugEnabled())
+                logger.debug("Sending batchlog remove request {} to {}", uuid, target);
+
             if (canDoLocalRequest(target))
-            {
-                insertLocal(Stage.BATCHLOG_MUTATION, message.payload, handler);
-            }
-            else if (targetVersion < MessagingService.VERSION_30)
-            {
-                MessagingService.instance().sendRR(mutation.createMessage(MessagingService.Verb.MUTATION),
-                                                   target,
-                                                   handler,
-                                                   false);
-            }
+                performLocally(Stage.MUTATION, () -> BatchlogManager.remove(uuid));
             else
-            {
-                MessagingService.instance().sendRR(message, target, handler, false);
-            }
+                MessagingService.instance().sendOneWay(message, target);
         }
     }
 
