@@ -1,0 +1,33 @@
+    @Test(expected = ChecksummedRandomAccessReader.CorruptFileException.class)
+    public void corruptionDetection() throws IOException
+    {
+        final File data = File.createTempFile("corruptionDetection", "data");
+        final File crc = File.createTempFile("corruptionDetection", "crc");
+
+        final byte[] expected = new byte[5 * 1024];
+        Arrays.fill(expected, (byte) 0);
+
+        SequentialWriter writer = ChecksummedSequentialWriter.open(data, crc);
+        writer.write(expected);
+        writer.finish();
+
+        assert data.exists();
+
+        // simulate corruption of file
+        try (RandomAccessFile dataFile = new RandomAccessFile(data, "rw"))
+        {
+            dataFile.seek(1024);
+            dataFile.write((byte) 5);
+        }
+
+        RandomAccessReader reader = new ChecksummedRandomAccessReader.Builder(data, crc).build();
+        byte[] b = new byte[expected.length];
+        reader.readFully(b);
+
+        assertArrayEquals(expected, b);
+
+        assertTrue(reader.isEOF());
+
+        reader.close();
+    }
+
