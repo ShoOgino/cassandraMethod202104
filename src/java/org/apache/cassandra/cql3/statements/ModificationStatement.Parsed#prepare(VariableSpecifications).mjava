@@ -1,62 +1,15 @@
-        public ModificationStatement prepare(VariableSpecifications boundNames) throws InvalidRequestException
+        public ModificationStatement prepare(VariableSpecifications boundNames)
         {
             CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
 
             Attributes preparedAttributes = attrs.prepare(keyspace(), columnFamily());
             preparedAttributes.collectMarkerSpecification(boundNames);
 
-            ModificationStatement stmt = prepareInternal(metadata, boundNames, preparedAttributes);
+            Conditions preparedConditions = prepareConditions(metadata, boundNames);
 
-            if (ifNotExists || ifExists || !conditions.isEmpty())
-            {
-                if (stmt.isCounter())
-                    throw new InvalidRequestException("Conditional updates are not supported on counter tables");
-
-                if (attrs.timestamp != null)
-                    throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
-
-                if (ifNotExists)
-                {
-                    // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
-                    // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-                    assert conditions.isEmpty();
-                    assert !ifExists;
-                    stmt.setIfNotExistCondition();
-                }
-                else if (ifExists)
-                {
-                    assert conditions.isEmpty();
-                    assert !ifNotExists;
-                    stmt.setIfExistCondition();
-                }
-                else
-                {
-                    for (Pair<ColumnIdentifier.Raw, ColumnCondition.Raw> entry : conditions)
-                    {
-                        ColumnIdentifier id = entry.left.prepare(metadata);
-                        ColumnDefinition def = metadata.getColumnDefinition(id);
-                        if (def == null)
-                            throw new InvalidRequestException(String.format("Unknown identifier %s", id));
-
-                        ColumnCondition condition = entry.right.prepare(keyspace(), def);
-                        condition.collectMarkerSpecification(boundNames);
-
-                        switch (def.kind)
-                        {
-                            case PARTITION_KEY:
-                            case CLUSTERING:
-                                throw new InvalidRequestException(String.format("PRIMARY KEY column '%s' cannot have IF conditions", id));
-                            default:
-                                stmt.addCondition(condition);
-                                break;
-                        }
-                    }
-                }
-
-                stmt.validateWhereClauseForConditions();
-            }
-
-            stmt.finishPreparation();
-            return stmt;
+            return prepareInternal(metadata,
+                                   boundNames,
+                                   preparedConditions,
+                                   preparedAttributes);
         }
 

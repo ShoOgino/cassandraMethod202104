@@ -1,5 +1,16 @@
-    private void processPartitionKeyRestrictions(boolean hasQueriableIndex) throws InvalidRequestException
+    private void processPartitionKeyRestrictions(boolean hasQueriableIndex)
     {
+        if (!type.allowPartitionKeyRanges())
+        {
+            checkFalse(partitionKeyRestrictions.isOnToken(),
+                       "The token function cannot be used in WHERE clauses for %s statements", type);
+
+            if (hasUnrestrictedPartitionKeyComponents())
+                throw invalidRequest("Some partition key parts are missing: %s",
+                                     Joiner.on(", ").join(getPartitionKeyUnrestrictedComponents()));
+        }
+        else
+        {
         // If there is a queriable index, no special condition are required on the other restrictions.
         // But we still need to know 2 things:
         // - If we don't have a queriable index, is the query ok
@@ -9,17 +20,18 @@
         if (partitionKeyRestrictions.isOnToken())
             isKeyRange = true;
 
-        if (hasPartitionKeyUnrestrictedComponents())
-        {
-            if (!partitionKeyRestrictions.isEmpty())
+            if (hasUnrestrictedPartitionKeyComponents())
             {
-                if (!hasQueriableIndex)
-                    throw invalidRequest("Partition key parts: %s must be restricted as other parts are",
-                                         Joiner.on(", ").join(getPartitionKeyUnrestrictedComponents()));
-            }
+                if (!partitionKeyRestrictions.isEmpty())
+                {
+                    if (!hasQueriableIndex)
+                        throw invalidRequest("Partition key parts: %s must be restricted as other parts are",
+                                             Joiner.on(", ").join(getPartitionKeyUnrestrictedComponents()));
+                }
 
-            isKeyRange = true;
-            usesSecondaryIndexing = hasQueriableIndex;
+                isKeyRange = true;
+                usesSecondaryIndexing = hasQueriableIndex;
+            }
         }
     }
 
