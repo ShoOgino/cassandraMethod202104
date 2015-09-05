@@ -1,0 +1,67 @@
+    /**
+     * Creates netty thread pools and event loops.
+     */
+    @VisibleForTesting
+    synchronized void initialize()
+    {
+        if (initialized)
+            return;
+
+        // prepare netty resources
+        eventExecutorGroup = new RequestThreadPoolExecutor();
+
+        if (useEpoll())
+        {
+            workerGroup = new EpollEventLoopGroup();
+            logger.info("Netty using native Epoll event loop");
+        }
+        else
+        {
+            workerGroup = new NioEventLoopGroup();
+            logger.info("Netty using Java NIO event loop");
+        }
+
+        int nativePort = DatabaseDescriptor.getNativeTransportPort();
+        int nativePortSSL = DatabaseDescriptor.getNativeTransportPortSSL();
+        InetAddress nativeAddr = DatabaseDescriptor.getRpcAddress();
+
+        org.apache.cassandra.transport.Server.Builder builder = new org.apache.cassandra.transport.Server.Builder()
+                                                                .withEventExecutor(eventExecutorGroup)
+                                                                .withEventLoopGroup(workerGroup)
+                                                                .withHost(nativeAddr);
+
+        if (!DatabaseDescriptor.getClientEncryptionOptions().enabled)
+        {
+            servers = Collections.singleton(builder.withSSL(false).withPort(nativePort).build());
+        }
+        else
+        {
+            if (nativePort != nativePortSSL)
+            {
+                // user asked for dedicated ssl port for supporting both non-ssl and ssl connections
+                servers = Collections.unmodifiableList(
+                                                      Arrays.asList(
+                                                                   builder.withSSL(false).withPort(nativePort).build(),
+                                                                   builder.withSSL(true).withPort(nativePortSSL).build()
+                                                      )
+                );
+            }
+            else
+            {
+                // ssl only mode using configured native port
+                servers = Collections.singleton(builder.withSSL(true).withPort(nativePort).build());
+            }
+        }
+
+        // register metrics
+        ClientMetrics.instance.addCounter("connectedNativeClients", () ->
+        {
+            int ret = 0;
+            for (Server server : servers)
+                ret += server.getConnectedClients();
+            return ret;
+        });
+
+        initialized = true;
+    }
+
