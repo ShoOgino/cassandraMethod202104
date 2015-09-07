@@ -1,6 +1,6 @@
     public StatementRestrictions(StatementType type,
                                  CFMetaData cfm,
-                                 List<Relation> whereClause,
+                                 WhereClause whereClause,
                                  VariableSpecifications boundNames,
                                  boolean selectsOnlyStaticColumns,
                                  boolean selectACollection,
@@ -17,7 +17,7 @@
          *   - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value
          *     in CQL so far)
          */
-        for (Relation relation : whereClause)
+        for (Relation relation : whereClause.relations)
             addRestriction(relation.toRestriction(cfm, boundNames));
 
         boolean hasQueriableClusteringColumnIndex = false;
@@ -28,8 +28,12 @@
             ColumnFamilyStore cfs = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfName);
             SecondaryIndexManager secondaryIndexManager = cfs.indexManager;
 
+            if (whereClause.containsCustomExpressions())
+                processCustomIndexExpressions(whereClause.expressions, boundNames, secondaryIndexManager);
+
             hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(secondaryIndexManager);
-            hasQueriableIndex = hasQueriableClusteringColumnIndex
+            hasQueriableIndex = !indexRestrictions.getCustomIndexExpressions().isEmpty()
+                    || hasQueriableClusteringColumnIndex
                     || partitionKeyRestrictions.hasSupportingIndex(secondaryIndexManager)
                     || nonPrimaryKeyRestrictions.hasSupportingIndex(secondaryIndexManager);
         }

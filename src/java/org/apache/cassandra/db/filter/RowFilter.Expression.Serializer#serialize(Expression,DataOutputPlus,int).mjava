@@ -1,10 +1,22 @@
             public void serialize(Expression expression, DataOutputPlus out, int version) throws IOException
             {
-                ByteBufferUtil.writeWithShortLength(expression.column.name.bytes, out);
-                expression.operator.writeTo(out);
-
                 if (version >= MessagingService.VERSION_30)
                     out.writeByte(expression.kind().ordinal());
+
+                // Custom expressions include neither a column or operator, but all
+                // other expressions do. Also, custom expressions are 3.0+ only, so
+                // the column & operator will always be the first things written for
+                // any pre-3.0 version
+                if (expression.kind() == Kind.CUSTOM)
+                {
+                    assert version >= MessagingService.VERSION_30;
+                    IndexMetadata.serializer.serialize(((CustomExpression)expression).targetIndex, out, version);
+                    ByteBufferUtil.writeWithShortLength(expression.value, out);
+                    return;
+                }
+
+                ByteBufferUtil.writeWithShortLength(expression.column.name.bytes, out);
+                expression.operator.writeTo(out);
 
                 switch (expression.kind())
                 {
