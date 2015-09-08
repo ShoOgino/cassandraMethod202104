@@ -1,0 +1,24 @@
+    @Test
+    public void testGetTemporaryFilesSafeAfterObsoletion() throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstable = sstable(cfs, 0, 128);
+        File dataFolder = sstable.descriptor.directory;
+
+        LogTransaction logs = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(logs);
+
+        LogTransaction.SSTableTidier tidier = logs.obsoleted(sstable);
+
+        logs.finish();
+
+        sstable.markObsolete(tidier);
+        sstable.selfRef().release();
+
+        // This should race with the asynchronous deletion of txn log files
+        // It doesn't matter what it returns but it should not throw because the txn
+        // was completed before deleting files (i.e. releasing sstables)
+        for (int i = 0; i < 200; i++)
+            LogAwareFileLister.getTemporaryFiles(dataFolder);
+    }
+

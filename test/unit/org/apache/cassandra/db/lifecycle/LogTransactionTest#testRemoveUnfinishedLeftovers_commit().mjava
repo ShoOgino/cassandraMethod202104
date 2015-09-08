@@ -1,0 +1,40 @@
+    @Test
+    public void testRemoveUnfinishedLeftovers_commit() throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        // simulate tracking sstables with a committed transaction (new log file deleted)
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(log);
+
+        log.trackNew(sstableNew);
+        LogTransaction.SSTableTidier tidier = log.obsoleted(sstableOld);
+
+        //Fake a commit
+        log.getLogFile().commit();
+
+        Set<File> tmpFiles = sstableOld.getAllFilePaths().stream().map(File::new).collect(Collectors.toSet());
+
+        sstableNew.selfRef().release();
+        sstableOld.selfRef().release();
+
+        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(sstableOld.descriptor.directory));
+
+        // normally called at startup
+        LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
+
+        // sstableNew should be only table left
+        Directories directories = new Directories(cfs.metadata);
+        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
+        assertEquals(1, sstables.size());
+
+        assertFiles(log.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
+
+        tidier.run();
+
+        // complete the transaction to avoid LEAK errors
+        assertNull(log.complete(null));
+    }
+

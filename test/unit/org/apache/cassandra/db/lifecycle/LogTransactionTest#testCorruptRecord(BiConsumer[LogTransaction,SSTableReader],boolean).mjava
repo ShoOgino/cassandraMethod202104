@@ -1,0 +1,54 @@
+    private static void testCorruptRecord(BiConsumer<LogTransaction, SSTableReader> modifier, boolean isRecoverable) throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        File dataFolder = sstableOld.descriptor.directory;
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(log);
+
+        log.trackNew(sstableNew);
+        log.obsoleted(sstableOld);
+
+        // Modify the transaction log or disk state for sstableOld
+        modifier.accept(log, sstableOld);
+
+        String txnFilePath = log.getLogFile().file.getPath();
+
+        assertNull(log.complete(null));
+
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
+        // The files on disk, for old files make sure to exclude the files that were deleted by the modifier
+        Set<String> newFiles = sstableNew.getAllFilePaths().stream().collect(Collectors.toSet());
+        Set<String> oldFiles = sstableOld.getAllFilePaths().stream().filter(p -> new File(p).exists()).collect(Collectors.toSet());
+
+        //This should filter as in progress since the last record is corrupt
+        assertFiles(newFiles, LogAwareFileLister.getTemporaryFiles(dataFolder));
+        assertFiles(oldFiles, LogAwareFileLister.getFinalFiles(dataFolder));
+
+        if (isRecoverable)
+        { // the corruption is recoverable but the commit record is unreadable so the transaction is still in progress
+
+            //This should remove new files
+            LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
+
+            // make sure to exclude the old files that were deleted by the modifier
+            assertFiles(dataFolder.getPath(), oldFiles);
+        }
+        else
+        { // if an intermediate line was also modified, it should ignore the tx log file
+
+            //This should not remove any files
+            LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
+
+            assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(newFiles,
+                                                                               oldFiles,
+                                                                               Collections.singleton(txnFilePath))));
+        }
+    }
+

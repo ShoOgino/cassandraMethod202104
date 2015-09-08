@@ -1,0 +1,23 @@
+    List<File> innerList() throws Throwable
+    {
+        list(Files.newDirectoryStream(folder))
+        .stream()
+        .filter((f) -> !LogFile.isLogFile(f))
+        .forEach((f) -> files.put(f, FileType.FINAL));
+
+        // Since many file systems are not atomic, we cannot be sure we have listed a consistent disk state
+        // (Linux would permit this, but for simplicity we keep our behaviour the same across platforms)
+        // so we must be careful to list txn log files AFTER every other file since these files are deleted last,
+        // after all other files are removed
+        list(Files.newDirectoryStream(folder, '*' + LogFile.EXT))
+        .stream()
+        .filter(LogFile::isLogFile)
+        .forEach(this::classifyFiles);
+
+        // Finally we apply the user filter before returning our result
+        return files.entrySet().stream()
+                    .filter((e) -> filter.apply(e.getKey(), e.getValue()))
+                    .map(Map.Entry::getKey)
+                    .collect(Collectors.toList());
+    }
+

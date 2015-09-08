@@ -1,0 +1,33 @@
+    @Test
+    public void testGetTemporaryFilesThrowsIfCompletingAfterObsoletion() throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstable = sstable(cfs, 0, 128);
+        File dataFolder = sstable.descriptor.directory;
+
+        LogTransaction logs = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(logs);
+
+        LogTransaction.SSTableTidier tidier = logs.obsoleted(sstable);
+
+        sstable.markObsolete(tidier);
+        sstable.selfRef().release();
+
+        LogTransaction.waitForDeletions();
+
+        try
+        {
+            // This should race with the asynchronous deletion of txn log files
+            // it should throw because we are violating the requirement that a transaction must
+            // finish before deleting files (i.e. releasing sstables)
+            LogAwareFileLister.getTemporaryFiles(dataFolder);
+            fail("Expected runtime exception");
+        }
+        catch(RuntimeException e)
+        {
+            //pass
+        }
+
+        logs.finish();
+    }
+

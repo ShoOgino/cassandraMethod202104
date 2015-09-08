@@ -1,0 +1,34 @@
+    public boolean verify()
+    {
+        Optional<LogRecord> firstInvalid = records.stream()
+                                                  .filter(this::isInvalid)
+                                                  .findFirst();
+
+        if (!firstInvalid.isPresent())
+            return true;
+
+        LogRecord failedOn = firstInvalid.get();
+        if (getLastRecord() != failedOn)
+        {
+            logError(failedOn);
+            return false;
+        }
+
+        if (records.stream()
+                   .filter((r) -> r != failedOn)
+                   .filter(LogFile::isInvalidWithCorruptedLastRecord)
+                   .map(LogFile::logError)
+                   .findFirst().isPresent())
+        {
+            logError(failedOn);
+            return false;
+        }
+
+        // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
+        // then we simply exited whilst serializing the last record and we carry on
+        logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
+                                  id,
+                                  failedOn.error));
+        return true;
+    }
+
