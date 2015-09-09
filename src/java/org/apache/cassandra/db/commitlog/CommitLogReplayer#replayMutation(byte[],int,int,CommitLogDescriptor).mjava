@@ -1,0 +1,101 @@
+    /**
+     * Deserializes and replays a commit log entry.
+     */
+    void replayMutation(byte[] inputBuffer, int size,
+            final int entryLocation, final CommitLogDescriptor desc) throws IOException
+    {
+
+        final Mutation mutation;
+        try (FastByteArrayInputStream bufIn = new FastByteArrayInputStream(inputBuffer, 0, size))
+        {
+            mutation = Mutation.serializer.deserialize(new DataInputStream(bufIn),
+                                                       desc.getMessagingVersion(),
+                                                       ColumnSerializer.Flag.LOCAL);
+            // doublecheck that what we read is [still] valid for the current schema
+            for (ColumnFamily cf : mutation.getColumnFamilies())
+                for (Cell cell : cf)
+                    cf.getComparator().validate(cell.name());
+        }
+        catch (UnknownColumnFamilyException ex)
+        {
+            if (ex.cfId == null)
+                return;
+            AtomicInteger i = invalidMutations.get(ex.cfId);
+            if (i == null)
+            {
+                i = new AtomicInteger(1);
+                invalidMutations.put(ex.cfId, i);
+            }
+            else
+                i.incrementAndGet();
+            return;
+        }
+        catch (Throwable t)
+        {
+            JVMStabilityInspector.inspectThrowable(t);
+            File f = File.createTempFile("mutation", "dat");
+
+            try (DataOutputStream out = new DataOutputStream(new FileOutputStream(f)))
+            {
+                out.write(inputBuffer, 0, size);
+            }
+
+            // Checksum passed so this error can't be permissible.
+            handleReplayError(false,
+                              "Unexpected error deserializing mutation; saved to %s.  " +
+                              "This may be caused by replaying a mutation against a table with the same name but incompatible schema.  " +
+                              "Exception follows: %s",
+                              f.getAbsolutePath(),
+                              t);
+            return;
+        }
+
+        if (logger.isTraceEnabled())
+            logger.trace("replaying mutation for {}.{}: {}", mutation.getKeyspaceName(), ByteBufferUtil.bytesToHex(mutation.key()), "{" + StringUtils.join(mutation.getColumnFamilies().iterator(), ", ") + "}");
+
+        Runnable runnable = new WrappedRunnable()
+        {
+            public void runMayThrow() throws IOException
+            {
+                if (Schema.instance.getKSMetaData(mutation.getKeyspaceName()) == null)
+                    return;
+                if (pointInTimeExceeded(mutation))
+                    return;
+
+                final Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+
+                // Rebuild the mutation, omitting column families that
+                //    a) the user has requested that we ignore,
+                //    b) have already been flushed,
+                // or c) are part of a cf that was dropped.
+                // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
+                Mutation newMutation = null;
+                for (ColumnFamily columnFamily : replayFilter.filter(mutation))
+                {
+                    if (Schema.instance.getCF(columnFamily.id()) == null)
+                        continue; // dropped
+
+                    if (shouldReplay(columnFamily.id(), new ReplayPosition(desc.id, entryLocation)))
+                    {
+                        if (newMutation == null)
+                            newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
+                        newMutation.add(columnFamily);
+                        replayedCount.incrementAndGet();
+                    }
+                }
+                if (newMutation != null)
+                {
+                    assert !newMutation.isEmpty();
+                    Keyspace.open(newMutation.getKeyspaceName()).apply(newMutation, false);
+                    keyspacesRecovered.add(keyspace);
+                }
+            }
+        };
+        futures.add(StageManager.getStage(Stage.MUTATION).submit(runnable));
+        if (futures.size() > MAX_OUTSTANDING_REPLAY_COUNT)
+        {
+            FBUtilities.waitOnFutures(futures);
+            futures.clear();
+        }
+    }
+
