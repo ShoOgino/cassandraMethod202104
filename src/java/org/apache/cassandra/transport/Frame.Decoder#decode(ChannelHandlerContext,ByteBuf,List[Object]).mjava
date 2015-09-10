@@ -11,8 +11,8 @@
                 return;
             }
 
-            // Wait until we have read at least the short header
-            if (buffer.readableBytes() < Header.LEGACY_LENGTH)
+            // Wait until we have the complete header
+            if (buffer.readableBytes() < Header.LENGTH)
                 return;
 
             int idx = buffer.readerIndex();
@@ -21,29 +21,14 @@
             Message.Direction direction = Message.Direction.extractFromVersion(firstByte);
             int version = firstByte & PROTOCOL_VERSION_MASK;
 
-            if (version > Server.CURRENT_VERSION)
-                throw new ProtocolException(String.format("Invalid or unsupported protocol version (%d); highest supported is %d ",
-                                                          version, Server.CURRENT_VERSION));
-
-            // Wait until we have the complete V3+ header
-            if (version >= Server.VERSION_3 && buffer.readableBytes() < Header.MODERN_LENGTH)
-                return;
+            if (version < Server.MIN_SUPPORTED_VERSION || version > Server.CURRENT_VERSION)
+                throw new ProtocolException(String.format("Invalid or unsupported protocol version (%d); the lowest supported version is %d and the greatest is %d",
+                                                          version, Server.MIN_SUPPORTED_VERSION, Server.CURRENT_VERSION));
 
             int flags = buffer.getByte(idx++);
 
-            int streamId, headerLength;
-            if (version >= Server.VERSION_3)
-            {
-                streamId = buffer.getShort(idx);
-                idx += 2;
-                headerLength = Header.MODERN_LENGTH;
-            }
-            else
-            {
-                streamId = buffer.getByte(idx);
-                idx++;
-                headerLength = Header.LEGACY_LENGTH;
-            }
+            int streamId = buffer.getShort(idx);
+            idx += 2;
 
             // This throws a protocol exceptions if the opcode is unknown
             Message.Type type;
@@ -59,13 +44,7 @@
             long bodyLength = buffer.getUnsignedInt(idx);
             idx += Header.BODY_LENGTH_SIZE;
 
-            if (bodyLength < 0)
-            {
-                buffer.skipBytes(headerLength);
-                throw ErrorMessage.wrap(new ProtocolException("Invalid frame body length: " + bodyLength), streamId);
-            }
-
-            long frameLength = bodyLength + headerLength;
+            long frameLength = bodyLength + Header.LENGTH;
             if (frameLength > MAX_FRAME_LENGTH)
             {
                 // Enter the discard mode and discard everything received so far.
