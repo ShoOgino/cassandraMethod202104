@@ -1,0 +1,31 @@
+    private void scheduleSetupTask(final Callable<Void> setupTask)
+    {
+        // The delay is to give the node a chance to see its peers before attempting the operation
+        ScheduledExecutors.optionalTasks.schedule(new Runnable()
+        {
+            public void run()
+            {
+                // If not all nodes are on 2.2, we don't want to initialize the role manager as this will confuse 2.1
+                // nodes (see CASSANDRA-9761 for details). So we re-schedule the setup for later, hoping that the upgrade
+                // will be finished by then.
+                if (!MessagingService.instance().areAllNodesAtLeast22())
+                {
+                    logger.debug("Not all nodes are upgraded to a version that supports Roles yet, rescheduling setup task");
+                    scheduleSetupTask(setupTask);
+                    return;
+                }
+
+                isClusterReady = true;
+                try
+                {
+                    setupTask.call();
+                }
+                catch (Exception e)
+                {
+                    logger.info("Setup task failed with error, rescheduling");
+                    scheduleSetupTask(setupTask);
+                }
+            }
+        }, AuthKeyspace.SUPERUSER_SETUP_DELAY, TimeUnit.MILLISECONDS);
+    }
+
