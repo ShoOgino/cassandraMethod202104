@@ -1,0 +1,28 @@
+    @Test
+    public void copy()
+    {
+        int now = FBUtilities.nowInSeconds();
+        long ts = secondToTs(now);
+        Row.Builder originalBuilder = BTreeRow.unsortedBuilder(now);
+        originalBuilder.newRow(c1);
+        LivenessInfo liveness = LivenessInfo.create(kcvm, ts, now);
+        originalBuilder.addPrimaryKeyLivenessInfo(liveness);
+        DeletionTime complexDeletion = new DeletionTime(ts-1, now);
+        originalBuilder.addComplexDeletion(m, complexDeletion);
+        List<Cell> expectedCells = Lists.newArrayList(BufferCell.live(kcvm, v, secondToTs(now), BB1),
+                                                      BufferCell.live(kcvm, m, secondToTs(now), BB1, CellPath.create(BB1)),
+                                                      BufferCell.live(kcvm, m, secondToTs(now), BB2, CellPath.create(BB2)));
+        expectedCells.forEach(originalBuilder::addCell);
+        DeletionTime rowDeletion = new DeletionTime(ts, now);
+        originalBuilder.addRowDeletion(rowDeletion);
+
+        RowBuilder builder = new RowBuilder();
+        Rows.copy(originalBuilder.build(), builder);
+
+        Assert.assertEquals(c1, builder.clustering);
+        Assert.assertEquals(liveness, builder.livenessInfo);
+        Assert.assertEquals(rowDeletion, builder.deletionTime);
+        Assert.assertEquals(Lists.newArrayList(Pair.create(m, complexDeletion)), builder.complexDeletions);
+        Assert.assertEquals(Sets.newHashSet(expectedCells), Sets.newHashSet(builder.cells));
+    }
+

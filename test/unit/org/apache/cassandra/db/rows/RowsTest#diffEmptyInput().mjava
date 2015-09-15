@@ -1,0 +1,54 @@
+    /**
+     * input row has no column data
+     */
+    @Test
+    public void diffEmptyInput()
+    {
+        int now1 = FBUtilities.nowInSeconds();
+        long ts1 = secondToTs(now1);
+        Row.Builder r1Builder = BTreeRow.unsortedBuilder(now1);
+        r1Builder.newRow(c1);
+        LivenessInfo r1Liveness = LivenessInfo.create(kcvm, ts1, now1);
+        r1Builder.addPrimaryKeyLivenessInfo(r1Liveness);
+
+        // mergedData == null
+        int now2 = now1 + 1;
+        long ts2 = secondToTs(now2);
+        Row.Builder r2Builder = BTreeRow.unsortedBuilder(now2);
+        r2Builder.newRow(c1);
+        LivenessInfo r2Liveness = LivenessInfo.create(kcvm, ts2, now2);
+        r2Builder.addPrimaryKeyLivenessInfo(r2Liveness);
+        DeletionTime r2ComplexDeletion = new DeletionTime(ts2-1, now2);
+        r2Builder.addComplexDeletion(m, r2ComplexDeletion);
+        Cell r2v = BufferCell.live(kcvm, v, ts2, BB2);
+        Cell r2m2 = BufferCell.live(kcvm, m, ts2, BB1, CellPath.create(BB2));
+        Cell r2m3 = BufferCell.live(kcvm, m, ts2, BB2, CellPath.create(BB3));
+        Cell r2m4 = BufferCell.live(kcvm, m, ts2, BB3, CellPath.create(BB4));
+        List<Cell> r2ExpectedCells = Lists.newArrayList(r2v, r2m2, r2m3, r2m4);
+
+        r2ExpectedCells.forEach(r2Builder::addCell);
+        DeletionTime r2RowDeletion = new DeletionTime(ts1 - 1, now2);
+        r2Builder.addRowDeletion(r2RowDeletion);
+
+        Row r1 = r1Builder.build();
+        Row r2 = r2Builder.build();
+
+        DiffListener listener = new DiffListener();
+        Rows.diff(listener, r2, r1);
+
+        Assert.assertEquals(c1, listener.clustering);
+
+        // check cells
+        Set<MergedPair<Cell>> expectedCells = Sets.newHashSet(MergedPair.create(0, r2v, null),   // v
+                                                              MergedPair.create(0, r2m2, null),  // m[2]
+                                                              MergedPair.create(0, r2m3, null),  // m[3]
+                                                              MergedPair.create(0, r2m4, null)); // m[4]
+
+        Assert.assertEquals(expectedCells.size(), listener.cells.size());
+        Assert.assertEquals(expectedCells, Sets.newHashSet(listener.cells));
+
+        // complex deletions
+        List<MergedPair<DeletionTime>> expectedCmplxDeletions = Lists.newArrayList(MergedPair.create(0, r2ComplexDeletion, null));
+        Assert.assertEquals(ImmutableMap.builder().put(m, expectedCmplxDeletions).build(), listener.complexDeletions);
+    }
+
