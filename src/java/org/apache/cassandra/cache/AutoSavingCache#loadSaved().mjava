@@ -1,0 +1,77 @@
+    public int loadSaved()
+    {
+        int count = 0;
+        long start = System.nanoTime();
+
+        // modern format, allows both key and value (so key cache load can be purely sequential)
+        File path = getCachePath(CURRENT_VERSION);
+        if (path.exists())
+        {
+            DataInputStream in = null;
+            try
+            {
+                logger.info(String.format("reading saved cache %s", path));
+                in = new DataInputStream(new LengthAvailableInputStream(new BufferedInputStream(streamFactory.getInputStream(path)), path.length()));
+                ArrayDeque<Future<Pair<K, V>>> futures = new ArrayDeque<Future<Pair<K, V>>>();
+
+                while (in.available() > 0)
+                {
+                    //ksname and cfname are serialized by the serializers in CacheService
+                    //That is delegated there because there are serializer specific conditions
+                    //where a cache key is skipped and not written
+                    String ksname = in.readUTF();
+                    String cfname = in.readUTF();
+
+                    ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreIncludingIndexes(Pair.create(ksname, cfname));
+
+                    Future<Pair<K, V>> entryFuture = cacheLoader.deserialize(in, cfs);
+                    // Key cache entry can return null, if the SSTable doesn't exist.
+                    if (entryFuture == null)
+                        continue;
+
+                    futures.offer(entryFuture);
+                    count++;
+
+                    /*
+                     * Kind of unwise to accrue an unbounded number of pending futures
+                     * So now there is this loop to keep a bounded number pending.
+                     */
+                    do
+                    {
+                        while (futures.peek() != null && futures.peek().isDone())
+                        {
+                            Future<Pair<K, V>> future = futures.poll();
+                            Pair<K, V> entry = future.get();
+                            if (entry != null && entry.right != null)
+                                put(entry.left, entry.right);
+                        }
+
+                        if (futures.size() > 1000)
+                            Thread.yield();
+                    } while(futures.size() > 1000);
+                }
+
+                Future<Pair<K, V>> future = null;
+                while ((future = futures.poll()) != null)
+                {
+                    Pair<K, V> entry = future.get();
+                    if (entry != null && entry.right != null)
+                        put(entry.left, entry.right);
+                }
+            }
+            catch (Throwable t)
+            {
+                JVMStabilityInspector.inspectThrowable(t);
+                logger.info(String.format("Harmless error reading saved cache %s", path.getAbsolutePath()), t);
+            }
+            finally
+            {
+                FileUtils.closeQuietly(in);
+            }
+        }
+        if (logger.isDebugEnabled())
+            logger.debug("completed reading ({} ms; {} keys) saved cache {}",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), count, path);
+        return count;
+    }
+
