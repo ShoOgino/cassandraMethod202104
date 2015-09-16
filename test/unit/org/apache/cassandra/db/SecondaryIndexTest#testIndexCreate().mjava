@@ -7,10 +7,12 @@
         // create a row and update the birthdate value, test that the index query fetches the new version
         new RowUpdateBuilder(cfs.metadata, 0, "k1").clustering("c").add("birthdate", 1L).build().applyUnsafe();
 
+        String indexName = "birthdate_index";
         ColumnDefinition old = cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("birthdate"));
-        IndexMetadata indexDef = IndexMetadata.singleColumnIndex(old,
-                                                                 "birthdate_index",
-                                                                 IndexMetadata.IndexType.COMPOSITES,
+        IndexMetadata indexDef = IndexMetadata.singleTargetIndex(cfs.metadata,
+                                                                 new IndexTarget(old.name, IndexTarget.Type.VALUES),
+                                                                 indexName,
+                                                                 IndexMetadata.Kind.COMPOSITES,
                                                                  Collections.EMPTY_MAP);
         cfs.metadata.indexes(cfs.metadata.getIndexes().with(indexDef));
         Future<?> future = cfs.indexManager.addIndex(indexDef);
@@ -18,15 +20,11 @@
 
         // we had a bug (CASSANDRA-2244) where index would get created but not flushed -- check for that
         // the way we find the index cfs is a bit convoluted at the moment
-        ColumnDefinition cDef = cfs.metadata.getColumnDefinition(ByteBufferUtil.bytes("birthdate"));
-        String indexName = getIndexNameForColumn(cfs, cDef);
-        assertNotNull(indexName);
         boolean flushed = false;
-        for (ColumnFamilyStore indexCfs : cfs.indexManager.getAllIndexColumnFamilyStores())
-        {
-            if (SecondaryIndexManager.getIndexName(indexCfs).equals(indexName))
-                flushed = indexCfs.getLiveSSTables().size() > 0;
-        }
+        ColumnFamilyStore indexCfs = cfs.indexManager.getIndex(indexDef)
+                                                     .getBackingTable()
+                                                     .orElseThrow(throwAssert("Index not found"));
+        flushed = !indexCfs.getLiveSSTables().isEmpty();
         assertTrue(flushed);
         assertIndexedOne(cfs, ByteBufferUtil.bytes("birthdate"), 1L);
 
