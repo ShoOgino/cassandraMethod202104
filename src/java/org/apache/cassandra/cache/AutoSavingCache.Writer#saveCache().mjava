@@ -1,4 +1,3 @@
-        @SuppressWarnings("resource")
         public void saveCache()
         {
             logger.debug("Deleting old {} files.", cacheType);
@@ -12,45 +11,34 @@
 
             long start = System.nanoTime();
 
-            HashMap<UUID, DataOutputPlus> writers = new HashMap<>();
-            HashMap<UUID, OutputStream> streams = new HashMap<>();
-            HashMap<UUID, Pair<File, File>> paths = new HashMap<>();
-
+            WrappedDataOutputStreamPlus writer = null;
+            Pair<File, File> cacheFilePaths = tempCacheFiles();
             try
             {
+                try
+                {
+                    writer = new WrappedDataOutputStreamPlus(streamFactory.getOutputStream(cacheFilePaths.left, cacheFilePaths.right));
+                }
+                catch (FileNotFoundException e)
+                {
+                    throw new RuntimeException(e);
+                }
+
                 while (keyIterator.hasNext())
                 {
                     K key = keyIterator.next();
-                    UUID cfId = key.getCFId();
-                    if (!Schema.instance.hasCF(key.getCFId()))
-                        continue; // the table has been dropped.
 
-                    DataOutputPlus writer = writers.get(cfId);
-                    if (writer == null)
-                    {
-                        Pair<File, File> cacheFilePaths = tempCacheFiles(cfId);
-                        OutputStream stream;
-                        try
-                        {
-                            stream = streamFactory.getOutputStream(cacheFilePaths.left, cacheFilePaths.right);
-                            writer = new WrappedDataOutputStreamPlus(stream);
-                        }
-                        catch (FileNotFoundException e)
-                        {
-                            throw new RuntimeException(e);
-                        }
-                        paths.put(cfId, cacheFilePaths);
-                        streams.put(cfId, stream);
-                        writers.put(cfId, writer);
-                    }
+                    ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreIncludingIndexes(key.ksAndCFName);
+                    if (cfs == null)
+                        continue; // the table or 2i has been dropped.
 
                     try
                     {
-                        cacheLoader.serialize(key, writer);
+                        cacheLoader.serialize(key, writer, cfs);
                     }
                     catch (IOException e)
                     {
-                        throw new FSWriteError(e, paths.get(cfId).left);
+                        throw new FSWriteError(e, cacheFilePaths.left);
                     }
 
                     keysWritten++;
@@ -60,39 +48,21 @@
             }
             finally
             {
-                if (keyIterator instanceof Closeable)
-                    try
-                    {
-                        ((Closeable)keyIterator).close();
-                    }
-                    catch (IOException ignored)
-                    {
-                        // not thrown (by OHC)
-                    }
-
-                for (OutputStream writer : streams.values())
-                {
+                if (writer != null)
                     FileUtils.closeQuietly(writer);
-                }
             }
 
-            for (Map.Entry<UUID, DataOutputPlus> entry : writers.entrySet())
-            {
-                UUID cfId = entry.getKey();
+            File cacheFile = getCacheDataPath(CURRENT_VERSION);
+            File crcFile = getCacheCrcPath(CURRENT_VERSION);
 
-                Pair<File, File> tmpFiles = paths.get(cfId);
-                File cacheFile = getCacheDataPath(cfId, CURRENT_VERSION);
-                File crcFile = getCacheCrcPath(cfId, CURRENT_VERSION);
+            cacheFile.delete(); // ignore error if it didn't exist
+            crcFile.delete();
 
-                cacheFile.delete(); // ignore error if it didn't exist
-                crcFile.delete();
+            if (!cacheFilePaths.left.renameTo(cacheFile))
+                logger.error("Unable to rename {} to {}", cacheFilePaths.left, cacheFile);
 
-                if (!tmpFiles.left.renameTo(cacheFile))
-                    logger.error("Unable to rename {} to {}", tmpFiles.left, cacheFile);
-
-                if (!tmpFiles.right.renameTo(crcFile))
-                    logger.error("Unable to rename {} to {}", tmpFiles.right, crcFile);
-            }
+            if (!cacheFilePaths.right.renameTo(crcFile))
+                logger.error("Unable to rename {} to {}", cacheFilePaths.right, crcFile);
 
             logger.info("Saved {} ({} items) in {} ms", cacheType, keysWritten, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
         }
