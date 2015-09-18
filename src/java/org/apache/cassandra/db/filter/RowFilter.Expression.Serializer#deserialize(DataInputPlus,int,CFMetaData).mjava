@@ -1,18 +1,29 @@
             public Expression deserialize(DataInputPlus in, int version, CFMetaData metadata) throws IOException
             {
-                ByteBuffer name = ByteBufferUtil.readWithShortLength(in);
-                Operator operator = Operator.readFrom(in);
+                Kind kind = null;
+                ByteBuffer name;
+                Operator operator;
+                ColumnDefinition column;
 
-                ColumnDefinition column = metadata.getColumnDefinition(name);
-                if (!metadata.isCompactTable() && column == null)
-                    throw new RuntimeException("Unknown (or dropped) column " + UTF8Type.instance.getString(name) + " during deserialization");
-
-                Kind kind;
                 if (version >= MessagingService.VERSION_30)
                 {
                     kind = Kind.values()[in.readByte()];
+                    // custom expressions (3.0+ only) do not contain a column or operator, only a value
+                    if (kind == Kind.CUSTOM)
+                    {
+                        return new CustomExpression(metadata,
+                                                    IndexMetadata.serializer.deserialize(in, version, metadata),
+                                                    ByteBufferUtil.readWithShortLength(in));
+                    }
                 }
-                else
+
+                name = ByteBufferUtil.readWithShortLength(in);
+                operator = Operator.readFrom(in);
+                column = metadata.getColumnDefinition(name);
+                if (!metadata.isCompactTable() && column == null)
+                    throw new RuntimeException("Unknown (or dropped) column " + UTF8Type.instance.getString(name) + " during deserialization");
+
+                if (version < MessagingService.VERSION_30)
                 {
                     if (column == null)
                         kind = Kind.THRIFT_DYN_EXPR;
@@ -22,6 +33,7 @@
                         kind = Kind.SIMPLE;
                 }
 
+                assert kind != null;
                 switch (kind)
                 {
                     case SIMPLE:
