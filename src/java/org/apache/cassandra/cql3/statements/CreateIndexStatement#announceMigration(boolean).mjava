@@ -1,12 +1,17 @@
     public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
     {
         CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
-        IndexTarget target = rawTarget.prepare(cfm);
+        List<IndexTarget> targets = new ArrayList<>(rawTargets.size());
+        for (IndexTarget.Raw rawTarget : rawTargets)
+            targets.add(rawTarget.prepare(cfm));
 
-        ColumnDefinition cd = cfm.getColumnDefinition(target.column);
         String acceptedName = indexName;
         if (Strings.isNullOrEmpty(acceptedName))
-            acceptedName = Indexes.getAvailableIndexName(keyspace(), columnFamily(), cd.name);
+        {
+            acceptedName = Indexes.getAvailableIndexName(keyspace(),
+                                                         columnFamily(),
+                                                         targets.size() == 1 ? targets.get(0).column.toString() : null);
+        }
 
         if (Schema.instance.getKSMetaData(keyspace()).existingIndexNames(null).contains(acceptedName))
         {
@@ -29,7 +34,7 @@
             kind = cfm.isCompound() ? IndexMetadata.Kind.COMPOSITES : IndexMetadata.Kind.KEYS;
         }
 
-        IndexMetadata index = IndexMetadata.singleTargetIndex(cfm, target, acceptedName, kind, indexOptions);
+        IndexMetadata index = IndexMetadata.fromIndexTargets(cfm, targets, acceptedName, kind, indexOptions);
 
         // check to disallow creation of an index which duplicates an existing one in all but name
         Optional<IndexMetadata> existingIndex = Iterables.tryFind(cfm.getIndexes(), existing -> existing.equalsWithoutName(index));
