@@ -13,9 +13,9 @@
      */
     public boolean updateAffectsView(AbstractBTreePartition partition)
     {
-        // If we are including all of the columns, then any update will be included
-        if (includeAllColumns)
-            return true;
+        ReadQuery selectQuery = getReadQuery();
+        if (!selectQuery.selectsKey(partition.partitionKey()))
+            return false;
 
         // If there are range tombstones, tombstones will also need to be generated for the view
         // This requires a query of the base rows and generating tombstones for all of those values
@@ -25,7 +25,10 @@
         // Check each row for deletion or update
         for (Row row : partition)
         {
-            if (!row.deletion().isLive())
+            if (!selectQuery.selectsClustering(partition.partitionKey(), row.clustering()))
+                continue;
+
+            if (includeAllColumns || viewHasAllPrimaryKeys || !row.deletion().isLive())
                 return true;
 
             if (row.primaryKeyLivenessInfo().isLive(FBUtilities.nowInSeconds()))
