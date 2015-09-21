@@ -1,0 +1,29 @@
+    private static UDAggregate createUDAFromRow(UntypedResultSet.Row row, Functions functions, Types types)
+    {
+        String ksName = row.getString("keyspace_name");
+        String functionName = row.getString("aggregate_name");
+        FunctionName name = new FunctionName(ksName, functionName);
+
+        List<AbstractType<?>> argTypes =
+            row.getFrozenList("argument_types", UTF8Type.instance)
+               .stream()
+               .map(t -> parse(ksName, t, types))
+               .collect(toList());
+
+        AbstractType<?> returnType = parse(ksName, row.getString("return_type"), types);
+
+        FunctionName stateFunc = new FunctionName(ksName, (row.getString("state_func")));
+        FunctionName finalFunc = row.has("final_func") ? new FunctionName(ksName, row.getString("final_func")) : null;
+        AbstractType<?> stateType = row.has("state_type") ? parse(ksName, row.getString("state_type"), types) : null;
+        ByteBuffer initcond = row.has("initcond") ? row.getBytes("initcond") : null;
+
+        try
+        {
+            return UDAggregate.create(functions, name, argTypes, returnType, stateFunc, finalFunc, stateType, initcond);
+        }
+        catch (InvalidRequestException reason)
+        {
+            return UDAggregate.createBroken(name, argTypes, returnType, initcond, reason);
+        }
+    }
+

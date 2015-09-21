@@ -1,39 +1,49 @@
-    public static synchronized void mergeSchema(Collection<Mutation> mutations) throws IOException
+    public static synchronized void mergeSchema(Collection<Mutation> mutations)
     {
-        // compare before/after schemas of the affected keyspaces only
-        Set<String> keyspaces = new HashSet<>(mutations.size());
-        for (Mutation mutation : mutations)
-            keyspaces.add(ByteBufferUtil.string(mutation.key().getKey()));
+        // only compare the keyspaces affected by this set of schema mutations
+        Set<String> affectedKeyspaces =
+        mutations.stream()
+                 .map(m -> UTF8Type.instance.compose(m.key().getKey()))
+                 .collect(Collectors.toSet());
 
-        // current state of the schema
-        Map<DecoratedKey, FilteredPartition> oldKeyspaces = readSchemaForKeyspaces(KEYSPACES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> oldColumnFamilies = readSchemaForKeyspaces(TABLES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> oldViews = readSchemaForKeyspaces(VIEWS, keyspaces);
-        Map<DecoratedKey, FilteredPartition> oldTypes = readSchemaForKeyspaces(TYPES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> oldFunctions = readSchemaForKeyspaces(FUNCTIONS, keyspaces);
-        Map<DecoratedKey, FilteredPartition> oldAggregates = readSchemaForKeyspaces(AGGREGATES, keyspaces);
+        // fetch the current state of schema for the affected keyspaces only
+        Keyspaces before = Schema.instance.getKeyspaces(affectedKeyspaces);
 
+        // apply the schema mutations and flush
         mutations.forEach(Mutation::apply);
-
         if (FLUSH_SCHEMA_TABLES)
             flush();
 
-        // with new data applied
-        Map<DecoratedKey, FilteredPartition> newKeyspaces = readSchemaForKeyspaces(KEYSPACES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> newColumnFamilies = readSchemaForKeyspaces(TABLES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> newViews = readSchemaForKeyspaces(VIEWS, keyspaces);
-        Map<DecoratedKey, FilteredPartition> newTypes = readSchemaForKeyspaces(TYPES, keyspaces);
-        Map<DecoratedKey, FilteredPartition> newFunctions = readSchemaForKeyspaces(FUNCTIONS, keyspaces);
-        Map<DecoratedKey, FilteredPartition> newAggregates = readSchemaForKeyspaces(AGGREGATES, keyspaces);
+        // fetch the new state of schema from schema tables (not applied to Schema.instance yet)
+        Keyspaces after = fetchKeyspacesOnly(affectedKeyspaces);
 
-        Set<String> keyspacesToDrop = mergeKeyspaces(oldKeyspaces, newKeyspaces);
-        mergeTables(oldColumnFamilies, newColumnFamilies);
-        mergeViews(oldViews, newViews);
-        mergeTypes(oldTypes, newTypes);
-        mergeFunctions(oldFunctions, newFunctions);
-        mergeAggregates(oldAggregates, newAggregates);
+        // deal with the diff
+        MapDifference<String, KeyspaceMetadata> keyspacesDiff = before.diff(after);
 
-        // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-        keyspacesToDrop.forEach(Schema.instance::dropKeyspace);
+        // dropped keyspaces
+        for (KeyspaceMetadata keyspace : keyspacesDiff.entriesOnlyOnLeft().values())
+        {
+            keyspace.functions.udas().forEach(Schema.instance::dropAggregate);
+            keyspace.functions.udfs().forEach(Schema.instance::dropFunction);
+            keyspace.views.forEach(v -> Schema.instance.dropView(v.ksName, v.viewName));
+            keyspace.tables.forEach(t -> Schema.instance.dropTable(t.ksName, t.cfName));
+            keyspace.types.forEach(Schema.instance::dropType);
+            Schema.instance.dropKeyspace(keyspace.name);
+        }
+
+        // new keyspaces
+        for (KeyspaceMetadata keyspace : keyspacesDiff.entriesOnlyOnRight().values())
+        {
+            Schema.instance.addKeyspace(KeyspaceMetadata.create(keyspace.name, keyspace.params));
+            keyspace.types.forEach(Schema.instance::addType);
+            keyspace.tables.forEach(Schema.instance::addTable);
+            keyspace.views.forEach(Schema.instance::addView);
+            keyspace.functions.udfs().forEach(Schema.instance::addFunction);
+            keyspace.functions.udas().forEach(Schema.instance::addAggregate);
+        }
+
+        // updated keyspaces
+        for (Map.Entry<String, MapDifference.ValueDifference<KeyspaceMetadata>> diff : keyspacesDiff.entriesDiffering().entrySet())
+            updateKeyspace(diff.getKey(), diff.getValue().leftValue(), diff.getValue().rightValue());
     }
 

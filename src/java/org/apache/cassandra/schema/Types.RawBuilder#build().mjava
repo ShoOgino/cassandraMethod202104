@@ -1,0 +1,40 @@
+        /**
+         * Build a Types instance from Raw definitions.
+         *
+         * Constructs a DAG of graph dependencies and resolves them 1 by 1 in topological order.
+         */
+        public Types build()
+        {
+            if (definitions.isEmpty())
+                return Types.none();
+
+            /*
+             * build a DAG of UDT dependencies
+             */
+            DefaultDirectedGraph<RawUDT, DefaultEdge> graph = new DefaultDirectedGraph<>(DefaultEdge.class);
+
+            definitions.forEach(graph::addVertex);
+
+            for (RawUDT udt1: definitions)
+                for (RawUDT udt2 : definitions)
+                    if (udt1 != udt2 && udt1.referencesUserType(udt2.name))
+                        graph.addEdge(udt2, udt1);
+
+            /*
+             * iterate in topological order,
+             */
+            Types types = new Types(new HashMap<>());
+
+            TopologicalOrderIterator<RawUDT, DefaultEdge> iterator = new TopologicalOrderIterator<>(graph);
+            while (iterator.hasNext())
+            {
+                UserType udt = iterator.next().prepare(keyspace, types); // will throw InvalidRequestException if meets an unknown type
+                types.types.put(udt.name, udt);
+            }
+
+            /*
+             * return an immutable copy
+             */
+            return Types.builder().add(types).build();
+        }
+
