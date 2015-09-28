@@ -3,8 +3,10 @@
      * across all replicas.
      *
      * @param mutations the mutations to be applied across the replicas
+     * @param writeCommitLog if commitlog should be written
+     * @param baseComplete time from epoch in ms that the local base mutation was(or will be) completed
      */
-    public static void mutateMV(ByteBuffer dataKey, Collection<Mutation> mutations, boolean writeCommitLog)
+    public static void mutateMV(ByteBuffer dataKey, Collection<Mutation> mutations, boolean writeCommitLog, AtomicLong baseComplete)
     throws UnavailableException, OverloadedException, WriteTimeoutException
     {
         Tracing.trace("Determining replicas for mutation");
@@ -37,13 +39,17 @@
                                                                                    consistencyLevel,
                                                                                    consistencyLevel,
                                                                                    naturalEndpoints,
+                                                                                   baseComplete,
                                                                                    WriteType.BATCH,
                                                                                    cleanup);
 
                 // When local node is the endpoint and there are no pending nodes we can
                 // Just apply the mutation locally.
                 if (pairedEndpoint.equals(FBUtilities.getBroadcastAddress()) && wrapper.handler.pendingEndpoints.isEmpty())
+                {
                     mutation.apply(writeCommitLog);
+                    viewWriteMetrics.viewReplicasSuccess.inc();
+                }
                 else
                     wrappers.add(wrapper);
             }
