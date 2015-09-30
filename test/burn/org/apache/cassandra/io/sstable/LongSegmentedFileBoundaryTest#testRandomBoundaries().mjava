@@ -1,0 +1,44 @@
+    @Test
+    public void testRandomBoundaries()
+    {
+        long[] candidates = new long[1 + (1 << 16)];
+        int[] indexesToCheck = new int[1 << 8];
+        Random random = new Random();
+
+        for (int run = 0; run < 100; run++)
+        {
+
+            long seed = random.nextLong();
+            random.setSeed(seed);
+            System.out.println("Seed: " + seed);
+
+            // at least 1Ki, and as many as 256Ki, boundaries
+            int candidateCount = (1 + random.nextInt(candidates.length >> 10)) << 10;
+            generateBoundaries(random, candidateCount, candidates, indexesToCheck);
+
+            Boundaries builder = new Boundaries();
+            int nextIndexToCheck = indexesToCheck[0];
+            int checkCount = 0;
+            System.out.printf("[0..%d)", candidateCount);
+            for (int i = 1; i < candidateCount - 1; i++)
+            {
+                if (i == nextIndexToCheck)
+                {
+                    if (checkCount % 20 == 0)
+                        System.out.printf(" %d", i);
+                    // grow number of samples logarithmically; work will still increase superlinearly, as size of dataset grows linearly
+                    int sampleCount = 1 << (31 - Integer.numberOfLeadingZeros(++checkCount));
+                    checkBoundarySample(random, candidates, i, sampleCount, builder);
+                    // select out next index to check (there may be dups, so skip them)
+                    while ((nextIndexToCheck = checkCount == indexesToCheck.length ? candidateCount : indexesToCheck[checkCount]) == i)
+                        checkCount++;
+                }
+
+                builder.addCandidate(candidates[i]);
+            }
+            System.out.println();
+            checkBoundaries(candidates, candidateCount - 1, builder, candidates[candidateCount - 1]);
+            Assert.assertEquals(candidateCount, nextIndexToCheck);
+        }
+    }
+
