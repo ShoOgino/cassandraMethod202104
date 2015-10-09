@@ -1,9 +1,8 @@
-    public void serialize(Row row, SerializationHeader header, DataOutputPlus out, int version)
+    private void serialize(Row row, SerializationHeader header, DataOutputPlus out, long previousUnfilteredSize, int version)
     throws IOException
     {
         int flags = 0;
         int extendedFlags = 0;
-        boolean hasExtendedFlags = false;
 
         boolean isStatic = row.isStatic();
         Columns headerColumns = header.columns(isStatic);
@@ -11,12 +10,10 @@
         Row.Deletion deletion = row.deletion();
         boolean hasComplexDeletion = row.hasComplexDeletion();
         boolean hasAllColumns = (row.size() == headerColumns.size());
+        boolean hasExtendedFlags = hasExtendedFlags(row);
 
         if (isStatic)
-        {
-            hasExtendedFlags = true;
             extendedFlags |= IS_STATIC;
-        }
 
         if (!pkLiveness.isEmpty())
             flags |= HAS_TIMESTAMP;
@@ -26,10 +23,7 @@
         {
             flags |= HAS_DELETION;
             if (deletion.isShadowable())
-            {
-                hasExtendedFlags = true;
                 extendedFlags |= HAS_SHADOWABLE_DELETION;
-            }
         }
         if (hasComplexDeletion)
             flags |= HAS_COMPLEX_DELETION;
@@ -45,6 +39,12 @@
 
         if (!isStatic)
             Clustering.serializer.serialize(row.clustering(), out, version, header.clusteringTypes());
+
+        if (header.isForSSTable())
+        {
+            out.writeUnsignedVInt(serializedRowBodySize(row, header, previousUnfilteredSize, version));
+            out.writeUnsignedVInt(previousUnfilteredSize);
+        }
 
         if ((flags & HAS_TIMESTAMP) != 0)
             header.writeTimestamp(pkLiveness.timestamp(), out);
