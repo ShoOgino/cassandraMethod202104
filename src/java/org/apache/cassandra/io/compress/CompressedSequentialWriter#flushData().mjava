@@ -17,6 +17,12 @@
 
         int compressedLength = compressed.position();
         uncompressedSize += buffer.position();
+        ByteBuffer toWrite = compressed;
+        if (compressedLength > maxCompressedLength)
+        {
+            toWrite = buffer;
+            compressedLength = buffer.position();
+        }
         compressedSize += compressedLength;
 
         try
@@ -26,18 +32,20 @@
             chunkCount++;
 
             // write out the compressed data
-            compressed.flip();
-            channel.write(compressed);
+            toWrite.flip();
+            channel.write(toWrite);
 
             // write corresponding checksum
-            compressed.rewind();
-            crcMetadata.appendDirect(compressed, true);
+            toWrite.rewind();
+            crcMetadata.appendDirect(toWrite, true);
             lastFlushOffset += compressedLength + 4;
         }
         catch (IOException e)
         {
             throw new FSWriteError(e, getPath());
         }
+        if (toWrite == buffer)
+            buffer.position(compressedLength);
 
         // next chunk should be written right after current + length of the checksum (int)
         chunkOffset += compressedLength + 4;

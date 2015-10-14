@@ -20,18 +20,18 @@
 
                 try
                 {
-                    metadata.compressor().uncompress(compressedChunk, uncompressed);
+                    if (chunk.length <= maxCompressedLength)
+                        metadata.compressor().uncompress(compressedChunk, uncompressed);
+                    else
+                        uncompressed.put(compressedChunk);
                 }
                 catch (IOException e)
                 {
                     throw new CorruptBlockException(channel.filePath(), chunk, e);
                 }
-                finally
-                {
-                    uncompressed.flip();
-                }
+                uncompressed.flip();
 
-                if (getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
+                if (maybeCheckCrc())
                 {
                     compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
 
@@ -44,6 +44,8 @@
             }
             catch (CorruptBlockException e)
             {
+                // Make sure reader does not see stale data.
+                uncompressed.position(0).limit(0);
                 throw new CorruptSSTableException(e, channel.filePath());
             }
 

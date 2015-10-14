@@ -8,51 +8,40 @@
                 assert position <= fileLength;
 
                 CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
-                ByteBuffer compressed = compressedHolder.get();
-
-                if (compressed.capacity() < chunk.length)
+                if (chunk.length <= maxCompressedLength)
                 {
-                    compressed = allocateBuffer(chunk.length);
-                    compressedHolder.set(compressed);
+                    ByteBuffer compressed = compressedHolder.get();
+                    assert compressed.capacity() >= chunk.length;
+                    compressed.clear().limit(chunk.length);
+                    if (channel.read(compressed, chunk.offset) != chunk.length)
+                        throw new CorruptBlockException(channel.filePath(), chunk);
+
+                    compressed.flip();
+                    uncompressed.clear();
+
+                    try
+                    {
+                        metadata.compressor().uncompress(compressed, uncompressed);
+                    }
+                    catch (IOException e)
+                    {
+                        throw new CorruptBlockException(channel.filePath(), chunk, e);
+                    }
+                    maybeCheckCrc(chunk, compressed);
                 }
                 else
                 {
-                    compressed.clear();
-                }
-
-                compressed.limit(chunk.length);
-                if (channel.read(compressed, chunk.offset) != chunk.length)
-                    throw new CorruptBlockException(channel.filePath(), chunk);
-
-                compressed.flip();
-                uncompressed.clear();
-
-                try
-                {
-                    metadata.compressor().uncompress(compressed, uncompressed);
-                }
-                catch (IOException e)
-                {
-                    throw new CorruptBlockException(channel.filePath(), chunk, e);
-                }
-                finally
-                {
-                    uncompressed.flip();
-                }
-
-                if (getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
-                {
-                    compressed.rewind();
-                    int checksum = (int) ChecksumType.CRC32.of(compressed);
-
-                    compressed.clear().limit(Integer.BYTES);
-                    if (channel.read(compressed, chunk.offset + chunk.length) != Integer.BYTES
-                                || compressed.getInt(0) != checksum)
+                    uncompressed.position(0).limit(chunk.length);
+                    if (channel.read(uncompressed, chunk.offset) != chunk.length)
                         throw new CorruptBlockException(channel.filePath(), chunk);
+                    maybeCheckCrc(chunk, uncompressed);
                 }
+                uncompressed.flip();
             }
             catch (CorruptBlockException e)
             {
+                // Make sure reader does not see stale data.
+                uncompressed.position(0).limit(0);
                 throw new CorruptSSTableException(e, channel.filePath());
             }
         }
