@@ -8,7 +8,7 @@
          * Note that this method should be called on *every* atom of a partition for
          * the tracker to work as efficiently as possible (#9486).
          */
-        public void update(OnDiskAtom atom, boolean isExpired)
+        public boolean update(OnDiskAtom atom, boolean isExpired)
         {
             // Get rid of now useless RTs
             ListIterator<RangeTombstone> iterator = openedTombstones.listIterator();
@@ -21,6 +21,8 @@
                 if (comparator.compare(atom.name(), t.max) > 0)
                 {
                     iterator.remove();
+                    // The iterator may still be in the unwrittenTombstones list. That's ok, it still needs to be written
+                    // but it can't influence anything else.
                 }
                 else
                 {
@@ -35,8 +37,6 @@
             if (atom instanceof RangeTombstone)
             {
                 RangeTombstone toAdd = (RangeTombstone)atom;
-                if (isExpired)
-                    toAdd = new ExpiredRangeTombstone(toAdd);
 
                 // We want to maintain openedTombstones in end bounds order so we find where to insert the new element
                 // and add it. While doing so, we also check if that new tombstone fully shadow or is fully shadowed
@@ -50,26 +50,50 @@
                     {
                         // the new one covers more than the existing one. If the new one happens to also supersedes
                         // the existing one, remove the existing one. In any case, we're not done yet.
-                        if (toAdd.data.supersedes(existing.data))
+                        if (!existing.data.supersedes(toAdd.data))
+                        {
                             iterator.remove();
+                            // If the existing one starts at the same position as the new, it does not need to be written
+                            // (it won't have been yet).
+                            if (comparator.compare(toAdd.min, existing.min) == 0)
+                                unwrittenTombstones.remove(existing);
+                        }
                     }
                     else
                     {
                         // the new one is included in the existing one. If the new one supersedes the existing one,
                         // then we add the new one (and if the new one ends like the existing one, we can actually remove
                         // the existing one), otherwise we can actually ignore it. In any case, we're done.
-                        if (toAdd.data.supersedes(existing.data))
+                        if (!toAdd.data.supersedes(existing.data))
+                            return false;
+
+                        if (cmp == 0)
                         {
-                            if (cmp == 0)
-                                iterator.set(toAdd);
-                            else
-                                insertBefore(toAdd, iterator);
+                            iterator.remove();
+                            // If the existing one starts at the same position as the new, it does not need to be written
+                            // (it won't have been yet).
+                            if (comparator.compare(toAdd.min, existing.min) == 0)
+                                unwrittenTombstones.remove(existing);
                         }
-                        return;
+                        else
+                        {
+                            iterator.previous();
+                        }
+                        // Found the insert position for the new tombstone
+                        break;
                     }
                 }
-                // If we reach here, either we had no tombstones and the new one ends after all existing ones.
-                iterator.add(toAdd);
+
+                if (isExpired)
+                    iterator.add(new ExpiredRangeTombstone(toAdd));
+                else
+                {
+                    iterator.add(toAdd);
+                    unwrittenTombstones.add(toAdd);
+                }
+                return false;
             }
+            // Caller should write cell.
+            return true;
         }
 
