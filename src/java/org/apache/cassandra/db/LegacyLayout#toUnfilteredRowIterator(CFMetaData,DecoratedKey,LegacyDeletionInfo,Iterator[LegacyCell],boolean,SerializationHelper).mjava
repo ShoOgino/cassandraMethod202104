@@ -5,13 +5,37 @@
                                                                  boolean reversed,
                                                                  SerializationHelper helper)
     {
+        // A reducer that basically does nothing, we know the 2 merged iterators can't have conflicting atoms (since we merge cells with range tombstones).
+        MergeIterator.Reducer<LegacyAtom, LegacyAtom> reducer = new MergeIterator.Reducer<LegacyAtom, LegacyAtom>()
+        {
+            private LegacyAtom atom;
+
+            public void reduce(int idx, LegacyAtom current)
+            {
+                // We're merging cell with range tombstones, so we should always only have a single atom to reduce.
+                assert atom == null;
+                atom = current;
+            }
+
+            protected LegacyAtom getReduced()
+            {
+                return atom;
+            }
+
+            protected void onKeyChange()
+            {
+                atom = null;
+            }
+        };
+        List<Iterator<LegacyAtom>> iterators = Arrays.asList(asLegacyAtomIterator(cells), asLegacyAtomIterator(delInfo.inRowRangeTombstones()));
+        PeekingIterator<LegacyAtom> atoms = Iterators.peekingIterator(MergeIterator.get(iterators, legacyAtomComparator(metadata), reducer));
+
         // Check if we have some static
-        PeekingIterator<LegacyCell> iter = Iterators.peekingIterator(cells);
-        Row staticRow = iter.hasNext() && iter.peek().name.clustering == Clustering.STATIC_CLUSTERING
-                      ? getNextRow(CellGrouper.staticGrouper(metadata, helper), iter)
+        Row staticRow = atoms.hasNext() && atoms.peek().isStatic()
+                      ? getNextRow(CellGrouper.staticGrouper(metadata, helper), atoms)
                       : Rows.EMPTY_STATIC_ROW;
 
-        Iterator<Row> rows = convertToRows(new CellGrouper(metadata, helper), iter, delInfo);
+        Iterator<Row> rows = convertToRows(new CellGrouper(metadata, helper), atoms);
         Iterator<RangeTombstone> ranges = delInfo.deletionInfo.rangeIterator(reversed);
         return new RowAndDeletionMergeIterator(metadata,
                                                key,
