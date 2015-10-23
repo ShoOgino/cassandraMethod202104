@@ -2,11 +2,12 @@
     public void testRemoveUnfinishedLeftovers_abort() throws Throwable
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
-        SSTableReader sstableNew = sstable(cfs, 1, 128);
+        File dataFolder = new Directories(cfs.metadata).getDirectoryForNewSSTables();
+        SSTableReader sstableOld = sstable(dataFolder, cfs, 0, 128);
+        SSTableReader sstableNew = sstable(dataFolder, cfs, 1, 128);
 
         // simulate tracking sstables with a failed transaction (new log file NOT deleted)
-        LogTransaction log = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION);
         assertNotNull(log);
 
         log.trackNew(sstableNew);
@@ -27,11 +28,10 @@
         Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
         assertEquals(1, sstables.size());
 
-        assertFiles(log.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
-
-        tidier.run();
+        assertFiles(dataFolder.getPath(), new HashSet<>(sstableOld.getAllFilePaths()));
 
         // complete the transaction before releasing files
+        tidier.run();
         log.close();
     }
 

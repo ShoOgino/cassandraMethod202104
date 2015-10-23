@@ -1,0 +1,79 @@
+    boolean readRecords(Set<LogRecord> records)
+    {
+        Map<File, List<String>> linesByReplica = replicas().stream()
+                                                           .map(LogReplica::file)
+                                                           .collect(Collectors.toMap(Function.<File>identity(), FileUtils::readLines));
+        int maxNumLines = linesByReplica.values().stream().map(List::size).reduce(0, Integer::max);
+        for (int i = 0; i < maxNumLines; i++)
+        {
+            String firstLine = null;
+            boolean partial = false;
+            for (Map.Entry<File, List<String>> entry : linesByReplica.entrySet())
+            {
+                List<String> currentLines = entry.getValue();
+                if (i >= currentLines.size())
+                    continue;
+
+                String currentLine = currentLines.get(i);
+                if (firstLine == null)
+                {
+                    firstLine = currentLine;
+                    continue;
+                }
+
+                if (!isPrefixMatch(firstLine, currentLine))
+                { // not a prefix match
+                    logger.error("Mismatched line in file {}: got '{}' expected '{}', giving up",
+                                 entry.getKey().getName(),
+                                 currentLine,
+                                 firstLine);
+                    return false;
+                }
+
+                if (!firstLine.equals(currentLine))
+                {
+                    if (i == currentLines.size() - 1)
+                    { // last record, just set record as invalid and move on
+                        logger.warn("Mismatched last line in file {}: '{}' not the same as '{}'",
+                                    entry.getKey().getName(),
+                                    currentLine,
+                                    firstLine);
+
+                        if (currentLine.length() > firstLine.length())
+                            firstLine = currentLine;
+
+                        partial = true;
+                    }
+                    else
+                    {   // mismatched entry file has more lines, giving up
+                        logger.error("Mismatched line in file {}: got '{}' expected '{}', giving up",
+                                     entry.getKey().getName(),
+                                     currentLine,
+                                     firstLine);
+                        return false;
+                    }
+                }
+            }
+
+            LogRecord record = LogRecord.make(firstLine);
+            if (records.contains(record))
+            { // duplicate records
+                logger.error("Found duplicate record {} for {}, giving up", record, record.fileName());
+                return false;
+            }
+
+            if (partial)
+                record.setPartial();
+
+            records.add(record);
+
+            if (record.isFinal() && i != (maxNumLines - 1))
+            { // too many final records
+                logger.error("Found too many lines for {}, giving up", record.fileName());
+                return false;
+            }
+        }
+
+        return true;
+    }
+
