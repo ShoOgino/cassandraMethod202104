@@ -1,0 +1,51 @@
+    @Test
+    public void testRemoveUnfinishedLeftovers_commit_multipleFolders() throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+
+        File origiFolder = new Directories(cfs.metadata).getDirectoryForNewSSTables();
+        File dataFolder1 = new File(origiFolder, "1");
+        File dataFolder2 = new File(origiFolder, "2");
+        Files.createDirectories(dataFolder1.toPath());
+        Files.createDirectories(dataFolder2.toPath());
+
+        SSTableReader[] sstables = { sstable(dataFolder1, cfs, 0, 128),
+                                     sstable(dataFolder1, cfs, 1, 128),
+                                     sstable(dataFolder2, cfs, 2, 128),
+                                     sstable(dataFolder2, cfs, 3, 128)
+        };
+
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION);
+        assertNotNull(log);
+
+        LogTransaction.SSTableTidier[] tidiers = { log.obsoleted(sstables[0]), log.obsoleted(sstables[2]) };
+
+        log.trackNew(sstables[1]);
+        log.trackNew(sstables[3]);
+
+        Collection<File> logFiles = log.logFiles();
+        Assert.assertEquals(2, logFiles.size());
+
+        // fake a commit
+        log.txnFile().commit();
+
+        Arrays.stream(sstables).forEach(s -> s.selfRef().release());
+
+        // test listing
+        Assert.assertEquals(sstables[0].getAllFilePaths().stream().map(File::new).collect(Collectors.toSet()),
+                            LogAwareFileLister.getTemporaryFiles(dataFolder1));
+        Assert.assertEquals(sstables[2].getAllFilePaths().stream().map(File::new).collect(Collectors.toSet()),
+                            LogAwareFileLister.getTemporaryFiles(dataFolder2));
+
+        // normally called at startup
+        LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
+
+        // new tables should be only table left
+        assertFiles(dataFolder1.getPath(), new HashSet<>(sstables[1].getAllFilePaths()));
+        assertFiles(dataFolder2.getPath(), new HashSet<>(sstables[3].getAllFilePaths()));
+
+        // complete the transaction to avoid LEAK errors
+        Arrays.stream(tidiers).forEach(LogTransaction.SSTableTidier::run);
+        assertNull(log.complete(null));
+    }
+

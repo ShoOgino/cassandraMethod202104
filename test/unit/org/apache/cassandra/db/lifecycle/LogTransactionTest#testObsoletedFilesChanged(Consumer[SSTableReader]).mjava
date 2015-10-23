@@ -1,11 +1,12 @@
     private static void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
-        SSTableReader sstableNew = sstable(cfs, 1, 128);
+        File dataFolder = new Directories(cfs.metadata).getDirectoryForNewSSTables();
+        SSTableReader sstableOld = sstable(dataFolder, cfs, 0, 128);
+        SSTableReader sstableNew = sstable(dataFolder, cfs, 1, 128);
 
         // simulate tracking sstables with a committed transaction except the checksum will be wrong
-        LogTransaction log = new LogTransaction(OperationType.COMPACTION, cfs.metadata);
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION);
         assertNotNull(log);
 
         log.trackNew(sstableNew);
@@ -15,15 +16,15 @@
         modifier.accept(sstableOld);
 
         //Fake a commit
-        log.getLogFile().commit();
+        log.txnFile().commit();
 
         //This should not remove the old files
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
 
-        assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
-                                                                                    sstableNew.getAllFilePaths(),
-                                                                                    sstableOld.getAllFilePaths(),
-                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
+        assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(
+                                                                          sstableNew.getAllFilePaths(),
+                                                                          sstableOld.getAllFilePaths(),
+                                                                          log.logFilePaths())));
 
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
@@ -31,9 +32,8 @@
         // complete the transaction to avoid LEAK errors
         assertNull(log.complete(null));
 
-        assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
-                                                                                    sstableNew.getAllFilePaths(),
-                                                                                    sstableOld.getAllFilePaths(),
-                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
+        assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
+                                                                           sstableOld.getAllFilePaths(),
+                                                                           log.logFilePaths())));
     }
 

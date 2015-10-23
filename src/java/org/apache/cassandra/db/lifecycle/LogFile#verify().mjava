@@ -1,9 +1,15 @@
-    public boolean verify()
+    boolean verify()
     {
-        Optional<LogRecord> firstInvalid = records.stream()
-                                                  .filter(this::isInvalid)
-                                                  .findFirst();
+        assert records.isEmpty();
+        if (!replicas.readRecords(records))
+        {
+            logger.error("Failed to read records from {}", replicas);
+            return false;
+        }
 
+        records.forEach(LogFile::verifyRecord);
+
+        Optional<LogRecord> firstInvalid = records.stream().filter(LogRecord::isInvalidOrPartial).findFirst();
         if (!firstInvalid.isPresent())
             return true;
 
@@ -14,9 +20,10 @@
             return false;
         }
 
+        records.stream().filter((r) -> r != failedOn).forEach(LogFile::verifyRecordWithCorruptedLastRecord);
         if (records.stream()
                    .filter((r) -> r != failedOn)
-                   .filter(LogFile::isInvalidWithCorruptedLastRecord)
+                   .filter(LogRecord::isInvalid)
                    .map(LogFile::logError)
                    .findFirst().isPresent())
         {
@@ -26,9 +33,10 @@
 
         // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
         // then we simply exited whilst serializing the last record and we carry on
-        logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
+        logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], " +
+                                  "but all previous records match state on disk; continuing",
                                   id,
-                                  failedOn.error));
+                                  failedOn.error()));
         return true;
     }
 

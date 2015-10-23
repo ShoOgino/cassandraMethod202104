@@ -1,0 +1,34 @@
+    static void verifyRecord(LogRecord record)
+    {
+        if (record.checksum != record.computeChecksum())
+        {
+            record.setError(String.format("Invalid checksum for sstable [%s], record [%s]: [%d] should have been [%d]",
+                                          record.fileName(),
+                                          record,
+                                          record.checksum,
+                                          record.computeChecksum()));
+            return;
+        }
+
+        if (record.type != Type.REMOVE)
+            return;
+
+        // Paranoid sanity checks: we create another record by looking at the files as they are
+        // on disk right now and make sure the information still matches. We don't want to delete
+        // files by mistake if the user has copied them from backup and forgot to remove a txn log
+        // file that obsoleted the very same files. So we check the latest update time and make sure
+        // it matches. Because we delete files from oldest to newest, the latest update time should
+        // always match.
+        record.status.onDiskRecord = record.withExistingFiles();
+        if (record.updateTime != record.status.onDiskRecord.updateTime && record.status.onDiskRecord.numFiles > 0)
+        {
+            record.setError(String.format("Unexpected files detected for sstable [%s], " +
+                                          "record [%s]: last update time [%tT] should have been [%tT]",
+                                          record.fileName(),
+                                          record,
+                                          record.status.onDiskRecord.updateTime,
+                                          record.updateTime));
+
+        }
+    }
+

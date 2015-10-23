@@ -1,0 +1,56 @@
+    private static void testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(Consumer<LogTransaction> modifier, boolean shouldCommit) throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+
+        File origiFolder = new Directories(cfs.metadata).getDirectoryForNewSSTables();
+        File dataFolder1 = new File(origiFolder, "1");
+        File dataFolder2 = new File(origiFolder, "2");
+        Files.createDirectories(dataFolder1.toPath());
+        Files.createDirectories(dataFolder2.toPath());
+
+        SSTableReader[] sstables = { sstable(dataFolder1, cfs, 0, 128),
+                                     sstable(dataFolder1, cfs, 1, 128),
+                                     sstable(dataFolder2, cfs, 2, 128),
+                                     sstable(dataFolder2, cfs, 3, 128)
+        };
+
+        LogTransaction log = new LogTransaction(OperationType.COMPACTION);
+        assertNotNull(log);
+
+        LogTransaction.SSTableTidier[] tidiers = { log.obsoleted(sstables[0]), log.obsoleted(sstables[2]) };
+
+        log.trackNew(sstables[1]);
+        log.trackNew(sstables[3]);
+
+        // fake some error condition on the txn logs
+        modifier.accept(log);
+
+        Arrays.stream(sstables).forEach(s -> s.selfRef().release());
+
+        LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
+        LogTransaction.waitForDeletions();
+
+        if (shouldCommit)
+        {
+            // only new sstables should still be there
+            assertFiles(dataFolder1.getPath(), new HashSet<>(sstables[1].getAllFilePaths()));
+            assertFiles(dataFolder2.getPath(), new HashSet<>(sstables[3].getAllFilePaths()));
+        }
+        else
+        {
+            // all files should still be there
+            assertFiles(dataFolder1.getPath(), Sets.newHashSet(Iterables.concat(sstables[0].getAllFilePaths(),
+                                                                                sstables[1].getAllFilePaths(),
+                                                                                Collections.singleton(log.logFilePaths().get(0)))));
+            assertFiles(dataFolder2.getPath(), Sets.newHashSet(Iterables.concat(sstables[2].getAllFilePaths(),
+                                                                                sstables[3].getAllFilePaths(),
+                                                                                Collections.singleton(log.logFilePaths().get(1)))));
+        }
+
+
+        // complete the transaction to avoid LEAK errors
+        Arrays.stream(tidiers).forEach(LogTransaction.SSTableTidier::run);
+        log.txnFile().commit(); // just anything to make sure transaction tidier will finish
+        assertNull(log.complete(null));
+    }
+
