@@ -3,14 +3,28 @@
             if (expressions.isEmpty())
                 return iter;
 
-            return new AlteringUnfilteredPartitionIterator(iter)
+            class IsSatisfiedFilter extends Transformation<UnfilteredRowIterator>
             {
-                protected Row computeNext(DecoratedKey partitionKey, Row row)
+                DecoratedKey pk;
+                public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator partition)
                 {
-                    // We filter tombstones when passing the row to isSatisfiedBy so that the method doesn't have to bother with them.
-                    Row purged = row.purge(DeletionPurger.PURGE_ALL, nowInSec);
-                    return purged != null && CQLFilter.this.isSatisfiedBy(partitionKey, purged) ? row : null;
+                    pk = partition.partitionKey();
+                    return Transformation.apply(partition, this);
                 }
-            };
+
+                public Row applyToRow(Row row)
+                {
+                    Row purged = row.purge(DeletionPurger.PURGE_ALL, nowInSec);
+                    if (purged == null)
+                        return null;
+
+                    for (Expression e : expressions)
+                        if (!e.isSatisfiedBy(pk, purged))
+                            return null;
+                    return row;
+                }
+            }
+
+            return Transformation.apply(iter, new IsSatisfiedFilter());
         }
 

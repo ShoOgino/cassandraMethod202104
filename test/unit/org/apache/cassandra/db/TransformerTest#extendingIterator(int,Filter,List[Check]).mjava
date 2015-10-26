@@ -1,0 +1,70 @@
+    private static BaseRowIterator<?> extendingIterator(int count, Filter filter, List<Check> checks)
+    {
+        class RefillNested extends Expect implements MoreRows<BaseRowIterator<?>>
+        {
+            boolean returnedEmpty, returnedSingleton, returnedNested;
+            RefillNested(int from)
+            {
+                super(from, count);
+            }
+
+            public BaseRowIterator<?> moreContents()
+            {
+                // first call return an empty iterator,
+                // second call return a singleton iterator (with a function that expects to be around to receive just that item)
+                // third call return a nested version of ourselves, with a function that expects to receive all future values
+                // fourth call, return null, indicating no more iterators to return
+
+                if (!returnedEmpty)
+                {
+                    returnedEmpty = true;
+                    return empty(filter, checks);
+                }
+
+                if (!returnedSingleton)
+                {
+                    returnedSingleton = true;
+                    return singleton(filter, from, checks);
+                }
+
+                if (from + 1 >= to)
+                    return null;
+
+                if (!returnedNested)
+                {
+                    returnedNested = true;
+
+                    RefillNested refill = new RefillNested(from + 1);
+                    checks.add(refill);
+                    return refill.applyTo(empty(filter, checks));
+                }
+
+                return null;
+            }
+
+            BaseRowIterator<?> applyTo(BaseRowIterator<?> iter)
+            {
+                if (iter instanceof UnfilteredRowIterator)
+                    return Transformation.apply(MoreRows.extend((UnfilteredRowIterator) iter, this), this);
+                else
+                    return Transformation.apply(MoreRows.extend((RowIterator) iter, this), this);
+            }
+        }
+
+        RefillNested refill = new RefillNested(0);
+        checks.add(refill);
+
+        BaseRowIterator<?> iter = empty(filter, checks);
+        switch (filter)
+        {
+            case APPLY_OUTER:
+                return FilteredRows.filter((UnfilteredRowIterator) refill.applyTo(iter), Integer.MAX_VALUE);
+            case APPLY_INNER:
+            case INIT:
+            case NONE:
+                return refill.applyTo(iter);
+            default:
+                throw new IllegalStateException();
+        }
+    }
+
