@@ -1,0 +1,31 @@
+        protected void initChannel(final Channel channel) throws Exception
+        {
+            super.initChannel(channel);
+            channel.pipeline().addFirst("sslDetectionHandler", new ByteToMessageDecoder()
+            {
+                @Override
+                protected void decode(ChannelHandlerContext channelHandlerContext, ByteBuf byteBuf, List<Object> list) throws Exception
+                {
+                    if (byteBuf.readableBytes() < 5)
+                    {
+                        // To detect if SSL must be used we need to have at least 5 bytes, so return here and try again
+                        // once more bytes a ready.
+                        return;
+                    }
+                    if (SslHandler.isEncrypted(byteBuf))
+                    {
+                        // Connection uses SSL/TLS, replace the detection handler with a SslHandler and so use
+                        // encryption.
+                        SslHandler sslHandler = createSslHandler();
+                        channelHandlerContext.pipeline().replace(this, "ssl", sslHandler);
+                    }
+                    else
+                    {
+                        // Connection use no TLS/SSL encryption, just remove the detection handler and continue without
+                        // SslHandler in the pipeline.
+                        channelHandlerContext.pipeline().remove(this);
+                    }
+                }
+            });
+        }
+
