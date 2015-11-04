@@ -1,0 +1,118 @@
+    /**
+     * Do a read by querying the memtable(s) first, and then each relevant sstables sequentially by order of the sstable
+     * max timestamp.
+     *
+     * This is used for names query in the hope of only having to query the 1 or 2 most recent query and then knowing nothing
+     * more recent could be in the older sstables (which we can only guarantee if we know exactly which row we queries, and if
+     * no collection or counters are included).
+     * This method assumes the filter is a {@code ClusteringIndexNamesFilter}.
+     */
+    private UnfilteredRowIterator queryMemtableAndSSTablesInTimestampOrder(ColumnFamilyStore cfs, ClusteringIndexNamesFilter filter)
+    {
+        Tracing.trace("Acquiring sstable references");
+        ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
+
+        ImmutableBTreePartition result = null;
+
+        Tracing.trace("Merging memtable contents");
+        for (Memtable memtable : view.memtables)
+        {
+            Partition partition = memtable.getPartition(partitionKey());
+            if (partition == null)
+                continue;
+
+            try (UnfilteredRowIterator iter = filter.getUnfilteredRowIterator(columnFilter(), partition))
+            {
+                if (iter.isEmpty())
+                    continue;
+
+                result = add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter, result, filter, false);
+            }
+        }
+
+        /* add the SSTables on disk */
+        Collections.sort(view.sstables, SSTableReader.maxTimestampComparator);
+        int sstablesIterated = 0;
+
+        // read sorted sstables
+        for (SSTableReader sstable : view.sstables)
+        {
+            // if we've already seen a partition tombstone with a timestamp greater
+            // than the most recent update to this sstable, we're done, since the rest of the sstables
+            // will also be older
+            if (result != null && sstable.getMaxTimestamp() < result.partitionLevelDeletion().markedForDeleteAt())
+                break;
+
+            long currentMaxTs = sstable.getMaxTimestamp();
+            filter = reduceFilter(filter, result, currentMaxTs);
+            if (filter == null)
+                break;
+
+            if (!shouldInclude(sstable))
+            {
+                // This mean that nothing queried by the filter can be in the sstable. One exception is the top-level partition deletion
+                // however: if it is set, it impacts everything and must be included. Getting that top-level partition deletion costs us
+                // some seek in general however (unless the partition is indexed and is in the key cache), so we first check if the sstable
+                // has any tombstone at all as a shortcut.
+                if (sstable.getSSTableMetadata().maxLocalDeletionTime == Integer.MAX_VALUE)
+                    continue; // Means no tombstone at all, we can skip that sstable
+
+                // We need to get the partition deletion and include it if it's live. In any case though, we're done with that sstable.
+                sstable.incrementReadCount();
+                try (UnfilteredRowIterator iter = sstable.iterator(partitionKey(), Slices.ALL, columnFilter(), filter.isReversed(), isForThrift()))
+                {
+                    if (iter.partitionLevelDeletion().isLive())
+                    {
+                        sstablesIterated++;
+                        result = add(UnfilteredRowIterators.noRowsIterator(iter.metadata(), iter.partitionKey(), Rows.EMPTY_STATIC_ROW, iter.partitionLevelDeletion(), filter.isReversed()), result, filter, sstable.isRepaired());
+                    }
+                }
+                continue;
+            }
+
+            Tracing.trace("Merging data from sstable {}", sstable.descriptor.generation);
+            sstable.incrementReadCount();
+            try (UnfilteredRowIterator iter = sstable.iterator(partitionKey(), filter.getSlices(metadata()), columnFilter(), filter.isReversed(), isForThrift());)
+            {
+                if (iter.isEmpty())
+                    continue;
+
+                sstablesIterated++;
+                result = add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter, result, filter, sstable.isRepaired());
+            }
+        }
+
+        cfs.metric.updateSSTableIterated(sstablesIterated);
+
+        if (result == null || result.isEmpty())
+            return EmptyIterators.unfilteredRow(metadata(), partitionKey(), false);
+
+        DecoratedKey key = result.partitionKey();
+        cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
+
+        // "hoist up" the requested data into a more recent sstable
+        if (sstablesIterated > cfs.getMinimumCompactionThreshold()
+            && !cfs.isAutoCompactionDisabled()
+            && cfs.getCompactionStrategyManager().shouldDefragment())
+        {
+            // !!WARNING!!   if we stop copying our data to a heap-managed object,
+            //               we will need to track the lifetime of this mutation as well
+            Tracing.trace("Defragmenting requested data");
+
+            try (UnfilteredRowIterator iter = result.unfilteredIterator(columnFilter(), Slices.ALL, false))
+            {
+                final Mutation mutation = new Mutation(PartitionUpdate.fromIterator(iter, columnFilter()));
+                StageManager.getStage(Stage.MUTATION).execute(new Runnable()
+                {
+                    public void run()
+                    {
+                        // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
+                        Keyspace.open(mutation.getKeyspaceName()).apply(mutation, false, false);
+                    }
+                });
+            }
+        }
+
+        return withStateTracking(result.unfilteredIterator(columnFilter(), Slices.ALL, clusteringIndexFilter().isReversed()));
+    }
+
