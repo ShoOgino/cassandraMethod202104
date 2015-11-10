@@ -3,6 +3,7 @@
          */
         public void run()
         {
+            Session session = null;
             outer:
             while (run || !queue.isEmpty())
             {
@@ -21,34 +22,37 @@
                 while (true)
                 {
                     // send the mutation to the last-used endpoint.  first time through, this will NPE harmlessly.
-                    try
+                    if (session != null)
                     {
-                        int i = 0;
-                        PreparedStatement statement = preparedStatement(client);
-                        while (bindVariables != null)
+                        try
                         {
-                            BoundStatement boundStatement = new BoundStatement(statement);
-                            for (int columnPosition = 0; columnPosition < bindVariables.size(); columnPosition++)
+                            int i = 0;
+                            PreparedStatement statement = preparedStatement(session);
+                            while (bindVariables != null)
                             {
-                                boundStatement.setBytesUnsafe(columnPosition, bindVariables.get(columnPosition));
-                            }
-                            client.execute(boundStatement);
-                            i++;
+                                BoundStatement boundStatement = new BoundStatement(statement);
+                                for (int columnPosition = 0; columnPosition < bindVariables.size(); columnPosition++)
+                                {
+                                    boundStatement.setBytesUnsafe(columnPosition, bindVariables.get(columnPosition));
+                                }
+                                session.execute(boundStatement);
+                                i++;
 
-                            if (i >= batchThreshold)
-                                break;
-                            bindVariables = queue.poll();
+                                if (i >= batchThreshold)
+                                    break;
+                                bindVariables = queue.poll();
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    catch (Exception e)
-                    {
-                        closeInternal();
-                        if (!iter.hasNext())
+                        catch (Exception e)
                         {
-                            lastException = new IOException(e);
-                            break outer;
-                        }
+                            closeInternal();
+                            if (!iter.hasNext())
+                            {
+                                lastException = new IOException(e);
+                                break outer;
+                            }
+                        }                        
                     }
 
                     // attempt to connect to a different endpoint
@@ -56,7 +60,8 @@
                     {
                         InetAddress address = iter.next();
                         String host = address.getHostName();
-                        client = CqlConfigHelper.getOutputCluster(host, conf).connect();
+                        cluster = CqlConfigHelper.getOutputCluster(host, conf);
+                        session = cluster.connect();
                     }
                     catch (Exception e)
                     {
