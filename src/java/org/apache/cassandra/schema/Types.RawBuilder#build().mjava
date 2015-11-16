@@ -11,26 +11,41 @@
             /*
              * build a DAG of UDT dependencies
              */
-            DefaultDirectedGraph<RawUDT, DefaultEdge> graph = new DefaultDirectedGraph<>(DefaultEdge.class);
+            Map<RawUDT, Integer> vertices = new HashMap<>(); // map values are numbers of referenced types
+            for (RawUDT udt : definitions)
+                vertices.put(udt, 0);
 
-            definitions.forEach(graph::addVertex);
-
-            for (RawUDT udt1: definitions)
+            Multimap<RawUDT, RawUDT> adjacencyList = HashMultimap.create();
+            for (RawUDT udt1 : definitions)
                 for (RawUDT udt2 : definitions)
-                    if (udt1 != udt2 && udt1.referencesUserType(udt2.name))
-                        graph.addEdge(udt2, udt1);
+                    if (udt1 != udt2 && udt1.referencesUserType(udt2))
+                        adjacencyList.put(udt2, udt1);
 
             /*
-             * iterate in topological order,
+             * resolve dependencies in topological order, using Kahn's algorithm
              */
-            Types types = new Types(new HashMap<>());
+            adjacencyList.values().forEach(vertex -> vertices.put(vertex, vertices.get(vertex) + 1));
 
-            TopologicalOrderIterator<RawUDT, DefaultEdge> iterator = new TopologicalOrderIterator<>(graph);
-            while (iterator.hasNext())
+            Queue<RawUDT> resolvableTypes = new LinkedList<>(); // UDTs with 0 dependencies
+            for (Map.Entry<RawUDT, Integer> entry : vertices.entrySet())
+                if (entry.getValue() == 0)
+                    resolvableTypes.add(entry.getKey());
+
+            Types types = new Types(new HashMap<>());
+            while (!resolvableTypes.isEmpty())
             {
-                UserType udt = iterator.next().prepare(keyspace, types); // will throw InvalidRequestException if meets an unknown type
+                RawUDT vertex = resolvableTypes.remove();
+
+                for (RawUDT dependentType : adjacencyList.get(vertex))
+                    if (vertices.replace(dependentType, vertices.get(dependentType) - 1) == 1)
+                        resolvableTypes.add(dependentType);
+
+                UserType udt = vertex.prepare(keyspace, types);
                 types.types.put(udt.name, udt);
             }
+
+            if (types.types.size() != definitions.size())
+                throw new ConfigurationException(format("Cannot resolve UDTs for keyspace %s: some types are missing", keyspace));
 
             /*
              * return an immutable copy
