@@ -1,0 +1,41 @@
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testChangedTopology() throws Exception
+    {
+        // create a hint
+        long now = FBUtilities.timestampMicros();
+        String key = "testChangedTopology";
+        Mutation mutation = createMutation(key, now);
+        Hint hint = Hint.create(mutation, now / 1000);
+
+        // Prepare metadata with injected stale endpoint serving the mutation key.
+        TokenMetadata tokenMeta = StorageService.instance.getTokenMetadata();
+        InetAddress local = FBUtilities.getBroadcastAddress();
+        InetAddress endpoint = InetAddress.getByName("1.1.1.1");
+        UUID localId = StorageService.instance.getLocalHostUUID();
+        UUID targetId = UUID.randomUUID();
+        tokenMeta.updateHostId(targetId, endpoint);
+        tokenMeta.updateNormalTokens(ImmutableList.of(mutation.key().getToken()), endpoint);
+
+        // sanity check that there is no data inside yet
+        assertNoPartitions(key, TABLE0);
+        assertNoPartitions(key, TABLE1);
+        assertNoPartitions(key, TABLE2);
+
+        assert StorageProxy.instance.getHintsInProgress() == 0;
+        long totalHintCount = StorageProxy.instance.getTotalHints();
+        // Process hint message.
+        HintMessage message = new HintMessage(localId, hint);
+        MessagingService.instance().getVerbHandler(MessagingService.Verb.HINT).doVerb(
+                MessageIn.create(local, message, Collections.emptyMap(), MessagingService.Verb.HINT, MessagingService.current_version),
+                -1);
+
+        // hint should not be applied as we no longer are a replica
+        assertNoPartitions(key, TABLE0);
+        assertNoPartitions(key, TABLE1);
+        assertNoPartitions(key, TABLE2);
+
+        // Attempt to send to new endpoint should have been made. Node is not live hence it should now be a hint.
+        assertEquals(totalHintCount + 1, StorageProxy.instance.getTotalHints());
+    }
+
