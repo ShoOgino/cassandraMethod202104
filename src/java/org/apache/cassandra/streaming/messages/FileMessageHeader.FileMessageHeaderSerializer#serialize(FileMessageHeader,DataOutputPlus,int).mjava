@@ -1,4 +1,4 @@
-        public void serialize(FileMessageHeader header, DataOutputPlus out, int version) throws IOException
+        public CompressionInfo serialize(FileMessageHeader header, DataOutputPlus out, int version) throws IOException
         {
             UUIDSerializer.serializer.serialize(header.cfId, out, version);
             out.writeInt(header.sequenceNumber);
@@ -18,11 +18,16 @@
                 out.writeLong(section.left);
                 out.writeLong(section.right);
             }
-            CompressionInfo.serializer.serialize(header.compressionInfo, out, version);
+            // construct CompressionInfo here to avoid holding large number of Chunks on heap.
+            CompressionInfo compressionInfo = null;
+            if (header.compressionMetadata != null)
+                compressionInfo = new CompressionInfo(header.compressionMetadata.getChunksForSections(header.sections), header.compressionMetadata.parameters);
+            CompressionInfo.serializer.serialize(compressionInfo, out, version);
             out.writeLong(header.repairedAt);
             out.writeInt(header.sstableLevel);
 
             if (version >= StreamMessage.VERSION_30)
                 SerializationHeader.serializer.serialize(header.version, header.header, out);
+            return compressionInfo;
         }
 
