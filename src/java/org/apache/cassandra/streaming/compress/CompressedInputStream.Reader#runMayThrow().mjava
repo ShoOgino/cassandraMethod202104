@@ -1,7 +1,7 @@
         protected void runMayThrow() throws Exception
         {
             byte[] compressedWithCRC;
-            while (chunks.hasNext())
+            while (!Thread.currentThread().isInterrupted() && chunks.hasNext())
             {
                 CompressionMetadata.Chunk chunk = chunks.next();
 
@@ -11,15 +11,28 @@
                 int bufferRead = 0;
                 while (bufferRead < readLength)
                 {
-                    int r = source.read(compressedWithCRC, bufferRead, readLength - bufferRead);
-                    if (r < 0)
+                    int r;
+                    try
+                    {
+                        r = source.read(compressedWithCRC, bufferRead, readLength - bufferRead);
+                        if (r < 0)
+                        {
+                            dataBuffer.put(POISON_PILL);
+                            return; // throw exception where we consume dataBuffer
+                        }
+                    }
+                    catch (IOException e)
                     {
                         dataBuffer.put(POISON_PILL);
-                        return; // throw exception where we consume dataBuffer
+                        throw e;
                     }
                     bufferRead += r;
                 }
                 dataBuffer.put(compressedWithCRC);
+            }
+            synchronized(CompressedInputStream.this)
+            {
+                readerThread = null;
             }
         }
 
