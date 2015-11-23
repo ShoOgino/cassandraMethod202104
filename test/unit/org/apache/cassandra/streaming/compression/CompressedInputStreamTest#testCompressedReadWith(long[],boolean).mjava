@@ -11,17 +11,19 @@
         Descriptor desc = Descriptor.fromFilename(tmp.getAbsolutePath());
         MetadataCollector collector = new MetadataCollector(new ClusteringComparator(BytesType.instance));
         CompressionParams param = CompressionParams.snappy(32);
-        CompressedSequentialWriter writer = new CompressedSequentialWriter(tmp, desc.filenameFor(Component.COMPRESSION_INFO), param, collector);
         Map<Long, Long> index = new HashMap<Long, Long>();
-        for (long l = 0L; l < 1000; l++)
+        try (CompressedSequentialWriter writer = new CompressedSequentialWriter(tmp, desc.filenameFor(Component.COMPRESSION_INFO), param, collector))
         {
-            index.put(l, writer.position());
-            writer.writeLong(l);
+            for (long l = 0L; l < 1000; l++)
+            {
+                index.put(l, writer.position());
+                writer.writeLong(l);
+            }
+            writer.finish();
         }
-        writer.finish();
 
         CompressionMetadata comp = CompressionMetadata.create(tmp.getAbsolutePath());
-        List<Pair<Long, Long>> sections = new ArrayList<Pair<Long, Long>>();
+        List<Pair<Long, Long>> sections = new ArrayList<>();
         for (long l : valuesToCheck)
         {
             long position = index.get(l);
@@ -40,14 +42,15 @@
             size += (c.length + 4); // 4bytes CRC
         byte[] toRead = new byte[size];
 
-        RandomAccessFile f = new RandomAccessFile(tmp, "r");
-        int pos = 0;
-        for (CompressionMetadata.Chunk c : chunks)
+        try (RandomAccessFile f = new RandomAccessFile(tmp, "r"))
         {
-            f.seek(c.offset);
-            pos += f.read(toRead, pos, c.length + 4);
+            int pos = 0;
+            for (CompressionMetadata.Chunk c : chunks)
+            {
+                f.seek(c.offset);
+                pos += f.read(toRead, pos, c.length + 4);
+            }
         }
-        f.close();
 
         if (testTruncate)
         {
@@ -60,13 +63,15 @@
         CompressionInfo info = new CompressionInfo(chunks, param);
         CompressedInputStream input = new CompressedInputStream(new ByteArrayInputStream(toRead), info,
                                                                 ChecksumType.CRC32, () -> 1.0);
-        DataInputStream in = new DataInputStream(input);
 
-        for (int i = 0; i < sections.size(); i++)
+        try (DataInputStream in = new DataInputStream(input))
         {
-            input.position(sections.get(i).left);
-            long readValue = in.readLong();
-            assert readValue == valuesToCheck[i] : "expected " + valuesToCheck[i] + " but was " + readValue;
+            for (int i = 0; i < sections.size(); i++)
+            {
+                input.position(sections.get(i).left);
+                long readValue = in.readLong();
+                assertEquals("expected " + valuesToCheck[i] + " but was " + readValue, valuesToCheck[i], readValue);
+            }
         }
     }
 
