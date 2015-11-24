@@ -1,0 +1,51 @@
+        protected Future<Integer> initiateMutation(final Mutation mutation,
+                                                   final long segmentId,
+                                                   final int serializedSize,
+                                                   final long entryLocation,
+                                                   final CommitLogReplayer clr)
+        {
+            Runnable runnable = new WrappedRunnable()
+            {
+                public void runMayThrow() throws IOException
+                {
+                    if (Schema.instance.getKSMetaData(mutation.getKeyspaceName()) == null)
+                        return;
+                    if (clr.pointInTimeExceeded(mutation))
+                        return;
+
+                    final Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+
+                    // Rebuild the mutation, omitting column families that
+                    //    a) the user has requested that we ignore,
+                    //    b) have already been flushed,
+                    // or c) are part of a cf that was dropped.
+                    // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
+                    Mutation newMutation = null;
+                    for (PartitionUpdate update : clr.replayFilter.filter(mutation))
+                    {
+                        if (Schema.instance.getCF(update.metadata().cfId) == null)
+                            continue; // dropped
+
+                        ReplayPosition rp = clr.cfPositions.get(update.metadata().cfId);
+
+                        // replay if current segment is newer than last flushed one or,
+                        // if it is the last known segment, if we are after the replay position
+                        if (segmentId > rp.segment || (segmentId == rp.segment && entryLocation > rp.position))
+                        {
+                            if (newMutation == null)
+                                newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
+                            newMutation.add(update);
+                            clr.replayedCount.incrementAndGet();
+                        }
+                    }
+                    if (newMutation != null)
+                    {
+                        assert !newMutation.isEmpty();
+                        Keyspace.open(newMutation.getKeyspaceName()).applyFromCommitLog(newMutation);
+                        clr.keyspacesRecovered.add(keyspace);
+                    }
+                }
+            };
+            return StageManager.getStage(Stage.MUTATION).submit(runnable, serializedSize);
+        }
+

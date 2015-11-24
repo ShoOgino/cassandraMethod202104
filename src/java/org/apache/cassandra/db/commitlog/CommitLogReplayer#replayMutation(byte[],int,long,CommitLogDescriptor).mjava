@@ -52,53 +52,19 @@
         if (logger.isTraceEnabled())
             logger.trace("replaying mutation for {}.{}: {}", mutation.getKeyspaceName(), mutation.key(), "{" + StringUtils.join(mutation.getPartitionUpdates().iterator(), ", ") + "}");
 
-        Runnable runnable = new WrappedRunnable()
+        pendingMutationBytes += size;
+        futures.offer(mutationInitiator.initiateMutation(mutation,
+                                                         desc.id,
+                                                         size,
+                                                         entryLocation,
+                                                         this));
+        //If there are finished mutations, or too many outstanding bytes/mutations
+        //drain the futures in the queue
+        while (futures.size() > MAX_OUTSTANDING_REPLAY_COUNT
+                || pendingMutationBytes > MAX_OUTSTANDING_REPLAY_BYTES
+                || (!futures.isEmpty() && futures.peek().isDone()))
         {
-            public void runMayThrow() throws IOException
-            {
-                if (Schema.instance.getKSMetaData(mutation.getKeyspaceName()) == null)
-                    return;
-                if (pointInTimeExceeded(mutation))
-                    return;
-
-                final Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
-
-                // Rebuild the mutation, omitting column families that
-                //    a) the user has requested that we ignore,
-                //    b) have already been flushed,
-                // or c) are part of a cf that was dropped.
-                // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
-                Mutation newMutation = null;
-                for (PartitionUpdate update : replayFilter.filter(mutation))
-                {
-                    if (Schema.instance.getCF(update.metadata().cfId) == null)
-                        continue; // dropped
-
-                    ReplayPosition rp = cfPositions.get(update.metadata().cfId);
-
-                    // replay if current segment is newer than last flushed one or,
-                    // if it is the last known segment, if we are after the replay position
-                    if (desc.id > rp.segment || (desc.id == rp.segment && entryLocation > rp.position))
-                    {
-                        if (newMutation == null)
-                            newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
-                        newMutation.add(update);
-                        replayedCount.incrementAndGet();
-                    }
-                }
-                if (newMutation != null)
-                {
-                    assert !newMutation.isEmpty();
-                    Keyspace.open(newMutation.getKeyspaceName()).applyFromCommitLog(newMutation);
-                    keyspacesRecovered.add(keyspace);
-                }
-            }
-        };
-        futures.add(StageManager.getStage(Stage.MUTATION).submit(runnable));
-        if (futures.size() > MAX_OUTSTANDING_REPLAY_COUNT)
-        {
-            FBUtilities.waitOnFutures(futures);
-            futures.clear();
+            pendingMutationBytes -= FBUtilities.waitOnFuture(futures.poll());
         }
     }
 
