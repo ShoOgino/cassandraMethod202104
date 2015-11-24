@@ -17,6 +17,8 @@
 
         MessageOut message = new MessageOut<>(MessagingService.Verb.MIGRATION_REQUEST, null, MigrationManager.MigrationsSerializer.instance);
 
+        final CountDownLatch completionLatch = new CountDownLatch(1);
+
         IAsyncCallback<Collection<Mutation>> cb = new IAsyncCallback<Collection<Mutation>>()
         {
             @Override
@@ -30,6 +32,10 @@
                 {
                     logger.error("Configuration exception merging remote schema", e);
                 }
+                finally
+                {
+                    completionLatch.countDown();
+                }
             }
 
             public boolean isLatencyForSnitch()
@@ -37,6 +43,11 @@
                 return false;
             }
         };
+
+        // Only save the latches if we need bootstrap or are bootstrapping
+        if (monitoringBootstrapStates.contains(SystemKeyspace.getBootstrapState()))
+            inflightTasks.offer(completionLatch);
+
         MessagingService.instance().sendRR(message, endpoint, cb);
     }
 
