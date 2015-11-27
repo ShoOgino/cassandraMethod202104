@@ -1,0 +1,35 @@
+    /**
+     * We cannot update rack or data-center for a live node, see CASSANDRA-10243.
+     *
+     * @param reloadedMap - the new map of hosts to NodeData
+     * @param reloadedDefaultData - the default NodeData
+     * @return true if we can continue updating (no live host had dc or rack updated)
+     */
+    private boolean livenessCheck(Map<InetAddress, NodeData> reloadedMap, NodeData reloadedDefaultData)
+    {
+        // If the default has changed we must check all live hosts but hopefully we will find a live
+        // host quickly and interrupt the loop. Otherwise we only check the live hosts that were either
+        // in the old set or in the new set
+        Set<InetAddress> hosts = NodeData.isSameDcRack(defaultNodeData, reloadedDefaultData)
+                                 ? Sets.intersection(StorageService.instance.getLiveMembers(), // same default
+                                                     Sets.union(nodeDataMap.keySet(), reloadedMap.keySet()))
+                                 : StorageService.instance.getLiveMembers(); // default updated
+
+        for (InetAddress host : hosts)
+        {
+            NodeData origValue = nodeDataMap.containsKey(host) ? nodeDataMap.get(host) : defaultNodeData;
+            NodeData updateValue = reloadedMap.containsKey(host) ? reloadedMap.get(host) : reloadedDefaultData;
+
+            if (!NodeData.isSameDcRack(origValue, updateValue))
+            {
+                logger.error("Cannot update data center or rack from {} to {} for live host {}, property file NOT RELOADED",
+                             new String[] { origValue.datacenter, origValue.rack }, // same format as error in PropertyFileSnitch,
+                             new String[] { updateValue.datacenter, updateValue.rack },
+                             host);
+                return false;
+            }
+        }
+
+        return true;
+    }
+

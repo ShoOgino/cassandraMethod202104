@@ -1,0 +1,35 @@
+    /**
+     * Test that we can change the default only if this does not result in any live node changing dc or rack.
+     * The configuration file contains default=DC1:r1 and we change it to default=DC2:r2. Let's use host 127.0.0.9
+     * since it is not in the configuration file.
+     */
+    @Test
+    public void testChangeDefault() throws Exception
+    {
+        final InetAddress host = InetAddress.getByName("127.0.0.9");
+        final PropertyFileSnitch snitch = new PropertyFileSnitch(/*refreshPeriodInSeconds*/1);
+        YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "r1"); // default
+
+        try
+        {
+            setNodeLive(host);
+
+            Files.copy(effectiveFile, backupFile);
+            replaceConfigFile(Collections.singletonMap("default", "DC2:r2")); // change default
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "r1"); // unchanged
+
+            setNodeShutdown(host);
+            replaceConfigFile(Collections.singletonMap("default", "DC2:r2")); // change default again (refresh file update)
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC2", "r2"); // default updated
+        }
+        finally
+        {
+            restoreOrigConfigFile();
+            setNodeShutdown(host);
+        }
+    }
+

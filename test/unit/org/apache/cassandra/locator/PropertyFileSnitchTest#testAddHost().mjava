@@ -1,0 +1,35 @@
+    /**
+     * Test that adding a host to the configuration file changes the host dc and rack only if the host
+     * is not live. The original configuration file does not contain 127.0.0.9 and so it should use
+     * the default default=DC1:r1.
+     */
+    @Test
+    public void testAddHost() throws Exception
+    {
+        final InetAddress host = InetAddress.getByName("127.0.0.9");
+        final PropertyFileSnitch snitch = new PropertyFileSnitch(/*refreshPeriodInSeconds*/1);
+        YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "r1"); // default
+
+        try
+        {
+            setNodeLive(host);
+
+            Files.copy(effectiveFile, backupFile);
+            replaceConfigFile(Collections.singletonMap(host.getHostAddress(), "DC2:RAC2")); // add this line if not yet there
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "r1"); // unchanged
+
+            setNodeShutdown(host);
+            replaceConfigFile(Collections.singletonMap(host.getHostAddress(), "DC2:RAC2")); // add this line if not yet there
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC2", "RAC2"); // changed
+        }
+        finally
+        {
+            restoreOrigConfigFile();
+            setNodeShutdown(host);
+        }
+    }
+

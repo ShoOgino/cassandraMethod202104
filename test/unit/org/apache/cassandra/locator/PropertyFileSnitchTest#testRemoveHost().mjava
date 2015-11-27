@@ -1,0 +1,35 @@
+    /**
+     * Test that removing a host from the configuration file changes the host rack only if the host
+     * is not live. The original configuration file contains 127.0.0.2=DC1:RAC2 and default=DC1:r1 so removing
+     * this host should result in a different rack if the host is not live.
+     */
+    @Test
+    public void testRemoveHost() throws Exception
+    {
+        final InetAddress host = InetAddress.getByName("127.0.0.2");
+        final PropertyFileSnitch snitch = new PropertyFileSnitch(/*refreshPeriodInSeconds*/1);
+        YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "RAC2");
+
+        try
+        {
+            setNodeLive(host);
+
+            Files.copy(effectiveFile, backupFile);
+            replaceConfigFile(Collections.singletonMap(host.getHostAddress(), "")); // removes line if found
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "RAC2"); // unchanged
+
+            setNodeShutdown(host);
+            replaceConfigFile(Collections.singletonMap(host.getHostAddress(), "")); // removes line if found
+
+            Thread.sleep(1500);
+            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, host.getHostAddress(), "DC1", "r1"); // default
+        }
+        finally
+        {
+            restoreOrigConfigFile();
+            setNodeShutdown(host);
+        }
+    }
+
