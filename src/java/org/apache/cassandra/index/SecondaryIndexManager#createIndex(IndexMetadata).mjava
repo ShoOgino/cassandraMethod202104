@@ -2,12 +2,18 @@
     {
         Index index = createInstance(indexDef);
         index.register(this);
+
         // if the index didn't register itself, we can probably assume that no initialization needs to happen
         final Callable<?> initialBuildTask = indexes.containsKey(indexDef.name)
                                            ? index.getInitializationTask()
                                            : null;
-        return initialBuildTask == null
-               ? Futures.immediateFuture(null)
-               : asyncExecutor.submit(initialBuildTask);
+        if (initialBuildTask == null)
+        {
+            // We need to make sure that the index is marked as built in the case where the initialBuildTask
+            // does not need to be run (if the index didn't register itself or if the base table was empty).
+            markIndexBuilt(indexDef.name);
+            return Futures.immediateFuture(null);
+        }
+        return asyncExecutor.submit(index.getInitializationTask());
     }
 
