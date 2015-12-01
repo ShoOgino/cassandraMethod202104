@@ -22,6 +22,22 @@
                 if (scrubInfo.isStopRequested())
                     throw new CompactionInterruptedException(scrubInfo.getCompactionInfo());
 
+                updateIndexKey();
+
+                if (prevKey != null && indexFile != null)
+                {
+                    long nextRowStart = currentRowPositionFromIndex == -1 ? dataFile.length() : currentRowPositionFromIndex;
+                    if (dataFile.getFilePointer() < nextRowStart)
+                    {
+                        // Encountered CASSANDRA-10791. Place post-END_OF_ROW data in the out-of-order table.
+                        saveOutOfOrderRow(prevKey,
+                                          SSTableIdentityIterator.createFragmentIterator(sstable, dataFile, prevKey, nextRowStart - dataFile.getFilePointer(), validateColumns),
+                                          String.format("Row fragment detected after END_OF_ROW at key %s", prevKey));
+                        if (dataFile.isEOF())
+                            break;
+                    }
+                }
+
                 long rowStart = dataFile.getFilePointer();
                 outputHandler.debug("Reading row at " + rowStart);
 
@@ -36,8 +52,6 @@
                     throwIfFatal(th);
                     // check for null key below
                 }
-
-                updateIndexKey();
 
                 long dataStart = dataFile.getFilePointer();
 
