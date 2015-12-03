@@ -1,0 +1,148 @@
+    @Test
+    public void testIntegerSAConstruction() throws Exception
+    {
+        final Map<ByteBuffer, TokenTreeBuilder> data = new HashMap<ByteBuffer, TokenTreeBuilder>()
+        {{
+                put(Int32Type.instance.decompose(5),  keyBuilder(1L));
+                put(Int32Type.instance.decompose(7),  keyBuilder(2L));
+                put(Int32Type.instance.decompose(1),  keyBuilder(3L));
+                put(Int32Type.instance.decompose(3),  keyBuilder(1L, 4L));
+                put(Int32Type.instance.decompose(8),  keyBuilder(2L, 6L));
+                put(Int32Type.instance.decompose(10), keyBuilder(5L));
+                put(Int32Type.instance.decompose(6),  keyBuilder(7L));
+                put(Int32Type.instance.decompose(4),  keyBuilder(9L, 10L));
+                put(Int32Type.instance.decompose(0),  keyBuilder(11L, 12L, 1L));
+        }};
+
+        OnDiskIndexBuilder builder = new OnDiskIndexBuilder(UTF8Type.instance, Int32Type.instance, OnDiskIndexBuilder.Mode.PREFIX);
+        for (Map.Entry<ByteBuffer, TokenTreeBuilder> e : data.entrySet())
+            addAll(builder, e.getKey(), e.getValue());
+
+        File index = File.createTempFile("on-disk-sa-int", "db");
+        index.deleteOnExit();
+
+        builder.finish(index);
+
+        OnDiskIndex onDisk = new OnDiskIndex(index, Int32Type.instance, new KeyConverter());
+
+        for (Map.Entry<ByteBuffer, TokenTreeBuilder> e : data.entrySet())
+        {
+            Assert.assertEquals(convert(e.getValue()), convert(onDisk.search(expressionFor(Int32Type.instance, e.getKey()))));
+        }
+
+        List<ByteBuffer> sortedNumbers = new ArrayList<ByteBuffer>()
+        {{
+            addAll(data.keySet().stream().collect(Collectors.toList()));
+        }};
+
+        Collections.sort(sortedNumbers, Int32Type.instance::compare);
+
+        // test full iteration
+        int idx = 0;
+        for (OnDiskIndex.DataTerm term : onDisk)
+        {
+            ByteBuffer number = sortedNumbers.get(idx++);
+            Assert.assertEquals(number, term.getTerm());
+            Assert.assertEquals(convert(data.get(number)), convert(term.getTokens()));
+        }
+
+        // test partial iteration (descending)
+        idx = 3; // start from the 3rd element
+        Iterator<OnDiskIndex.DataTerm> partialIter = onDisk.iteratorAt(sortedNumbers.get(idx), OnDiskIndex.IteratorOrder.DESC, true);
+        while (partialIter.hasNext())
+        {
+            OnDiskIndex.DataTerm term = partialIter.next();
+            ByteBuffer number = sortedNumbers.get(idx++);
+
+            Assert.assertEquals(number, term.getTerm());
+            Assert.assertEquals(convert(data.get(number)), convert(term.getTokens()));
+        }
+
+        idx = 3; // start from the 3rd element exclusive
+        partialIter = onDisk.iteratorAt(sortedNumbers.get(idx++), OnDiskIndex.IteratorOrder.DESC, false);
+        while (partialIter.hasNext())
+        {
+            OnDiskIndex.DataTerm term = partialIter.next();
+            ByteBuffer number = sortedNumbers.get(idx++);
+
+            Assert.assertEquals(number, term.getTerm());
+            Assert.assertEquals(convert(data.get(number)), convert(term.getTokens()));
+        }
+
+        // test partial iteration (ascending)
+        idx = 6; // start from the 6rd element
+        partialIter = onDisk.iteratorAt(sortedNumbers.get(idx), OnDiskIndex.IteratorOrder.ASC, true);
+        while (partialIter.hasNext())
+        {
+            OnDiskIndex.DataTerm term = partialIter.next();
+            ByteBuffer number = sortedNumbers.get(idx--);
+
+            Assert.assertEquals(number, term.getTerm());
+            Assert.assertEquals(convert(data.get(number)), convert(term.getTokens()));
+        }
+
+        idx = 6; // start from the 6rd element exclusive
+        partialIter = onDisk.iteratorAt(sortedNumbers.get(idx--), OnDiskIndex.IteratorOrder.ASC, false);
+        while (partialIter.hasNext())
+        {
+            OnDiskIndex.DataTerm term = partialIter.next();
+            ByteBuffer number = sortedNumbers.get(idx--);
+
+            Assert.assertEquals(number, term.getTerm());
+            Assert.assertEquals(convert(data.get(number)), convert(term.getTokens()));
+        }
+
+        onDisk.close();
+
+        List<ByteBuffer> iterCheckNums = new ArrayList<ByteBuffer>()
+        {{
+            add(Int32Type.instance.decompose(3));
+            add(Int32Type.instance.decompose(9));
+            add(Int32Type.instance.decompose(14));
+            add(Int32Type.instance.decompose(42));
+        }};
+
+        OnDiskIndexBuilder iterTest = new OnDiskIndexBuilder(UTF8Type.instance, Int32Type.instance, OnDiskIndexBuilder.Mode.PREFIX);
+        for (int i = 0; i < iterCheckNums.size(); i++)
+            iterTest.add(iterCheckNums.get(i), keyAt((long) i), i);
+
+        File iterIndex = File.createTempFile("sa-iter", ".db");
+        iterIndex.deleteOnExit();
+
+        iterTest.finish(iterIndex);
+
+        onDisk = new OnDiskIndex(iterIndex, Int32Type.instance, new KeyConverter());
+
+        ByteBuffer number = Int32Type.instance.decompose(1);
+        Assert.assertEquals(0, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, false)));
+        Assert.assertEquals(0, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, true)));
+        Assert.assertEquals(4, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, false)));
+        Assert.assertEquals(4, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, true)));
+
+        number = Int32Type.instance.decompose(44);
+        Assert.assertEquals(4, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, false)));
+        Assert.assertEquals(4, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, true)));
+        Assert.assertEquals(0, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, false)));
+        Assert.assertEquals(0, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, true)));
+
+        number = Int32Type.instance.decompose(20);
+        Assert.assertEquals(3, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, false)));
+        Assert.assertEquals(3, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, true)));
+        Assert.assertEquals(1, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, false)));
+        Assert.assertEquals(1, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, true)));
+
+        number = Int32Type.instance.decompose(5);
+        Assert.assertEquals(1, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, false)));
+        Assert.assertEquals(1, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, true)));
+        Assert.assertEquals(3, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, false)));
+        Assert.assertEquals(3, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, true)));
+
+        number = Int32Type.instance.decompose(10);
+        Assert.assertEquals(2, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, false)));
+        Assert.assertEquals(2, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.ASC, true)));
+        Assert.assertEquals(2, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, false)));
+        Assert.assertEquals(2, Iterators.size(onDisk.iteratorAt(number, OnDiskIndex.IteratorOrder.DESC, true)));
+
+        onDisk.close();
+    }
+

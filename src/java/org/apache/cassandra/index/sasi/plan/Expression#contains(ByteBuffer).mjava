@@ -1,0 +1,67 @@
+    public boolean contains(ByteBuffer value)
+    {
+        if (!TypeUtil.isValid(value, validator))
+        {
+            int size = value.remaining();
+            if ((value = TypeUtil.tryUpcast(value, validator)) == null)
+            {
+                logger.error("Can't cast value for {} to size accepted by {}, value size is {} bytes.",
+                             index.getColumnName(),
+                             validator,
+                             size);
+                return false;
+            }
+        }
+
+        if (lower != null)
+        {
+            // suffix check
+            if (isLiteral)
+            {
+                if (!validateStringValue(value, lower.value))
+                    return false;
+            }
+            else
+            {
+                // range or (not-)equals - (mainly) for numeric values
+                int cmp = validator.compare(lower.value, value);
+
+                // in case of (NOT_)EQ lower == upper
+                if (operation == Op.EQ || operation == Op.NOT_EQ)
+                    return cmp == 0;
+
+                if (cmp > 0 || (cmp == 0 && !lower.inclusive))
+                    return false;
+            }
+        }
+
+        if (upper != null && lower != upper)
+        {
+            // string (prefix or suffix) check
+            if (isLiteral)
+            {
+                if (!validateStringValue(value, upper.value))
+                    return false;
+            }
+            else
+            {
+                // range - mainly for numeric values
+                int cmp = validator.compare(upper.value, value);
+                if (cmp < 0 || (cmp == 0 && !upper.inclusive))
+                    return false;
+            }
+        }
+
+        // as a last step let's check exclusions for the given field,
+        // this covers EQ/RANGE with exclusions.
+        for (ByteBuffer term : exclusions)
+        {
+            if (isLiteral && validateStringValue(value, term))
+                return false;
+            else if (validator.compare(term, value) == 0)
+                return false;
+        }
+
+        return true;
+    }
+

@@ -1,0 +1,55 @@
+    @Test
+    public void testConcurrentMemtableReadsAndWrites() throws Exception
+    {
+        final ColumnFamilyStore store = Keyspace.open(KS_NAME).getColumnFamilyStore(CF_NAME);
+
+        ExecutorService scheduler = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+        final int writeCount = 10000;
+        final AtomicInteger updates = new AtomicInteger(0);
+
+        for (int i = 0; i < writeCount; i++)
+        {
+            final String key = "key" + i;
+            final String firstName = "first_name#" + i;
+            final String lastName = "last_name#" + i;
+
+            scheduler.submit((Runnable) () -> {
+                try
+                {
+                    newMutation(key, firstName, lastName, 26, System.currentTimeMillis()).apply();
+                    Uninterruptibles.sleepUninterruptibly(5, TimeUnit.MILLISECONDS); // back up a bit to do more reads
+                }
+                finally
+                {
+                    updates.incrementAndGet();
+                }
+            });
+        }
+
+        final ByteBuffer firstName = UTF8Type.instance.decompose("first_name");
+        final ByteBuffer age = UTF8Type.instance.decompose("age");
+
+        int previousCount = 0;
+
+        do
+        {
+            // this loop figures out if number of search results monotonically increasing
+            // to make sure that concurrent updates don't interfere with reads, uses first_name and age
+            // indexes to test correctness of both Trie and SkipList ColumnIndex implementations.
+
+            Set<DecoratedKey> rows = getPaged(store, 100, buildExpression(firstName, Operator.EQ, UTF8Type.instance.decompose("a")),
+                                                          buildExpression(age, Operator.EQ, Int32Type.instance.decompose(26)));
+
+            Assert.assertTrue(previousCount <= rows.size());
+            previousCount = rows.size();
+        }
+        while (updates.get() < writeCount);
+
+        // to make sure that after all of the right are done we can read all "count" worth of rows
+        Set<DecoratedKey> rows = getPaged(store, 100, buildExpression(firstName, Operator.EQ, UTF8Type.instance.decompose("a")),
+                                                      buildExpression(age, Operator.EQ, Int32Type.instance.decompose(26)));
+
+        Assert.assertEquals(writeCount, rows.size());
+    }
+

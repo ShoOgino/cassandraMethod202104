@@ -1,0 +1,62 @@
+    @VisibleForTesting
+    protected static ListMultimap<ColumnDefinition, Expression> analyzeGroup(QueryController controller,
+                                                                             OperationType op,
+                                                                             List<RowFilter.Expression> expressions)
+    {
+        ListMultimap<ColumnDefinition, Expression> analyzed = ArrayListMultimap.create();
+
+        // sort all of the expressions in the operation by name and priority of the logical operator
+        // this gives us an efficient way to handle inequality and combining into ranges without extra processing
+        // and converting expressions from one type to another.
+        Collections.sort(expressions, (a, b) -> {
+            int cmp = a.column().compareTo(b.column());
+            return cmp == 0 ? -Integer.compare(getPriority(a.operator()), getPriority(b.operator())) : cmp;
+        });
+
+        for (final RowFilter.Expression e : expressions)
+        {
+            ColumnIndex columnIndex = controller.getIndex(e);
+            List<Expression> perColumn = analyzed.get(e.column());
+
+            if (columnIndex == null)
+                columnIndex = new ColumnIndex(controller.getKeyValidator(), e.column(), null);
+
+            AbstractAnalyzer analyzer = columnIndex.getAnalyzer();
+            analyzer.reset(e.getIndexValue());
+
+            // EQ/NOT_EQ can have multiple expressions e.g. text = "Hello World",
+            // becomes text = "Hello" OR text = "World" because "space" is always interpreted as a split point (by analyzer),
+            // NOT_EQ is made an independent expression only in case of pre-existing multiple EQ expressions, or
+            // if there is no EQ operations and NOT_EQ is met or a single NOT_EQ expression present,
+            // in such case we know exactly that there would be no more EQ/RANGE expressions for given column
+            // since NOT_EQ has the lowest priority.
+            if (e.operator() == Operator.EQ
+                    || (e.operator() == Operator.NEQ
+                       && (perColumn.size() == 0 || perColumn.size() > 1
+                           || (perColumn.size() == 1 && perColumn.get(0).getOp() == Op.NOT_EQ))))
+            {
+                while (analyzer.hasNext())
+                {
+                    final ByteBuffer token = analyzer.next();
+                    perColumn.add(new Expression(controller, columnIndex).add(e.operator(), token));
+                }
+            }
+            else
+            // "range" or not-equals operator, combines both bounds together into the single expression,
+            // iff operation of the group is AND, otherwise we are forced to create separate expressions,
+            // not-equals is combined with the range iff operator is AND.
+            {
+                Expression range;
+                if (perColumn.size() == 0 || op != OperationType.AND)
+                    perColumn.add((range = new Expression(controller, columnIndex)));
+                else
+                    range = Iterables.getLast(perColumn);
+
+                while (analyzer.hasNext())
+                    range.add(e.operator(), analyzer.next());
+            }
+        }
+
+        return analyzed;
+    }
+

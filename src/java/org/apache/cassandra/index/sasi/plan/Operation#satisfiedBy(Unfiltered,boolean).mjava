@@ -1,0 +1,67 @@
+    /**
+     * Recursive "satisfies" checks based on operation
+     * and data from the lower level members using depth-first search
+     * and bubbling the results back to the top level caller.
+     *
+     * Most of the work here is done by {@link #localSatisfiedBy(Unfiltered, boolean)}
+     * see it's comment for details, if there are no local expressions
+     * assigned to Operation it will call satisfiedBy(Row) on it's children.
+     *
+     * Query: first_name = X AND (last_name = Y OR address = XYZ AND street = IL AND city = C) OR (state = 'CA' AND country = 'US')
+     * Row: key1: (first_name: X, last_name: Z, address: XYZ, street: IL, city: C, state: NY, country:US)
+     *
+     * #1                       OR
+     *                        /    \
+     * #2       (first_name) AND   AND (state, country)
+     *                          \
+     * #3            (last_name) OR
+     *                             \
+     * #4                          AND (address, street, city)
+     *
+     *
+     * Evaluation of the key1 is top-down depth-first search:
+     *
+     * --- going down ---
+     * Level #1 is evaluated, OR expression has to pull results from it's children which are at level #2 and OR them together,
+     * Level #2 AND (state, country) could be be evaluated right away, AND (first_name) refers to it's "right" child from level #3
+     * Level #3 OR (last_name) requests results from level #4
+     * Level #4 AND (address, street, city) does logical AND between it's 3 fields, returns result back to level #3.
+     * --- bubbling up ---
+     * Level #3 computes OR between AND (address, street, city) result and it's "last_name" expression
+     * Level #2 computes AND between "first_name" and result of level #3, AND (state, country) which is already computed
+     * Level #1 does OR between results of AND (first_name) and AND (state, country) and returns final result.
+     *
+     * @param row The row to check.
+     * @return true if give Row satisfied all of the expressions in the tree,
+     *         false otherwise.
+     */
+    public boolean satisfiedBy(Unfiltered row, boolean allowMissingColumns)
+    {
+        boolean sideL, sideR;
+
+        if (expressions == null || expressions.isEmpty())
+        {
+            sideL =  left != null &&  left.satisfiedBy(row, allowMissingColumns);
+            sideR = right != null && right.satisfiedBy(row, allowMissingColumns);
+
+            // one of the expressions was skipped
+            // because it had no indexes attached
+            if (left == null)
+                return sideR;
+        }
+        else
+        {
+            sideL = localSatisfiedBy(row, allowMissingColumns);
+
+            // if there is no right it means that this expression
+            // is last in the sequence, we can just return result from local expressions
+            if (right == null)
+                return sideL;
+
+            sideR = right.satisfiedBy(row, allowMissingColumns);
+        }
+
+
+        return op.apply(sideL, sideR);
+    }
+

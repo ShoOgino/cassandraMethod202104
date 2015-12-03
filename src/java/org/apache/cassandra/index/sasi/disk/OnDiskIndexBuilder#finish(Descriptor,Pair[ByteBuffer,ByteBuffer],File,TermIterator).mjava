@@ -1,0 +1,61 @@
+    protected void finish(Descriptor descriptor, Pair<ByteBuffer, ByteBuffer> range, File file, TermIterator terms)
+    {
+        SequentialWriter out = null;
+
+        try
+        {
+            out = new SequentialWriter(file, BLOCK_SIZE, BufferType.ON_HEAP);
+
+            out.writeUTF(descriptor.version.toString());
+
+            out.writeShort(termSize.size);
+
+            // min, max term (useful to find initial scan range from search expressions)
+            ByteBufferUtil.writeWithShortLength(terms.minTerm(), out);
+            ByteBufferUtil.writeWithShortLength(terms.maxTerm(), out);
+
+            // min, max keys covered by index (useful when searching across multiple indexes)
+            ByteBufferUtil.writeWithShortLength(range.left, out);
+            ByteBufferUtil.writeWithShortLength(range.right, out);
+
+            out.writeUTF(mode.toString());
+
+            out.skipBytes((int) (BLOCK_SIZE - out.position()));
+
+            dataLevel = mode == Mode.SPARSE ? new DataBuilderLevel(out, new MutableDataBlock(mode))
+                                            : new MutableLevel<>(out, new MutableDataBlock(mode));
+            while (terms.hasNext())
+            {
+                Pair<ByteBuffer, TokenTreeBuilder> term = terms.next();
+                addTerm(new InMemoryDataTerm(term.left, term.right), out);
+            }
+
+            dataLevel.finalFlush();
+            for (MutableLevel l : levels)
+                l.flush(); // flush all of the buffers
+
+            // and finally write levels index
+            final long levelIndexPosition = out.position();
+
+            out.writeInt(levels.size());
+            for (int i = levels.size() - 1; i >= 0; i--)
+                levels.get(i).flushMetadata();
+
+            dataLevel.flushMetadata();
+
+            out.writeLong(levelIndexPosition);
+
+            // sync contents of the output and disk,
+            // since it's not done implicitly on close
+            out.sync();
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, file);
+        }
+        finally
+        {
+            FileUtils.closeQuietly(out);
+        }
+    }
+

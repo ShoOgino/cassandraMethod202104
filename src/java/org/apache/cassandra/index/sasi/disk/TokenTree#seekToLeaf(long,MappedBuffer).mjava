@@ -1,0 +1,55 @@
+    // finds leaf that *could* contain token
+    private void seekToLeaf(long token, MappedBuffer file)
+    {
+        // this loop always seeks forward except for the first iteration
+        // where it may seek back to the root
+        long blockStart = startPos;
+        while (true)
+        {
+            file.position(blockStart);
+
+            byte info = file.get();
+            boolean isLeaf = (info & 1) == 1;
+
+            if (isLeaf)
+            {
+                file.position(blockStart);
+                break;
+            }
+
+            short tokenCount = file.getShort();
+
+            long minToken = file.getLong();
+            long maxToken = file.getLong();
+
+            long seekBase = blockStart + TokenTreeBuilder.BLOCK_HEADER_BYTES;
+            if (minToken > token)
+            {
+                // seek to beginning of child offsets to locate first child
+                file.position(seekBase + tokenCount * LONG_BYTES);
+                blockStart = (startPos + (int) file.getLong());
+            }
+            else if (maxToken < token)
+            {
+                // seek to end of child offsets to locate last child
+                file.position(seekBase + (2 * tokenCount) * LONG_BYTES);
+                blockStart = (startPos + (int) file.getLong());
+            }
+            else
+            {
+                // skip to end of block header/start of interior block tokens
+                file.position(seekBase);
+
+                short offsetIndex = searchBlock(token, tokenCount, file);
+
+                // file pointer is now at beginning of offsets
+                if (offsetIndex == tokenCount)
+                    file.position(file.position() + (offsetIndex * LONG_BYTES));
+                else
+                    file.position(file.position() + ((tokenCount - offsetIndex - 1) + offsetIndex) * LONG_BYTES);
+
+                blockStart = (startPos + (int) file.getLong());
+            }
+        }
+    }
+

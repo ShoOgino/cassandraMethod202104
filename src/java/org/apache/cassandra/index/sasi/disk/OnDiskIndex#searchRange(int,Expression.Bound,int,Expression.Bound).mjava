@@ -1,0 +1,79 @@
+    private RangeIterator<Long, Token> searchRange(int lowerBlock, Expression.Bound lower, int upperBlock, Expression.Bound upper)
+    {
+        // if lower is at the beginning of the block that means we can just do a single iterator per block
+        SearchResult<DataTerm> lowerPosition = (lower == null) ? null : searchIndex(lower.value, lowerBlock);
+        SearchResult<DataTerm> upperPosition = (upper == null) ? null : searchIndex(upper.value, upperBlock);
+
+        RangeUnionIterator.Builder<Long, Token> builder = RangeUnionIterator.builder();
+
+        // optimistically assume that first and last blocks are full block reads, saves at least 3 'else' conditions
+        int firstFullBlockIdx = lowerBlock, lastFullBlockIdx = upperBlock;
+
+        // 'lower' doesn't cover the whole block so we need to do a partial iteration
+        // Two reasons why that can happen:
+        //   - 'lower' is not the first element of the block
+        //   - 'lower' is first element but it's not inclusive in the query
+        if (lowerPosition != null && (lowerPosition.index > 0 || !lower.inclusive))
+        {
+            DataBlock block = dataLevel.getBlock(lowerBlock);
+            int start = (lower.inclusive || lowerPosition.cmp != 0) ? lowerPosition.index : lowerPosition.index + 1;
+
+            builder.add(block.getRange(start, block.termCount()));
+            firstFullBlockIdx = lowerBlock + 1;
+        }
+
+        if (upperPosition != null)
+        {
+            DataBlock block = dataLevel.getBlock(upperBlock);
+            int lastIndex = block.termCount() - 1;
+
+            // The save as with 'lower' but here we need to check if the upper is the last element of the block,
+            // which means that we only have to get individual results if:
+            //  - if it *is not* the last element, or
+            //  - it *is* but shouldn't be included (dictated by upperInclusive)
+            if (upperPosition.index != lastIndex || !upper.inclusive)
+            {
+                int end = (upperPosition.cmp < 0 || (upperPosition.cmp == 0 && upper.inclusive))
+                                ? upperPosition.index + 1 : upperPosition.index;
+
+                builder.add(block.getRange(0, end));
+                lastFullBlockIdx = upperBlock - 1;
+            }
+        }
+
+        int totalSuperBlocks = (lastFullBlockIdx - firstFullBlockIdx) / OnDiskIndexBuilder.SUPER_BLOCK_SIZE;
+
+        // if there are no super-blocks, we can simply read all of the block iterators in sequence
+        if (totalSuperBlocks == 0)
+        {
+            for (int i = firstFullBlockIdx; i <= lastFullBlockIdx; i++)
+                builder.add(dataLevel.getBlock(i).getBlockIndex().iterator(keyFetcher));
+
+            return builder.build();
+        }
+
+        // first get all of the blocks which are aligned before the first super-block in the sequence,
+        // e.g. if the block range was (1, 9) and super-block-size = 4, we need to read 1, 2, 3, 4 - 7 is covered by
+        // super-block, 8, 9 is a remainder.
+
+        int superBlockAlignedStart = firstFullBlockIdx == 0 ? 0 : (int) FBUtilities.align(firstFullBlockIdx, OnDiskIndexBuilder.SUPER_BLOCK_SIZE);
+        for (int blockIdx = firstFullBlockIdx; blockIdx < Math.min(superBlockAlignedStart, lastFullBlockIdx); blockIdx++)
+            builder.add(getBlockIterator(blockIdx));
+
+        // now read all of the super-blocks matched by the request, from the previous comment
+        // it's a block with index 1 (which covers everything from 4 to 7)
+
+        int superBlockIdx = superBlockAlignedStart / OnDiskIndexBuilder.SUPER_BLOCK_SIZE;
+        for (int offset = 0; offset < totalSuperBlocks - 1; offset++)
+            builder.add(dataLevel.getSuperBlock(superBlockIdx++).iterator());
+
+        // now it's time for a remainder read, again from the previous example it's 8, 9 because
+        // we have over-shot previous block but didn't request enough to cover next super-block.
+
+        int lastCoveredBlock = superBlockIdx * OnDiskIndexBuilder.SUPER_BLOCK_SIZE;
+        for (int offset = 0; offset <= (lastFullBlockIdx - lastCoveredBlock); offset++)
+            builder.add(getBlockIterator(lastCoveredBlock + offset));
+
+        return builder.build();
+    }
+

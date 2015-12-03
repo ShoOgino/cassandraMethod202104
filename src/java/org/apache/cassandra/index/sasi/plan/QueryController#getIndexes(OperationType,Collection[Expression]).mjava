@@ -1,0 +1,36 @@
+    /**
+     * Build a range iterator from the given list of expressions by applying given operation (OR/AND).
+     * Building of such iterator involves index search, results of which are persisted in the internal resources list
+     * and can be released later via {@link QueryController#releaseIndexes(Operation)}.
+     *
+     * @param op The operation type to coalesce expressions with.
+     * @param expressions The expressions to build range iterator from (expressions with not results are ignored).
+     *
+     * @return The range builder based on given expressions and operation type.
+     */
+    public RangeIterator.Builder<Long, Token> getIndexes(OperationType op, Collection<Expression> expressions)
+    {
+        if (resources.containsKey(expressions))
+            throw new IllegalArgumentException("Can't process the same expressions multiple times.");
+
+        RangeIterator.Builder<Long, Token> builder = op == OperationType.OR
+                                                ? RangeUnionIterator.<Long, Token>builder()
+                                                : RangeIntersectionIterator.<Long, Token>builder();
+
+        List<RangeIterator<Long, Token>> perIndexUnions = new ArrayList<>();
+
+        for (Map.Entry<Expression, Set<SSTableIndex>> e : getView(op, expressions).entrySet())
+        {
+            RangeIterator<Long, Token> index = TermIterator.build(e.getKey(), e.getValue());
+
+            if (index == null)
+                continue;
+
+            builder.add(index);
+            perIndexUnions.add(index);
+        }
+
+        resources.put(expressions, perIndexUnions);
+        return builder;
+    }
+

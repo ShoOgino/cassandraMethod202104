@@ -1,0 +1,57 @@
+    /**
+     * Search for rows which match all of the terms inside the given expression in the index file.
+     *
+     * @param exp The expression to use for the query.
+     *
+     * @return Iterator which contains rows for all of the terms from the given range.
+     */
+    public RangeIterator<Long, Token> search(Expression exp)
+    {
+        // convert single NOT_EQ to range with exclusion
+        final Expression expression = (exp.getOp() != Op.NOT_EQ)
+                                        ? exp
+                                        : new Expression(exp).setOp(Op.RANGE)
+                                                .setLower(new Expression.Bound(minTerm, true))
+                                                .setUpper(new Expression.Bound(maxTerm, true))
+                                                .addExclusion(exp.lower.value);
+
+        List<ByteBuffer> exclusions = new ArrayList<>(expression.exclusions.size());
+
+        Iterables.addAll(exclusions, expression.exclusions.stream().filter(exclusion -> {
+            // accept only exclusions which are in the bounds of lower/upper
+            return !(expression.lower != null && comparator.compare(exclusion, expression.lower.value) < 0)
+                && !(expression.upper != null && comparator.compare(exclusion, expression.upper.value) > 0);
+        }).collect(Collectors.toList()));
+
+        Collections.sort(exclusions, comparator);
+
+        if (exclusions.size() == 0)
+            return searchRange(expression);
+
+        List<Expression> ranges = new ArrayList<>(exclusions.size());
+
+        // calculate range splits based on the sorted exclusions
+        Iterator<ByteBuffer> exclusionsIterator = exclusions.iterator();
+
+        Expression.Bound min = expression.lower, max = null;
+        while (exclusionsIterator.hasNext())
+        {
+            max = new Expression.Bound(exclusionsIterator.next(), false);
+            ranges.add(new Expression(expression).setOp(Op.RANGE).setLower(min).setUpper(max));
+            min = max;
+        }
+
+        assert max != null;
+        ranges.add(new Expression(expression).setOp(Op.RANGE).setLower(max).setUpper(expression.upper));
+
+        RangeUnionIterator.Builder<Long, Token> builder = RangeUnionIterator.builder();
+        for (Expression e : ranges)
+        {
+            RangeIterator<Long, Token> range = searchRange(e);
+            if (range != null)
+                builder.add(range);
+        }
+
+        return builder.build();
+    }
+

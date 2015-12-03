@@ -1,0 +1,94 @@
+    @Test
+    public void testPartialIndexWrites() throws Exception
+    {
+        final int maxKeys = 100000, numParts = 4, partSize = maxKeys / numParts;
+        final String keyFormat = "key%06d";
+        final long timestamp = System.currentTimeMillis();
+
+        ColumnFamilyStore cfs = Keyspace.open(KS_NAME).getColumnFamilyStore(CF_NAME);
+        ColumnDefinition column = cfs.metadata.getColumnDefinition(UTF8Type.instance.decompose("age"));
+
+        SASIIndex sasi = (SASIIndex) cfs.indexManager.getIndexByName("age");
+
+        File directory = cfs.getDirectories().getDirectoryForNewSSTables();
+        Descriptor descriptor = Descriptor.fromFilename(cfs.getSSTablePath(directory));
+        PerSSTableIndexWriter indexWriter = (PerSSTableIndexWriter) sasi.getFlushObserver(descriptor, OperationType.FLUSH);
+
+        SortedMap<DecoratedKey, Row> expectedKeys = new TreeMap<>(DecoratedKey.comparator);
+
+        for (int i = 0; i < maxKeys; i++)
+        {
+            ByteBuffer key = ByteBufferUtil.bytes(String.format(keyFormat, i));
+            expectedKeys.put(cfs.metadata.partitioner.decorateKey(key),
+                             BTreeRow.singleCellRow(Clustering.EMPTY,
+                                                    BufferCell.live(cfs.metadata, column, timestamp, Int32Type.instance.decompose(i))));
+        }
+
+        indexWriter.begin();
+
+        Iterator<Map.Entry<DecoratedKey, Row>> keyIterator = expectedKeys.entrySet().iterator();
+        long position = 0;
+
+        Set<String> segments = new HashSet<>();
+        outer:
+        for (;;)
+        {
+            for (int i = 0; i < partSize; i++)
+            {
+                if (!keyIterator.hasNext())
+                    break outer;
+
+                Map.Entry<DecoratedKey, Row> key = keyIterator.next();
+
+                indexWriter.startPartition(key.getKey(), position++);
+                indexWriter.nextUnfilteredCluster(key.getValue());
+            }
+
+            PerSSTableIndexWriter.Index index = indexWriter.getIndex(column);
+
+            OnDiskIndex segment = index.scheduleSegmentFlush(false).call();
+            index.segments.add(Futures.immediateFuture(segment));
+            segments.add(segment.getIndexPath());
+        }
+
+        for (String segment : segments)
+            Assert.assertTrue(new File(segment).exists());
+
+        String indexFile = indexWriter.indexes.get(column).filename(true);
+
+        // final flush
+        indexWriter.complete();
+
+        for (String segment : segments)
+            Assert.assertFalse(new File(segment).exists());
+
+        OnDiskIndex index = new OnDiskIndex(new File(indexFile), Int32Type.instance, keyPosition -> {
+            ByteBuffer key = ByteBufferUtil.bytes(String.format(keyFormat, keyPosition));
+            return cfs.metadata.partitioner.decorateKey(key);
+        });
+
+        Assert.assertEquals(0, UTF8Type.instance.compare(index.minKey(), ByteBufferUtil.bytes(String.format(keyFormat, 0))));
+        Assert.assertEquals(0, UTF8Type.instance.compare(index.maxKey(), ByteBufferUtil.bytes(String.format(keyFormat, maxKeys - 1))));
+
+        Set<DecoratedKey> actualKeys = new HashSet<>();
+        int count = 0;
+        for (OnDiskIndex.DataTerm term : index)
+        {
+            RangeIterator<Long, Token> tokens = term.getTokens();
+
+            while (tokens.hasNext())
+            {
+                for (DecoratedKey key : tokens.next())
+                    actualKeys.add(key);
+            }
+
+            Assert.assertEquals(count++, (int) Int32Type.instance.compose(term.getTerm()));
+        }
+
+        Assert.assertEquals(expectedKeys.size(), actualKeys.size());
+        for (DecoratedKey key : expectedKeys.keySet())
+            Assert.assertTrue(actualKeys.contains(key));
+
+        FileUtils.closeQuietly(index);
+    }
+

@@ -1,0 +1,58 @@
+    public D computeNext()
+    {
+        RangeIterator<K, D> head = null;
+
+        while (!ranges.isEmpty())
+        {
+            head = ranges.poll();
+            if (head.hasNext())
+                break;
+
+            FileUtils.closeQuietly(head);
+        }
+
+        if (head == null || !head.hasNext())
+            return endOfData();
+
+        D candidate = head.next();
+
+        List<RangeIterator<K, D>> processedRanges = new ArrayList<>();
+
+        if (head.hasNext())
+            processedRanges.add(head);
+        else
+            FileUtils.closeQuietly(head);
+
+        while (!ranges.isEmpty())
+        {
+            // peek here instead of poll is an optimization
+            // so we can re-insert less ranges back if candidate
+            // is less than head of the current range.
+            RangeIterator<K, D> range = ranges.peek();
+
+            int cmp = candidate.get().compareTo(range.getCurrent());
+
+            assert cmp <= 0;
+
+            if (cmp < 0)
+            {
+                break; // candidate is smaller than next token, return immediately
+            }
+            else if (cmp == 0)
+            {
+                candidate.merge(range.next()); // consume and merge
+
+                range = ranges.poll();
+                // re-prioritize changed range
+
+                if (range.hasNext())
+                    processedRanges.add(range);
+                else
+                    FileUtils.closeQuietly(range);
+            }
+        }
+
+        ranges.addAll(processedRanges);
+        return candidate;
+    }
+

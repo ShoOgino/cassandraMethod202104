@@ -1,0 +1,103 @@
+    /**
+     * Check every expression in the analyzed list to figure out if the
+     * columns in the give row match all of the based on the operation
+     * set to the current operation node.
+     *
+     * The algorithm is as follows: for every given expression from analyzed
+     * list get corresponding column from the Row:
+     *   - apply {@link Expression#contains(ByteBuffer)}
+     *     method to figure out if it's satisfied;
+     *   - apply logical operation between boolean accumulator and current boolean result;
+     *   - if result == false and node's operation is AND return right away;
+     *
+     * After all of the expressions have been evaluated return resulting accumulator variable.
+     *
+     * Example:
+     *
+     * Operation = (op: AND, columns: [first_name = p, 5 < age < 7, last_name: y])
+     * Row = (first_name: pavel, last_name: y, age: 6, timestamp: 15)
+     *
+     * #1 get "first_name" = p (expressions)
+     *      - row-get "first_name"                      => "pavel"
+     *      - compare "pavel" against "p"               => true (current)
+     *      - set accumulator current                   => true (because this is expression #1)
+     *
+     * #2 get "last_name" = y (expressions)
+     *      - row-get "last_name"                       => "y"
+     *      - compare "y" against "y"                   => true (current)
+     *      - set accumulator to accumulator & current  => true
+     *
+     * #3 get 5 < "age" < 7 (expressions)
+     *      - row-get "age"                             => "6"
+     *      - compare 5 < 6 < 7                         => true (current)
+     *      - set accumulator to accumulator & current  => true
+     *
+     * #4 return accumulator => true (row satisfied all of the conditions)
+     *
+     * @param row The row to check.
+     * @return true if give Row satisfied all of the analyzed expressions,
+     *         false otherwise.
+     */
+    private boolean localSatisfiedBy(Unfiltered row, boolean allowMissingColumns)
+    {
+        if (row == null || !row.isRow())
+            return false;
+
+        final int now = FBUtilities.nowInSeconds();
+        boolean result = false;
+        int idx = 0;
+
+        for (ColumnDefinition column : expressions.keySet())
+        {
+            if (column.kind == Kind.PARTITION_KEY)
+                continue;
+
+            ByteBuffer value = ColumnIndex.getValueOf(column, (Row) row, now);
+            boolean isMissingColumn = value == null;
+
+            if (!allowMissingColumns && isMissingColumn)
+                throw new IllegalStateException("All indexed columns should be included into the column slice, missing: " + column);
+
+            boolean isMatch = false;
+            // If there is a column with multiple expressions that effectively means an OR
+            // e.g. comment = 'x y z' could be split into 'comment' EQ 'x', 'comment' EQ 'y', 'comment' EQ 'z'
+            // by analyzer, in situation like that we only need to check if at least one of expressions matches,
+            // and there is no hit on the NOT_EQ (if any) which are always at the end of the filter list.
+            // Loop always starts from the end of the list, which makes it possible to break after the last
+            // NOT_EQ condition on first EQ/RANGE condition satisfied, instead of checking every
+            // single expression in the column filter list.
+            List<Expression> filters = expressions.get(column);
+            for (int i = filters.size() - 1; i >= 0; i--)
+            {
+                Expression expression = filters.get(i);
+                isMatch = !isMissingColumn && expression.contains(value);
+                if (expression.getOp() == Op.NOT_EQ)
+                {
+                    // since this is NOT_EQ operation we have to
+                    // inverse match flag (to check against other expressions),
+                    // and break in case of negative inverse because that means
+                    // that it's a positive hit on the not-eq clause.
+                    isMatch = !isMatch;
+                    if (!isMatch)
+                        break;
+                } // if it was a match on EQ/RANGE or column is missing
+                else if (isMatch || isMissingColumn)
+                    break;
+            }
+
+            if (idx++ == 0)
+            {
+                result = isMatch;
+                continue;
+            }
+
+            result = op.apply(result, isMatch);
+
+            // exit early because we already got a single false
+            if (op == OperationType.AND && !result)
+                return false;
+        }
+
+        return idx == 0 || result;
+    }
+

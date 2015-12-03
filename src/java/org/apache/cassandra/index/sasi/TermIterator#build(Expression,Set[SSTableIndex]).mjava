@@ -1,0 +1,78 @@
+    public static TermIterator build(final Expression e, Set<SSTableIndex> perSSTableIndexes)
+    {
+        final List<RangeIterator<Long, Token>> tokens = new CopyOnWriteArrayList<>();
+        final AtomicLong tokenCount = new AtomicLong(0);
+
+        RangeIterator<Long, Token> memtableIterator = e.index.searchMemtable(e);
+        if (memtableIterator != null)
+        {
+            tokens.add(memtableIterator);
+            tokenCount.addAndGet(memtableIterator.getCount());
+        }
+
+        final Set<SSTableIndex> referencedIndexes = new CopyOnWriteArraySet<>();
+
+        try
+        {
+            final CountDownLatch latch = new CountDownLatch(perSSTableIndexes.size());
+            final ExecutorService searchExecutor = SEARCH_EXECUTOR.get();
+
+            for (final SSTableIndex index : perSSTableIndexes)
+            {
+                if (!index.reference())
+                {
+                    latch.countDown();
+                    continue;
+                }
+
+                // add to referenced right after the reference was acquired,
+                // that helps to release index if something goes bad inside of the search
+                referencedIndexes.add(index);
+
+                searchExecutor.submit((Runnable) () -> {
+                    try
+                    {
+                        e.checkpoint();
+
+                        RangeIterator<Long, Token> keyIterator = index.search(e);
+                        if (keyIterator == null)
+                        {
+                            releaseIndex(referencedIndexes, index);
+                            return;
+                        }
+
+                        tokens.add(keyIterator);
+                        tokenCount.getAndAdd(keyIterator.getCount());
+                    }
+                    catch (Throwable e1)
+                    {
+                        releaseIndex(referencedIndexes, index);
+
+                        if (logger.isDebugEnabled())
+                            logger.debug(String.format("Failed search an index %s, skipping.", index.getPath()), e1);
+                    }
+                    finally
+                    {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            Uninterruptibles.awaitUninterruptibly(latch);
+
+            // checkpoint right away after all indexes complete search because we might have crossed the quota
+            e.checkpoint();
+
+            RangeIterator<Long, Token> ranges = RangeUnionIterator.build(tokens);
+            return ranges == null ? null : new TermIterator(e, ranges, referencedIndexes);
+        }
+        catch (Throwable ex)
+        {
+            // if execution quota was exceeded while opening indexes or something else happened
+            // local (yet to be tracked) indexes should be released first before re-throwing exception
+            referencedIndexes.forEach(TermIterator::releaseQuietly);
+
+            throw ex;
+        }
+    }
+
