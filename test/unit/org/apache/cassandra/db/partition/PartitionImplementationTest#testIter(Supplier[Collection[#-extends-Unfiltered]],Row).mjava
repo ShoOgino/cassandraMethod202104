@@ -1,0 +1,88 @@
+    private void testIter(Supplier<Collection<? extends Unfiltered>> contentSupplier, Row staticRow)
+    {
+        NavigableSet<Clusterable> sortedContent = new TreeSet<Clusterable>(cfm.comparator);
+        sortedContent.addAll(contentSupplier.get());
+        AbstractBTreePartition partition;
+        try (UnfilteredRowIterator iter = new Util.UnfilteredSource(cfm, Util.dk("pk"), staticRow, sortedContent.stream().map(x -> (Unfiltered) x).iterator()))
+        {
+            partition = ImmutableBTreePartition.create(iter);
+        }
+
+        ColumnDefinition defCol = cfm.getColumnDefinition(new ColumnIdentifier("col", true));
+        ColumnFilter cf = ColumnFilter.selectionBuilder().add(defCol).build();
+        Function<? super Clusterable, ? extends Clusterable> colFilter = x -> x instanceof Row ? ((Row) x).filter(cf, cfm) : x;
+        Slices slices = Slices.with(cfm.comparator, Slice.make(clustering(KEY_RANGE / 4), clustering(KEY_RANGE * 3 / 4)));
+        Slices multiSlices = makeSlices();
+
+        // lastRow
+        assertRowsEqual((Row) get(sortedContent.descendingSet(), x -> x instanceof Row),
+                        partition.lastRow());
+        // get(static)
+        assertRowsEqual(staticRow,
+                        partition.getRow(Clustering.STATIC_CLUSTERING));
+
+        // get
+        for (int i=0; i < KEY_RANGE; ++i)
+        {
+            Clustering cl = clustering(i);
+            assertRowsEqual(getRow(sortedContent, cl),
+                            partition.getRow(cl));
+        }
+        // isEmpty
+        assertEquals(sortedContent.isEmpty() && staticRow == null,
+                     partition.isEmpty());
+        // hasRows
+        assertEquals(sortedContent.stream().anyMatch(x -> x instanceof Row),
+                     partition.hasRows());
+
+        // iterator
+        assertIteratorsEqual(sortedContent.stream().filter(x -> x instanceof Row).iterator(),
+                             partition.iterator());
+
+        // unfiltered iterator
+        assertIteratorsEqual(sortedContent.iterator(),
+                             partition.unfilteredIterator());
+
+        // unfiltered iterator
+        assertIteratorsEqual(sortedContent.iterator(),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), Slices.ALL, false));
+        // column-filtered
+        assertIteratorsEqual(sortedContent.stream().map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, Slices.ALL, false));
+        // sliced
+        assertIteratorsEqual(slice(sortedContent, slices.get(0)),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), slices, false));
+        assertIteratorsEqual(streamOf(slice(sortedContent, slices.get(0))).map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, slices, false));
+        // randomly multi-sliced
+        assertIteratorsEqual(slice(sortedContent, multiSlices),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), multiSlices, false));
+        assertIteratorsEqual(streamOf(slice(sortedContent, multiSlices)).map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, multiSlices, false));
+        // reversed
+        assertIteratorsEqual(sortedContent.descendingIterator(),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), Slices.ALL, true));
+        assertIteratorsEqual(sortedContent.descendingSet().stream().map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, Slices.ALL, true));
+        assertIteratorsEqual(invert(slice(sortedContent, slices.get(0))),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), slices, true));
+        assertIteratorsEqual(streamOf(invert(slice(sortedContent, slices.get(0)))).map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, slices, true));
+        assertIteratorsEqual(invert(slice(sortedContent, multiSlices)),
+                             partition.unfilteredIterator(ColumnFilter.all(cfm), multiSlices, true));
+        assertIteratorsEqual(streamOf(invert(slice(sortedContent, multiSlices))).map(colFilter).iterator(),
+                             partition.unfilteredIterator(cf, multiSlices, true));
+
+        // search iterator
+        testSearchIterator(sortedContent, partition, ColumnFilter.all(cfm), false);
+        testSearchIterator(sortedContent, partition, cf, false);
+        testSearchIterator(sortedContent, partition, ColumnFilter.all(cfm), true);
+        testSearchIterator(sortedContent, partition, cf, true);
+
+        // sliceable iter
+        testSliceableIterator(sortedContent, partition, ColumnFilter.all(cfm), false);
+        testSliceableIterator(sortedContent, partition, cf, false);
+        testSliceableIterator(sortedContent, partition, ColumnFilter.all(cfm), true);
+        testSliceableIterator(sortedContent, partition, cf, true);
+    }
+

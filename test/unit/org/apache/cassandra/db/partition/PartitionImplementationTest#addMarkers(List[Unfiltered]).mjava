@@ -1,0 +1,83 @@
+    List<Unfiltered> addMarkers(List<Unfiltered> content)
+    {
+        List<RangeTombstoneMarker> markers = new ArrayList<>();
+        Set<Integer> delTimes = new HashSet<>();
+        for (int i = 0; i < ENTRIES / 10; ++i)
+        {
+            int delTime;
+            do
+            {
+                delTime = rand.nextInt(KEY_RANGE);
+            }
+            while (!delTimes.add(delTime));
+
+            int start = rand.nextInt(KEY_RANGE);
+            DeletionTime dt = new DeletionTime(delTime, delTime);
+            RangeTombstoneMarker open = RangeTombstoneBoundMarker.inclusiveOpen(false, clustering(start).getRawValues(), dt);
+            int end = start + rand.nextInt((KEY_RANGE - start) / 4 + 1);
+            RangeTombstoneMarker close = RangeTombstoneBoundMarker.inclusiveClose(false, clustering(end).getRawValues(), dt);
+            markers.add(open);
+            markers.add(close);
+        }
+        markers.sort(cfm.comparator);
+
+        RangeTombstoneMarker toAdd = null;
+        Set<DeletionTime> open = new HashSet<>();
+        DeletionTime current = DeletionTime.LIVE;
+        for (RangeTombstoneMarker marker : markers)
+        {
+            if (marker.isOpen(false))
+            {
+                DeletionTime delTime = marker.openDeletionTime(false);
+                open.add(delTime);
+                if (delTime.supersedes(current))
+                {
+                    if (toAdd != null)
+                    {
+                        if (cfm.comparator.compare(toAdd, marker) != 0)
+                            content.add(toAdd);
+                        else
+                        {
+                            // gotta join
+                            current = toAdd.isClose(false) ? toAdd.closeDeletionTime(false) : DeletionTime.LIVE;
+                        }
+                    }
+                    if (current != DeletionTime.LIVE)
+                        marker = RangeTombstoneBoundaryMarker.makeBoundary(false, marker.openBound(false).invert(), marker.openBound(false), current, delTime);
+                    toAdd = marker;
+                    current = delTime;
+                }
+            }
+            else
+            {
+                assert marker.isClose(false);
+                DeletionTime delTime = marker.closeDeletionTime(false);
+                boolean removed = open.remove(delTime);
+                assert removed;
+                if (current.equals(delTime))
+                {
+                    if (toAdd != null)
+                    {
+                        if (cfm.comparator.compare(toAdd, marker) != 0)
+                            content.add(toAdd);
+                        else
+                        {
+                            // gotta join
+                            current = toAdd.closeDeletionTime(false);
+                            marker = new RangeTombstoneBoundMarker(marker.closeBound(false), current);
+                        }
+                    }
+                    DeletionTime best = open.stream().max(DeletionTime::compareTo).orElse(DeletionTime.LIVE);
+                    if (best != DeletionTime.LIVE)
+                        marker = RangeTombstoneBoundaryMarker.makeBoundary(false, marker.closeBound(false), marker.closeBound(false).invert(), current, best);
+                    toAdd = marker;
+                    current = best;
+                }
+            }
+        }
+        content.add(toAdd);
+        assert current == DeletionTime.LIVE;
+        assert open.isEmpty();
+        return content;
+    }
+
