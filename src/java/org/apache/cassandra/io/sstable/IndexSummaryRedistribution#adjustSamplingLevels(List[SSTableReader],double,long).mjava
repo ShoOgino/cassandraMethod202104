@@ -1,5 +1,5 @@
-    private static List<SSTableReader> adjustSamplingLevels(List<SSTableReader> sstables,
-                                                            double totalReadsPerSec, long memoryPoolCapacity) throws IOException
+    private List<SSTableReader> adjustSamplingLevels(List<SSTableReader> sstables,
+                                                     double totalReadsPerSec, long memoryPoolCapacity) throws IOException
     {
 
         List<ResampleEntry> toDownsample = new ArrayList<>(sstables.size() / 4);
@@ -10,9 +10,12 @@
 
         // Going from the coldest to the hottest sstables, try to give each sstable an amount of space proportional
         // to the number of total reads/sec it handles.
-        long remainingSpace = memoryPoolCapacity;
+        remainingSpace = memoryPoolCapacity;
         for (SSTableReader sstable : sstables)
         {
+            if (isStopRequested())
+                throw new CompactionInterruptedException(getCompactionInfo());
+
             int minIndexInterval = sstable.metadata.getMinIndexInterval();
             int maxIndexInterval = sstable.metadata.getMaxIndexInterval();
 
@@ -37,21 +40,21 @@
             }
 
             int newSamplingLevel = IndexSummaryBuilder.calculateSamplingLevel(currentSamplingLevel, currentNumEntries, targetNumEntries,
-                    minIndexInterval, maxIndexInterval);
+                                                                              minIndexInterval, maxIndexInterval);
             int numEntriesAtNewSamplingLevel = IndexSummaryBuilder.entriesAtSamplingLevel(newSamplingLevel, maxSummarySize);
             double effectiveIndexInterval = sstable.getEffectiveIndexInterval();
 
             logger.trace("{} has {} reads/sec; ideal space for index summary: {} bytes ({} entries); considering moving " +
-                    "from level {} ({} entries, {} bytes) to level {} ({} entries, {} bytes)",
-                    sstable.getFilename(), readsPerSec, idealSpace, targetNumEntries, currentSamplingLevel, currentNumEntries,
-                    currentNumEntries * avgEntrySize, newSamplingLevel, numEntriesAtNewSamplingLevel,
-                    numEntriesAtNewSamplingLevel * avgEntrySize);
+                         "from level {} ({} entries, {} bytes) to level {} ({} entries, {} bytes)",
+                         sstable.getFilename(), readsPerSec, idealSpace, targetNumEntries, currentSamplingLevel, currentNumEntries,
+                         currentNumEntries * avgEntrySize, newSamplingLevel, numEntriesAtNewSamplingLevel,
+                         numEntriesAtNewSamplingLevel * avgEntrySize);
 
             if (effectiveIndexInterval < minIndexInterval)
             {
                 // The min_index_interval was changed; re-sample to match it.
                 logger.debug("Forcing resample of {} because the current index interval ({}) is below min_index_interval ({})",
-                        sstable, effectiveIndexInterval, minIndexInterval);
+                             sstable, effectiveIndexInterval, minIndexInterval);
                 long spaceUsed = (long) Math.ceil(avgEntrySize * numEntriesAtNewSamplingLevel);
                 forceResample.add(new ResampleEntry(sstable, spaceUsed, newSamplingLevel));
                 remainingSpace -= spaceUsed;
@@ -60,20 +63,20 @@
             {
                 // The max_index_interval was lowered; force an upsample to the effective minimum sampling level
                 logger.debug("Forcing upsample of {} because the current index interval ({}) is above max_index_interval ({})",
-                        sstable, effectiveIndexInterval, maxIndexInterval);
+                             sstable, effectiveIndexInterval, maxIndexInterval);
                 newSamplingLevel = Math.max(1, (BASE_SAMPLING_LEVEL * minIndexInterval) / maxIndexInterval);
                 numEntriesAtNewSamplingLevel = IndexSummaryBuilder.entriesAtSamplingLevel(newSamplingLevel, sstable.getMaxIndexSummarySize());
                 long spaceUsed = (long) Math.ceil(avgEntrySize * numEntriesAtNewSamplingLevel);
                 forceUpsample.add(new ResampleEntry(sstable, spaceUsed, newSamplingLevel));
                 remainingSpace -= avgEntrySize * numEntriesAtNewSamplingLevel;
             }
-            else if (targetNumEntries >= currentNumEntries * UPSAMPLE_THRESHOLD && newSamplingLevel > currentSamplingLevel)
+            else if (targetNumEntries >= currentNumEntries * IndexSummaryManager.UPSAMPLE_THRESHOLD && newSamplingLevel > currentSamplingLevel)
             {
                 long spaceUsed = (long) Math.ceil(avgEntrySize * numEntriesAtNewSamplingLevel);
                 toUpsample.add(new ResampleEntry(sstable, spaceUsed, newSamplingLevel));
                 remainingSpace -= avgEntrySize * numEntriesAtNewSamplingLevel;
             }
-            else if (targetNumEntries < currentNumEntries * DOWNSAMPLE_THESHOLD && newSamplingLevel < currentSamplingLevel)
+            else if (targetNumEntries < currentNumEntries * IndexSummaryManager.DOWNSAMPLE_THESHOLD && newSamplingLevel < currentSamplingLevel)
             {
                 long spaceUsed = (long) Math.ceil(avgEntrySize * numEntriesAtNewSamplingLevel);
                 toDownsample.add(new ResampleEntry(sstable, spaceUsed, newSamplingLevel));
@@ -102,24 +105,30 @@
         toDownsample.addAll(forceUpsample);
         Multimap<DataTracker, SSTableReader> replacedByTracker = HashMultimap.create();
         Multimap<DataTracker, SSTableReader> replacementsByTracker = HashMultimap.create();
-        for (ResampleEntry entry : toDownsample)
-        {
-            SSTableReader sstable = entry.sstable;
-            logger.debug("Re-sampling index summary for {} from {}/{} to {}/{} of the original number of entries",
-                         sstable, sstable.getIndexSummarySamplingLevel(), Downsampling.BASE_SAMPLING_LEVEL,
-                         entry.newSamplingLevel, Downsampling.BASE_SAMPLING_LEVEL);
-            ColumnFamilyStore cfs = Keyspace.open(sstable.getKeyspaceName()).getColumnFamilyStore(sstable.getColumnFamilyName());
-            SSTableReader replacement = sstable.cloneWithNewSummarySamplingLevel(cfs, entry.newSamplingLevel);
-            DataTracker tracker = cfs.getDataTracker();
 
-            replacedByTracker.put(tracker, sstable);
-            replacementsByTracker.put(tracker, replacement);
+        try
+        {
+            for (ResampleEntry entry : toDownsample)
+            {
+                if (isStopRequested())
+                    throw new CompactionInterruptedException(getCompactionInfo());
+
+                SSTableReader sstable = entry.sstable;
+                logger.debug("Re-sampling index summary for {} from {}/{} to {}/{} of the original number of entries",
+                             sstable, sstable.getIndexSummarySamplingLevel(), Downsampling.BASE_SAMPLING_LEVEL,
+                             entry.newSamplingLevel, Downsampling.BASE_SAMPLING_LEVEL);
+                ColumnFamilyStore cfs = Keyspace.open(sstable.getKeyspaceName()).getColumnFamilyStore(sstable.getColumnFamilyName());
+                DataTracker tracker = cfs.getDataTracker();
+                SSTableReader replacement = sstable.cloneWithNewSummarySamplingLevel(cfs, entry.newSamplingLevel);
+                newSSTables.add(replacement);
+                replacedByTracker.put(tracker, sstable);
+                replacementsByTracker.put(tracker, replacement);
+            }
         }
-
-        for (DataTracker tracker : replacedByTracker.keySet())
+        finally
         {
-            tracker.replaceWithNewInstances(replacedByTracker.get(tracker), replacementsByTracker.get(tracker));
-            newSSTables.addAll(replacementsByTracker.get(tracker));
+            for (DataTracker tracker : replacedByTracker.keySet())
+                tracker.replaceWithNewInstances(replacedByTracker.get(tracker), replacementsByTracker.get(tracker));
         }
 
         return newSSTables;
