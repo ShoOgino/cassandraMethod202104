@@ -1,7 +1,7 @@
-    private static List<SSTableReader> adjustSamplingLevels(List<SSTableReader> sstables, Map<UUID, LifecycleTransaction> transactions,
-                                                            double totalReadsPerSec, long memoryPoolCapacity) throws IOException
+    private List<SSTableReader> adjustSamplingLevels(List<SSTableReader> sstables,
+                                                     Map<UUID, LifecycleTransaction> transactions,
+                                                     double totalReadsPerSec, long memoryPoolCapacity) throws IOException
     {
-
         List<ResampleEntry> toDownsample = new ArrayList<>(sstables.size() / 4);
         List<ResampleEntry> toUpsample = new ArrayList<>(sstables.size() / 4);
         List<ResampleEntry> forceResample = new ArrayList<>();
@@ -10,9 +10,12 @@
 
         // Going from the coldest to the hottest sstables, try to give each sstable an amount of space proportional
         // to the number of total reads/sec it handles.
-        long remainingSpace = memoryPoolCapacity;
+        remainingSpace = memoryPoolCapacity;
         for (SSTableReader sstable : sstables)
         {
+            if (isStopRequested())
+                throw new CompactionInterruptedException(getCompactionInfo());
+
             int minIndexInterval = sstable.metadata.params.minIndexInterval;
             int maxIndexInterval = sstable.metadata.params.maxIndexInterval;
 
@@ -105,6 +108,9 @@
         toDownsample.addAll(forceUpsample);
         for (ResampleEntry entry : toDownsample)
         {
+            if (isStopRequested())
+                throw new CompactionInterruptedException(getCompactionInfo());
+
             SSTableReader sstable = entry.sstable;
             logger.trace("Re-sampling index summary for {} from {}/{} to {}/{} of the original number of entries",
                          sstable, sstable.getIndexSummarySamplingLevel(), Downsampling.BASE_SAMPLING_LEVEL,
