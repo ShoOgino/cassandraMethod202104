@@ -1,0 +1,61 @@
+    @Test
+    public void testClientWriterWithDroppedColumn() throws Exception
+    {
+        String KS = "cql_keyspace";
+        String TABLE = "table3";
+
+        File tempdir = Files.createTempDir();
+        File dataDir = new File(tempdir.getAbsolutePath() + File.separator + KS + File.separator + TABLE);
+        assert dataDir.mkdirs();
+
+        String schemaToDrop = "CREATE TABLE cql_keyspace.table3 ("
+                            + "  k int PRIMARY KEY,"
+                            + "  v1 text,"
+                            + "  v2 int,"
+                            + "  v3 list<int>,"
+                            + "  v4 text"
+                            + ")";
+
+        QueryProcessor.executeInternal(schemaToDrop);
+        QueryProcessor.executeInternal("ALTER TABLE cql_keyspace.table3 DROP v4");
+
+
+        String schema = "CREATE TABLE cql_keyspace.table3 ("
+                        + "  k int PRIMARY KEY,"
+                        + "  v1 text,"
+                        + "  v2 int,"
+                        + "  v3 list<int>"
+                        + ")";
+
+
+        String insert = "INSERT INTO cql_keyspace.table3 (k, v1, v2, v3) VALUES (?, ?, ?, ?)";
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .forTable(schema)
+                                                  .withPartitioner(StorageService.instance.getPartitioner())
+                                                  .using(insert).build();
+
+        writer.addRow(0, "test1", 24, Lists.newArrayList(4));
+        writer.addRow(1, "test2", null, Lists.newArrayList(4,4,5));
+        writer.addRow(2, "test3", 42, null);
+        writer.close();
+
+        BulkLoader.ExternalClient client = new BulkLoader.ExternalClient(Sets.newHashSet(FBUtilities.getLocalAddress()),
+                                                                         DatabaseDescriptor.getRpcPort(),
+                                                                         null, null, new TFramedTransportFactory(),
+                                                                         DatabaseDescriptor.getStoragePort(),
+                                                                         DatabaseDescriptor.getSSLStoragePort(), null);
+
+        SSTableLoader loader = new SSTableLoader(dataDir, client, new OutputHandler.SystemOutput(false, false));
+        
+
+        loader.stream().get();
+
+
+        CFMetaData cfMetaData = client.getCFMetaData(KS, TABLE);
+        assert cfMetaData != null;
+
+        UntypedResultSet rs = QueryProcessor.executeInternal("SELECT * FROM cql_keyspace.table3;");
+        assertEquals(3, rs.size());
+    }
+

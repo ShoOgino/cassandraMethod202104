@@ -1,0 +1,48 @@
+    @Test
+    public void testClientWriter() throws Exception
+    {
+        String KS = "cql_keyspace";
+        String TABLE = "table2";
+
+        File tempdir = Files.createTempDir();
+        File dataDir = new File(tempdir.getAbsolutePath() + File.separator + KS + File.separator + TABLE);
+        assert dataDir.mkdirs();
+
+        String schema = "CREATE TABLE cql_keyspace.table2 ("
+                        + "  k int PRIMARY KEY,"
+                        + "  v1 text,"
+                        + "  v2 int"
+                        + ")";
+
+        QueryProcessor.executeInternal(schema);
+
+        String insert = "INSERT INTO cql_keyspace.table2 (k, v1, v2) VALUES (?, ?, ?)";
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .forTable(schema)
+                                                  .withPartitioner(StorageService.instance.getPartitioner())
+                                                  .using(insert).build();
+
+        writer.addRow(0, "test1", 24);
+        writer.addRow(1, "test2", null);
+        writer.addRow(2, "test3", 42);
+        writer.addRow(ImmutableMap.<String, Object>of("k", 3, "v2", 12));
+        writer.close();
+
+        BulkLoader.ExternalClient client = new BulkLoader.ExternalClient(Sets.newHashSet(FBUtilities.getLocalAddress()),
+                                                                         DatabaseDescriptor.getRpcPort(),
+                                                                         null, null, new TFramedTransportFactory(),
+                                                                         DatabaseDescriptor.getStoragePort(),
+                                                                         DatabaseDescriptor.getSSLStoragePort(), null);
+
+
+        SSTableLoader loader = new SSTableLoader(dataDir, client, new OutputHandler.SystemOutput(false, false));
+
+
+
+        loader.stream().get();
+
+        UntypedResultSet rs = QueryProcessor.executeInternal("SELECT * FROM cql_keyspace.table2;");
+        assertEquals(4, rs.size());
+    }
+
