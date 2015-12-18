@@ -1,0 +1,36 @@
+    /**
+     * Applies the counter mutation, returns the result Mutation (for replication to other nodes).
+     *
+     * 1. Grabs the striped cell-level locks in the proper order
+     * 2. Gets the current values of the counters-to-be-modified from the counter cache
+     * 3. Reads the rest of the current values (cache misses) from the CF
+     * 4. Writes the updated counter values
+     * 5. Updates the counter cache
+     * 6. Releases the lock(s)
+     *
+     * See CASSANDRA-4775 and CASSANDRA-6504 for further details.
+     *
+     * @return the applied resulting Mutation
+     */
+    public Mutation applyCounterMutation() throws WriteTimeoutException
+    {
+        Mutation result = new Mutation(getKeyspaceName(), key());
+        Keyspace keyspace = Keyspace.open(getKeyspaceName());
+
+        List<Lock> locks = new ArrayList<>();
+        Tracing.trace("Acquiring counter locks");
+        try
+        {
+            grabCounterLocks(keyspace, locks);
+            for (PartitionUpdate upd : getPartitionUpdates())
+                result.add(processModifications(upd));
+            result.apply();
+            return result;
+        }
+        finally
+        {
+            for (Lock lock : locks)
+                lock.unlock();
+        }
+    }
+
