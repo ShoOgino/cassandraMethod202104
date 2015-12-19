@@ -1,0 +1,54 @@
+    @Test
+    public void testAbortTxnWithOpenEarlyShouldRemoveSSTable() throws InterruptedException
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF);
+        truncate(cfs);
+
+        File dir = cfs.getDirectories().getDirectoryForNewSSTables();
+        LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE);
+        try (SSTableWriter writer = getWriter(cfs, dir, txn))
+        {
+            for (int i = 0; i < 10000; i++)
+            {
+                UpdateBuilder builder = UpdateBuilder.create(cfs.metadata, random(i, 10)).withTimestamp(1);
+                for (int j = 0; j < 100; j++)
+                    builder.newRow("" + j).add("val", ByteBuffer.allocate(1000));
+                writer.append(builder.build().unfilteredIterator());
+            }
+
+            SSTableReader s = writer.setMaxDataAge(1000).openEarly();
+            assert s != null;
+            assertFileCounts(dir.list());
+            for (int i = 10000; i < 20000; i++)
+            {
+                UpdateBuilder builder = UpdateBuilder.create(cfs.metadata, random(i, 10)).withTimestamp(1);
+                for (int j = 0; j < 100; j++)
+                    builder.newRow("" + j).add("val", ByteBuffer.allocate(1000));
+                writer.append(builder.build().unfilteredIterator());
+            }
+            SSTableReader s2 = writer.setMaxDataAge(1000).openEarly();
+            assertTrue(s.last.compareTo(s2.last) < 0);
+            assertFileCounts(dir.list());
+            s.selfRef().release();
+            s2.selfRef().release();
+
+            int datafiles = assertFileCounts(dir.list());
+            assertEquals(datafiles, 1);
+
+            // These checks don't work on Windows because the writer has the channel still
+            // open till .abort() is called (via the builder)
+            if (!FBUtilities.isWindows())
+            {
+                LifecycleTransaction.waitForDeletions();
+                assertFileCounts(dir.list());
+            }
+            writer.abort();
+            txn.abort();
+            LifecycleTransaction.waitForDeletions();
+            datafiles = assertFileCounts(dir.list());
+            assertEquals(datafiles, 0);
+            validateCFS(cfs);
+        }
+    }
+
