@@ -1,0 +1,66 @@
+    public void testGcCompaction(TombstoneOption tombstoneOption, TombstoneOption backgroundTombstoneOption, String compactionClass) throws Throwable
+    {
+        id.set(0);
+        compactionTimeNanos = 0;
+        alterTable("ALTER TABLE %s WITH compaction = { 'class' :  '" + compactionClass + "', 'provide_overlapping_tombstones' : '" + backgroundTombstoneOption + "'  };");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.disableAutoCompaction();
+
+        long onStartTime = System.currentTimeMillis();
+        ExecutorService es = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        List<Future<?>> tasks = new ArrayList<>();
+        for (int ti = 0; ti < 1; ++ti)
+        {
+            Random rand = new Random(ti);
+            tasks.add(es.submit(() -> 
+            {
+                for (int i = 0; i < ITERS; ++i)
+                    try
+                    {
+                        pushData(rand, COUNT);
+                        deleteData(rand, COUNT / 3);
+                    }
+                    catch (Throwable e)
+                    {
+                        throw new AssertionError(e);
+                    }
+            }));
+        }
+        for (Future<?> task : tasks)
+            task.get();
+
+        flush();
+        long onEndTime = System.currentTimeMillis();
+        int startRowCount = countRows(cfs);
+        int startTombCount = countTombstoneMarkers(cfs);
+        int startRowDeletions = countRowDeletions(cfs);
+        int startTableCount = cfs.getLiveSSTables().size();
+        long startSize = SSTableReader.getTotalBytes(cfs.getLiveSSTables());
+        System.out.println();
+
+        String hashesBefore = getHashes();
+
+        long startTime = System.currentTimeMillis();
+        CompactionManager.instance.performGarbageCollection(cfs, tombstoneOption, 0);
+        long endTime = System.currentTimeMillis();
+
+        int endRowCount = countRows(cfs);
+        int endTombCount = countTombstoneMarkers(cfs);
+        int endRowDeletions = countRowDeletions(cfs);
+        int endTableCount = cfs.getLiveSSTables().size();
+        long endSize = SSTableReader.getTotalBytes(cfs.getLiveSSTables());
+
+        System.out.println(cfs.getCompactionParametersJson());
+        System.out.println(String.format("%s compactions completed in %.3fs",
+                tombstoneOption.toString(), (endTime - startTime) * 1e-3));
+        System.out.println(String.format("Operations completed in %.3fs, out of which %.3f for ongoing " + backgroundTombstoneOption + " background compactions",
+                (onEndTime - onStartTime) * 1e-3, compactionTimeNanos * 1e-9));
+        System.out.println(String.format("At start: %12d tables %12d bytes %12d rows %12d deleted rows %12d tombstone markers",
+                startTableCount, startSize, startRowCount, startRowDeletions, startTombCount));
+        System.out.println(String.format("At end:   %12d tables %12d bytes %12d rows %12d deleted rows %12d tombstone markers",
+                endTableCount, endSize, endRowCount, endRowDeletions, endTombCount));
+
+        String hashesAfter = getHashes();
+        Assert.assertEquals(hashesBefore, hashesAfter);
+    }
+

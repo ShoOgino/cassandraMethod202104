@@ -1,0 +1,32 @@
+        /**
+         * Construct an iterator that filters out data shadowed by the provided "tombstone source".
+         *
+         * @param dataSource The input row. The result is a filtered version of this.
+         * @param tombSource Tombstone source, i.e. iterator used to identify deleted data in the input row.
+         * @param nowInSec Current time, used in choosing the winner when cell expiration is involved.
+         * @param cellLevelGC If false, the iterator will only look at row-level deletion times and tombstones.
+         *                    If true, deleted or overwritten cells within a surviving row will also be removed.
+         */
+        protected GarbageSkippingUnfilteredRowIterator(UnfilteredRowIterator dataSource, UnfilteredRowIterator tombSource, int nowInSec, boolean cellLevelGC)
+        {
+            super(dataSource);
+            this.tombSource = tombSource;
+            this.nowInSec = nowInSec;
+            this.cellLevelGC = cellLevelGC;
+            metadata = dataSource.metadata();
+            cf = ColumnFilter.all(metadata);
+
+            activeDeletionTime = partitionDeletionTime = tombSource.partitionLevelDeletion();
+
+            // Only preserve partition level deletion if not shadowed. (Note: Shadowing deletion must not be copied.)
+            this.partitionLevelDeletion = dataSource.partitionLevelDeletion().supersedes(tombSource.partitionLevelDeletion()) ?
+                    dataSource.partitionLevelDeletion() :
+                    DeletionTime.LIVE;
+
+            Row dataStaticRow = garbageFilterRow(dataSource.staticRow(), tombSource.staticRow());
+            this.staticRow = dataStaticRow != null ? dataStaticRow : Rows.EMPTY_STATIC_ROW;
+
+            tombNext = advance(tombSource);
+            dataNext = advance(dataSource);
+        }
+

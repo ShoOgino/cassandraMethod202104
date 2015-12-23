@@ -1,0 +1,21 @@
+    private List<Unfiltered> compact(Iterable<List<Unfiltered>> sources, Iterable<List<Unfiltered>> tombstoneSources)
+    {
+        List<Iterable<UnfilteredRowIterator>> content = ImmutableList.copyOf(Iterables.transform(sources, list -> ImmutableList.of(listToIterator(list, kk))));
+        Map<DecoratedKey, Iterable<UnfilteredRowIterator>> transformedSources = new TreeMap<>();
+        transformedSources.put(kk, Iterables.transform(tombstoneSources, list -> listToIterator(list, kk)));
+        try (CompactionController controller = new Controller(Keyspace.openAndGetStore(metadata), transformedSources, GC_BEFORE);
+             CompactionIterator iter = new CompactionIterator(OperationType.COMPACTION,
+                                                              Lists.transform(content, x -> new Scanner(x)),
+                                                              controller, NOW, null))
+        {
+            List<Unfiltered> result = new ArrayList<>();
+            assertTrue(iter.hasNext());
+            try (UnfilteredRowIterator partition = iter.next())
+            {
+                Iterators.addAll(result, partition);
+            }
+            assertFalse(iter.hasNext());
+            return result;
+        }
+    }
+

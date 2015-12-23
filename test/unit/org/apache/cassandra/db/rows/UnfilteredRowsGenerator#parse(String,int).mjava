@@ -1,0 +1,50 @@
+    /**
+     * Constructs a list of unfiltereds with integer clustering according to the specification string.
+     *
+     * The string is a space-delimited sorted list that can contain:
+     *  * open tombstone markers, e.g. xx<[yy] where xx is the clustering, yy is the deletion time, and "<" stands for
+     *    non-inclusive (<= for inclusive).
+     *  * close tombstone markers, e.g. [yy]<=xx. Adjacent close and open markers (e.g. [yy]<=xx xx<[zz]) are combined
+     *    into boundary markers.
+     *  * empty rows, e.g. xx or xx[yy] or xx[yyDzz] where xx is the clustering, yy is the live time and zz is deletion
+     *    time.
+     *
+     * @param input Specification.
+     * @param default_liveness Liveness to use for rows if not explicitly specified.
+     * @return Parsed list.
+     */
+    public List<Unfiltered> parse(String input, int default_liveness)
+    {
+        String[] split = input.split(" ");
+        Pattern open = Pattern.compile("(\\d+)<(=)?\\[(\\d+)\\]");
+        Pattern close = Pattern.compile("\\[(\\d+)\\]<(=)?(\\d+)");
+        Pattern row = Pattern.compile("(\\d+)(\\[(\\d+)(?:D(\\d+))?\\])?");
+        List<Unfiltered> out = new ArrayList<>(split.length);
+        for (String s : split)
+        {
+            Matcher m = open.matcher(s);
+            if (m.matches())
+            {
+                out.add(openMarker(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(3)), m.group(2) != null));
+                continue;
+            }
+            m = close.matcher(s);
+            if (m.matches())
+            {
+                out.add(closeMarker(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(1)), m.group(2) != null));
+                continue;
+            }
+            m = row.matcher(s);
+            if (m.matches())
+            {
+                int live = m.group(3) != null ? Integer.parseInt(m.group(3)) : default_liveness;
+                int delTime = m.group(4) != null ? Integer.parseInt(m.group(4)) : -1;
+                out.add(emptyRowAt(Integer.parseInt(m.group(1)), live, delTime));
+                continue;
+            }
+            Assert.fail("Can't parse " + s);
+        }
+        attachBoundaries(out);
+        return out;
+    }
+
