@@ -1,0 +1,26 @@
+    @Test
+    @BMRule(name = "Greatest name in the world",
+            targetClass="HintsBufferPool",
+            targetMethod="switchCurrentBuffer",
+            targetLocation="AT INVOKE java.util.concurrent.BlockingQueue.take",
+            action="org.apache.cassandra.hints.HintsBufferPoolTest.blockedOnBackpressure = true;")
+    public void testBackpressure() throws Exception
+    {
+        Queue<HintsBuffer> returnedBuffers = new ConcurrentLinkedQueue<>();
+        HintsBufferPool pool = new HintsBufferPool(256, (buffer, p) -> returnedBuffers.offer(buffer));
+
+        Thread blocked = new Thread(() -> {
+            for (int ii = 0; ii < 512; ii++)
+                pool.write(ImmutableList.of(UUID.randomUUID()), HintsBufferTest.createHint(ii, ii));
+        });
+        blocked.start();
+
+        Util.spinAssertEquals(State.WAITING, () -> blocked.getState(), 1);
+
+        while (blocked.isAlive())
+            if (!returnedBuffers.isEmpty())
+                pool.offer(returnedBuffers.poll().recycle());
+
+        assertTrue(blockedOnBackpressure);
+    }
+
