@@ -1,0 +1,51 @@
+    /**
+     * Create, if necessary, the required encryption components (for either decrpyt or encrypt operations).
+     * Note that in the case of encyption (this is, when writing out a new hints file), we need to write
+     * the cipher's IV out to the header so it can be used when decrypting. Thus, we need to add an additional
+     * entry to the {@code params} map.
+     *
+     * @param params the base parameters into the descriptor.
+     * @return null if not using encryption; else, the initialized {@link Cipher} and a possibly updated version
+     * of the {@code params} map.
+     */
+    @SuppressWarnings("unchecked")
+    static EncryptionData createEncryption(ImmutableMap<String, Object> params)
+    {
+        if (params.containsKey(ENCRYPTION))
+        {
+            Map<?, ?> encryptionConfig = (Map<?, ?>) params.get(ENCRYPTION);
+            EncryptionContext encryptionContext = EncryptionContext.createFromMap(encryptionConfig, DatabaseDescriptor.getEncryptionContext());
+
+            try
+            {
+                Cipher cipher;
+                if (encryptionConfig.containsKey(EncryptionContext.ENCRYPTION_IV))
+                {
+                    cipher = encryptionContext.getDecryptor();
+                }
+                else
+                {
+                    cipher = encryptionContext.getEncryptor();
+                    ImmutableMap<String, Object> encParams = ImmutableMap.<String, Object>builder()
+                                                                 .putAll(encryptionContext.toHeaderParameters())
+                                                                 .put(EncryptionContext.ENCRYPTION_IV, Hex.bytesToHex(cipher.getIV()))
+                                                                 .build();
+
+                    Map<String, Object> map = new HashMap<>(params);
+                    map.put(ENCRYPTION, encParams);
+                    params = ImmutableMap.<String, Object>builder().putAll(map).build();
+                }
+                return new EncryptionData(cipher, encryptionContext.getCompressor(), params);
+            }
+            catch (IOException ioe)
+            {
+                logger.warn("failed to create encyption context for hints file. ignoring encryption for hints.", ioe);
+                return null;
+            }
+        }
+        else
+        {
+            return null;
+        }
+    }
+
