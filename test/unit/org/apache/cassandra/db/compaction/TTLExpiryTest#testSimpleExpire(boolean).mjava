@@ -1,0 +1,48 @@
+    public void testSimpleExpire(boolean force10944Bug) throws InterruptedException
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore("Standard1");
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+        // To reproduce #10944, we need our gcBefore to be equal to the locaDeletionTime. A gcGrace of 1 will (almost always) give us that.
+        cfs.metadata.gcGraceSeconds(force10944Bug ? 1 : 0);
+        long timestamp = System.currentTimeMillis();
+        String key = "ttl";
+        new RowUpdateBuilder(cfs.metadata, timestamp, 1, key)
+                        .add("col", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                        .add("col7", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                        .build()
+                        .applyUnsafe();
+
+        cfs.forceBlockingFlush();
+
+        new RowUpdateBuilder(cfs.metadata, timestamp, 1, key)
+            .add("col2", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+            .addMapEntry("col8", "bar", "foo")
+            .delete("col1")
+            .build()
+            .applyUnsafe();
+
+
+        cfs.forceBlockingFlush();
+        // To reproduce #10944, we need to avoid the optimization that get rid of full sstable because everything
+        // is known to be gcAble, so keep some data non-expiring in that case.
+        new RowUpdateBuilder(cfs.metadata, timestamp, force10944Bug ? 0 : 1, key)
+                    .add("col3", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                    .build()
+                    .applyUnsafe();
+
+
+        cfs.forceBlockingFlush();
+        new RowUpdateBuilder(cfs.metadata, timestamp, 1, key)
+                            .add("col311", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+                            .build()
+                            .applyUnsafe();
+
+
+        cfs.forceBlockingFlush();
+        Thread.sleep(2000); // wait for ttl to expire
+        assertEquals(4, cfs.getLiveSSTables().size());
+        cfs.enableAutoCompaction(true);
+        assertEquals(force10944Bug ? 1 : 0, cfs.getLiveSSTables().size());
+    }
+
