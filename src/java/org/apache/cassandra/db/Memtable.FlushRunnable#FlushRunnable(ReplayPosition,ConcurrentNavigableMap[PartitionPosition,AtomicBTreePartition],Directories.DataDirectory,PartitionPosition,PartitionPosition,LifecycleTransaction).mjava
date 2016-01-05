@@ -1,0 +1,27 @@
+        FlushRunnable(ReplayPosition context, ConcurrentNavigableMap<PartitionPosition, AtomicBTreePartition> toFlush, Directories.DataDirectory flushLocation, PartitionPosition from, PartitionPosition to, LifecycleTransaction txn)
+        {
+            this.context = context;
+            this.toFlush = toFlush;
+            this.from = from;
+            this.to = to;
+            long keySize = 0;
+            for (PartitionPosition key : toFlush.keySet())
+            {
+                //  make sure we don't write non-sensical keys
+                assert key instanceof DecoratedKey;
+                keySize += ((DecoratedKey) key).getKey().remaining();
+            }
+            estimatedSize = (long) ((keySize // index entries
+                                    + keySize // keys in data file
+                                    + liveDataSize.get()) // data
+                                    * 1.2); // bloom filter and row index overhead
+
+            this.isBatchLogTable = cfs.name.equals(SystemKeyspace.BATCHES) && cfs.keyspace.getName().equals(SystemKeyspace.NAME);
+
+            if (flushLocation == null)
+                writer = createFlushWriter(txn, cfs.getSSTablePath(getDirectories().getLocationForDisk(getDirectories().getWriteableLocation(estimatedSize))), columnsCollector.get(), statsCollector.get());
+            else
+                writer = createFlushWriter(txn, cfs.getSSTablePath(getDirectories().getLocationForDisk(flushLocation)), columnsCollector.get(), statsCollector.get());
+
+        }
+
