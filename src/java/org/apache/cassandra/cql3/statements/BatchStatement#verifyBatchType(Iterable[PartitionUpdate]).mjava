@@ -5,11 +5,21 @@
             Set<DecoratedKey> keySet = new HashSet<>();
             Set<String> tableNames = new HashSet<>();
 
+            Map<String, Collection<Range<Token>>> localTokensByKs = new HashMap<>();
+            boolean localPartitionsOnly = true;
             for (PartitionUpdate update : updates)
             {
                 keySet.add(update.partitionKey());
                 tableNames.add(String.format("%s.%s", update.metadata().ksName, update.metadata().cfName));
+
+                if (localPartitionsOnly)
+                    localPartitionsOnly &= isPartitionLocal(localTokensByKs, update);
             }
+
+            // CASSANDRA-9303: If we only have local mutations we do not warn
+            if (localPartitionsOnly)
+                return;
+
 
             NoSpamLogger.log(logger, NoSpamLogger.Level.WARN, 1, TimeUnit.MINUTES, UNLOGGED_BATCH_WARNING,
                              keySet.size(), keySet.size() == 1 ? "" : "s",
