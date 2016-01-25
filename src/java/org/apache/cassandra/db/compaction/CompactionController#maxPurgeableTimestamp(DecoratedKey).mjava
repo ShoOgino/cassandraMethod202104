@@ -2,7 +2,8 @@
      * @return the largest timestamp before which it's okay to drop tombstones for the given partition;
      * i.e., after the maxPurgeableTimestamp there may exist newer data that still needs to be suppressed
      * in other sstables.  This returns the minimum timestamp for any SSTable that contains this partition and is not
-     * participating in this compaction, or LONG.MAX_VALUE if no such SSTable exists.
+     * participating in this compaction, or memtable that contains this partition,
+     * or LONG.MAX_VALUE if no SSTable or memtable exist.
      */
     public long maxPurgeableTimestamp(DecoratedKey key)
     {
@@ -18,6 +19,13 @@
             if ((sstable.getBloomFilter() instanceof AlwaysPresentFilter && sstable.getPosition(key, SSTableReader.Operator.EQ, false) != null)
                 || sstable.getBloomFilter().isPresent(key))
                 min = Math.min(min, sstable.getMinTimestamp());
+        }
+
+        for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
+        {
+            Partition partition = memtable.getPartition(key);
+            if (partition != null)
+                min = Math.min(min, partition.stats().minTimestamp);
         }
         return min;
     }
