@@ -24,16 +24,29 @@
             AbstractAnalyzer analyzer = columnIndex.getAnalyzer();
             analyzer.reset(e.getIndexValue());
 
-            // EQ/NOT_EQ can have multiple expressions e.g. text = "Hello World",
+            // EQ/LIKE_*/NOT_EQ can have multiple expressions e.g. text = "Hello World",
             // becomes text = "Hello" OR text = "World" because "space" is always interpreted as a split point (by analyzer),
             // NOT_EQ is made an independent expression only in case of pre-existing multiple EQ expressions, or
             // if there is no EQ operations and NOT_EQ is met or a single NOT_EQ expression present,
             // in such case we know exactly that there would be no more EQ/RANGE expressions for given column
             // since NOT_EQ has the lowest priority.
-            if (e.operator() == Operator.EQ
-                    || (e.operator() == Operator.NEQ
-                       && (perColumn.size() == 0 || perColumn.size() > 1
-                           || (perColumn.size() == 1 && perColumn.get(0).getOp() == Op.NOT_EQ))))
+            boolean isMultiExpression = false;
+            switch (e.operator())
+            {
+                case EQ:
+                case LIKE_PREFIX:
+                case LIKE_SUFFIX:
+                case LIKE_CONTAINS:
+                    isMultiExpression = true;
+                    break;
+
+                case NEQ:
+                    isMultiExpression = (perColumn.size() == 0 || perColumn.size() > 1
+                                     || (perColumn.size() == 1 && perColumn.get(0).getOp() == Op.NOT_EQ));
+                    break;
+            }
+
+            if (isMultiExpression)
             {
                 while (analyzer.hasNext())
                 {
