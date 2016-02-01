@@ -18,16 +18,19 @@
         try
         {
             if (message.version < MessagingService.VERSION_30 && LegacyBatchlogMigrator.isLegacyBatchlogMutation(message.payload))
+            {
                 LegacyBatchlogMigrator.handleLegacyMutation(message.payload);
+                reply(id, replyTo);
+            }
             else
-                message.payload.apply();
-
-            Tracing.trace("Enqueuing response to {}", replyTo);
-            MessagingService.instance().sendReply(WriteResponse.createMessage(), id, replyTo);
+                message.payload.applyFuture().thenAccept(o -> reply(id, replyTo)).exceptionally(wto -> {
+                    failed();
+                    return null;
+                });
         }
         catch (WriteTimeoutException wto)
         {
-            Tracing.trace("Payload application resulted in WriteTimeout, not replying");
+            failed();
         }
     }
 
