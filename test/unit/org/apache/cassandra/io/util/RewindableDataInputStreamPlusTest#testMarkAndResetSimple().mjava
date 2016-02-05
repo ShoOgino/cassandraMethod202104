@@ -1,0 +1,106 @@
+    @Test
+    public void testMarkAndResetSimple() throws Exception
+    {
+        byte[] testData;
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(baos))
+        {
+            // boolean
+            out.writeBoolean(true);
+            // byte
+            out.writeByte(0x1);
+            // char
+            out.writeChar('a');
+            // short
+            out.writeShort(1);
+            // int
+            out.writeInt(1);
+            // long
+            out.writeLong(1L);
+            // float
+            out.writeFloat(1.0f);
+            // double
+            out.writeDouble(1.0d);
+
+            // String
+            out.writeUTF("abc");
+            testData = baos.toByteArray();
+        }
+
+        for (int memCapacity = 0; memCapacity <= 16; memCapacity++)
+        {
+            int diskCapacity = 16 - memCapacity;
+            try (RewindableDataInputStreamPlus reader = new RewindableDataInputStreamPlus(new ByteArrayInputStream(testData),
+                                                                                          INITIAL_BUFFER_SIZE, memCapacity, file,
+                                                                                          diskCapacity))
+            {
+                try {
+                    //should mark before resetting
+                    reader.reset(null);
+                    fail("Should have thrown IOException");
+                } catch (IOException e) {}
+
+                assertTrue(reader.readBoolean());
+
+                reader.mark();
+
+                try {
+                    //cannot mark already marked stream
+                    reader.mark();
+                    fail("Should have thrown IllegalStateException");
+                } catch (IllegalStateException e) {}
+
+                assertEquals(0x1, reader.readByte());
+                assertEquals('a', reader.readChar());
+                assertEquals(3, reader.bytesPastMark(null));
+                reader.reset(null);
+
+                try {
+                    //cannot mark when reading from cache
+                    reader.mark();
+                    fail("Should have thrown IllegalStateException");
+                } catch (IllegalStateException e) {}
+
+                //read again previous sequence
+                assertEquals(0x1, reader.readByte());
+                assertEquals('a', reader.readChar());
+                //finish reading again previous sequence
+                assertEquals(1, reader.readShort());
+
+                reader.mark();
+                assertEquals(1, reader.readInt());
+                assertEquals(1L, reader.readLong());
+                assertEquals(1.0f, reader.readFloat(), 0);
+                assertEquals(16, reader.bytesPastMark(null));
+                reader.reset(null);
+
+                //read again previous sequence
+                assertEquals(1, reader.readInt());
+                assertEquals(1L, reader.readLong());
+                assertEquals(1.0f, reader.readFloat(), 0);
+                //finish reading again previous sequence
+
+                //mark again
+                reader.mark();
+                assertEquals(1.0d, reader.readDouble(), 0);
+                assertEquals(8, reader.bytesPastMark(null));
+                reader.reset(null);
+
+                //read again previous sequence
+                assertEquals(1.0d, reader.readDouble(), 0);
+                //finish reading again previous sequence
+
+                //mark and reset
+                reader.mark();
+                reader.reset(null);
+
+                assertEquals("abc", reader.readUTF());
+
+                //check max file size
+                assertEquals(diskCapacity, file.length());
+            }
+            assertFalse(file.exists());
+        }
+    }
+
