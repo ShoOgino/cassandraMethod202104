@@ -1,0 +1,37 @@
+    /**
+     * A callback for handling timeouts when creating a connection/negotiating the handshake.
+     * <p>
+     * Note: this method is *not* invoked from the netty event loop,
+     * so there's an inherent race with {@link #finishHandshake(HandshakeResult)},
+     * as well as any possible connect() reattempts (a seemingly remote race condition, however).
+     * Therefore, this function tries to lose any races, as much as possible.
+     *
+     * @return true if there was a timeout on the connect/handshake; else false.
+     */
+    boolean connectionTimeout(ChannelFuture channelFuture)
+    {
+        if (connectionRetryFuture != null)
+        {
+            connectionRetryFuture.cancel(false);
+            connectionRetryFuture = null;
+        }
+        connectAttemptCount = 0;
+        State initialState = state.get();
+        if (initialState == State.CLOSED)
+            return true;
+
+        if (initialState != State.READY)
+        {
+            logger.debug("timed out while trying to connect to {}", connectionId);
+
+            channelFuture.channel().close();
+            // a last-ditch attempt to let finishHandshake() win the race
+            if (state.compareAndSet(initialState, State.NOT_READY))
+            {
+                backlog.clear();
+                return true;
+            }
+        }
+        return false;
+    }
+

@@ -1,0 +1,29 @@
+    private void close(boolean softClose)
+    {
+        int count = 32;
+        for (int i = 0; i < count; i++)
+            omc.addToBacklog(new QueuedMessage(new MessageOut<>(ECHO), i));
+        Assert.assertEquals(count, omc.backlogSize());
+        Assert.assertEquals(count, omc.getPendingMessages().intValue());
+
+        ScheduledFuture<?> connectionTimeoutFuture = new TestScheduledFuture();
+        Assert.assertFalse(connectionTimeoutFuture.isCancelled());
+        omc.setConnectionTimeoutFuture(connectionTimeoutFuture);
+        ChannelWriter channelWriter = ChannelWriter.create(channel, omc::handleMessageResult, Optional.empty());
+        omc.setChannelWriter(channelWriter);
+
+        omc.close(softClose);
+        Assert.assertFalse(channel.isActive());
+        Assert.assertEquals(State.CLOSED, omc.getState());
+        Assert.assertEquals(0, omc.backlogSize());
+        Assert.assertEquals(0, omc.getPendingMessages().intValue());
+        int sentMessages = channel.outboundMessages().size();
+
+        if (softClose)
+            Assert.assertTrue(count <= sentMessages);
+        else
+            Assert.assertEquals(0, sentMessages);
+        Assert.assertTrue(connectionTimeoutFuture.isCancelled());
+        Assert.assertTrue(channelWriter.isClosed());
+    }
+

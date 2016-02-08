@@ -1,0 +1,38 @@
+    @Test
+    public void handshake_HappyPath()
+    {
+        // beacuse both CHH & SHH are ChannelInboundHandlers, we can't use the same EmbeddedChannel to handle them
+        InboundHandshakeHandler inboundHandshakeHandler = new InboundHandshakeHandler(new TestAuthenticator(true));
+        EmbeddedChannel inboundChannel = new EmbeddedChannel(inboundHandshakeHandler);
+
+        OutboundMessagingConnection imc = new OutboundMessagingConnection(connectionId, null, Optional.empty(), new AllowAllInternodeAuthenticator());
+        OutboundConnectionParams params = OutboundConnectionParams.builder()
+                                                                  .connectionId(connectionId)
+                                                                  .callback(imc::finishHandshake)
+                                                                  .mode(NettyFactory.Mode.MESSAGING)
+                                                                  .protocolVersion(MessagingService.current_version)
+                                                                  .coalescingStrategy(Optional.empty())
+                                                                  .build();
+        OutboundHandshakeHandler outboundHandshakeHandler = new OutboundHandshakeHandler(params);
+        EmbeddedChannel outboundChannel = new EmbeddedChannel(outboundHandshakeHandler);
+        Assert.assertEquals(1, outboundChannel.outboundMessages().size());
+
+        // move internode protocol Msg1 to the server's channel
+        Object o;
+        while ((o = outboundChannel.readOutbound()) != null)
+            inboundChannel.writeInbound(o);
+            Assert.assertEquals(1, inboundChannel.outboundMessages().size());
+
+        // move internode protocol Msg2 to the client's channel
+        while ((o = inboundChannel.readOutbound()) != null)
+            outboundChannel.writeInbound(o);
+        Assert.assertEquals(1, outboundChannel.outboundMessages().size());
+
+        // move internode protocol Msg3 to the server's channel
+        while ((o = outboundChannel.readOutbound()) != null)
+            inboundChannel.writeInbound(o);
+
+        Assert.assertEquals(READY, imc.getState());
+        Assert.assertEquals(MESSAGING_HANDSHAKE_COMPLETE, inboundHandshakeHandler.getState());
+    }
+

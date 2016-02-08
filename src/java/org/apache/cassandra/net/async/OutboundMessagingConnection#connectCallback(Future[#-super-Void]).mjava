@@ -1,0 +1,48 @@
+    /**
+     * Handles the callback of the TCP connection attempt (not including the handshake negotiation!), and really all
+     * we're handling here is the TCP connection failures. On failure, we close the channel (which should disconnect
+     * the socket, if connected). If there was an {@link IOException} while trying to connect, the connection will be
+     * retried after a short delay.
+     * <p>
+     * This method does not alter the {@link #state} as it's only evaluating the TCP connect, not TCP connect and handshake.
+     * Thus, {@link #finishHandshake(HandshakeResult)} will handle any necessary state updates.
+     * <p>
+     * Note: this method is called from the event loop, so be careful wrt thread visibility
+     *
+     * @return true iff the TCP connection was established and the {@link #state} is not {@link State#CLOSED}; else false.
+     */
+    @VisibleForTesting
+    boolean connectCallback(Future<? super Void> future)
+    {
+        ChannelFuture channelFuture = (ChannelFuture)future;
+
+        // make sure this instance is not (terminally) closed
+        if (state.get() == State.CLOSED)
+        {
+            channelFuture.channel().close();
+            return false;
+        }
+
+        // this is the success state
+        final Throwable cause = future.cause();
+        if (cause == null)
+        {
+            connectAttemptCount = 0;
+            return true;
+        }
+
+        setStateIfNotClosed(state, State.NOT_READY);
+        if (cause instanceof IOException)
+        {
+            logger.trace("unable to connect on attempt {} to {}", connectAttemptCount, connectionId, cause);
+            connectAttemptCount++;
+            connectionRetryFuture = scheduledExecutor.schedule(this::connect, OPEN_RETRY_DELAY_MS * connectAttemptCount, TimeUnit.MILLISECONDS);
+        }
+        else
+        {
+            JVMStabilityInspector.inspectThrowable(cause);
+            logger.error("non-IO error attempting to connect to {}", connectionId, cause);
+        }
+        return false;
+    }
+

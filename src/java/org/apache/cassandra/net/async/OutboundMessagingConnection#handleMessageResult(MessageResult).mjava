@@ -1,0 +1,57 @@
+    /**
+     * Handles the result of each message sent.
+     *
+     * Note: this function is expected to be invoked on the netty event loop. Also, do not retain any state from
+     * the input {@code messageResult}.
+     */
+    void handleMessageResult(MessageResult messageResult)
+    {
+        completedMessageCount.incrementAndGet();
+
+        // checking the cause() is an optimized way to tell if the operation was successful (as the cause will be null)
+        // Note that ExpiredException is just a marker for timeout-ed message we're dropping, but as we already
+        // incremented the dropped message count in MessageOutHandler, we have nothing to do.
+        Throwable cause = messageResult.future.cause();
+        if (cause == null)
+            return;
+
+        if (cause instanceof ExpiredException)
+        {
+            droppedMessageCount.incrementAndGet();
+            return;
+        }
+
+        JVMStabilityInspector.inspectThrowable(cause);
+
+        if (cause instanceof IOException || cause.getCause() instanceof IOException)
+        {
+            ChannelWriter writer = messageResult.writer;
+            if (writer.shouldPurgeBacklog())
+                purgeBacklog();
+
+            // This writer needs to be closed and we need to trigger a reconnection. We really only want to do that
+            // once for this channel however (and again, no race because we're on the netty event loop).
+            if (!writer.isClosed() && messageResult.allowReconnect)
+            {
+                reconnect();
+                writer.close();
+            }
+
+            QueuedMessage msg = messageResult.msg;
+            if (msg != null && msg.shouldRetry())
+            {
+                sendMessage(msg.createRetry());
+            }
+        }
+        else if (messageResult.future.isCancelled())
+        {
+            // Someone cancelled the future, which we assume meant it doesn't want the message to be sent if it hasn't
+            // yet. Just ignore.
+        }
+        else
+        {
+            // Non IO exceptions are likely a programming error so let's not silence them
+            logger.error("Unexpected error writing on " + connectionId, cause);
+        }
+    }
+

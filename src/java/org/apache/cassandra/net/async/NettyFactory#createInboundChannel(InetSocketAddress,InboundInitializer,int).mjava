@@ -1,0 +1,56 @@
+    /**
+     * Create a {@link Channel} that listens on the {@code localAddr}. This method will block while trying to bind to the address,
+     * but it does not make a remote call.
+     */
+    public Channel createInboundChannel(InetSocketAddress localAddr, InboundInitializer initializer, int receiveBufferSize) throws ConfigurationException
+    {
+        String nic = FBUtilities.getNetworkInterface(localAddr.getAddress());
+        logger.info("Starting Messaging Service on {} {}, encryption: {}",
+                    localAddr, nic == null ? "" : String.format(" (%s)", nic), encryptionLogStatement(initializer.encryptionOptions));
+        Class<? extends ServerChannel> transport = useEpoll ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
+        ServerBootstrap bootstrap = new ServerBootstrap().group(acceptGroup, inboundGroup)
+                                                         .channel(transport)
+                                                         .option(ChannelOption.SO_BACKLOG, 500)
+                                                         .childOption(ChannelOption.SO_KEEPALIVE, true)
+                                                         .childOption(ChannelOption.TCP_NODELAY, true)
+                                                         .childOption(ChannelOption.SO_REUSEADDR, true)
+                                                         .childOption(ChannelOption.SO_SNDBUF, INBOUND_CHANNEL_SEND_BUFFER_SIZE)
+                                                         .childHandler(initializer);
+
+        if (receiveBufferSize > 0)
+            bootstrap.childOption(ChannelOption.SO_RCVBUF, receiveBufferSize);
+
+        ChannelFuture channelFuture = bootstrap.bind(localAddr);
+
+        if (!channelFuture.awaitUninterruptibly().isSuccess())
+        {
+            if (channelFuture.channel().isOpen())
+                channelFuture.channel().close();
+
+            Throwable failedChannelCause = channelFuture.cause();
+
+            String causeString = "";
+            if (failedChannelCause != null && failedChannelCause.getMessage() != null)
+                causeString = failedChannelCause.getMessage();
+
+            if (causeString.contains("in use"))
+            {
+                throw new ConfigurationException(localAddr + " is in use by another process.  Change listen_address:storage_port " +
+                                                 "in cassandra.yaml to values that do not conflict with other services");
+            }
+            // looking at the jdk source, solaris/windows bind failue messages both use the phrase "cannot assign requested address".
+            // windows message uses "Cannot" (with a capital 'C'), and solaris (a/k/a *nux) doe not. hence we search for "annot" <sigh>
+            else if (causeString.contains("annot assign requested address"))
+            {
+                throw new ConfigurationException("Unable to bind to address " + localAddr
+                                                 + ". Set listen_address in cassandra.yaml to an interface you can bind to, e.g., your private IP address on EC2");
+            }
+            else
+            {
+                throw new ConfigurationException("failed to bind to: " + localAddr, failedChannelCause);
+            }
+        }
+
+        return channelFuture.channel();
+    }
+

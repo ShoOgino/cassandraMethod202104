@@ -1,0 +1,32 @@
+    private boolean tryConnect()
+    {
+        if (state.get() != State.CREATING_CHANNEL)
+                return false;
+
+        logger.debug("connection attempt {} to {}", connectAttemptCount, connectionId);
+
+
+        InetSocketAddress remote = connectionId.remoteAddress();
+        if (!authenticator.authenticate(remote.getAddress(), remote.getPort()))
+        {
+            logger.warn("Internode auth failed connecting to {}", connectionId);
+            //Remove the connection pool and other thread so messages aren't queued
+            MessagingService.instance().destroyConnectionPool(remote.getAddress());
+
+            // don't update the state field as destroyConnectionPool() *should* call OMC.close()
+            // on all the connections in the OMP for the remoteAddress
+            return false;
+        }
+
+        boolean compress = shouldCompressConnection(connectionId.local(), connectionId.remote());
+        Bootstrap bootstrap = buildBootstrap(compress);
+
+        ChannelFuture connectFuture = bootstrap.connect();
+        connectFuture.addListener(this::connectCallback);
+
+        long timeout = Math.max(MINIMUM_CONNECT_TIMEOUT_MS, DatabaseDescriptor.getRpcTimeout());
+        if (connectionTimeoutFuture == null || connectionTimeoutFuture.isDone())
+            connectionTimeoutFuture = scheduledExecutor.schedule(() -> connectionTimeout(connectFuture), timeout, TimeUnit.MILLISECONDS);
+        return true;
+    }
+

@@ -1,0 +1,34 @@
+        public void initChannel(SocketChannel channel) throws Exception
+        {
+            ChannelPipeline pipeline = channel.pipeline();
+
+            // order of handlers: ssl -> logger -> handshakeHandler
+            if (params.encryptionOptions != null)
+            {
+                SslContext sslContext = SSLFactory.getSslContext(params.encryptionOptions, true, false);
+
+                final SslHandler sslHandler;
+                if (params.encryptionOptions.require_endpoint_verification)
+                {
+                    InetSocketAddress peer = params.connectionId.remoteAddress();
+                    sslHandler = sslContext.newHandler(channel.alloc(), peer.getHostString(), peer.getPort());
+                    SSLEngine engine = sslHandler.engine();
+                    SSLParameters sslParameters = engine.getSSLParameters();
+                    sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+                    engine.setSSLParameters(sslParameters);
+                }
+                else
+                {
+                    sslHandler = sslContext.newHandler(channel.alloc());
+                }
+
+                logger.trace("creating outbound netty SslContext: context={}, engine={}", sslContext.getClass().getName(), sslHandler.engine().getClass().getName());
+                pipeline.addFirst(SSL_CHANNEL_HANDLER_NAME, sslHandler);
+            }
+
+            if (NettyFactory.WIRETRACE)
+                pipeline.addLast("logger", new LoggingHandler(LogLevel.INFO));
+
+            pipeline.addLast(HANDSHAKE_HANDLER_NAME, new OutboundHandshakeHandler(params));
+        }
+

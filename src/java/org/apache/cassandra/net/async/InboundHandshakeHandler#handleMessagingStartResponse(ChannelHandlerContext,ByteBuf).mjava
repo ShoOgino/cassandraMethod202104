@@ -1,0 +1,35 @@
+    /**
+     * Handles the third (and last) message in the internode messaging handshake protocol. Grabs the protocol version and
+     * IP addr the peer wants to use.
+     */
+    @VisibleForTesting
+    State handleMessagingStartResponse(ChannelHandlerContext ctx, ByteBuf in) throws IOException
+    {
+        ThirdHandshakeMessage msg = ThirdHandshakeMessage.maybeDecode(in);
+        if (msg == null)
+            return State.AWAIT_MESSAGING_START_RESPONSE;
+
+        logger.trace("received third handshake message from peer {}, message = {}", ctx.channel().remoteAddress(), msg);
+        if (handshakeTimeout != null)
+        {
+            handshakeTimeout.cancel(false);
+            handshakeTimeout = null;
+        }
+
+        int maxVersion = msg.messagingVersion;
+        if (maxVersion > MessagingService.current_version)
+        {
+            logger.error("peer wants to use a messaging version higher ({}) than what this node supports ({})", maxVersion, MessagingService.current_version);
+            ctx.close();
+            return State.HANDSHAKE_FAIL;
+        }
+
+        // record the (true) version of the endpoint
+        InetAddress from = msg.address;
+        MessagingService.instance().setVersion(from, maxVersion);
+        logger.trace("Set version for {} to {} (will use {})", from, maxVersion, MessagingService.instance().getVersion(from));
+
+        setupMessagingPipeline(ctx.pipeline(), from, compressed, version);
+        return State.MESSAGING_HANDSHAKE_COMPLETE;
+    }
+

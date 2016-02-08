@@ -1,0 +1,24 @@
+    /**
+     * Writes a message to this {@link ChannelWriter} if the channel is writable.
+     * <p>
+     * We always want to write to the channel *unless* it's not writable yet still open.
+     * If the channel is closed, the promise will be notifed as a fail (due to channel closed),
+     * and let the handler ({@link #handleMessageFuture(Future, QueuedMessage, boolean)})
+     * do the reconnect magic/dance. Thus we simplify when to reconnect by not burdening the (concurrent) callers
+     * of this method, and instead keep it all in the future handler/event loop (which is single threaded).
+     *
+     * @param message the message to write/send.
+     * @param checkWritability a flag to indicate if the status of the channel should be checked before passing
+     * the message on to the {@link #channel}.
+     * @return true if the message was written to the channel; else, false.
+     */
+    boolean write(QueuedMessage message, boolean checkWritability)
+    {
+        if ( (checkWritability && (channel.isWritable()) || !channel.isOpen()) || !checkWritability)
+        {
+            write0(message).addListener(f -> handleMessageFuture(f, message, true));
+            return true;
+        }
+        return false;
+    }
+

@@ -1,5 +1,40 @@
-    public static CoalescingStrategy newCoalescingStrategy(String strategy, int coalesceWindow, Logger logger, String displayName)
+    public static Optional<CoalescingStrategy> newCoalescingStrategy(String strategy, int coalesceWindow, Logger logger, String displayName)
     {
-        return newCoalescingStrategy(strategy, coalesceWindow, PARKER, logger, displayName);
+        String strategyCleaned = strategy.trim().toUpperCase(Locale.ENGLISH);
+
+        try
+        {
+            switch (Enum.valueOf(Strategy.class, strategyCleaned))
+            {
+                case MOVINGAVERAGE:
+                    return Optional.of(new MovingAverageCoalescingStrategy(coalesceWindow, logger, displayName));
+                case FIXED:
+                    return Optional.of(new FixedCoalescingStrategy(coalesceWindow, logger, displayName));
+                case TIMEHORIZON:
+                    long initialEpoch = System.nanoTime();
+                    return Optional.of(new TimeHorizonMovingAverageCoalescingStrategy(coalesceWindow, logger, displayName, initialEpoch));
+                case DISABLED:
+                    return Optional.empty();
+                default:
+                    throw new IllegalArgumentException("supported coalese strategy");
+            }
+        }
+        catch (IllegalArgumentException iae)
+        {
+            try
+            {
+                Class<?> clazz = Class.forName(strategy);
+
+                if (!CoalescingStrategy.class.isAssignableFrom(clazz))
+                    throw new RuntimeException(strategy + " is not an instance of CoalescingStrategy");
+
+                Constructor<?> constructor = clazz.getConstructor(int.class, Logger.class, String.class);
+                return Optional.of((CoalescingStrategy)constructor.newInstance(coalesceWindow, logger, displayName));
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
     }
 

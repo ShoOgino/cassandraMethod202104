@@ -1,0 +1,33 @@
+    @Test
+    public void decode_WithHalfReceivedParameters() throws Exception
+    {
+        MessageOut msgOut = new MessageOut(MessagingService.Verb.ECHO);
+        msgOut = msgOut.withParameter("p3", "val1".getBytes(Charsets.UTF_8));
+
+        serialize(msgOut);
+
+        // move the write index pointer back a few bytes to simulate like the full bytes are not present.
+        // yeah, it's lame, but it tests the basics of what is happening during the deserialiization
+        int originalWriterIndex = buf.writerIndex();
+        buf.writerIndex(originalWriterIndex - 6);
+
+        MessageInWrapper wrapper = new MessageInWrapper();
+        MessageInHandler handler = new MessageInHandler(addr.getAddress(), MSG_VERSION, wrapper.messageConsumer);
+        List<Object> out = new ArrayList<>();
+        handler.decode(null, buf, out);
+
+        Assert.assertNull(wrapper.messageIn);
+
+        MessageHeader header = handler.getMessageHeader();
+        Assert.assertEquals(MSG_ID, header.messageId);
+        Assert.assertEquals(msgOut.verb, header.verb);
+        Assert.assertEquals(msgOut.from, header.from);
+        Assert.assertTrue(out.isEmpty());
+
+        // now, set the writer index back to the original value to pretend that we actually got more bytes in
+        buf.writerIndex(originalWriterIndex);
+        handler.decode(null, buf, out);
+        Assert.assertNotNull(wrapper.messageIn);
+        Assert.assertTrue(out.isEmpty());
+    }
+

@@ -1,0 +1,27 @@
+    @VisibleForTesting
+    OutboundMessagingConnection(OutboundConnectionIdentifier connectionId,
+                                ServerEncryptionOptions encryptionOptions,
+                                Optional<CoalescingStrategy> coalescingStrategy,
+                                IInternodeAuthenticator authenticator,
+                                ScheduledExecutorService sceduledExecutor)
+    {
+        this.connectionId = connectionId;
+        this.encryptionOptions = encryptionOptions;
+        this.authenticator = authenticator;
+        backlog = new ConcurrentLinkedQueue<>();
+        droppedMessageCount = new AtomicLong(0);
+        completedMessageCount = new AtomicLong(0);
+        state = new AtomicReference<>(State.NOT_READY);
+        this.scheduledExecutor = sceduledExecutor;
+        this.coalescingStrategy = coalescingStrategy;
+
+        // We want to use the most precise protocol version we know because while there is version detection on connect(),
+        // the target version might be accessed by the pool (in getConnection()) before we actually connect (as we
+        // only connect when the first message is submitted). Note however that the only case where we'll connect
+        // without knowing the true version of a node is if that node is a seed (otherwise, we can't know a node
+        // unless it has been gossiped to us or it has connected to us, and in both cases that will set the version).
+        // In that case we won't rely on that targetVersion before we're actually connected and so the version
+        // detection in connect() will do its job.
+        targetVersion = MessagingService.instance().getVersion(connectionId.remote());
+    }
+

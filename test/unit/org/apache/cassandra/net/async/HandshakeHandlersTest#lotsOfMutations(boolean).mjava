@@ -1,0 +1,43 @@
+    private void lotsOfMutations(boolean compress)
+    {
+        TestChannels channels = buildChannels(compress);
+        EmbeddedChannel outboundChannel = channels.outboundChannel;
+        EmbeddedChannel inboundChannel = channels.inboundChannel;
+
+        // now the actual test!
+        ByteBuffer buf = ByteBuffer.allocate(1 << 10);
+        byte[] bytes = "ThisIsA16CharStr".getBytes();
+        while (buf.remaining() > 0)
+            buf.put(bytes);
+
+        // write a bunch of messages to the channel
+        ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
+        int count = 1024;
+        for (int i = 0; i < count; i++)
+        {
+            if (i % 2 == 0)
+            {
+                Mutation mutation = new RowUpdateBuilder(cfs1.metadata.get(), 0, "k")
+                                    .clustering("bytes")
+                                    .add("val", buf)
+                                    .build();
+
+                QueuedMessage msg = new QueuedMessage(mutation.createMessage(), i);
+                outboundChannel.writeAndFlush(msg);
+            }
+            else
+            {
+                outboundChannel.writeAndFlush(new QueuedMessage(new MessageOut<>(MessagingService.Verb.ECHO), i));
+            }
+        }
+        outboundChannel.flush();
+
+        // move the messages to the other channel
+        Object o;
+        while ((o = outboundChannel.readOutbound()) != null)
+            inboundChannel.writeInbound(o);
+
+        Assert.assertTrue(outboundChannel.outboundMessages().isEmpty());
+        Assert.assertFalse(inboundChannel.finishAndReleaseAll());
+    }
+
