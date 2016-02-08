@@ -4,22 +4,29 @@
      * Returns a task for the compaction strategy that needs it the most (most estimated remaining tasks)
      *
      */
-    public synchronized AbstractCompactionTask getNextBackgroundTask(int gcBefore)
+    public AbstractCompactionTask getNextBackgroundTask(int gcBefore)
     {
         if (!isEnabled())
             return null;
 
         maybeReload(cfs.metadata);
-
-        List<AbstractCompactionStrategy> strategies = new ArrayList<>(repaired.size() + unrepaired.size());
-        strategies.addAll(repaired);
-        strategies.addAll(unrepaired);
-        Collections.sort(strategies, (o1, o2) -> Ints.compare(o2.getEstimatedRemainingTasks(), o1.getEstimatedRemainingTasks()));
-        for (AbstractCompactionStrategy strategy : strategies)
+        List<AbstractCompactionStrategy> strategies = new ArrayList<>();
+        readLock.lock();
+        try
         {
-            AbstractCompactionTask task = strategy.getNextBackgroundTask(gcBefore);
-            if (task != null)
-                return task;
+            strategies.addAll(repaired);
+            strategies.addAll(unrepaired);
+            Collections.sort(strategies, (o1, o2) -> Ints.compare(o2.getEstimatedRemainingTasks(), o1.getEstimatedRemainingTasks()));
+            for (AbstractCompactionStrategy strategy : strategies)
+            {
+                AbstractCompactionTask task = strategy.getNextBackgroundTask(gcBefore);
+                if (task != null)
+                    return task;
+            }
+        }
+        finally
+        {
+            readLock.unlock();
         }
         return null;
     }
