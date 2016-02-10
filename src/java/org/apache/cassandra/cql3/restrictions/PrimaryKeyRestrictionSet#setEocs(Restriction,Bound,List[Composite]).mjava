@@ -1,0 +1,48 @@
+    /**
+     * Sets EOCs for the composites returned by the specified slice restriction for the given bound.
+     *
+     * @param r the slice restriction
+     * @param bound the bound
+     * @param composites the composites
+     * @return the composites with their EOCs properly set
+     */
+    private List<Composite> setEocs(Restriction r, Bound bound, List<Composite> composites)
+    {
+        List<Composite> list = new ArrayList<>(composites.size());
+
+        // The first column of the slice might not be the first clustering column (e.g. clustering_0 = ? AND (clustering_1, clustering_2) >= (?, ?)
+        int offset = r.getFirstColumn().position();
+
+        for (int i = 0, m = composites.size(); i < m; i++)
+        {
+            Composite composite = composites.get(i);
+
+            // Handle the no bound case
+            if (composite.size() == offset)
+            {
+                list.add(composite.withEOC(bound.isEnd() ? EOC.END : EOC.START));
+                continue;
+            }
+
+            // In the case of mixed order columns, we will have some extra slices where the columns change directions.
+            // For example: if we have clustering_0 DESC and clustering_1 ASC a slice like (clustering_0, clustering_1) > (1, 2)
+            // will produce 2 slices: [EMPTY, 1.START] and [1.2.END, 1.END]
+            // So, the END bound will return 2 composite with the same values 1
+            if (composite.size() <= r.getLastColumn().position() && i < m - 1 && composite.equals(composites.get(i + 1)))
+            {
+                list.add(composite.withEOC(EOC.START));
+                list.add(composites.get(i++).withEOC(EOC.END));
+                continue;
+            }
+
+            // Handle the normal bounds
+            ColumnDefinition column = r.getColumnDefs().get(composite.size() - 1 - offset);
+            Bound b = reverseBoundIfNeeded(column, bound);
+
+            Composite.EOC eoc = eocFor(r, bound, b);
+            list.add(composite.withEOC(eoc));
+        }
+
+        return list;
+    }
+
