@@ -1,0 +1,66 @@
+    private void serializeRow(Row row)
+    {
+        try
+        {
+            json.writeStartObject();
+            String rowType = row.isStatic() ? "static_block" : "row";
+            json.writeFieldName("type");
+            json.writeString(rowType);
+            json.writeNumberField("position", this.currentPosition);
+
+            // Only print clustering information for non-static rows.
+            if (!row.isStatic())
+            {
+                serializeClustering(row.clustering());
+            }
+
+            LivenessInfo liveInfo = row.primaryKeyLivenessInfo();
+            if (!liveInfo.isEmpty())
+            {
+                objectIndenter.setCompact(false);
+                json.writeFieldName("liveness_info");
+                objectIndenter.setCompact(true);
+                json.writeStartObject();
+                json.writeFieldName("tstamp");
+                json.writeNumber(liveInfo.timestamp());
+                if (liveInfo.isExpiring())
+                {
+                    json.writeFieldName("ttl");
+                    json.writeNumber(liveInfo.ttl());
+                    json.writeFieldName("expires_at");
+                    json.writeNumber(liveInfo.localExpirationTime());
+                    json.writeFieldName("expired");
+                    json.writeBoolean(liveInfo.localExpirationTime() < (System.currentTimeMillis() / 1000));
+                }
+                json.writeEndObject();
+                objectIndenter.setCompact(false);
+            }
+
+            // If this is a deletion, indicate that, otherwise write cells.
+            if (!row.deletion().isLive())
+            {
+                json.writeFieldName("deletion_info");
+                objectIndenter.setCompact(true);
+                json.writeStartObject();
+                json.writeFieldName("deletion_time");
+                json.writeNumber(row.deletion().time().markedForDeleteAt());
+                json.writeFieldName("tstamp");
+                json.writeNumber(row.deletion().time().localDeletionTime());
+                json.writeEndObject();
+                objectIndenter.setCompact(false);
+            }
+            else
+            {
+                json.writeFieldName("cells");
+                json.writeStartArray();
+                row.cells().forEach(c -> serializeCell(c, liveInfo));
+                json.writeEndArray();
+            }
+            json.writeEndObject();
+        }
+        catch (IOException e)
+        {
+            logger.error("Fatal error parsing row.", e);
+        }
+    }
+
