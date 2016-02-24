@@ -1,0 +1,107 @@
+    /**
+     * Given arguments specifying an SSTable, and optionally an output file, export the contents of the SSTable to JSON.
+     *
+     * @param args
+     *            command lines arguments
+     * @throws ConfigurationException
+     *             on configuration failure (wrong params given)
+     */
+    public static void main(String[] args) throws ConfigurationException
+    {
+        CommandLineParser parser = new PosixParser();
+        try
+        {
+            cmd = parser.parse(options, args);
+        }
+        catch (ParseException e1)
+        {
+            System.err.println(e1.getMessage());
+            printUsage();
+            System.exit(1);
+        }
+
+        if (cmd.getArgs().length != 1)
+        {
+            System.err.println("You must supply exactly one sstable");
+            printUsage();
+            System.exit(1);
+        }
+
+        String[] keys = cmd.getOptionValues(KEY_OPTION);
+        HashSet<String> excludes = new HashSet<>(Arrays.asList(
+                cmd.getOptionValues(EXCLUDE_KEY_OPTION) == null
+                        ? new String[0]
+                        : cmd.getOptionValues(EXCLUDE_KEY_OPTION)));
+        String ssTableFileName = new File(cmd.getArgs()[0]).getAbsolutePath();
+
+        if (Descriptor.isLegacyFile(new File(ssTableFileName)))
+        {
+            System.err.println("Unsupported legacy sstable");
+            System.exit(1);
+        }
+        if (!new File(ssTableFileName).exists())
+        {
+            System.err.println("Cannot find file " + ssTableFileName);
+            System.exit(1);
+        }
+        Descriptor desc = Descriptor.fromFilename(ssTableFileName);
+        try
+        {
+            CFMetaData metadata = metadataFromSSTable(desc);
+            if (cmd.hasOption(ENUMERATE_KEYS_OPTION))
+            {
+                JsonTransformer.keysToJson(null, iterToStream(new KeyIterator(desc, metadata)), metadata, System.out);
+            }
+            else
+            {
+                SSTableReader sstable = SSTableReader.openNoValidation(desc, metadata);
+                IPartitioner partitioner = sstable.getPartitioner();
+                final ISSTableScanner currentScanner;
+                if ((keys != null) && (keys.length > 0))
+                {
+                    List<AbstractBounds<PartitionPosition>> bounds = Arrays.stream(keys)
+                            .filter(key -> !excludes.contains(key))
+                            .map(metadata.getKeyValidator()::fromString)
+                            .map(partitioner::decorateKey)
+                            .sorted()
+                            .map(DecoratedKey::getToken)
+                            .map(token -> new Bounds<>(token.minKeyBound(), token.maxKeyBound())).collect(Collectors.toList());
+                    currentScanner = sstable.getScanner(bounds.iterator());
+                }
+                else
+                {
+                    currentScanner = sstable.getScanner();
+                }
+                Stream<UnfilteredRowIterator> partitions = iterToStream(currentScanner).filter(i ->
+                    excludes.isEmpty() || !excludes.contains(metadata.getKeyValidator().getString(i.partitionKey().getKey()))
+                );
+                if (cmd.hasOption(DEBUG_OUTPUT_OPTION))
+                {
+                    AtomicLong position = new AtomicLong();
+                    partitions.forEach(partition ->
+                    {
+                        position.set(currentScanner.getCurrentPosition());
+                        partition.forEachRemaining(row ->
+                        {
+                            System.out.println(
+                                    "[" + metadata.getKeyValidator().getString(partition.partitionKey().getKey()) + "]@"
+                                            + position.get() + " " + row.toString(metadata, false, true));
+                            position.set(currentScanner.getCurrentPosition());
+                        });
+                    });
+                }
+                else
+                {
+                    JsonTransformer.toJson(currentScanner, partitions, metadata, System.out);
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            // throwing exception outside main with broken pipe causes windows cmd to hang
+            e.printStackTrace(System.err);
+        }
+
+        System.exit(0);
+    }
+

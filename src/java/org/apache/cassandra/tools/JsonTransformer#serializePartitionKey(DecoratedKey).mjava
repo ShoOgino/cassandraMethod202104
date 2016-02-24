@@ -1,0 +1,57 @@
+    private void serializePartitionKey(DecoratedKey key)
+    {
+        AbstractType<?> keyValidator = metadata.getKeyValidator();
+        objectIndenter.setCompact(true);
+        try
+        {
+            arrayIndenter.setCompact(true);
+            json.writeStartArray();
+            if (keyValidator instanceof CompositeType)
+            {
+                // if a composite type, the partition has multiple keys.
+                CompositeType compositeType = (CompositeType) keyValidator;
+                ByteBuffer keyBytes = key.getKey().duplicate();
+                // Skip static data if it exists.
+                if (keyBytes.remaining() >= 2)
+                {
+                    int header = ByteBufferUtil.getShortLength(keyBytes, keyBytes.position());
+                    if ((header & 0xFFFF) == 0xFFFF)
+                    {
+                        ByteBufferUtil.readShortLength(keyBytes);
+                    }
+                }
+
+                int i = 0;
+                while (keyBytes.remaining() > 0 && i < compositeType.getComponents().size())
+                {
+                    AbstractType<?> colType = compositeType.getComponents().get(i);
+
+                    ByteBuffer value = ByteBufferUtil.readBytesWithShortLength(keyBytes);
+                    String colValue = colType.getString(value);
+
+                    json.writeString(colValue);
+
+                    byte b = keyBytes.get();
+                    if (b != 0)
+                    {
+                        break;
+                    }
+                    ++i;
+                }
+            }
+            else
+            {
+                // if not a composite type, assume a single column partition key.
+                assert metadata.partitionKeyColumns().size() == 1;
+                json.writeString(keyValidator.getString(key.getKey()));
+            }
+            json.writeEndArray();
+            objectIndenter.setCompact(false);
+            arrayIndenter.setCompact(false);
+        }
+        catch (IOException e)
+        {
+            logger.error("Failure serializing partition key.", e);
+        }
+    }
+
