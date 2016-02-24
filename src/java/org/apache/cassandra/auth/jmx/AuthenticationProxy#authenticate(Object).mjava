@@ -1,0 +1,43 @@
+    /**
+     * Perform authentication of the client opening the {@code}MBeanServerConnection{@code}
+     *
+     * @param credentials optionally these credentials may be supplied by the JMX user.
+     *                    Out of the box, the JDK's {@code}RMIServerImpl{@code} is capable
+     *                    of supplying a two element String[], containing username & password.
+     *                    If present, these credentials will be made available to configured
+     *                    {@code}LoginModule{@code}s via {@code}JMXCallbackHandler{@code}.
+     *
+     * @return the authenticated subject containing any {@code}Principal{@code}s added by
+     *the {@code}LoginModule{@code}s
+     *
+     * @throws SecurityException if the server cannot authenticate the user
+     *         with the provided credentials.
+     */
+    public Subject authenticate(Object credentials)
+    {
+        // The credentials object is expected to be a string array holding the subject's
+        // username & password. Those values are made accessible to LoginModules via the
+        // JMXCallbackHandler.
+        JMXCallbackHandler callbackHandler = new JMXCallbackHandler(credentials);
+        try
+        {
+            LoginContext loginContext = new LoginContext(loginConfigName, callbackHandler);
+            loginContext.login();
+            final Subject subject = loginContext.getSubject();
+            if (!subject.isReadOnly())
+            {
+                AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+                    subject.setReadOnly();
+                    return null;
+                });
+            }
+
+            return subject;
+        }
+        catch (LoginException e)
+        {
+            logger.trace("Authentication exception", e);
+            throw new SecurityException("Authentication error", e);
+        }
+    }
+

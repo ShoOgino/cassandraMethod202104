@@ -1,0 +1,31 @@
+    @Test
+    public void rejectWhenWildcardGrantIntersectsWithWildcardTarget() throws Throwable
+    {
+        // in this test, permissions are granted on org.apache.cassandra:type=CustomBean,property=*
+        // and all beans in the org.apache.cassandra.hints domain, but
+        // but the target of the invocation is org.apache.cassandra*:*
+        // i.e. the subject has permissions on all CustomBeans and on the HintsService bean, but is
+        // attempting to query all names in the org.apache.cassandra* domain. The operation should
+        // be rejected as the permissions don't cover all known beans matching that domain, due to
+        // the BatchLogManager bean.
+
+        JMXResource allCustomBeans = JMXResource.mbean("org.apache.cassandra:type=CustomBean,property=*");
+        JMXResource allHintsBeans = JMXResource.mbean("org.apache.cassandra.hints:*");
+        ObjectName allCassandraBeans = ObjectName.getInstance("org.apache.cassandra*:*");
+
+        Map<RoleResource, Set<PermissionDetails>> permissions =
+            ImmutableMap.of(role1, ImmutableSet.of(permission(role1, allCustomBeans, Permission.DESCRIBE),
+                                                   permission(role1, allHintsBeans, Permission.DESCRIBE)));
+
+        AuthorizationProxy proxy = new ProxyBuilder().isAuthzRequired(() -> true)
+                                                     .isSuperuser((role) -> false)
+                                                     .getPermissions(permissions::get)
+                                                     .queryNames(matcher(allBeans))
+                                                     .build();
+
+        // the grant on org.apache.cassandra:* shouldn't permit us to invoke queryNames with java.lang:*
+        assertFalse(proxy.authorize(subject(role1.getRoleName()),
+                                    "queryNames",
+                                    new Object[]{ allCassandraBeans, null }));
+    }
+

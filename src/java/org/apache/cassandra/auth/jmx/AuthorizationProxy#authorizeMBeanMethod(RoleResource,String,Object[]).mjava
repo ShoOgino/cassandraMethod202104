@@ -1,0 +1,40 @@
+    /**
+     * Authorize execution of a method on an MBean (or set of MBeans) which may be
+     * managed by the MBeanServer. Note that this also includes the queryMBeans and queryNames
+     * methods of MBeanServer as those both take an ObjectName (possibly a pattern containing
+     * wildcards) as their first argument. They both of those methods also accept null arguments,
+     * in which case they will be handled by authorizedMBeanServerMethod
+     *
+     * @param role
+     * @param methodName
+     * @param args
+     * @return the result of the method invocation, if authorized
+     * @throws Throwable
+     * @throws SecurityException if authorization fails
+     */
+    private boolean authorizeMBeanMethod(RoleResource role, String methodName, Object[] args)
+    {
+        ObjectName targetBean = (ObjectName)args[0];
+
+        // work out which permission we need to execute the method being called on the mbean
+        Permission requiredPermission = getRequiredPermission(methodName);
+        if (null == requiredPermission)
+            return false;
+
+        logger.trace("JMX invocation of {} on {} requires permission {}", methodName, targetBean, requiredPermission);
+
+        // find any JMXResources upon which the authenticated subject has been granted the
+        // reqired permission. We'll do ObjectName-specific filtering & matching of resources later
+        Set<JMXResource> permittedResources = getPermittedResources(role, requiredPermission);
+
+        if (permittedResources.isEmpty())
+            return false;
+
+        // finally, check the JMXResource from the grants to see if we have either
+        // an exact match or a wildcard match for the target resource, whichever is
+        // applicable
+        return targetBean.isPattern()
+                ? checkPattern(targetBean, permittedResources)
+                : checkExact(targetBean, permittedResources);
+    }
+

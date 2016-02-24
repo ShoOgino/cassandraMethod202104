@@ -1,25 +1,37 @@
-    private static void maybeInitJmx()
+    private void maybeInitJmx()
     {
-        if (System.getProperty("com.sun.management.jmxremote.port") != null)
-            return;
+        System.setProperty("java.rmi.server.randomIDs", "true");
 
-        String jmxPort = System.getProperty("cassandra.jmx.local.port");
+        // If a remote port has been specified then use that to set up a JMX
+        // connector server which can be accessed remotely. Otherwise, look
+        // for the local port property and create a server which is bound
+        // only to the loopback address. Auth options are applied to both
+        // remote and local-only servers, but currently SSL is only
+        // available for remote.
+        // If neither is remote nor local port is set in cassandra-env.(sh|ps)
+        // then JMX is effectively  disabled.
+        boolean localOnly = false;
+        String jmxPort = System.getProperty("cassandra.jmx.remote.port");
+
+        if (jmxPort == null)
+        {
+            localOnly = true;
+            jmxPort = System.getProperty("cassandra.jmx.local.port");
+        }
+
         if (jmxPort == null)
             return;
 
-        System.setProperty("java.rmi.server.hostname", InetAddress.getLoopbackAddress().getHostAddress());
-        RMIServerSocketFactory serverFactory = new RMIServerSocketFactoryImpl();
-        Map<String, ?> env = Collections.singletonMap(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE, serverFactory);
         try
         {
-            LocateRegistry.createRegistry(Integer.valueOf(jmxPort), null, serverFactory);
-            JMXServiceURL url = new JMXServiceURL(String.format("service:jmx:rmi://localhost/jndi/rmi://localhost:%s/jmxrmi", jmxPort));
-            jmxServer = new RMIConnectorServer(url, env, ManagementFactory.getPlatformMBeanServer());
+            jmxServer = JMXServerUtils.createJMXServer(Integer.parseInt(jmxPort), localOnly);
+            if (jmxServer == null)
+                return;
             jmxServer.start();
         }
         catch (IOException e)
         {
-            logger.error("Error starting local jmx server: ", e);
+            logger.error("Error starting JMX server: ", e);
         }
     }
 

@@ -1,0 +1,59 @@
+    /**
+     * Performs the actual authorization of an identified subject to execute a remote method invocation.
+     * @param subject The principal making the execution request. A null value represents a local invocation
+     *                from the JMX connector itself
+     * @param methodName Name of the method being invoked
+     * @param args Array containing invocation argument. If the first element is an ObjectName instance, for
+     *             authz purposes we consider this an invocation of an MBean method, otherwise it is treated
+     *             as an invocation of a method on the MBeanServer.
+     */
+    @VisibleForTesting
+    boolean authorize(Subject subject, String methodName, Object[] args)
+    {
+        logger.trace("Authorizing JMX method invocation {} for {}",
+                     methodName,
+                     subject == null ? "" :subject.toString().replaceAll("\\n", " "));
+
+        if (!isAuthSetupComplete.get())
+        {
+            logger.trace("Auth setup is not complete, refusing access");
+            return false;
+        }
+
+        // Permissive authorization is enabled
+        if (!isAuthzRequired.get())
+            return true;
+
+        // Allow operations performed locally on behalf of the connector server itself
+        if (subject == null)
+            return true;
+
+        // Restrict access to certain methods by any remote user
+        if (METHOD_BLACKLIST.contains(methodName))
+        {
+            logger.trace("Access denied to blacklisted method {}", methodName);
+            return false;
+        }
+
+        // Reject if the user has not authenticated
+        Set<Principal> principals = subject.getPrincipals();
+        if (principals == null || principals.isEmpty())
+            return false;
+
+        // Currently, we assume that the first Principal returned from the Subject
+        // is the one to use for authorization. It would be good to make this more
+        // robust, but we have no control over which Principals a given LoginModule
+        // might choose to associate with the Subject following successful authentication
+        RoleResource userResource = RoleResource.role(principals.iterator().next().getName());
+        // A role with superuser status can do anything
+        if (isSuperuser.apply(userResource))
+            return true;
+
+        // The method being invoked may be a method on an MBean, or it could belong
+        // to the MBeanServer itself
+        if (args != null && args[0] instanceof ObjectName)
+            return authorizeMBeanMethod(userResource, methodName, args);
+        else
+            return authorizeMBeanServerMethod(userResource, methodName);
+    }
+

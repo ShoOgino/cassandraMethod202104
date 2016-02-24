@@ -1,0 +1,46 @@
+    /**
+     * Given a set of JMXResources upon which the Subject has been granted a particular permission,
+     * check whether any match the pattern-type ObjectName representing the target of the method
+     * invocation. At this point, we are sure that whatever the required permission, the Subject
+     * has definitely been granted it against this set of JMXResources. The job of this method is
+     * only to verify that the target of the invocation is covered by the members of the set.
+     *
+     * @param target
+     * @param permittedResources
+     * @return true if all registered beans which match the target can also be matched by the
+     *         JMXResources the subject has been granted permissions on; false otherwise
+     */
+    private boolean checkPattern(ObjectName target, Set<JMXResource> permittedResources)
+    {
+        // if the required permission was granted on the root JMX resource, then we're done
+        if (permittedResources.contains(JMXResource.root()))
+            return true;
+
+        // Get the full set of beans which match the target pattern
+        Set<ObjectName> targetNames = queryNames.apply(target);
+
+        // Iterate over the resources the permission has been granted on. Some of these may
+        // be patterns, so query the server to retrieve the full list of matching names and
+        // remove those from the target set. Once the target set is empty (i.e. all required
+        // matches have been satisfied), the requirement is met.
+        // If there are still unsatisfied targets after all the JMXResources have been processed,
+        // there are insufficient grants to permit the operation.
+        for (JMXResource resource : permittedResources)
+        {
+            try
+            {
+                Set<ObjectName> matchingNames = queryNames.apply(ObjectName.getInstance(resource.getObjectName()));
+                targetNames.removeAll(matchingNames);
+                if (targetNames.isEmpty())
+                    return true;
+            }
+            catch (MalformedObjectNameException e)
+            {
+                logger.warn("Permissions for JMX resource contains invalid ObjectName {}", resource.getObjectName());
+            }
+        }
+
+        logger.trace("Subject does not have sufficient permissions on all MBeans matching the target pattern {}", target);
+        return false;
+    }
+

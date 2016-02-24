@@ -1,0 +1,37 @@
+    private static Map<String, Object> configureJmxAuthentication()
+    {
+        Map<String, Object> env = new HashMap<>();
+        if (!Boolean.getBoolean("com.sun.management.jmxremote.authenticate"))
+            return env;
+
+        // If authentication is enabled, initialize the appropriate JMXAuthenticator
+        // and stash it in the environment settings.
+        // A JAAS configuration entry takes precedence. If one is supplied, use
+        // Cassandra's own custom JMXAuthenticator implementation which delegates
+        // auth to the LoginModules specified by the JAAS configuration entry.
+        // If no JAAS entry is found, an instance of the JDK's own
+        // JMXPluggableAuthenticator is created. In that case, the admin may have
+        // set a location for the JMX password file which must be added to env
+        // before creating the authenticator. If no password file has been
+        // explicitly set, it's read from the default location
+        // $JAVA_HOME/lib/management/jmxremote.password
+        String configEntry = System.getProperty("cassandra.jmx.remote.login.config");
+        if (configEntry != null)
+        {
+            env.put(JMXConnectorServer.AUTHENTICATOR, new AuthenticationProxy(configEntry));
+        }
+        else
+        {
+            String passwordFile = System.getProperty("com.sun.management.jmxremote.password.file");
+            if (passwordFile != null)
+            {
+                // stash the password file location where JMXPluggableAuthenticator expects it
+                env.put("jmx.remote.x.password.file", passwordFile);
+            }
+
+            env.put(JMXConnectorServer.AUTHENTICATOR, new JMXPluggableAuthenticatorWrapper(env));
+        }
+
+        return env;
+    }
+

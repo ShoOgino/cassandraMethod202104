@@ -1,0 +1,27 @@
+    private static MBeanServerForwarder configureJmxAuthorization(Map<String, Object> env)
+    {
+        // If a custom authz proxy is supplied (Cassandra ships with AuthorizationProxy, which
+        // delegates to its own role based IAuthorizer), then instantiate and return one which
+        // can be set as the JMXConnectorServer's MBeanServerForwarder.
+        // If no custom proxy is supplied, check system properties for the location of the
+        // standard access file & stash it in env
+        String authzProxyClass = System.getProperty("cassandra.jmx.authorizer");
+        if (authzProxyClass != null)
+        {
+            final InvocationHandler handler = FBUtilities.construct(authzProxyClass, "JMX authz proxy");
+            final Class[] interfaces = { MBeanServerForwarder.class };
+
+            Object proxy = Proxy.newProxyInstance(MBeanServerForwarder.class.getClassLoader(), interfaces, handler);
+            return MBeanServerForwarder.class.cast(proxy);
+        }
+        else
+        {
+            String accessFile = System.getProperty("com.sun.management.jmxremote.access.file");
+            if (accessFile != null)
+            {
+                env.put("jmx.remote.x.access.file", accessFile);
+            }
+            return null;
+        }
+    }
+

@@ -1,0 +1,34 @@
+    private void testNonMbeanMethods(boolean withPermission)
+    {
+        String[] methods = { "getDefaultDomain",
+                             "getDomains",
+                             "getMBeanCount",
+                             "hashCode",
+                             "queryMBeans",
+                             "queryNames",
+                             "toString" };
+
+
+        ProxyBuilder builder = new ProxyBuilder().isAuthzRequired(() -> true).isSuperuser((role) -> false);
+        if (withPermission)
+        {
+            Map<RoleResource, Set<PermissionDetails>> permissions =
+                ImmutableMap.of(role1, ImmutableSet.of(permission(role1, JMXResource.root(), Permission.DESCRIBE)));
+            builder.getPermissions(permissions::get);
+        }
+        else
+        {
+            builder.getPermissions((role) -> Collections.emptySet());
+        }
+        AuthorizationProxy proxy = builder.build();
+
+        for (String method : methods)
+            assertEquals(withPermission, proxy.authorize(subject(role1.getRoleName()), method, new Object[]{ null }));
+
+        // non-whitelisted methods should be rejected regardless.
+        // This isn't exactly comprehensive, but it's better than nothing
+        String[] notAllowed = { "fooMethod", "barMethod", "bazMethod" };
+        for (String method : notAllowed)
+            assertFalse(proxy.authorize(subject(role1.getRoleName()), method, new Object[]{ null }));
+    }
+
