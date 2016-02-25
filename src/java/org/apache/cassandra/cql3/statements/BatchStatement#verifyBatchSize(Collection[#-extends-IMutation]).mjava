@@ -3,22 +3,32 @@
      *
      * @param updates - the batch mutations.
      */
-    public static void verifyBatchSize(Iterable<PartitionUpdate> updates) throws InvalidRequestException
+    private static void verifyBatchSize(Collection<? extends IMutation> mutations) throws InvalidRequestException
     {
+        // We only warn for batch spanning multiple mutations (#10876)
+        if (mutations.size() <= 1)
+            return;
+
         long size = 0;
         long warnThreshold = DatabaseDescriptor.getBatchSizeWarnThreshold();
         long failThreshold = DatabaseDescriptor.getBatchSizeFailThreshold();
 
-        for (PartitionUpdate update : updates)
-            size += update.dataSize();
+        for (IMutation mutation : mutations)
+        {
+            for (PartitionUpdate update : mutation.getPartitionUpdates())
+                size += update.dataSize();
+        }
 
         if (size > warnThreshold)
         {
             Set<String> tableNames = new HashSet<>();
-            for (PartitionUpdate update : updates)
-                tableNames.add(String.format("%s.%s", update.metadata().ksName, update.metadata().cfName));
+            for (IMutation mutation : mutations)
+            {
+                for (PartitionUpdate update : mutation.getPartitionUpdates())
+                    tableNames.add(String.format("%s.%s", update.metadata().ksName, update.metadata().cfName));
+            }
 
-            String format = "Batch of prepared statements for {} is of size {}, exceeding specified threshold of {} by {}.{}";
+            String format = "Batch for {} is of size {}, exceeding specified threshold of {} by {}.{}";
             if (size > failThreshold)
             {
                 Tracing.trace(format, tableNames, size, failThreshold, size - failThreshold, " (see batch_size_fail_threshold_in_kb)");
