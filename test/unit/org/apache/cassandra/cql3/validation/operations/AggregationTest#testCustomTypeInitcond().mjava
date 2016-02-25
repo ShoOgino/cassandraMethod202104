@@ -1,0 +1,67 @@
+    public void testCustomTypeInitcond() throws Throwable
+    {
+        try
+        {
+            String type = "DynamicCompositeType(s => UTF8Type, i => Int32Type)";
+
+            executeNet(Server.CURRENT_VERSION,
+                       "CREATE FUNCTION " + KEYSPACE + ".f11064(i 'DynamicCompositeType(s => UTF8Type, i => Int32Type)')\n" +
+                       "RETURNS NULL ON NULL INPUT\n" +
+                       "RETURNS '" + type + "'\n" +
+                       "LANGUAGE java\n" +
+                       "AS 'return i;'");
+
+            // create aggregate using the 'composite syntax' for composite types
+            executeNet(Server.CURRENT_VERSION,
+                       "CREATE AGGREGATE " + KEYSPACE + ".a11064()\n" +
+                       "SFUNC f11064 " +
+                       "STYPE '" + type + "'\n" +
+                       "INITCOND 's@foo:i@32'");
+
+            AbstractType<?> compositeType = TypeParser.parse(type);
+            ByteBuffer compositeTypeValue = compositeType.fromString("s@foo:i@32");
+            String compositeTypeString = compositeType.asCQL3Type().toCQLLiteral(compositeTypeValue, Server.CURRENT_VERSION);
+            // ensure that the composite type is serialized using the 'blob syntax'
+            assertTrue(compositeTypeString.startsWith("0x"));
+
+            // ensure that the composite type is 'serialized' using the 'blob syntax' in the schema
+            assertRows(execute("SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", KEYSPACE, "a11064"),
+                       row(compositeTypeString));
+
+            // create aggregate using the 'blob syntax' for composite types
+            executeNet(Server.CURRENT_VERSION,
+                       "CREATE AGGREGATE " + KEYSPACE + ".a11064_2()\n" +
+                       "SFUNC f11064 " +
+                       "STYPE '" + type + "'\n" +
+                       "INITCOND " + compositeTypeString);
+
+            // ensure that the composite type is 'serialized' using the 'blob syntax' in the schema
+            assertRows(execute("SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", KEYSPACE, "a11064_2"),
+                       row(compositeTypeString));
+        }
+        finally
+        {
+            try
+            {
+                execute("DROP AGGREGATE " + KEYSPACE + ".a11064_2");
+            }
+            catch (Exception ignore)
+            {
+            }
+            try
+            {
+                execute("DROP AGGREGATE " + KEYSPACE + ".a11064");
+            }
+            catch (Exception ignore)
+            {
+            }
+            try
+            {
+                execute("DROP FUNCTION " + KEYSPACE + ".f11064");
+            }
+            catch (Exception ignore)
+            {
+            }
+        }
+    }
+
