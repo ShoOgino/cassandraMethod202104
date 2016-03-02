@@ -1,0 +1,31 @@
+    public Set<TokenRange> maybeLoadTokenRanges(StressSettings settings)
+    {
+        maybeLoadSchemaInfo(settings); // ensure table metadata is available
+
+        JavaDriverClient client = settings.getJavaDriverClient();
+        synchronized (client)
+        {
+            if (tokenRanges != null)
+                return tokenRanges;
+
+            Cluster cluster = client.getCluster();
+            Metadata metadata = cluster.getMetadata();
+            if (metadata == null)
+                throw new RuntimeException("Unable to get metadata");
+
+            List<TokenRange> sortedRanges = new ArrayList<>(metadata.getTokenRanges().size() + 1);
+            for (TokenRange range : metadata.getTokenRanges())
+            {
+                //if we don't unwrap we miss the partitions between ring min and smallest range start value
+                if (range.isWrappedAround())
+                    sortedRanges.addAll(range.unwrap());
+                else
+                    sortedRanges.add(range);
+            }
+
+            Collections.sort(sortedRanges);
+            tokenRanges = new LinkedHashSet<>(sortedRanges);
+            return tokenRanges;
+        }
+    }
+
