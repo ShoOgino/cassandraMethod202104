@@ -1,0 +1,81 @@
+    public void testSetup(String compactionClass, String compressorClass, DiskAccessMode mode, boolean cacheEnabled) throws Throwable
+    {
+        id.set(0);
+        compactionTimeNanos = 0;
+        ChunkCache.instance.enable(cacheEnabled);
+        DatabaseDescriptor.setDiskAccessMode(mode);
+        alterTable("ALTER TABLE %s WITH compaction = { 'class' :  '" + compactionClass + "'  };");
+        alterTable("ALTER TABLE %s WITH compression = { 'sstable_compression' : '" + compressorClass + "'  };");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.disableAutoCompaction();
+
+        long onStartTime = System.currentTimeMillis();
+        ExecutorService es = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        List<Future<?>> tasks = new ArrayList<>();
+        for (int ti = 0; ti < 1; ++ti)
+        {
+            Random rand = new Random(ti);
+            tasks.add(es.submit(() -> 
+            {
+                for (int i = 0; i < ITERS; ++i)
+                    try
+                    {
+                        pushData(rand, COUNT);
+                        readAndDelete(rand, COUNT / 3);
+                    }
+                    catch (Throwable e)
+                    {
+                        throw new AssertionError(e);
+                    }
+            }));
+        }
+        for (Future<?> task : tasks)
+            task.get();
+
+        flush();
+        long onEndTime = System.currentTimeMillis();
+        int startRowCount = countRows(cfs);
+        int startTombCount = countTombstoneMarkers(cfs);
+        int startRowDeletions = countRowDeletions(cfs);
+        int startTableCount = cfs.getLiveSSTables().size();
+        long startSize = SSTableReader.getTotalBytes(cfs.getLiveSSTables());
+        System.out.println("\nCompession: " + cfs.getCompressionParameters().toString());
+        System.out.println("Reader " + cfs.getLiveSSTables().iterator().next().getFileDataInput(0).toString());
+        if (cacheEnabled)
+            System.out.format("Cache size %s requests %,d hit ratio %f\n",
+                FileUtils.stringifyFileSize(ChunkCache.instance.metrics.size.getValue()),
+                ChunkCache.instance.metrics.requests.getCount(),
+                ChunkCache.instance.metrics.hitRate.getValue());
+        else
+        {
+            Assert.assertTrue("Chunk cache had requests: " + ChunkCache.instance.metrics.requests.getCount(), ChunkCache.instance.metrics.requests.getCount() < COUNT);
+            System.out.println("Cache disabled");
+        }
+        System.out.println(String.format("Operations completed in %.3fs", (onEndTime - onStartTime) * 1e-3));
+        if (!CONCURRENT_COMPACTIONS)
+            System.out.println(String.format(", out of which %.3f for non-concurrent compaction", compactionTimeNanos * 1e-9));
+        else
+            System.out.println();
+
+        String hashesBefore = getHashes();
+        long startTime = System.currentTimeMillis();
+        CompactionManager.instance.performMaximal(cfs, true);
+        long endTime = System.currentTimeMillis();
+
+        int endRowCount = countRows(cfs);
+        int endTombCount = countTombstoneMarkers(cfs);
+        int endRowDeletions = countRowDeletions(cfs);
+        int endTableCount = cfs.getLiveSSTables().size();
+        long endSize = SSTableReader.getTotalBytes(cfs.getLiveSSTables());
+
+        System.out.println(String.format("Major compaction completed in %.3fs",
+                (endTime - startTime) * 1e-3));
+        System.out.println(String.format("At start: %,12d tables %12s %,12d rows %,12d deleted rows %,12d tombstone markers",
+                startTableCount, FileUtils.stringifyFileSize(startSize), startRowCount, startRowDeletions, startTombCount));
+        System.out.println(String.format("At end:   %,12d tables %12s %,12d rows %,12d deleted rows %,12d tombstone markers",
+                endTableCount, FileUtils.stringifyFileSize(endSize), endRowCount, endRowDeletions, endTombCount));
+        String hashesAfter = getHashes();
+
+        Assert.assertEquals(hashesBefore, hashesAfter);
+    }
+

@@ -1,0 +1,51 @@
+        @Override
+        public void readChunk(long position, ByteBuffer uncompressed)
+        {
+            try
+            {
+                // accesses must always be aligned
+                assert (position & -uncompressed.capacity()) == position;
+                assert position <= fileLength;
+
+                CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
+
+                MmappedRegions.Region region = regions.floor(chunk.offset);
+                long segmentOffset = region.offset();
+                int chunkOffset = Ints.checkedCast(chunk.offset - segmentOffset);
+                ByteBuffer compressedChunk = region.buffer();
+
+                compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
+
+                uncompressed.clear();
+
+                try
+                {
+                    metadata.compressor().uncompress(compressedChunk, uncompressed);
+                }
+                catch (IOException e)
+                {
+                    throw new CorruptBlockException(channel.filePath(), chunk);
+                }
+                finally
+                {
+                    uncompressed.flip();
+                }
+
+                if (getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
+                {
+                    compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
+
+                    int checksum = (int) metadata.checksumType.of(compressedChunk);
+
+                    compressedChunk.limit(compressedChunk.capacity());
+                    if (compressedChunk.getInt() != checksum)
+                        throw new CorruptBlockException(channel.filePath(), chunk);
+                }
+            }
+            catch (CorruptBlockException e)
+            {
+                throw new CorruptSSTableException(e, channel.filePath());
+            }
+
+        }
+
