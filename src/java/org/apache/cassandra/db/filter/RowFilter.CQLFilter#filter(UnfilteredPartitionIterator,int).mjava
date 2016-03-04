@@ -4,6 +4,9 @@
                 return iter;
 
             final CFMetaData metadata = iter.metadata();
+            long numberOfStaticColumnExpressions = expressions.stream().filter(e -> e.column.isStatic()).count();
+            final boolean filterStaticColumns = numberOfStaticColumnExpressions != 0;
+            final boolean filterNonStaticColumns = (expressions.size() - numberOfStaticColumnExpressions) > 0;
 
             class IsSatisfiedFilter extends Transformation<UnfilteredRowIterator>
             {
@@ -11,12 +14,13 @@
                 public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator partition)
                 {
                     // The filter might be on static columns, so need to check static row first.
-                    Row staticRow = applyToRow(partition.staticRow());
-                    if (staticRow == null)
+                    if (filterStaticColumns && applyToRow(partition.staticRow()) == null)
                         return null;
 
                     pk = partition.partitionKey();
-                    return Transformation.apply(partition, this);
+                    UnfilteredRowIterator iterator = Transformation.apply(partition, this);
+
+                    return (filterNonStaticColumns && !iterator.hasNext()) ? null : iterator;
                 }
 
                 public Row applyToRow(Row row)
