@@ -1,8 +1,9 @@
     public StatementRestrictions(CFMetaData cfm,
-            List<Relation> whereClause,
-            VariableSpecifications boundNames,
-            boolean selectsOnlyStaticColumns,
-            boolean selectACollection) throws InvalidRequestException
+                                 List<Relation> whereClause,
+                                 VariableSpecifications boundNames,
+                                 boolean selectsOnlyStaticColumns,
+                                 boolean selectACollection,
+                                 boolean useFiltering)
     {
         this.cfm = cfm;
         this.partitionKeyRestrictions = new PrimaryKeyRestrictionSet(cfm.getKeyValidatorAsCType());
@@ -53,6 +54,16 @@
         // there is restrictions not covered by the PK.
         if (!nonPrimaryKeyRestrictions.isEmpty())
         {
+            if (!hasQueriableIndex)
+            {
+                // Filtering for non-index query is only supported for thrift static CFs
+                if (cfm.comparator.isDense() ||  cfm.comparator.isCompound())
+                    throw invalidRequest("Predicates on non-primary-key columns (%s) are not yet supported for non secondary index queries",
+                                         Joiner.on(", ").join(toIdentifiers(nonPrimaryKeyRestrictions.getColumnDefs())));
+
+                if (!useFiltering)
+                    throw invalidRequest(REQUIRES_ALLOW_FILTERING_MESSAGE);
+            }
             usesSecondaryIndexing = true;
             indexRestrictions.add(nonPrimaryKeyRestrictions);
         }
