@@ -1,0 +1,54 @@
+    @Test
+    public void testThrottledReadersAreNotCached() throws IOException
+    {
+        String CONTENT = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam vitae.";
+
+        File file = new File("testThrottledReadersAreNotCached");
+        file.deleteOnExit();
+
+        File metadata = new File(file.getPath() + ".meta");
+        metadata.deleteOnExit();
+
+        MetadataCollector sstableMetadataCollector = new MetadataCollector(new SimpleDenseCellNameType(BytesType.instance)).replayPosition(null);
+        try (SequentialWriter writer = new CompressedSequentialWriter(file, metadata.getPath(), new CompressionParameters(SnappyCompressor.instance), sstableMetadataCollector))
+        {
+            writer.write(CONTENT.getBytes());
+            writer.finish();
+        }
+
+        CompressionMetadata meta = new CompressionMetadata(metadata.getPath(), file.length());
+
+        try(ChannelProxy channel = new ChannelProxy(file);
+            CompressedPoolingSegmentedFile segmentedFile = new CompressedPoolingSegmentedFile(channel, meta))
+        {
+            //The cache bucket is only initialized by a call to FileCacheService.instance.get() so first
+            // we must create a reader using the interface for accessing segments
+            FileDataInput reader = segmentedFile.getSegment(0);
+            assertNotNull(reader);
+            reader.close();
+
+            //Now we create a throttled reader, this should not be added to the cache
+            RateLimiter limiter = RateLimiter.create(1024);
+            reader = segmentedFile.createThrottledReader(limiter);
+            assertNotNull(reader);
+            assertTrue(reader instanceof CompressedThrottledReader);
+            reader.close();
+
+            //We retrieve 2 readers, neither should be a throttled reader
+            FileDataInput[] readers =
+            {
+                segmentedFile.getSegment(0),
+                segmentedFile.getSegment(0)
+            };
+
+            for (FileDataInput r : readers)
+            {
+                assertNotNull(r);
+                assertFalse(r instanceof CompressedThrottledReader);
+            }
+
+            for (FileDataInput r : readers)
+                r.close();
+        }
+    }
+
