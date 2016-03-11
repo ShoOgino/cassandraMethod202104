@@ -1,0 +1,38 @@
+    /**
+     * Whether the view might be affected by the provided update.
+     * <p>
+     * Note that having this method return {@code true} is not an absolute guarantee that the view will be
+     * updated, just that it most likely will, but a {@code false} return guarantees it won't be affected).
+     *
+     * @param partitionKey the partition key that is updated.
+     * @param update the update being applied.
+     * @return {@code false} if we can guarantee that inserting {@code update} for key {@code partitionKey}
+     * won't affect the view in any way, {@code true} otherwise.
+     */
+    public boolean mayBeAffectedBy(DecoratedKey partitionKey, Row update)
+    {
+        // We can guarantee that the view won't be affected if:
+        //  - the clustering is excluded by the view filter (note that this isn't true of the filter on regular columns:
+        //    even if an update don't match a view condition on a regular column, that update can still invalidate an pre-existing
+        //    entry).
+        //  - or the update don't modify any of the columns impacting the view (where "impacting" the view means that column is
+        //    neither included in the view, nor used by the view filter).
+        if (!getReadQuery().selectsClustering(partitionKey, update.clustering()))
+            return false;
+
+        // We want to find if the update modify any of the columns that are part of the view (in which case the view is affected).
+        // But if the view include all the base table columns, or the update has either a row deletion or a row liveness (note
+        // that for the liveness, it would be more "precise" to check if it's live, but pushing an update that is already expired
+        // is dump so it's ok not to optimize for it and it saves us from having to pass nowInSec to the method), we know the view
+        // is affected right away.
+        if (includeAllColumns || !update.deletion().isLive() || !update.primaryKeyLivenessInfo().isEmpty())
+            return true;
+
+        for (ColumnData data : update)
+        {
+            if (definition.metadata.getColumnDefinition(data.column().name) != null)
+                return true;
+        }
+        return false;
+    }
+

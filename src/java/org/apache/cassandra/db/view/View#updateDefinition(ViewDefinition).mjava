@@ -4,31 +4,18 @@
      * @return true if the view contains only columns which are part of the base's primary key; false if there is at
      *         least one column which is not.
      */
-    public boolean updateDefinition(ViewDefinition definition)
+    public void updateDefinition(ViewDefinition definition)
     {
         this.definition = definition;
 
         CFMetaData viewCfm = definition.metadata;
-        List<ColumnDefinition> partitionDefs = new ArrayList<>(viewCfm.partitionKeyColumns().size());
-        List<ColumnDefinition> primaryKeyDefs = new ArrayList<>(viewCfm.partitionKeyColumns().size()
-                                                                + viewCfm.clusteringColumns().size());
-        List<ColumnDefinition> baseComplexColumns = new ArrayList<>();
-
-        // We only add the partition columns to the partitions list, but both partition columns and clustering
-        // columns are added to the primary keys list
-        boolean partitionAllPrimaryKeyColumns = resolveAndAddColumns(Iterables.transform(viewCfm.partitionKeyColumns(), cd -> cd.name), primaryKeyDefs, partitionDefs);
-        boolean clusteringAllPrimaryKeyColumns = resolveAndAddColumns(Iterables.transform(viewCfm.clusteringColumns(), cd -> cd.name), primaryKeyDefs);
-
-        for (ColumnDefinition cdef : baseCfs.metadata.allColumns())
+        List<ColumnDefinition> nonPKDefPartOfViewPK = new ArrayList<>();
+        for (ColumnDefinition baseColumn : baseCfs.metadata.allColumns())
         {
-            if (cdef.isComplex() && definition.includes(cdef.name))
-            {
-                baseComplexColumns.add(cdef);
-            }
+            ColumnDefinition viewColumn = getViewColumn(baseColumn);
+            if (viewColumn != null && !baseColumn.isPrimaryKeyColumn() && viewColumn.isPrimaryKeyColumn())
+                nonPKDefPartOfViewPK.add(baseColumn);
         }
-
-        this.columns = new Columns(partitionDefs, primaryKeyDefs, baseComplexColumns);
-
-        return partitionAllPrimaryKeyColumns && clusteringAllPrimaryKeyColumns;
+        this.baseNonPKColumnsInViewPK = nonPKDefPartOfViewPK;
     }
 

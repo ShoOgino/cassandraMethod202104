@@ -1,0 +1,37 @@
+    /**
+     * Calculates and pushes updates to the views replicas. The replicas are determined by
+     * {@link ViewUtils#getViewNaturalEndpoint(String, Token, Token)}.
+     *
+     * @param update an update on the base table represented by this object.
+     * @param writeCommitLog whether we should write the commit log for the view updates.
+     * @param baseComplete time from epoch in ms that the local base mutation was (or will be) completed
+     */
+    public void pushViewReplicaUpdates(PartitionUpdate update, boolean writeCommitLog, AtomicLong baseComplete)
+    {
+        assert update.metadata().cfId.equals(baseTableMetadata.cfId);
+
+        Collection<View> views = updatedViews(update);
+        if (views.isEmpty())
+            return;
+
+        // Read modified rows
+        int nowInSec = FBUtilities.nowInSeconds();
+        SinglePartitionReadCommand command = readExistingRowsCommand(update, views, nowInSec);
+        if (command == null)
+            return;
+
+        ColumnFamilyStore cfs = Keyspace.openAndGetStore(update.metadata());
+        long start = System.nanoTime();
+        Collection<Mutation> mutations;
+        try (ReadOrderGroup orderGroup = command.startOrderGroup();
+             UnfilteredRowIterator existings = UnfilteredPartitionIterators.getOnlyElement(command.executeLocally(orderGroup), command);
+             UnfilteredRowIterator updates = update.unfilteredIterator())
+        {
+            mutations = generateViewUpdates(views, updates, existings, nowInSec);
+        }
+        Keyspace.openAndGetStore(update.metadata()).metric.viewReadTime.update(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+
+        if (!mutations.isEmpty())
+            StorageProxy.mutateMV(update.partitionKey().getKey(), mutations, writeCommitLog, baseComplete);
+    }
+
