@@ -1,0 +1,72 @@
+    @Test
+    public void testCircularSpillFile() throws Exception
+    {
+        byte[] testData;
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(baos))
+        {
+            // boolean
+            out.writeBoolean(true);
+            // byte
+            out.writeByte(0x1);
+            // char
+            out.writeChar('a');
+            // short
+            out.writeShort(1);
+            // int
+            out.writeInt(1);
+
+            // String
+            out.writeUTF("ab");
+            testData = baos.toByteArray();
+
+            // 1 (boolean) + 1 (byte) + 2 (char) + 2 (short) + 4 (int) + 4 bytes (utf string)
+        }
+
+        //read at most 4 bytes multiple times (and then check file size)
+        int MEM_SIZE = 0;
+        int DISK_SIZE = 4;
+        try (RewindableDataInputStreamPlus reader = new RewindableDataInputStreamPlus(new ByteArrayInputStream(testData),
+                                                                                      INITIAL_BUFFER_SIZE, MEM_SIZE, file,
+                                                                                      DISK_SIZE))
+        {
+            //read 2 bytes and reset
+            reader.mark();
+            assertTrue(reader.readBoolean());
+            assertEquals(0x1, reader.readByte());
+            assertEquals(2, reader.bytesPastMark(null));
+            reader.reset();
+
+            //read again previous sequence
+            assertTrue(reader.readBoolean());
+            assertEquals(0x1, reader.readByte());
+            //finish reading again previous sequence
+
+            //read 4 bytes and reset
+            reader.mark();
+            assertEquals('a', reader.readChar());
+            assertEquals(1, reader.readShort());
+            assertEquals(4, reader.bytesPastMark(null));
+            reader.reset();
+
+            //read again previous sequence
+            assertEquals('a', reader.readChar());
+            assertEquals(1, reader.readShort());
+            //finish reading again previous sequence
+
+            //read 4 bytes and reset
+            reader.mark();
+            assertEquals(1, reader.readInt());
+            assertEquals(4, reader.bytesPastMark(null));
+            reader.reset();
+
+            //read again previous sequence
+            assertEquals(1, reader.readInt());
+
+            //check max file size
+            assertEquals(DISK_SIZE, file.length());
+        }
+        assertFalse(file.exists());
+    }
+

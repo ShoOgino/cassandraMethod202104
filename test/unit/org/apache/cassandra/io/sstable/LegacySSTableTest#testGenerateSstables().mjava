@@ -1,5 +1,5 @@
     /**
-     * Generates sstables for 4 CQL tables (see {@link #createTables(String)}) in <i>current</i>
+     * Generates sstables for 8 CQL tables (see {@link #createTables(String)}) in <i>current</i>
      * sstable format (version) into {@code test/data/legacy-sstables/VERSION}, where
      * {@code VERSION} matches {@link Version#getVersion() BigFormat.latestVersion.getVersion()}.
      * <p>
@@ -7,13 +7,10 @@
      * during development. I.e. remove the {@code @Ignore} annotation temporarily.
      * </p>
      */
-    @Test
     @Ignore
+    @Test
     public void testGenerateSstables() throws Throwable
     {
-        createKeyspace();
-        createTables(BigFormat.latestVersion.getVersion());
-
         Random rand = new Random();
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < 128; i++)
@@ -22,25 +19,28 @@
         }
         String randomString = sb.toString();
 
-        for (int pk = 0; pk < 5; pk++)
+        for (int compact = 0; compact <= 1; compact++)
         {
-            String valPk = Integer.toString(pk);
-            QueryProcessor.executeInternal(String.format("INSERT INTO legacy_tables.legacy_%s_simple (pk, val) VALUES ('%s', '%s')",
-                                                         BigFormat.latestVersion, valPk, "foo bar baz"));
-
-            QueryProcessor.executeInternal(String.format("UPDATE legacy_tables.legacy_%s_simple_counter SET val = val + 1 WHERE pk = '%s'",
-                                                         BigFormat.latestVersion, valPk));
-
-            for (int ck = 0; ck < 50; ck++)
+            for (int pk = 0; pk < 5; pk++)
             {
-                String valCk = Integer.toString(ck);
+                String valPk = Integer.toString(pk);
+                QueryProcessor.executeInternal(String.format("INSERT INTO legacy_tables.legacy_%s_simple%s (pk, val) VALUES ('%s', '%s')",
+                                                             BigFormat.latestVersion, getCompactNameSuffix(compact), valPk, "foo bar baz"));
 
-                QueryProcessor.executeInternal(String.format("INSERT INTO legacy_tables.legacy_%s_clust (pk, ck, val) VALUES ('%s', '%s', '%s')",
-                                                             BigFormat.latestVersion, valPk, valCk + longString, randomString));
+                QueryProcessor.executeInternal(String.format("UPDATE legacy_tables.legacy_%s_simple_counter%s SET val = val + 1 WHERE pk = '%s'",
+                                                             BigFormat.latestVersion, getCompactNameSuffix(compact), valPk));
 
-                QueryProcessor.executeInternal(String.format("UPDATE legacy_tables.legacy_%s_clust_counter SET val = val + 1 WHERE pk = '%s' AND ck='%s'",
-                                                             BigFormat.latestVersion, valPk, valCk + longString));
+                for (int ck = 0; ck < 50; ck++)
+                {
+                    String valCk = Integer.toString(ck);
 
+                    QueryProcessor.executeInternal(String.format("INSERT INTO legacy_tables.legacy_%s_clust%s (pk, ck, val) VALUES ('%s', '%s', '%s')",
+                                                                 BigFormat.latestVersion, getCompactNameSuffix(compact), valPk, valCk + longString, randomString));
+
+                    QueryProcessor.executeInternal(String.format("UPDATE legacy_tables.legacy_%s_clust_counter%s SET val = val + 1 WHERE pk = '%s' AND ck='%s'",
+                                                                 BigFormat.latestVersion, getCompactNameSuffix(compact), valPk, valCk + longString));
+
+                }
             }
         }
 
@@ -48,9 +48,12 @@
 
         File ksDir = new File(LEGACY_SSTABLE_ROOT, String.format("%s/legacy_tables", BigFormat.latestVersion));
         ksDir.mkdirs();
-        copySstablesFromTestData(String.format("legacy_%s_simple", BigFormat.latestVersion), ksDir);
-        copySstablesFromTestData(String.format("legacy_%s_simple_counter", BigFormat.latestVersion), ksDir);
-        copySstablesFromTestData(String.format("legacy_%s_clust", BigFormat.latestVersion), ksDir);
-        copySstablesFromTestData(String.format("legacy_%s_clust_counter", BigFormat.latestVersion), ksDir);
+        for (int compact = 0; compact <= 1; compact++)
+        {
+            copySstablesFromTestData(String.format("legacy_%s_simple%s", BigFormat.latestVersion, getCompactNameSuffix(compact)), ksDir);
+            copySstablesFromTestData(String.format("legacy_%s_simple_counter%s", BigFormat.latestVersion, getCompactNameSuffix(compact)), ksDir);
+            copySstablesFromTestData(String.format("legacy_%s_clust%s", BigFormat.latestVersion, getCompactNameSuffix(compact)), ksDir);
+            copySstablesFromTestData(String.format("legacy_%s_clust_counter%s", BigFormat.latestVersion, getCompactNameSuffix(compact)), ksDir);
+        }
     }
 
