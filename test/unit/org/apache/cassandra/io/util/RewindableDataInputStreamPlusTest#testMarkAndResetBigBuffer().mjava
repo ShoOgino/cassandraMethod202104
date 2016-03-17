@@ -1,0 +1,77 @@
+    @Test
+    public void testMarkAndResetBigBuffer() throws Exception
+    {
+        byte[] testData;
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(baos))
+        {
+            // boolean
+            out.writeBoolean(true);
+            // byte
+            out.writeByte(0x1);
+            // char
+            out.writeChar('a');
+            // short
+            out.writeShort(1);
+            // int
+            out.writeInt(1);
+            // long
+            out.writeLong(1L);
+            // float
+            out.writeFloat(1.0f);
+            // double
+            out.writeDouble(1.0d);
+
+            // String
+            out.writeUTF("abc");
+            testData = baos.toByteArray();
+
+            // 1 (boolean) + 1 (byte) + 2 (char) + 2 (short) + 4 (int) + 8 (long)
+            // + 4 (float) + 8 (double) + 5 bytes (utf string)
+        }
+
+        for (int memCapacity = 0; memCapacity <= 18; memCapacity++)
+        {
+            int diskCapacity = 18 - memCapacity;
+            try (RewindableDataInputStreamPlus reader = new RewindableDataInputStreamPlus(new ByteArrayInputStream(testData),
+                                                                                          INITIAL_BUFFER_SIZE, memCapacity, file,
+                                                                                          diskCapacity))
+            {
+                //read a big amount before resetting
+                reader.mark();
+                assertTrue(reader.readBoolean());
+                assertEquals(0x1, reader.readByte());
+                assertEquals('a', reader.readChar());
+                assertEquals(1, reader.readShort());
+                assertEquals(1, reader.readInt());
+                assertEquals(1L, reader.readLong());
+                reader.reset();
+
+                //read from buffer
+                assertTrue(reader.readBoolean());
+                assertEquals(0x1, reader.readByte());
+                assertEquals('a', reader.readChar());
+                assertEquals(1, reader.readShort());
+                assertEquals(1, reader.readInt());
+                assertEquals(1L, reader.readLong());
+
+                assertEquals(17, reader.available());
+
+                //mark again
+                reader.mark();
+                assertEquals(1.0f, reader.readFloat(), 0);
+                assertEquals(1.0d, reader.readDouble(), 0);
+                assertEquals("abc", reader.readUTF());
+                reader.reset();
+
+                assertEquals(17, reader.available());
+
+                assertEquals(1.0f, reader.readFloat(), 0);
+                assertEquals(1.0d, reader.readDouble(), 0);
+                assertEquals("abc", reader.readUTF());
+            }
+            assertFalse(file.exists());
+        }
+    }
+

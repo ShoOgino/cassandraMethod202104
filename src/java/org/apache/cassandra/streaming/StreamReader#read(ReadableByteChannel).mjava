@@ -23,9 +23,9 @@
                      session.planId(), fileSeqNum, session.peer, repairedAt, totalSize, cfs.keyspace.getName(),
                      cfs.getColumnFamilyName());
 
-        DataInputStream dis = new DataInputStream(new LZFInputStream(Channels.newInputStream(channel)));
-        BytesReadTracker in = new BytesReadTracker(dis);
-        StreamDeserializer deserializer = new StreamDeserializer(cfs.metadata, in, inputVersion, header.toHeader(cfs.metadata));
+        TrackedInputStream in = new TrackedInputStream(new LZFInputStream(Channels.newInputStream(channel)));
+        StreamDeserializer deserializer = new StreamDeserializer(cfs.metadata, in, inputVersion, getHeader(cfs.metadata),
+                                                                 totalSize, session.planId());
         SSTableMultiWriter writer = null;
         try
         {
@@ -44,16 +44,21 @@
         {
             if (deserializer != null)
                 logger.warn("[Stream {}] Error while reading partition {} from stream on ks='{}' and table='{}'.",
-                            session.planId(), deserializer.partitionKey(), cfs.keyspace.getName(), cfs.getColumnFamilyName());
+                            session.planId(), deserializer.partitionKey(), cfs.keyspace.getName(), cfs.getTableName());
             if (writer != null)
             {
                 writer.abort(e);
             }
-            drain(dis, in.getBytesRead());
+            drain(in, in.getBytesRead());
             if (e instanceof IOException)
                 throw (IOException) e;
             else
                 throw Throwables.propagate(e);
+        }
+        finally
+        {
+            if (deserializer != null)
+                deserializer.cleanup();
         }
     }
 
