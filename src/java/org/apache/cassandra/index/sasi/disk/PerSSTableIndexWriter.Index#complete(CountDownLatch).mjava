@@ -28,7 +28,7 @@
 
                     for (Future<OnDiskIndex> f : segments)
                     {
-                        OnDiskIndex part = Futures.getUnchecked(f);
+                        OnDiskIndex part = f.get();
                         if (part == null)
                             continue;
 
@@ -42,7 +42,7 @@
                                    new File(outputFile),
                                    new CombinedTermIterator(parts));
                 }
-                catch (Exception e)
+                catch (Exception | FSError e)
                 {
                     logger.error("Failed to flush index {}.", outputFile, e);
                     FileUtils.delete(outputFile);
@@ -51,13 +51,14 @@
                 {
                     logger.info("Index flush to {} took {} ms.", outputFile, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start1));
 
-                    for (OnDiskIndex part : parts)
+                    for (int segment = 0; segment < segmentNumber; segment++)
                     {
-                        if (part == null)
-                            continue;
+                        OnDiskIndex part = parts[segment];
 
-                        FileUtils.closeQuietly(part);
-                        FileUtils.delete(part.getIndexPath());
+                        if (part != null)
+                            FileUtils.closeQuietly(part);
+
+                        FileUtils.delete(outputFile + "_" + segment);
                     }
 
                     latch.countDown();
