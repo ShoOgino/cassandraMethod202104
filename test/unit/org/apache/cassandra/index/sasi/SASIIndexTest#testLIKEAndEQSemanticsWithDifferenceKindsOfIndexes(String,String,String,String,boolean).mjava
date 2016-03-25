@@ -1,11 +1,13 @@
     private void testLIKEAndEQSemanticsWithDifferenceKindsOfIndexes(String containsTable,
                                                                     String prefixTable,
                                                                     String analyzedPrefixTable,
+                                                                    String tokenizedContainsTable,
                                                                     boolean forceFlush)
     {
         QueryProcessor.executeOnceInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?);", KS_NAME, containsTable), 0, "Pavel");
         QueryProcessor.executeOnceInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?);", KS_NAME, prefixTable), 0, "Jean-Claude");
         QueryProcessor.executeOnceInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?);", KS_NAME, analyzedPrefixTable), 0, "Jean-Claude");
+        QueryProcessor.executeOnceInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?);", KS_NAME, tokenizedContainsTable), 0, "Pavel");
 
         if (forceFlush)
         {
@@ -22,29 +24,45 @@
         Assert.assertNotNull(results);
         Assert.assertEquals(0, results.size());
 
+        results = QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE 'Pav%%';", KS_NAME, containsTable));
+        Assert.assertNotNull(results);
+        Assert.assertEquals(1, results.size());
+
         results = QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE 'Pavel';", KS_NAME, containsTable));
+        Assert.assertNotNull(results);
+        Assert.assertEquals(1, results.size());
+
+        results = QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v = 'Pav';", KS_NAME, containsTable));
+        Assert.assertNotNull(results);
+        Assert.assertEquals(0, results.size());
+
+        results = QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v = 'Pavel';", KS_NAME, containsTable));
         Assert.assertNotNull(results);
         Assert.assertEquals(1, results.size());
 
         try
         {
-            QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v = 'Pav';", KS_NAME, containsTable));
+            QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v = 'Pav';", KS_NAME, tokenizedContainsTable));
             Assert.fail();
         }
         catch (InvalidRequestException e)
         {
-            // expected since CONTAINS indexes only support LIKE
+            // expected since CONTAINS + analyzed indexes only support LIKE
         }
 
         try
         {
-            QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE 'Pav%%';", KS_NAME, containsTable));
+            QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE 'Pav%%';", KS_NAME, tokenizedContainsTable));
             Assert.fail();
         }
         catch (InvalidRequestException e)
         {
-            // expected since CONTAINS indexes only support LIKE '%<term>' and LIKE '%<term>%'
+            // expected since CONTAINS + analyzed only support LIKE
         }
+
+        QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE 'Pav%%';", KS_NAME, containsTable));
+        Assert.assertNotNull(results);
+        Assert.assertEquals(1, results.size());
 
         results = QueryProcessor.executeOnceInternal(String.format("SELECT * FROM %s.%s WHERE v LIKE '%%Pav';", KS_NAME, containsTable));
         Assert.assertNotNull(results);
