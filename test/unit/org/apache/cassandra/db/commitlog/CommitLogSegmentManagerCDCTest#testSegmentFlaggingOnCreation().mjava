@@ -1,0 +1,50 @@
+    @Test
+    public void testSegmentFlaggingOnCreation() throws Throwable
+    {
+        CommitLogSegmentManagerCDC cdcMgr = (CommitLogSegmentManagerCDC)CommitLog.instance.segmentManager;
+        String ct = createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+
+        int origSize = DatabaseDescriptor.getCDCSpaceInMB();
+        try
+        {
+            DatabaseDescriptor.setCDCSpaceInMB(16);
+            CFMetaData ccfm = Keyspace.open(keyspace()).getColumnFamilyStore(ct).metadata;
+            // Spin until we hit CDC capacity and make sure we get a WriteTimeout
+            try
+            {
+                for (int i = 0; i < 1000; i++)
+                {
+                    new RowUpdateBuilder(ccfm, 0, i)
+                        .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+                        .build().apply();
+                }
+                Assert.fail("Expected WriteTimeoutException from full CDC but did not receive it.");
+            }
+            catch (WriteTimeoutException e) { }
+
+            expectCurrentCDCState(CDCState.FORBIDDEN);
+            CommitLog.instance.forceRecycleAllSegments();
+
+            cdcMgr.awaitManagementTasksCompletion();
+            new File(DatabaseDescriptor.getCDCLogLocation()).listFiles()[0].delete();
+            cdcMgr.updateCDCTotalSize();
+            // Confirm cdc update process changes flag on active segment
+            expectCurrentCDCState(CDCState.PERMITTED);
+
+            // Clear out archived CDC files
+            for (File f : new File(DatabaseDescriptor.getCDCLogLocation()).listFiles()) {
+                FileUtils.deleteWithConfirm(f);
+            }
+
+            // Set space to 0, confirm newly allocated segments are FORBIDDEN
+            DatabaseDescriptor.setCDCSpaceInMB(0);
+            CommitLog.instance.forceRecycleAllSegments();
+            CommitLog.instance.segmentManager.awaitManagementTasksCompletion();
+            expectCurrentCDCState(CDCState.FORBIDDEN);
+        }
+        finally
+        {
+            DatabaseDescriptor.setCDCSpaceInMB(origSize);
+        }
+    }
+

@@ -6,12 +6,12 @@
                            commitLog.executor.getClass().getSimpleName(),
                            randomSize ? " random size" : "",
                            discardedRun ? " with discarded run" : "");
-        commitLog.allocator.enableReserveSegmentCreation();
+        CommitLog.instance.segmentManager.enableReserveSegmentCreation();
         
         final List<CommitlogThread> threads = new ArrayList<>();
         ScheduledExecutorService scheduled = startThreads(commitLog, threads);
 
-        discardedPos = ReplayPosition.NONE;
+        discardedPos = CommitLogPosition.NONE;
         if (discardedRun)
         {
             // Makes sure post-break data is not deleted, and that replayer correctly rejects earlier mutations.
@@ -23,13 +23,12 @@
             for (CommitlogThread t: threads)
             {
                 t.join();
-                if (t.rp.compareTo(discardedPos) > 0)
-                    discardedPos = t.rp;
+                if (t.clsp.compareTo(discardedPos) > 0)
+                    discardedPos = t.clsp;
             }
             verifySizes(commitLog);
 
-            commitLog.discardCompletedSegments(Schema.instance.getCFMetaData("Keyspace1", "Standard1").cfId,
-                                               discardedPos);
+            commitLog.discardCompletedSegments(Schema.instance.getCFMetaData("Keyspace1", "Standard1").cfId, discardedPos);
             threads.clear();
 
             System.out.format("Discarded at %s\n", discardedPos);
@@ -57,26 +56,28 @@
 
         System.out.println("Stopped. Replaying... ");
         System.out.flush();
-        Replayer repl = new Replayer(commitLog);
+        Reader reader = new Reader();
         File[] files = new File(location).listFiles();
-        repl.recover(files);
+
+        DummyHandler handler = new DummyHandler();
+        reader.readAllFiles(handler, files);
 
         for (File f : files)
             if (!f.delete())
                 Assert.fail("Failed to delete " + f);
 
-        if (hash == repl.hash && cells == repl.cells)
+        if (hash == reader.hash && cells == reader.cells)
             System.out.format("Test success. compressor = %s, encryption enabled = %b; discarded = %d, skipped = %d\n",
                               commitLog.configuration.getCompressorName(),
                               commitLog.configuration.useEncryption(),
-                              repl.discarded, repl.skipped);
+                              reader.discarded, reader.skipped);
         else
         {
             System.out.format("Test failed (compressor = %s, encryption enabled = %b). Cells %d, expected %d, diff %d; discarded = %d, skipped = %d -  hash %d expected %d.\n",
                               commitLog.configuration.getCompressorName(),
                               commitLog.configuration.useEncryption(),
-                              repl.cells, cells, cells - repl.cells, repl.discarded, repl.skipped,
-                              repl.hash, hash);
+                              reader.cells, cells, cells - reader.cells, reader.discarded, reader.skipped,
+                              reader.hash, hash);
             failed = true;
         }
     }

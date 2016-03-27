@@ -1,27 +1,28 @@
     @Test
     public void testDeleteIfNotDirty() throws Exception
     {
-        ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
-        ColumnFamilyStore cfs2 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD2);
+        Keyspace ks = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs1 = ks.getColumnFamilyStore(STANDARD1);
+        ColumnFamilyStore cfs2 = ks.getColumnFamilyStore(STANDARD2);
 
         // Roughly 32 MB mutation
-        Mutation rm = new RowUpdateBuilder(cfs1.metadata, 0, "k")
-                      .clustering("bytes")
-                      .add("val", ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/4) - 1))
-                      .build();
+         Mutation rm = new RowUpdateBuilder(cfs1.metadata, 0, "k")
+                  .clustering("bytes")
+                  .add("val", ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/4) - 1))
+                  .build();
 
         // Adding it twice (won't change segment)
         CommitLog.instance.add(rm);
         CommitLog.instance.add(rm);
 
-        assertEquals(1, CommitLog.instance.activeSegments());
+        assertEquals(1, CommitLog.instance.segmentManager.getActiveSegments().size());
 
         // "Flush": this won't delete anything
         UUID cfid1 = rm.getColumnFamilyIds().iterator().next();
         CommitLog.instance.sync(true);
-        CommitLog.instance.discardCompletedSegments(cfid1, CommitLog.instance.getContext());
+        CommitLog.instance.discardCompletedSegments(cfid1, CommitLog.instance.getCurrentPosition());
 
-        assertEquals(1, CommitLog.instance.activeSegments());
+        assertEquals(1, CommitLog.instance.segmentManager.getActiveSegments().size());
 
         // Adding new mutation on another CF, large enough (including CL entry overhead) that a new segment is created
         Mutation rm2 = new RowUpdateBuilder(cfs2.metadata, 0, "k")
@@ -33,15 +34,15 @@
         CommitLog.instance.add(rm2);
         CommitLog.instance.add(rm2);
 
-        assertEquals(3, CommitLog.instance.activeSegments());
+        assertEquals(3, CommitLog.instance.segmentManager.getActiveSegments().size());
 
         // "Flush" second cf: The first segment should be deleted since we
         // didn't write anything on cf1 since last flush (and we flush cf2)
 
         UUID cfid2 = rm2.getColumnFamilyIds().iterator().next();
-        CommitLog.instance.discardCompletedSegments(cfid2, CommitLog.instance.getContext());
+        CommitLog.instance.discardCompletedSegments(cfid2, CommitLog.instance.getCurrentPosition());
 
         // Assert we still have both our segment
-        assertEquals(1, CommitLog.instance.activeSegments());
+        assertEquals(1, CommitLog.instance.segmentManager.getActiveSegments().size());
     }
 

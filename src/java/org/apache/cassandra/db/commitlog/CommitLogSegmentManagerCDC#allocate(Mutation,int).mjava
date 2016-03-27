@@ -1,0 +1,31 @@
+    /**
+     * Reserve space in the current segment for the provided mutation or, if there isn't space available,
+     * create a new segment. For CDC mutations, allocation is expected to throw WTE if the segment disallows CDC mutations.
+     *
+     * @param mutation Mutation to allocate in segment manager
+     * @param size total size (overhead + serialized) of mutation
+     * @return the created Allocation object
+     * @throws WriteTimeoutException If segment disallows CDC mutations, we throw WTE
+     */
+    @Override
+    public CommitLogSegment.Allocation allocate(Mutation mutation, int size) throws WriteTimeoutException
+    {
+        CommitLogSegment segment = allocatingFrom();
+        CommitLogSegment.Allocation alloc;
+
+        throwIfForbidden(mutation, segment);
+        while ( null == (alloc = segment.allocate(mutation, size)) )
+        {
+            // Failed to allocate, so move to a new segment with enough room if possible.
+            advanceAllocatingFrom(segment);
+            segment = allocatingFrom;
+
+            throwIfForbidden(mutation, segment);
+        }
+
+        if (mutation.trackedByCDC())
+            segment.setCDCState(CDCState.CONTAINS);
+
+        return alloc;
+    }
+

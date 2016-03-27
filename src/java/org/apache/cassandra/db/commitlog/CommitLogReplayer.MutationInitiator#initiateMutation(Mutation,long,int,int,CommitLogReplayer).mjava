@@ -2,7 +2,7 @@
                                                    final long segmentId,
                                                    final int serializedSize,
                                                    final int entryLocation,
-                                                   final CommitLogReplayer clr)
+                                                   final CommitLogReplayer commitLogReplayer)
         {
             Runnable runnable = new WrappedRunnable()
             {
@@ -10,7 +10,7 @@
                 {
                     if (Schema.instance.getKSMetaData(mutation.getKeyspaceName()) == null)
                         return;
-                    if (clr.pointInTimeExceeded(mutation))
+                    if (commitLogReplayer.pointInTimeExceeded(mutation))
                         return;
 
                     final Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
@@ -21,19 +21,19 @@
                     // or c) are part of a cf that was dropped.
                     // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
                     Mutation newMutation = null;
-                    for (PartitionUpdate update : clr.replayFilter.filter(mutation))
+                    for (PartitionUpdate update : commitLogReplayer.replayFilter.filter(mutation))
                     {
                         if (Schema.instance.getCF(update.metadata().cfId) == null)
                             continue; // dropped
 
                         // replay if current segment is newer than last flushed one or,
-                        // if it is the last known segment, if we are after the replay position
-                        if (clr.shouldReplay(update.metadata().cfId, new ReplayPosition(segmentId, entryLocation)))
+                        // if it is the last known segment, if we are after the commit log segment position
+                        if (commitLogReplayer.shouldReplay(update.metadata().cfId, new CommitLogPosition(segmentId, entryLocation)))
                         {
                             if (newMutation == null)
                                 newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
                             newMutation.add(update);
-                            clr.replayedCount.incrementAndGet();
+                            commitLogReplayer.replayedCount.incrementAndGet();
                         }
                     }
                     if (newMutation != null)
@@ -49,7 +49,7 @@
                             throw Throwables.propagate(e.getCause());
                         }
 
-                        clr.keyspacesRecovered.add(keyspace);
+                        commitLogReplayer.keyspacesReplayed.add(keyspace);
                     }
                 }
             };

@@ -1,0 +1,49 @@
+    /**
+     * Switch to a new segment, regardless of how much is left in the current one.
+     *
+     * Flushes any dirty CFs for this segment and any older segments, and then recycles
+     * the segments
+     */
+    void forceRecycleAll(Iterable<UUID> droppedCfs)
+    {
+        List<CommitLogSegment> segmentsToRecycle = new ArrayList<>(activeSegments);
+        CommitLogSegment last = segmentsToRecycle.get(segmentsToRecycle.size() - 1);
+        advanceAllocatingFrom(last);
+
+        // wait for the commit log modifications
+        last.waitForModifications();
+
+        // make sure the writes have materialized inside of the memtables by waiting for all outstanding writes
+        // on the relevant keyspaces to complete
+        Keyspace.writeOrder.awaitNewBarrier();
+
+        // flush and wait for all CFs that are dirty in segments up-to and including 'last'
+        Future<?> future = flushDataFrom(segmentsToRecycle, true);
+        try
+        {
+            future.get();
+
+            for (CommitLogSegment segment : activeSegments)
+                for (UUID cfId : droppedCfs)
+                    segment.markClean(cfId, segment.getCurrentCommitLogPosition());
+
+            // now recycle segments that are unused, as we may not have triggered a discardCompletedSegments()
+            // if the previous active segment was the only one to recycle (since an active segment isn't
+            // necessarily dirty, and we only call dCS after a flush).
+            for (CommitLogSegment segment : activeSegments)
+            {
+                if (segment.isUnused())
+                    recycleSegment(segment);
+            }
+
+            CommitLogSegment first;
+            if ((first = activeSegments.peek()) != null && first.id <= last.id)
+                logger.error("Failed to force-recycle all segments; at least one segment is still in use with dirty CFs.");
+        }
+        catch (Throwable t)
+        {
+            // for now just log the error
+            logger.error("Failed waiting for a forced recycle of in-use commit log segments", t);
+        }
+    }
+

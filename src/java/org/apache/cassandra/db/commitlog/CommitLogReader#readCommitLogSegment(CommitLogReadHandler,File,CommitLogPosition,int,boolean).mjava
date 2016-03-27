@@ -1,0 +1,116 @@
+    /**
+     * Reads mutations from file, handing them off to handler
+     * @param handler Handler that will take action based on deserialized Mutations
+     * @param file CommitLogSegment file to read
+     * @param minPosition Optional minimum CommitLogPosition - all segments with id > or matching w/greater position will be read
+     * @param mutationLimit Optional limit on # of mutations to replay. Local ALL_MUTATIONS serves as marker to play all.
+     * @param tolerateTruncation Whether or not we should allow truncation of this file or throw if EOF found
+     *
+     * @throws IOException
+     */
+    public void readCommitLogSegment(CommitLogReadHandler handler,
+                                     File file,
+                                     CommitLogPosition minPosition,
+                                     int mutationLimit,
+                                     boolean tolerateTruncation) throws IOException
+    {
+        // just transform from the file name (no reading of headers) to determine version
+        CommitLogDescriptor desc = CommitLogDescriptor.fromFileName(file.getName());
+
+        try(ChannelProxy channel = new ChannelProxy(file);
+            RandomAccessReader reader = RandomAccessReader.open(channel))
+        {
+            if (desc.version < CommitLogDescriptor.VERSION_21)
+            {
+                if (!shouldSkipSegmentId(file, desc, minPosition))
+                {
+                    if (minPosition.segmentId == desc.id)
+                        reader.seek(minPosition.position);
+                    ReadStatusTracker statusTracker = new ReadStatusTracker(mutationLimit, tolerateTruncation);
+                    statusTracker.errorContext = desc.fileName();
+                    readSection(handler, reader, minPosition, (int) reader.length(), statusTracker, desc);
+                }
+                return;
+            }
+
+            final long segmentIdFromFilename = desc.id;
+            try
+            {
+                // The following call can either throw or legitimately return null. For either case, we need to check
+                // desc outside this block and set it to null in the exception case.
+                desc = CommitLogDescriptor.readHeader(reader, DatabaseDescriptor.getEncryptionContext());
+            }
+            catch (Exception e)
+            {
+                desc = null;
+            }
+            if (desc == null)
+            {
+                // don't care about whether or not the handler thinks we can continue. We can't w/out descriptor.
+                handler.handleUnrecoverableError(new CommitLogReadException(
+                    String.format("Could not read commit log descriptor in file %s", file),
+                    CommitLogReadErrorReason.UNRECOVERABLE_DESCRIPTOR_ERROR,
+                    false));
+                return;
+            }
+
+            if (segmentIdFromFilename != desc.id)
+            {
+                if (handler.shouldSkipSegmentOnError(new CommitLogReadException(String.format(
+                    "Segment id mismatch (filename %d, descriptor %d) in file %s", segmentIdFromFilename, desc.id, file),
+                                                                                CommitLogReadErrorReason.RECOVERABLE_DESCRIPTOR_ERROR,
+                                                                                false)))
+                {
+                    return;
+                }
+            }
+
+            if (shouldSkipSegmentId(file, desc, minPosition))
+                return;
+
+            CommitLogSegmentReader segmentReader;
+            try
+            {
+                segmentReader = new CommitLogSegmentReader(handler, desc, reader, tolerateTruncation);
+            }
+            catch(Exception e)
+            {
+                handler.handleUnrecoverableError(new CommitLogReadException(
+                    String.format("Unable to create segment reader for commit log file: %s", e),
+                    CommitLogReadErrorReason.UNRECOVERABLE_UNKNOWN_ERROR,
+                    tolerateTruncation));
+                return;
+            }
+
+            try
+            {
+                ReadStatusTracker statusTracker = new ReadStatusTracker(mutationLimit, tolerateTruncation);
+                for (CommitLogSegmentReader.SyncSegment syncSegment : segmentReader)
+                {
+                    statusTracker.tolerateErrorsInSection &= syncSegment.toleratesErrorsInSection;
+
+                    // Skip segments that are completely behind the desired minPosition
+                    if (desc.id == minPosition.segmentId && syncSegment.endPosition < minPosition.position)
+                        continue;
+
+                    statusTracker.errorContext = String.format("Next section at %d in %s", syncSegment.fileStartPosition, desc.fileName());
+
+                    // TODO: Since EncryptedFileSegmentInputStream doesn't implement seek(), we cannot pre-emptively seek
+                    // to the desired offset in the syncSegment before reading the section and deserializing the mutations.
+                    readSection(handler, syncSegment.input, minPosition, syncSegment.endPosition, statusTracker, desc);
+                    if (!statusTracker.shouldContinue())
+                        break;
+                }
+            }
+            // Unfortunately AbstractIterator cannot throw a checked exception, so we check to see if a RuntimeException
+            // is wrapping an IOException.
+            catch (RuntimeException re)
+            {
+                if (re.getCause() instanceof IOException)
+                    throw (IOException) re.getCause();
+                throw re;
+            }
+            logger.debug("Finished reading {}", file);
+        }
+    }
+

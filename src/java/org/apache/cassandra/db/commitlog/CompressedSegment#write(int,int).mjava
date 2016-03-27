@@ -9,13 +9,13 @@
         try
         {
             int neededBufferSize = compressor.initialCompressedBufferLength(length) + COMPRESSED_MARKER_SIZE;
-            ByteBuffer compressedBuffer = reusableBufferHolder.get();
+            ByteBuffer compressedBuffer = manager.getBufferPool().getThreadLocalReusableBuffer();
             if (compressor.preferredBufferType() != BufferType.typeOf(compressedBuffer) ||
                 compressedBuffer.capacity() < neededBufferSize)
             {
                 FileUtils.clean(compressedBuffer);
                 compressedBuffer = allocate(neededBufferSize);
-                reusableBufferHolder.set(compressedBuffer);
+                manager.getBufferPool().setThreadLocalReusableBuffer(compressedBuffer);
             }
 
             ByteBuffer inputBuffer = buffer.duplicate();
@@ -29,7 +29,7 @@
             // Only one thread can be here at a given time.
             // Protected by synchronization on CommitLogSegment.sync().
             writeSyncMarker(compressedBuffer, 0, (int) channel.position(), (int) channel.position() + compressedBuffer.remaining());
-            commitLog.allocator.addSize(compressedBuffer.limit());
+            manager.addSize(compressedBuffer.limit());
             channel.write(compressedBuffer);
             assert channel.position() - lastWrittenPos == compressedBuffer.limit();
             lastWrittenPos = channel.position();

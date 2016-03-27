@@ -1,0 +1,54 @@
+    @Test
+    public void testCDCWriteTimeout() throws Throwable
+    {
+        createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+        CommitLogSegmentManagerCDC cdcMgr = (CommitLogSegmentManagerCDC)CommitLog.instance.segmentManager;
+        CFMetaData cfm = currentTableMetadata();
+
+        // Confirm that logic to check for whether or not we can allocate new CDC segments works
+        Integer originalCDCSize = DatabaseDescriptor.getCDCSpaceInMB();
+        try
+        {
+            DatabaseDescriptor.setCDCSpaceInMB(32);
+            // Spin until we hit CDC capacity and make sure we get a WriteTimeout
+            try
+            {
+                // Should trigger on anything < 20:1 compression ratio during compressed test
+                for (int i = 0; i < 100; i++)
+                {
+                    new RowUpdateBuilder(cfm, 0, i)
+                        .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+                        .build().apply();
+                }
+                Assert.fail("Expected WriteTimeoutException from full CDC but did not receive it.");
+            }
+            catch (WriteTimeoutException e)
+            {
+                // expected, do nothing
+            }
+            expectCurrentCDCState(CDCState.FORBIDDEN);
+
+            // Confirm we can create a non-cdc table and write to it even while at cdc capacity
+            createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=false;");
+            execute("INSERT INTO %s (idx, data) VALUES (1, '1');");
+
+            // Confirm that, on flush+recyle, we see files show up in cdc_raw
+            Keyspace.open(keyspace()).getColumnFamilyStore(currentTable()).forceBlockingFlush();
+            CommitLog.instance.forceRecycleAllSegments();
+            cdcMgr.awaitManagementTasksCompletion();
+            Assert.assertTrue("Expected files to be moved to overflow.", getCDCRawCount() > 0);
+
+            // Simulate a CDC consumer reading files then deleting them
+            for (File f : new File(DatabaseDescriptor.getCDCLogLocation()).listFiles())
+                FileUtils.deleteWithConfirm(f);
+
+            // Update size tracker to reflect deleted files. Should flip flag on current allocatingFrom to allow.
+            cdcMgr.updateCDCTotalSize();
+            expectCurrentCDCState(CDCState.PERMITTED);
+        }
+        finally
+        {
+            DatabaseDescriptor.setCDCSpaceInMB(originalCDCSize);
+        }
+    }
+

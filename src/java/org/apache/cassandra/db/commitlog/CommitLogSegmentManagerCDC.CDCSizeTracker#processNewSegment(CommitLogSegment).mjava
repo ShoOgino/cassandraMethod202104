@@ -1,0 +1,26 @@
+        /**
+         * Synchronous size recalculation on each segment creation/deletion call could lead to very long delays in new
+         * segment allocation, thus long delays in thread signaling to wake waiting allocation / writer threads.
+         *
+         * This can be reached either from the segment management thread in ABstractCommitLogSegmentManager or from the
+         * size recalculation executor, so we synchronize on this object to reduce the race overlap window available for
+         * size to get off.
+         *
+         * Reference DirectorySizerBench for more information about performance of the directory size recalc.
+         */
+        void processNewSegment(CommitLogSegment segment)
+        {
+            // See synchronization in CommitLogSegment.setCDCState
+            synchronized(segment)
+            {
+                segment.setCDCState(defaultSegmentSize() + totalCDCSizeOnDisk() > allowableCDCBytes()
+                                    ? CDCState.FORBIDDEN
+                                    : CDCState.PERMITTED);
+                if (segment.getCDCState() == CDCState.PERMITTED)
+                    unflushedCDCSize.addAndGet(defaultSegmentSize());
+            }
+
+            // Take this opportunity to kick off a recalc to pick up any consumer file deletion.
+            submitOverflowSizeRecalculation();
+        }
+
