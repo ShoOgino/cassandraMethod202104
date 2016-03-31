@@ -1,9 +1,14 @@
     public void run()
     {
+        UUID localHostId = SystemKeyspace.getLocalHostId();
         String ksname = baseCfs.metadata.ksName, viewName = view.name;
 
         if (SystemKeyspace.isViewBuilt(ksname, viewName))
+        {
+            if (!SystemKeyspace.isViewStatusReplicated(ksname, viewName))
+                updateDistributed(ksname, viewName, localHostId);
             return;
+        }
 
         Iterable<Range<Token>> ranges = StorageService.instance.getLocalRanges(baseCfs.metadata.ksName);
         final Pair<Integer, Token> buildStatus = SystemKeyspace.getViewBuildStatus(ksname, viewName);
@@ -46,6 +51,7 @@
         try (Refs<SSTableReader> sstables = baseCfs.selectAndReference(function).refs;
              ReducingKeyIterator iter = new ReducingKeyIterator(sstables))
         {
+            SystemDistributedKeyspace.startViewBuild(ksname, viewName, localHostId);
             while (!isStopped && iter.hasNext())
             {
                 DecoratedKey key = iter.next();
@@ -70,13 +76,14 @@
             }
 
             if (!isStopped)
-            SystemKeyspace.finishViewBuildStatus(ksname, viewName);
-
+            {
+                SystemKeyspace.finishViewBuildStatus(ksname, viewName);
+                updateDistributed(ksname, viewName, localHostId);
+            }
         }
         catch (Exception e)
         {
-            final ViewBuilder builder = new ViewBuilder(baseCfs, view);
-            ScheduledExecutors.nonPeriodicTasks.schedule(() -> CompactionManager.instance.submitViewBuilder(builder),
+            ScheduledExecutors.nonPeriodicTasks.schedule(() -> CompactionManager.instance.submitViewBuilder(this),
                                                          5,
                                                          TimeUnit.MINUTES);
             logger.warn("Materialized View failed to complete, sleeping 5 minutes before restarting", e);
