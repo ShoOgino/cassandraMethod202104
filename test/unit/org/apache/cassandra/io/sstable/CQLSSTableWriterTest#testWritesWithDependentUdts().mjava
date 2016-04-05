@@ -1,0 +1,64 @@
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testWritesWithDependentUdts() throws Exception
+    {
+        final String KS = "cql_keyspace4";
+        final String TABLE = "table4";
+
+        final String schema = "CREATE TABLE " + KS + "." + TABLE + " ("
+                              + "  k int,"
+                              + "  v1 frozen<nested_tuple>,"
+                              + "  PRIMARY KEY (k)"
+                              + ")";
+
+        File tempdir = Files.createTempDir();
+        File dataDir = new File(tempdir.getAbsolutePath() + File.separator + KS + File.separator + TABLE);
+        assert dataDir.mkdirs();
+
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .withType("CREATE TYPE " + KS + ".nested_tuple (c int, tpl frozen<tuple2>)")
+                                                  .withType("CREATE TYPE " + KS + ".tuple2 (a int, b int)")
+                                                  .forTable(schema)
+                                                  .using("INSERT INTO " + KS + "." + TABLE + " (k, v1) " +
+                                                         "VALUES (?, ?)")
+                                                  .build();
+
+        UserType tuple2Type = writer.getUDType("tuple2");
+        UserType nestedTuple = writer.getUDType("nested_tuple");
+        TypeCodec tuple2Codec = UDHelper.codecFor(tuple2Type);
+        TypeCodec nestedTupleCodec = UDHelper.codecFor(nestedTuple);
+
+        for (int i = 0; i < 100; i++)
+        {
+            writer.addRow(i,
+                          nestedTuple.newValue()
+                                     .setInt("c", i * 100)
+                                     .set("tpl",
+                                          tuple2Type.newValue()
+                                                    .setInt("a", i * 200)
+                                                    .setInt("b", i * 300),
+                                          tuple2Codec));
+        }
+
+        writer.close();
+        loadSSTables(dataDir, KS);
+
+        UntypedResultSet resultSet = QueryProcessor.executeInternal("SELECT * FROM " + KS + "." + TABLE);
+
+        assertEquals(resultSet.size(), 100);
+        int cnt = 0;
+        for (UntypedResultSet.Row row: resultSet) {
+            assertEquals(cnt,
+                         row.getInt("k"));
+            UDTValue nestedTpl = (UDTValue) nestedTupleCodec.deserialize(row.getBytes("v1"),
+                                                                         ProtocolVersion.NEWEST_SUPPORTED);
+            assertEquals(nestedTpl.getInt("c"), cnt * 100);
+            UDTValue tpl = nestedTpl.getUDTValue("tpl");
+            assertEquals(tpl.getInt("a"), cnt * 200);
+            assertEquals(tpl.getInt("b"), cnt * 300);
+
+            cnt++;
+        }
+    }
+
