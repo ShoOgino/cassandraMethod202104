@@ -1,0 +1,125 @@
+    /*
+     * Inserts a new element starting at index i. This method assumes that:
+     *    ends[i-1] <= start < ends[i]
+     * (note that start can be equal to ends[i-1] in the case where we have a boundary, i.e. for instance
+     * ends[i-1] is the exclusive end of X and start is the inclusive start of X).
+     *
+     * A RangeTombstoneList is a list of range [s_0, e_0]...[s_n, e_n] such that:
+     *   - s_i is a start bound and e_i is a end bound
+     *   - s_i < e_i
+     *   - e_i <= s_i+1
+     * Basically, range are non overlapping and in order.
+     */
+    private void insertFrom(int i, ClusteringBound start, ClusteringBound end, long markedAt, int delTime)
+    {
+        while (i < size)
+        {
+            assert start.isStart() && end.isEnd();
+            assert i == 0 || comparator.compare(ends[i-1], start) <= 0;
+            assert comparator.compare(start, ends[i]) < 0;
+
+            if (Slice.isEmpty(comparator, start, end))
+                return;
+
+            // Do we overwrite the current element?
+            if (markedAt > markedAts[i])
+            {
+                // We do overwrite.
+
+                // First deal with what might come before the newly added one.
+                if (comparator.compare(starts[i], start) < 0)
+                {
+                    ClusteringBound newEnd = start.invert();
+                    if (!Slice.isEmpty(comparator, starts[i], newEnd))
+                    {
+                        addInternal(i, starts[i], start.invert(), markedAts[i], delTimes[i]);
+                        i++;
+                        setInternal(i, start, ends[i], markedAts[i], delTimes[i]);
+                    }
+                }
+
+                // now, start <= starts[i]
+
+                // Does the new element stops before the current one,
+                int endCmp = comparator.compare(end, starts[i]);
+                if (endCmp < 0)
+                {
+                    // Here start <= starts[i] and end < starts[i]
+                    // This means the current element is before the current one.
+                    addInternal(i, start, end, markedAt, delTime);
+                    return;
+                }
+
+                // Do we overwrite the current element fully?
+                int cmp = comparator.compare(ends[i], end);
+                if (cmp <= 0)
+                {
+                    // We do overwrite fully:
+                    // update the current element until it's end and continue on with the next element (with the new inserted start == current end).
+
+                    // If we're on the last element, or if we stop before the next start, we set the current element and are done
+                    // Note that the comparison below is inclusive: if a end equals a start, this means they form a boundary, or
+                    // in other words that they are for the same element but one is inclusive while the other exclusive. In which case we know
+                    // we're good with the next element
+                    if (i == size-1 || comparator.compare(end, starts[i+1]) <= 0)
+                    {
+                        setInternal(i, start, end, markedAt, delTime);
+                        return;
+                    }
+
+                    setInternal(i, start, starts[i+1].invert(), markedAt, delTime);
+                    start = starts[i+1];
+                    i++;
+                }
+                else
+                {
+                    // We don't overwrite fully. Insert the new interval, and then update the now next
+                    // one to reflect the not overwritten parts. We're then done.
+                    addInternal(i, start, end, markedAt, delTime);
+                    i++;
+                    ClusteringBound newStart = end.invert();
+                    if (!Slice.isEmpty(comparator, newStart, ends[i]))
+                    {
+                        setInternal(i, newStart, ends[i], markedAts[i], delTimes[i]);
+                    }
+                    return;
+                }
+            }
+            else
+            {
+                // we don't overwrite the current element
+
+                // If the new interval starts before the current one, insert that new interval
+                if (comparator.compare(start, starts[i]) < 0)
+                {
+                    // If we stop before the start of the current element, just insert the new interval and we're done;
+                    // otherwise insert until the beginning of the current element
+                    if (comparator.compare(end, starts[i]) <= 0)
+                    {
+                        addInternal(i, start, end, markedAt, delTime);
+                        return;
+                    }
+                    ClusteringBound newEnd = starts[i].invert();
+                    if (!Slice.isEmpty(comparator, start, newEnd))
+                    {
+                        addInternal(i, start, newEnd, markedAt, delTime);
+                        i++;
+                    }
+                }
+
+                // After that, we're overwritten on the current element but might have
+                // some residual parts after ...
+
+                // ... unless we don't extend beyond it.
+                if (comparator.compare(end, ends[i]) <= 0)
+                    return;
+
+                start = ends[i].invert();
+                i++;
+            }
+        }
+
+        // If we got there, then just insert the remainder at the end
+        addInternal(i, start, end, markedAt, delTime);
+    }
+
