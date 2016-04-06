@@ -1,0 +1,49 @@
+    /*
+     * Don't ignore spurious failures of this test since it is testing concurrent access
+     * and might not fail reliably.
+     */
+    @Test
+    public void verifyConcurrentUUIDGeneration() throws Throwable
+    {
+        long iterations = 250000;
+        int threads = 4;
+        ExecutorService es = Executors.newFixedThreadPool(threads);
+        try
+        {
+            AtomicBoolean failedOrdering = new AtomicBoolean(false);
+            AtomicBoolean failedDuplicate = new AtomicBoolean(false);
+            Set<UUID> generated = Sets.newSetFromMap(new NonBlockingHashMap<>());
+            Runnable task = () -> {
+                long lastTimestamp = 0;
+                long newTimestamp = 0;
+
+                for (long i = 0; i < iterations; i++)
+                {
+                    UUID uuid = UUIDGen.getTimeUUID();
+                    newTimestamp = uuid.timestamp();
+
+                    if (lastTimestamp >= newTimestamp)
+                        failedOrdering.set(true);
+                    if (!generated.add(uuid))
+                        failedDuplicate.set(true);
+
+                    lastTimestamp = newTimestamp;
+                }
+            };
+
+            for (int i = 0; i < threads; i++)
+            {
+                es.execute(task);
+            }
+            es.shutdown();
+            es.awaitTermination(10, TimeUnit.MINUTES);
+
+            assert !failedOrdering.get();
+            assert !failedDuplicate.get();
+        }
+        finally
+        {
+            es.shutdown();
+        }
+    }
+
