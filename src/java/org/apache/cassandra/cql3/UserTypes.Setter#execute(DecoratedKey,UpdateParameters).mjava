@@ -1,0 +1,35 @@
+        public void execute(DecoratedKey partitionKey, UpdateParameters params) throws InvalidRequestException
+        {
+            Term.Terminal value = t.bind(params.options);
+            if (value == UNSET_VALUE)
+                return;
+
+            Value userTypeValue = (Value) value;
+            if (column.type.isMultiCell())
+            {
+                // setting a whole UDT at once means we overwrite all cells, so delete existing cells
+                params.setComplexDeletionTimeForOverwrite(column);
+                if (value == null)
+                    return;
+
+                Iterator<ByteBuffer> fieldNameIter = userTypeValue.type.fieldNames().iterator();
+                for (ByteBuffer buffer : userTypeValue.elements)
+                {
+                    ByteBuffer fieldName = fieldNameIter.next();
+                    if (buffer == null)
+                        continue;
+
+                    CellPath fieldPath = userTypeValue.type.cellPathForField(fieldName);
+                    params.addCell(column, fieldPath, buffer);
+                }
+            }
+            else
+            {
+                // for frozen UDTs, we're overwriting the whole cell value
+                if (value == null)
+                    params.addTombstone(column);
+                else
+                    params.addCell(column, value.get(params.options.getProtocolVersion()));
+            }
+        }
+

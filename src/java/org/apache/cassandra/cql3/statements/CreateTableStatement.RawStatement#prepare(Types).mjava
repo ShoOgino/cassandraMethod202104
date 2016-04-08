@@ -20,10 +20,24 @@
             {
                 ColumnIdentifier id = entry.getKey();
                 CQL3Type pt = entry.getValue().prepare(keyspace(), udts);
-                if (pt.isCollection() && ((CollectionType)pt.getType()).isMultiCell())
-                    stmt.collections.put(id.bytes, (CollectionType)pt.getType());
+                if (pt.getType().isMultiCell())
+                    stmt.multicellColumns.put(id.bytes, pt.getType());
                 if (entry.getValue().isCounter())
                     stmt.hasCounters = true;
+
+                // check for non-frozen UDTs or collections in a non-frozen UDT
+                if (pt.getType().isUDT() && pt.getType().isMultiCell())
+                {
+                    for (AbstractType<?> innerType : ((UserType) pt.getType()).fieldTypes())
+                    {
+                        if (innerType.isMultiCell())
+                        {
+                            assert innerType.isCollection();  // shouldn't get this far with a nested non-frozen UDT
+                            throw new InvalidRequestException("Non-frozen UDTs with nested non-frozen collections are not supported");
+                        }
+                    }
+                }
+
                 stmt.columns.put(id, pt.getType()); // we'll remove what is not a column below
             }
 
@@ -82,8 +96,8 @@
             // For COMPACT STORAGE, we reject any "feature" that we wouldn't be able to translate back to thrift.
             if (useCompactStorage)
             {
-                if (!stmt.collections.isEmpty())
-                    throw new InvalidRequestException("Non-frozen collection types are not supported with COMPACT STORAGE");
+                if (!stmt.multicellColumns.isEmpty())
+                    throw new InvalidRequestException("Non-frozen collections and UDTs are not supported with COMPACT STORAGE");
                 if (!staticColumns.isEmpty())
                     throw new InvalidRequestException("Static columns are not supported in COMPACT STORAGE tables");
 

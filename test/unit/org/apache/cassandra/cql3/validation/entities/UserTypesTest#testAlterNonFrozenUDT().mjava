@@ -1,0 +1,41 @@
+    @Test
+    public void testAlterNonFrozenUDT() throws Throwable
+    {
+        String myType = KEYSPACE + '.' + createType("CREATE TYPE %s (a int, b text)");
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v " + myType + ")");
+        execute("INSERT INTO %s (k, v) VALUES (0, ?)", userType("a", 1, "b", "abc"));
+
+        beforeAndAfterFlush(() -> {
+            assertRows(execute("SELECT v FROM %s"), row(userType("a", 1, "b", "abc")));
+            assertRows(execute("SELECT v.a FROM %s"), row(1));
+            assertRows(execute("SELECT v.b FROM %s"), row("abc"));
+        });
+
+        schemaChange("ALTER TYPE " + myType + " RENAME b TO foo");
+        assertRows(execute("SELECT v FROM %s"), row(userType("a", 1, "b", "abc")));
+        assertRows(execute("SELECT v.a FROM %s"), row(1));
+        assertRows(execute("SELECT v.foo FROM %s"), row("abc"));
+
+        execute("UPDATE %s SET v.foo = 'def' WHERE k = 0");
+        assertRows(execute("SELECT v FROM %s"), row(userType("a", 1, "foo", "def")));
+        assertRows(execute("SELECT v.a FROM %s"), row(1));
+        assertRows(execute("SELECT v.foo FROM %s"), row("def"));
+
+        execute("INSERT INTO %s (k, v) VALUES (0, ?)", userType("a", 2, "foo", "def"));
+        assertRows(execute("SELECT v FROM %s"), row(userType("a", 2, "foo", "def")));
+        assertRows(execute("SELECT v.a FROM %s"), row(2));
+        assertRows(execute("SELECT v.foo FROM %s"), row("def"));
+
+        schemaChange("ALTER TYPE " + myType + " ADD c int");
+        assertRows(execute("SELECT v FROM %s"), row(userType("a", 2, "foo", "def", "c", null)));
+        assertRows(execute("SELECT v.a FROM %s"), row(2));
+        assertRows(execute("SELECT v.foo FROM %s"), row("def"));
+        assertRows(execute("SELECT v.c FROM %s"), row(new Object[] {null}));
+
+        execute("INSERT INTO %s (k, v) VALUES (0, ?)", userType("a", 3, "foo", "abc", "c", 0));
+        beforeAndAfterFlush(() -> {
+            assertRows(execute("SELECT v FROM %s"), row(userType("a", 3, "foo", "abc", "c", 0)));
+            assertRows(execute("SELECT v.c FROM %s"), row(0));
+        });
+    }
+
