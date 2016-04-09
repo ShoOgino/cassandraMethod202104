@@ -42,31 +42,25 @@
 
         if (header.isForSSTable())
         {
-            out.writeUnsignedVInt(serializedRowBodySize(row, header, previousUnfilteredSize, version));
-            // We write the size of the previous unfiltered to make reverse queries more efficient (and simpler).
-            // This is currently not used however and using it is tbd.
-            out.writeUnsignedVInt(previousUnfilteredSize);
+            DataOutputBuffer dob = DataOutputBuffer.RECYCLER.get();
+            try
+            {
+                serializeRowBody(row, flags, header, dob);
+
+                out.writeUnsignedVInt(dob.position() + TypeSizes.sizeofUnsignedVInt(previousUnfilteredSize));
+                // We write the size of the previous unfiltered to make reverse queries more efficient (and simpler).
+                // This is currently not used however and using it is tbd.
+                out.writeUnsignedVInt(previousUnfilteredSize);
+                out.write(dob.buffer());
+            }
+            finally
+            {
+                dob.recycle();
+            }
         }
-
-        if ((flags & HAS_TIMESTAMP) != 0)
-            header.writeTimestamp(pkLiveness.timestamp(), out);
-        if ((flags & HAS_TTL) != 0)
+        else
         {
-            header.writeTTL(pkLiveness.ttl(), out);
-            header.writeLocalDeletionTime(pkLiveness.localExpirationTime(), out);
-        }
-        if ((flags & HAS_DELETION) != 0)
-            header.writeDeletionTime(deletion.time(), out);
-
-        if (!hasAllColumns)
-            Columns.serializer.serializeSubset(Collections2.transform(row, ColumnData::column), headerColumns, out);
-
-        for (ColumnData data : row)
-        {
-            if (data.column.isSimple())
-                Cell.serializer.serialize((Cell) data, out, pkLiveness, header);
-            else
-                writeComplexColumn((ComplexColumnData) data, hasComplexDeletion, pkLiveness, header, out);
+            serializeRowBody(row, flags, header, out);
         }
     }
 

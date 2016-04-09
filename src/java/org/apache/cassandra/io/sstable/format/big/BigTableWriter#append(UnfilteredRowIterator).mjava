@@ -23,29 +23,31 @@
         long startPosition = beforeAppend(key);
         observers.forEach((o) -> o.startPartition(key, iwriter.indexFile.position()));
 
+        //Reuse the writer for each row
+        columnIndexWriter.reset();
+
         try (UnfilteredRowIterator collecting = Transformation.apply(iterator, new StatsCollector(metadataCollector)))
         {
-            ColumnIndex columnIndex = new ColumnIndex(header, dataFile, descriptor.version, observers,
-                                                      getRowIndexEntrySerializer().indexInfoSerializer());
-
-            columnIndex.buildRowIndex(collecting);
+            columnIndexWriter.buildRowIndex(collecting);
 
             // afterAppend() writes the partition key before the first RowIndexEntry - so we have to add it's
             // serialized size to the index-writer position
             long indexFilePosition = ByteBufferUtil.serializedSizeWithShortLength(key.getKey()) + iwriter.indexFile.position();
 
             RowIndexEntry entry = RowIndexEntry.create(startPosition, indexFilePosition,
-                                                       collecting.partitionLevelDeletion(), columnIndex.headerLength, columnIndex.columnIndexCount,
-                                                       columnIndex.indexInfoSerializedSize(),
-                                                       columnIndex.indexSamples,
-                                                       columnIndex.offsets(),
+                                                       collecting.partitionLevelDeletion(),
+                                                       columnIndexWriter.headerLength,
+                                                       columnIndexWriter.columnIndexCount,
+                                                       columnIndexWriter.indexInfoSerializedSize(),
+                                                       columnIndexWriter.indexSamples(),
+                                                       columnIndexWriter.offsets(),
                                                        getRowIndexEntrySerializer().indexInfoSerializer());
 
             long endPosition = dataFile.position();
             long rowSize = endPosition - startPosition;
             maybeLogLargePartitionWarning(key, rowSize);
             metadataCollector.addPartitionSizeInBytes(rowSize);
-            afterAppend(key, endPosition, entry, columnIndex.buffer());
+            afterAppend(key, endPosition, entry, columnIndexWriter.buffer());
             return entry;
         }
         catch (IOException e)
