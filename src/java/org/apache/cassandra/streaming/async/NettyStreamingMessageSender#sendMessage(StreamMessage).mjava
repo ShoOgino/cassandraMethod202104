@@ -1,0 +1,27 @@
+    @Override
+    public void sendMessage(StreamMessage message)
+    {
+        if (closed)
+            throw new RuntimeException("stream has been closed, cannot send " + message);
+
+        if (message instanceof OutgoingFileMessage)
+        {
+            if (isPreview)
+                throw new RuntimeException("Cannot send file messages for preview streaming sessions");
+            logger.debug("{} Sending {}", createLogTag(session, null), message);
+            fileTransferExecutor.submit(new FileStreamTask((OutgoingFileMessage)message));
+            return;
+        }
+
+        try
+        {
+            setupControlMessageChannel();
+            sendControlMessage(controlMessageChannel, message, future -> onControlMessageComplete(future, message));
+        }
+        catch (Exception e)
+        {
+            close();
+            session.onError(e);
+        }
+    }
+

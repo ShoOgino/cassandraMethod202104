@@ -1,0 +1,27 @@
+        public void run()
+        {
+            // if the channel has been closed, cancel the scheduled task and return
+            if (!channel.isOpen() || closed)
+            {
+                future.cancel(false);
+                return;
+            }
+
+            // if the channel is currently processing streaming, skip this execution. As this task executes
+            // on the event loop, even if there is a race with a FileStreamTask which changes the channel attribute
+            // after we check it, the FileStreamTask cannot send out any bytes as this KeepAliveTask is executing
+            // on the event loop (and FileStreamTask publishes it's buffer to the channel, consumed after we're done here).
+            if (channel.attr(TRANSFERRING_FILE_ATTR).get())
+                return;
+
+            try
+            {
+                logger.trace("{} Sending keep-alive to {}.", createLogTag(session, channel), session.peer);
+                sendControlMessage(channel, new KeepAliveMessage(), this::keepAliveListener);
+            }
+            catch (IOException ioe)
+            {
+                future.cancel(false);
+            }
+        }
+

@@ -1,0 +1,55 @@
+    /**
+     * @return A buffer with decompressed data.
+     */
+    public ByteBuf deserialize(LZ4FastDecompressor decompressor, DataInputPlus in, int version) throws IOException
+    {
+        final int compressedLength = in.readInt();
+        final int uncompressedLength = in.readInt();
+
+        // there's no guarantee the next compressed block is contained within one buffer in the input,
+        // so hence we need a 'staging' buffer to get all the bytes into one contiguous buffer for the decompressor
+        ByteBuf compressed = null;
+        ByteBuf uncompressed = null;
+        try
+        {
+            final ByteBuffer compressedNioBuffer;
+
+            // ReadableByteChannel allows us to keep the bytes off-heap because we pass a ByteBuffer to RBC.read(BB),
+            // DataInputPlus.read() takes a byte array (thus, an on-heap array).
+            if (in instanceof ReadableByteChannel)
+            {
+                compressed = allocator.directBuffer(compressedLength);
+                compressedNioBuffer = compressed.nioBuffer(0, compressedLength);
+                int readLength = ((ReadableByteChannel) in).read(compressedNioBuffer);
+                assert readLength == compressedNioBuffer.position();
+                compressedNioBuffer.flip();
+            }
+            else
+            {
+                byte[] compressedBytes = new byte[compressedLength];
+                in.readFully(compressedBytes);
+                compressedNioBuffer = ByteBuffer.wrap(compressedBytes);
+            }
+
+            uncompressed = allocator.directBuffer(uncompressedLength);
+            ByteBuffer uncompressedNioBuffer = uncompressed.nioBuffer(0, uncompressedLength);
+            decompressor.decompress(compressedNioBuffer, uncompressedNioBuffer);
+            uncompressed.writerIndex(uncompressedLength);
+            return uncompressed;
+        }
+        catch (Exception e)
+        {
+            if (uncompressed != null)
+                uncompressed.release();
+
+            if (e instanceof IOException)
+                throw e;
+            throw new IOException(e);
+        }
+        finally
+        {
+            if (compressed != null)
+                compressed.release();
+        }
+    }
+

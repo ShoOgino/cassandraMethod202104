@@ -1,0 +1,45 @@
+    private void decompress(ByteBuffer compressed) throws IOException
+    {
+        final int compressedChunkLength = info.parameters.chunkLength();
+        int length = compressed.remaining();
+
+        // uncompress if the buffer size is less than chunk size. else, if the buffer size is equal to the compressedChunkLength,
+        // we assume the buffer is not compressed. see CASSANDRA-10520
+        final boolean releaseCompressedBuffer;
+        if (length - CHECKSUM_LENGTH < compressedChunkLength)
+        {
+            buffer.clear();
+            compressed.limit(length - CHECKSUM_LENGTH);
+            info.parameters.getSstableCompressor().uncompress(compressed, buffer);
+            buffer.flip();
+            releaseCompressedBuffer = true;
+        }
+        else
+        {
+            FileUtils.clean(buffer);
+            buffer = compressed;
+            buffer.limit(length - CHECKSUM_LENGTH);
+            releaseCompressedBuffer = false;
+        }
+        totalCompressedBytesRead += length;
+
+        // validate crc randomly
+        double crcCheckChance = this.crcCheckChanceSupplier.get();
+        if (crcCheckChance > 0d && crcCheckChance > ThreadLocalRandom.current().nextDouble())
+        {
+            ByteBuffer crcBuf = compressed.duplicate();
+            crcBuf.limit(length - CHECKSUM_LENGTH).position(0);
+            int checksum = (int) checksumType.of(crcBuf);
+
+            crcBuf.limit(length);
+            if (crcBuf.getInt() != checksum)
+                throw new IOException("CRC unmatched");
+        }
+
+        if (releaseCompressedBuffer)
+            FileUtils.clean(compressed);
+
+        // buffer offset is always aligned
+        bufferOffset = current & ~(compressedChunkLength - 1);
+    }
+

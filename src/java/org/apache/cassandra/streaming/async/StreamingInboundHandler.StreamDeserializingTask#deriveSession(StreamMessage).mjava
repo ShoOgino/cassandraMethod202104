@@ -1,0 +1,27 @@
+        StreamSession deriveSession(StreamMessage message) throws IOException
+        {
+            StreamSession streamSession = null;
+            // StreamInitMessage starts a new channel, and IncomingFileMessage potentially, as well.
+            // IncomingFileMessage needs a session to be established a priori, though
+            if (message instanceof StreamInitMessage)
+            {
+                assert session == null : "initiator of stream session received a StreamInitMessage";
+                StreamInitMessage init = (StreamInitMessage) message;
+                StreamResultFuture.initReceivingSide(init.sessionIndex, init.planId, init.streamOperation, init.from, channel, init.keepSSTableLevel, init.pendingRepair, init.previewKind);
+                streamSession = sessionProvider.apply(new SessionIdentifier(init.from, init.planId, init.sessionIndex));
+            }
+            else if (message instanceof IncomingFileMessage)
+            {
+                // TODO: it'd be great to check if the session actually exists before slurping in the entire sstable,
+                // but that's a refactoring for another day
+                FileMessageHeader header = ((IncomingFileMessage) message).header;
+                streamSession = sessionProvider.apply(new SessionIdentifier(header.sender, header.planId, header.sessionIndex));
+            }
+
+            if (streamSession == null)
+                throw new IllegalStateException(createLogTag(null, channel) + " no session found for message " + message);
+
+            streamSession.attach(channel);
+            return streamSession;
+        }
+

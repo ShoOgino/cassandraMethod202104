@@ -1,0 +1,18 @@
+    @Override
+    protected void doFlush(int count) throws IOException
+    {
+        // flush the current backing write buffer only if there's any pending data
+        if (buffer.position() > 0 && channel.isOpen())
+        {
+            int byteCount = buffer.position();
+            currentBuf.writerIndex(byteCount);
+
+            if (!Uninterruptibles.tryAcquireUninterruptibly(channelRateLimiter, byteCount, 2, TimeUnit.MINUTES))
+                throw new IOException("outbound channel was not writable");
+
+            channel.writeAndFlush(currentBuf).addListener(future -> handleBuffer(future, byteCount));
+            currentBuf = channel.alloc().directBuffer(bufferSize, bufferSize);
+            buffer = currentBuf.nioBuffer(0, bufferSize);
+        }
+    }
+

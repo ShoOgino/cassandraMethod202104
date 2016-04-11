@@ -1,0 +1,23 @@
+    /**
+     * Finish preparing the session. This method is blocking (memtables are flushed in {@link #addTransferRanges}),
+     * so the logic should not execute on the main IO thread (read: netty event loop).
+     */
+    private void prepareAsync(Collection<StreamRequest> requests, Collection<StreamSummary> summaries)
+    {
+
+        for (StreamRequest request : requests)
+            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true); // always flush on stream request
+        for (StreamSummary summary : summaries)
+            prepareReceiving(summary);
+
+        PrepareSynAckMessage prepareSynAck = new PrepareSynAckMessage();
+        if (!peer.equals(FBUtilities.getBroadcastAddress()))
+            for (StreamTransferTask task : transfers.values())
+                prepareSynAck.summaries.add(task.getSummary());
+        messageSender.sendMessage(prepareSynAck);
+
+
+        streamResult.handleSessionPrepared(this);
+        maybeCompleted();
+    }
+

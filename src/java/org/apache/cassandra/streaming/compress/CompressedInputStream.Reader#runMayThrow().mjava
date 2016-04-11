@@ -1,34 +1,52 @@
         protected void runMayThrow() throws Exception
         {
-            byte[] compressedWithCRC;
+            byte[] tmp = null;
             while (chunks.hasNext())
             {
                 CompressionMetadata.Chunk chunk = chunks.next();
 
                 int readLength = chunk.length + 4; // read with CRC
-                compressedWithCRC = new byte[readLength];
-
-                int bufferRead = 0;
-                while (bufferRead < readLength)
+                ByteBuffer compressedWithCRC = null;
+                try
                 {
-                    try
+                    final int r;
+                    if (source instanceof ReadableByteChannel)
                     {
-                        int r = source.read(compressedWithCRC, bufferRead, readLength - bufferRead);
-                        if (r < 0)
-                        {
-                            readException = new EOFException("No chunk available");
-                            dataBuffer.put(POISON_PILL);
-                            return; // throw exception where we consume dataBuffer
-                        }
-                        bufferRead += r;
+                        compressedWithCRC = ByteBuffer.allocateDirect(readLength);
+                        r = ((ReadableByteChannel)source).read(compressedWithCRC);
+                        compressedWithCRC.flip();
                     }
-                    catch (IOException e)
+                    else
                     {
-                        logger.warn("Error while reading compressed input stream.", e);
-                        readException = e;
+                        // read into an on-heap araay, then copy over to an off-heap buffer. at a minumum snappy requires
+                        // off-heap buffers for decompression, else we could have just wrapped the plain byte array in a ByteBuffer
+                        if (tmp == null || tmp.length < info.parameters.chunkLength() + CHECKSUM_LENGTH)
+                            tmp = new byte[info.parameters.chunkLength() + CHECKSUM_LENGTH];
+                        source.readFully(tmp, 0, readLength);
+                        compressedWithCRC = ByteBuffer.allocateDirect(readLength);
+                        compressedWithCRC.put(tmp, 0, readLength);
+                        compressedWithCRC.position(0);
+                        r = readLength;
+                    }
+
+                    if (r < 0)
+                    {
+                        FileUtils.clean(compressedWithCRC);
+                        readException = new EOFException("No chunk available");
                         dataBuffer.put(POISON_PILL);
                         return; // throw exception where we consume dataBuffer
                     }
+                }
+                catch (IOException e)
+                {
+                    if (!(e instanceof EOFException))
+                        logger.warn("Error while reading compressed input stream.", e);
+                    if (compressedWithCRC != null)
+                        FileUtils.clean(compressedWithCRC);
+
+                    readException = e;
+                    dataBuffer.put(POISON_PILL);
+                    return; // throw exception where we consume dataBuffer
                 }
                 dataBuffer.put(compressedWithCRC);
             }

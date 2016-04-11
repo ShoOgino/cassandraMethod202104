@@ -1,0 +1,63 @@
+        @Override
+        public void run()
+        {
+            try
+            {
+                while (true)
+                {
+                    // do a check of available bytes and possibly sleep some amount of time (then continue).
+                    // this way we can break out of run() sanely or we end up blocking indefintely in StreamMessage.deserialize()
+                    while (buffers.available() == 0)
+                    {
+                        if (closed)
+                            return;
+
+                        Uninterruptibles.sleepUninterruptibly(400, TimeUnit.MILLISECONDS);
+                    }
+
+                    StreamMessage message = StreamMessage.deserialize(buffers, protocolVersion, null);
+
+                    // keep-alives don't necessarily need to be tied to a session (they could be arrive before or after
+                    // wrt session lifecycle, due to races), just log that we received the message and carry on
+                    if (message instanceof KeepAliveMessage)
+                    {
+                        logger.debug("{} Received {}", createLogTag(session, channel), message);
+                        continue;
+                    }
+
+                    if (session == null)
+                        session = deriveSession(message);
+                    logger.debug("{} Received {}", createLogTag(session, channel), message);
+                    session.messageReceived(message);
+                }
+            }
+            catch (EOFException eof)
+            {
+                // ignore
+            }
+            catch (Throwable t)
+            {
+                JVMStabilityInspector.inspectThrowable(t);
+                if (session != null)
+                {
+                    session.onError(t);
+                }
+                else if (t instanceof StreamReceiveException)
+                {
+                    ((StreamReceiveException)t).session.onError(t);
+                }
+                else
+                {
+                    logger.error("{} stream operation from {} failed", createLogTag(session, channel), remoteAddress, t);
+                }
+            }
+            finally
+            {
+                channel.close();
+                closed = true;
+
+                if (buffers != null)
+                    buffers.close();
+            }
+        }
+
