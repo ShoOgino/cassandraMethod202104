@@ -1,0 +1,72 @@
+    @Test
+    public void filteringOnClusteringColumns() throws Throwable
+    {
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, PRIMARY KEY (a, b, c))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 15, 16, 17)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 22, 23, 24)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)");
+
+        beforeAndAfterFlush(() -> {
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 AND b > 12 AND c > 13 AND d = 17 ALLOW FILTERING"),
+                       row(11, 15, 16, 17));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE a = 11 AND b > 12 AND c > 13 and d = 17");
+
+            assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c > 30 ALLOW FILTERING"),
+                       row(31, 32, 33, 34));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c > 30");
+
+            assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c < 30 ALLOW FILTERING"),
+                       row(21, 22, 23, 24));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c < 30");
+
+            assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c = 33 ALLOW FILTERING"),
+                       row(31, 32, 33, 34));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c = 33");
+
+            assertRows(execute("SELECT * FROM %s WHERE c = 33 ALLOW FILTERING"),
+                       row(31, 32, 33, 34));
+            assertInvalidMessage("PRIMARY KEY column \"c\" cannot be restricted as preceding column \"b\" is not restricted",
+                                 "SELECT * FROM %s WHERE c = 33");
+        });
+
+        // --------------------------------------------------
+        // Clustering column within and across partition keys
+        // --------------------------------------------------
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, PRIMARY KEY (a, b, c))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 15, 16, 17)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 18, 19, 20)");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 22, 23, 24)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 25, 26, 27)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 28, 29, 30)");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 35, 36, 37)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 38, 39, 40)");
+
+        beforeAndAfterFlush(() -> {
+
+            assertRows(executeFilteringOnly("SELECT * FROM %s WHERE a = 21 AND c > 23"),
+                       row(21, 25, 26, 27),
+                       row(21, 28, 29, 30));
+            assertRows(executeFilteringOnly("SELECT * FROM %s WHERE a = 21 AND c > 23 ORDER BY b DESC"),
+                       row(21, 28, 29, 30),
+                       row(21, 25, 26, 27));
+            assertRows(executeFilteringOnly("SELECT * FROM %s WHERE c > 16 and c < 36"),
+                       row(11, 18, 19, 20),
+                       row(21, 22, 23, 24),
+                       row(21, 25, 26, 27),
+                       row(21, 28, 29, 30),
+                       row(31, 32, 33, 34));
+        });
+    }
+

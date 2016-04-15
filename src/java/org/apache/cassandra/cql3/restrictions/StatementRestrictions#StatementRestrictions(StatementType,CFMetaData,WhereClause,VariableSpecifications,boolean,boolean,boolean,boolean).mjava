@@ -4,10 +4,10 @@
                                  VariableSpecifications boundNames,
                                  boolean selectsOnlyStaticColumns,
                                  boolean selectsComplexColumn,
-                                 boolean useFiltering,
-                                 boolean forView) throws InvalidRequestException
+                                 boolean allowFiltering,
+                                 boolean forView)
     {
-        this(type, cfm);
+        this(type, cfm, allowFiltering);
 
 
         ColumnFamilyStore cfs;
@@ -64,7 +64,7 @@
                 processCustomIndexExpressions(whereClause.expressions, boundNames, secondaryIndexManager);
 
             hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(secondaryIndexManager);
-            hasQueriableIndex = !indexRestrictions.getCustomIndexExpressions().isEmpty()
+            hasQueriableIndex = !filterRestrictions.getCustomIndexExpressions().isEmpty()
                     || hasQueriableClusteringColumnIndex
                     || partitionKeyRestrictions.hasSupportingIndex(secondaryIndexManager)
                     || nonPrimaryKeyRestrictions.hasSupportingIndex(secondaryIndexManager);
@@ -76,7 +76,7 @@
         // Some but not all of the partition key columns have been specified;
         // hence we need turn these restrictions into a row filter.
         if (usesSecondaryIndexing)
-            indexRestrictions.add(partitionKeyRestrictions);
+            filterRestrictions.add(partitionKeyRestrictions);
 
         if (selectsOnlyStaticColumns && hasClusteringColumnsRestriction())
         {
@@ -97,16 +97,18 @@
                 throw invalidRequest("Cannot restrict clustering columns when selecting only static columns");
         }
 
-        processClusteringColumnsRestrictions(hasQueriableIndex, selectsOnlyStaticColumns, selectsComplexColumn, forView);
+        processClusteringColumnsRestrictions(hasQueriableIndex,
+                                             selectsOnlyStaticColumns,
+                                             selectsComplexColumn,
+                                             forView,
+                                             allowFiltering);
 
         // Covers indexes on the first clustering column (among others).
         if (isKeyRange && hasQueriableClusteringColumnIndex)
             usesSecondaryIndexing = true;
 
-        usesSecondaryIndexing = usesSecondaryIndexing || clusteringColumnsRestrictions.hasContains();
-
-        if (usesSecondaryIndexing)
-            indexRestrictions.add(clusteringColumnsRestrictions);
+        if (usesSecondaryIndexing || clusteringColumnsRestrictions.needFiltering())
+            filterRestrictions.add(clusteringColumnsRestrictions);
 
         // Even if usesSecondaryIndexing is false at this point, we'll still have to use one if
         // there is restrictions not covered by the PK.
@@ -122,10 +124,10 @@
             }
             if (hasQueriableIndex)
                 usesSecondaryIndexing = true;
-            else if (!useFiltering)
+            else if (!allowFiltering)
                 throw invalidRequest(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE);
 
-            indexRestrictions.add(nonPrimaryKeyRestrictions);
+            filterRestrictions.add(nonPrimaryKeyRestrictions);
         }
 
         if (usesSecondaryIndexing)

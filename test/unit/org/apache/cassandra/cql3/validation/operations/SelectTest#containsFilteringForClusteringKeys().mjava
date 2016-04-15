@@ -1,0 +1,39 @@
+    @Test
+    public void containsFilteringForClusteringKeys() throws Throwable
+    {
+        //-------------------------------------------------
+        // Frozen collections filtering for clustering keys
+        //-------------------------------------------------
+        createTable("CREATE TABLE %s (a int, b int, c frozen<list<int>>, d int, PRIMARY KEY (a, b, c))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 11, 12, list(1, 3), 14);
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, list(2, 3), 24);
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, list(3, 3), 34);
+
+        beforeAndAfterFlush(() -> {
+
+            assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c CONTAINS 2 ALLOW FILTERING"),
+                       row(21, 22, list(2, 3), 24));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c CONTAINS 2");
+
+            assertRows(execute("SELECT * FROM %s WHERE c CONTAINS 3 ALLOW FILTERING"),
+                       row(11, 12, list(1, 3), 14),
+                       row(21, 22, list(2, 3), 24),
+                       row(21, 22, list(3, 3), 34));
+        });
+
+        createTable("CREATE TABLE %s (a int, b int, c frozen<map<text, text>>, d int, PRIMARY KEY (a, b, c))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 11, 12, map("1", "3"), 14);
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, map("2", "3"), 24);
+        execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, map("3", "3"), 34);
+
+        beforeAndAfterFlush(() -> {
+            assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c CONTAINS KEY '2' ALLOW FILTERING"),
+                       row(21, 22, map("2", "3"), 24));
+            assertInvalidMessage("Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c CONTAINS KEY '2'");
+        });
+    }
+
