@@ -1,0 +1,32 @@
+    public Ec2Snitch(SnitchProperties props) throws IOException, ConfigurationException
+    {
+        String az = awsApiCall(ZONE_NAME_QUERY_URL);
+
+        // if using the full naming scheme, region name is created by removing letters from the 
+        // end of the availability zone and zone is the full zone name
+        usingLegacyNaming = isUsingLegacyNaming(props);
+        String region;
+        if (usingLegacyNaming)
+        {
+            // Split "us-east-1a" or "asia-1a" into "us-east"/"1a" and "asia"/"1a".
+            String[] splits = az.split("-");
+            ec2zone = splits[splits.length - 1];
+
+            // hack for CASSANDRA-4026
+            region = az.substring(0, az.length() - 1);
+            if (region.endsWith("1"))
+                region = az.substring(0, az.length() - 3);
+        }
+        else
+        {
+            // grab the region name, which is embedded in the availability zone name.
+            // thus an AZ of "us-east-1a" yields the region name "us-east-1"
+            region = az.replaceFirst("[a-z]+$","");
+            ec2zone = az;
+        }
+
+        String datacenterSuffix = props.get("dc_suffix", "");
+        ec2region = region.concat(datacenterSuffix);
+        logger.info("EC2Snitch using region: {}, zone: {}.", ec2region, ec2zone);
+    }
+
