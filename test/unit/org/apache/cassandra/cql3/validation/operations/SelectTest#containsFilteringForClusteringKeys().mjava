@@ -4,6 +4,32 @@
         //-------------------------------------------------
         // Frozen collections filtering for clustering keys
         //-------------------------------------------------
+
+        // first clustering column
+        createTable("CREATE TABLE %s (a int, b frozen<list<int>>, c int, PRIMARY KEY (a, b, c))");
+        execute("INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 11, list(1, 3), 14);
+        execute("INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 21, list(2, 3), 24);
+        execute("INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 21, list(3, 3), 34);
+
+        beforeAndAfterFlush(() -> {
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 21 AND b CONTAINS 2 ALLOW FILTERING"),
+                       row(21, list(2, 3), 24));
+            assertInvalidMessage("Clustering columns can only be restricted with CONTAINS with a secondary index or filtering",
+                                 "SELECT * FROM %s WHERE a = 21 AND b CONTAINS 2");
+
+            assertRows(execute("SELECT * FROM %s WHERE b CONTAINS 2 ALLOW FILTERING"),
+                       row(21, list(2, 3), 24));
+            assertInvalidMessage("Clustering columns can only be restricted with CONTAINS with a secondary index or filtering",
+                                 "SELECT * FROM %s WHERE b CONTAINS 2");
+
+            assertRows(execute("SELECT * FROM %s WHERE b CONTAINS 3 ALLOW FILTERING"),
+                       row(11, list(1, 3), 14),
+                       row(21, list(2, 3), 24),
+                       row(21, list(3, 3), 34));
+        });
+
+        // non-first clustering column
         createTable("CREATE TABLE %s (a int, b int, c frozen<list<int>>, d int, PRIMARY KEY (a, b, c))");
 
         execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 11, 12, list(1, 3), 14);
@@ -11,6 +37,11 @@
         execute("INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, list(3, 3), 34);
 
         beforeAndAfterFlush(() -> {
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 21 AND c CONTAINS 2 ALLOW FILTERING"),
+                       row(21, 22, list(2, 3), 24));
+            assertInvalidMessage("Clustering columns can only be restricted with CONTAINS with a secondary index or filtering",
+                                 "SELECT * FROM %s WHERE a = 21 AND c CONTAINS 2");
 
             assertRows(execute("SELECT * FROM %s WHERE b > 20 AND c CONTAINS 2 ALLOW FILTERING"),
                        row(21, 22, list(2, 3), 24));
