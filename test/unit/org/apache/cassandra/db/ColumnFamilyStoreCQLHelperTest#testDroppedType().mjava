@@ -1,0 +1,44 @@
+    @Test
+    public void testDroppedType() throws Throwable
+    {
+        String typeA = createType("CREATE TYPE %s (a1 varint, a2 varint, a3 varint);");
+        String typeB = createType("CREATE TYPE %s (b1 frozen<" + typeA + ">, b2 frozen<" + typeA + ">, b3 frozen<" + typeA + ">);");
+
+        String tableName = createTable("CREATE TABLE IF NOT EXISTS %s (" +
+                                       "pk1 varint," +
+                                       "ck1 varint," +
+                                       "reg1 " + typeB + "," +
+                                       "reg2 varint," +
+                                       "PRIMARY KEY (pk1, ck1));");
+
+        alterTable("ALTER TABLE %s DROP reg1 USING TIMESTAMP 10000;");
+
+        Runnable validate = () -> {
+            try
+            {
+                ColumnFamilyStore cfs = Keyspace.open(keyspace()).getColumnFamilyStore(tableName);
+                cfs.snapshot(SNAPSHOT);
+                String schema = Files.toString(cfs.getDirectories().getSnapshotSchemaFile(SNAPSHOT), Charset.defaultCharset());
+
+                // When both column and it's type are dropped, the type in column definition gets substituted with a tuple
+                assertTrue(schema.startsWith("CREATE TABLE IF NOT EXISTS " + keyspace() + "." + tableName + " (\n" +
+                                             "\tpk1 varint,\n" +
+                                             "\tck1 varint,\n" +
+                                             "\treg2 varint,\n" +
+                                             "\treg1 frozen<tuple<frozen<tuple<varint, varint, varint>>, frozen<tuple<varint, varint, varint>>, frozen<tuple<varint, varint, varint>>>>,\n" +
+                                             "\tPRIMARY KEY (pk1, ck1))"));
+                assertTrue(schema.contains("ALTER TABLE " + keyspace() + "." + tableName + " DROP reg1 USING TIMESTAMP 10000;"));
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        };
+
+        // Validate before and after the type drop
+        validate.run();
+        schemaChange("DROP TYPE " + keyspace() + "." + typeB);
+        schemaChange("DROP TYPE " + keyspace() + "." + typeA);
+        validate.run();
+    }
+
