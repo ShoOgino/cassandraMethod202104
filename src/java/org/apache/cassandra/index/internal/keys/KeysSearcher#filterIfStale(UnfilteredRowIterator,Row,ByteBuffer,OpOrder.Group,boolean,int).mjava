@@ -8,10 +8,12 @@
         if (isForThrift)
         {
             // The data we got has gone though ThrifResultsMerger, so we're looking for the row whose clustering
-            // is the indexed name. Ans so we need to materialize the partition.
+            // is the indexed name and so we need to materialize the partition.
             ImmutableBTreePartition result = ImmutableBTreePartition.create(iterator);
             iterator.close();
             Row data = result.getRow(Clustering.make(index.getIndexedColumn().name.bytes));
+            if (data == null)
+                return null;
 
             // for thrift tables, we need to compare the index entry against the compact value column,
             // not the column actually designated as the indexed column so we don't use the index function
@@ -28,7 +30,18 @@
             }
             else
             {
-                return result.unfilteredIterator();
+                if (command.columnFilter().fetches(index.getIndexedColumn()))
+                    return result.unfilteredIterator();
+
+                // The query on the base table used an extended column filter to ensure that the
+                // indexed column was actually read for use in the staleness check, before
+                // returning the results we must filter the base table partition so that it
+                // contains only the originally requested columns. See CASSANDRA-11523
+                ClusteringComparator comparator = result.metadata().comparator;
+                Slices.Builder slices = new Slices.Builder(comparator);
+                for (ColumnDefinition selected : command.columnFilter().fetchedColumns())
+                    slices.add(Slice.make(comparator, selected.name.bytes));
+                return result.unfilteredIterator(ColumnFilter.all(command.metadata()), slices.build(), false);
             }
         }
         else
