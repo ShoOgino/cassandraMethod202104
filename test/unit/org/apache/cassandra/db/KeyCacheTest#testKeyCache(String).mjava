@@ -1,0 +1,55 @@
+    private void testKeyCache(String cf) throws ExecutionException, InterruptedException
+    {
+        CompactionManager.instance.disableAutoCompaction();
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cf);
+
+        // just to make sure that everything is clean
+        CacheService.instance.invalidateKeyCache();
+
+        // KeyCache should start at size 0 if we're caching X% of zero data.
+        assertKeyCacheSize(0, KEYSPACE1, cf);
+
+        Mutation rm;
+
+        // inserts
+        new RowUpdateBuilder(cfs.metadata, 0, "key1").clustering("1").build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 0, "key2").clustering("2").build().applyUnsafe();
+
+        // to make sure we have SSTable
+        cfs.forceBlockingFlush();
+
+        // reads to cache key position
+        Util.getAll(Util.cmd(cfs, "key1").build());
+        Util.getAll(Util.cmd(cfs, "key2").build());
+
+        assertKeyCacheSize(2, KEYSPACE1, cf);
+
+        Set<SSTableReader> readers = cfs.getLiveSSTables();
+        Refs<SSTableReader> refs = Refs.tryRef(readers);
+        if (refs == null)
+            throw new IllegalStateException();
+
+        Util.compactAll(cfs, Integer.MAX_VALUE).get();
+        boolean noEarlyOpen = DatabaseDescriptor.getSSTablePreempiveOpenIntervalInMB() < 0;
+
+        // after compaction cache should have entries for new SSTables,
+        // but since we have kept a reference to the old sstables,
+        // if we had 2 keys in cache previously it should become 4
+        assertKeyCacheSize(noEarlyOpen ? 2 : 4, KEYSPACE1, cf);
+
+        refs.release();
+
+        LifecycleTransaction.waitForDeletions();
+
+        // after releasing the reference this should drop to 2
+        assertKeyCacheSize(2, KEYSPACE1, cf);
+
+        // re-read same keys to verify that key cache didn't grow further
+        Util.getAll(Util.cmd(cfs, "key1").build());
+        Util.getAll(Util.cmd(cfs, "key2").build());
+
+        assertKeyCacheSize(noEarlyOpen ? 4 : 2, KEYSPACE1, cf);
+    }
+

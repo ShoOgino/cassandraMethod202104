@@ -1,0 +1,57 @@
+    private void addIndexBlock() throws IOException
+    {
+        IndexInfo cIndexInfo = new IndexInfo(firstClustering,
+                                             lastClustering,
+                                             startPosition,
+                                             currentPosition() - startPosition,
+                                             openMarker);
+
+        // indexOffsets is used for both shallow (ShallowIndexedEntry) and non-shallow IndexedEntry.
+        // For shallow ones, we need it to serialize the offsts in close().
+        // For non-shallow ones, the offsts are passed into IndexedEntry, so we don't have to
+        // calculate the offsets again.
+
+        // indexOffsets contains the offsets of the serialized IndexInfo objects.
+        // I.e. indexOffsets[0] is always 0 so we don't have to deal with a special handling
+        // for index #0 and always subtracting 1 for the index (which could be error-prone).
+        if (indexOffsets == null)
+            indexOffsets = new int[10];
+        else
+        {
+            if (columnIndexCount >= indexOffsets.length)
+                indexOffsets = Arrays.copyOf(indexOffsets, indexOffsets.length + 10);
+            indexOffsets[columnIndexCount] =
+                buffer != null
+                    ? Ints.checkedCast(buffer.position())
+                    : indexSamplesSerializedSize;
+        }
+        columnIndexCount++;
+
+        // First, we collect the IndexInfo objects until we reach Config.column_index_cache_size_in_kb in an ArrayList.
+        // When column_index_cache_size_in_kb is reached, we switch to byte-buffer mode.
+        if (buffer == null)
+        {
+            indexSamplesSerializedSize += idxSerializer.serializedSize(cIndexInfo);
+            if (indexSamplesSerializedSize + columnIndexCount * TypeSizes.sizeof(0) > DatabaseDescriptor.getColumnIndexCacheSize())
+            {
+                buffer = new DataOutputBuffer(DatabaseDescriptor.getColumnIndexCacheSize() * 2);
+                for (IndexInfo indexSample : indexSamples)
+                {
+                    idxSerializer.serialize(indexSample, buffer);
+                }
+                indexSamples = null;
+            }
+            else
+            {
+                indexSamples.add(cIndexInfo);
+            }
+        }
+        // don't put an else here...
+        if (buffer != null)
+        {
+            idxSerializer.serialize(cIndexInfo, buffer);
+        }
+
+        firstClustering = null;
+    }
+

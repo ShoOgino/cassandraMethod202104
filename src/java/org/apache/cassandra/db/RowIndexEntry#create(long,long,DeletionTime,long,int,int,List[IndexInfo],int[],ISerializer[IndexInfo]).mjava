@@ -1,0 +1,36 @@
+    /**
+     * @param dataFilePosition  position of the partition in the {@link org.apache.cassandra.io.sstable.Component.Type#DATA} file
+     * @param indexFilePosition position in the {@link org.apache.cassandra.io.sstable.Component.Type#PRIMARY_INDEX} of the {@link RowIndexEntry}
+     * @param deletionTime      deletion time of {@link RowIndexEntry}
+     * @param headerLength      deletion time of {@link RowIndexEntry}
+     * @param columnIndexCount  number of {@link IndexInfo} entries in the {@link RowIndexEntry}
+     * @param indexedPartSize   serialized size of all serialized {@link IndexInfo} objects and their offsets
+     * @param indexSamples      list with IndexInfo offsets (if total serialized size is less than {@link org.apache.cassandra.config.Config#column_index_cache_size_in_kb}
+     * @param offsets           offsets of IndexInfo offsets
+     * @param idxInfoSerializer the {@link IndexInfo} serializer
+     */
+    public static RowIndexEntry<IndexInfo> create(long dataFilePosition, long indexFilePosition,
+                                       DeletionTime deletionTime, long headerLength, int columnIndexCount,
+                                       int indexedPartSize,
+                                       List<IndexInfo> indexSamples, int[] offsets,
+                                       ISerializer<IndexInfo> idxInfoSerializer)
+    {
+        // If the "partition building code" in BigTableWriter.append() via ColumnIndex returns a list
+        // of IndexInfo objects, which is the case if the serialized size is less than
+        // Config.column_index_cache_size_in_kb, AND we have more than one IndexInfo object, we
+        // construct an IndexedEntry object. (note: indexSamples.size() and columnIndexCount have the same meaning)
+        if (indexSamples != null && indexSamples.size() > 1)
+            return new IndexedEntry(dataFilePosition, deletionTime, headerLength,
+                                    indexSamples.toArray(new IndexInfo[indexSamples.size()]), offsets,
+                                    indexedPartSize, idxInfoSerializer);
+        // Here we have to decide whether we have serialized IndexInfo objects that exceeds
+        // Config.column_index_cache_size_in_kb (not exceeding case covered above).
+        // Such a "big" indexed-entry is represented as a shallow one.
+        if (columnIndexCount > 1)
+            return new ShallowIndexedEntry(dataFilePosition, indexFilePosition,
+                                           deletionTime, headerLength, columnIndexCount,
+                                           indexedPartSize, idxInfoSerializer);
+        // Last case is that there are no index samples.
+        return new RowIndexEntry<>(dataFilePosition);
+    }
+
