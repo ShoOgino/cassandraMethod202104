@@ -1,17 +1,12 @@
     private void verifySizes(CommitLog commitLog)
     {
         // Complete anything that's still left to write.
-        commitLog.executor.requestExtraSync().awaitUninterruptibly();
-        // One await() does not suffice as we may be signalled when an ongoing sync finished. Request another
-        // (which shouldn't write anything) to make sure the first we triggered completes.
-        // FIXME: The executor should give us a chance to await completion of the sync we requested.
-        commitLog.executor.requestExtraSync().awaitUninterruptibly();
-
-        // Wait for any pending deletes or segment allocations to complete.
+        commitLog.executor.syncBlocking();
+        // Wait for any concurrent segment allocations to complete.
         commitLog.segmentManager.awaitManagementTasksCompletion();
 
         long combinedSize = 0;
-        for (File f : new File(DatabaseDescriptor.getCommitLogLocation()).listFiles())
+        for (File f : new File(commitLog.segmentManager.storageDirectory).listFiles())
             combinedSize += f.length();
         Assert.assertEquals(combinedSize, commitLog.getActiveOnDiskSize());
 

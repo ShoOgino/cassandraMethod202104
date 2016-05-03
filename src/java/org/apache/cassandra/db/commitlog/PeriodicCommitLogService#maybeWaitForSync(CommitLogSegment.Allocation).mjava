@@ -1,18 +1,10 @@
     protected void maybeWaitForSync(CommitLogSegment.Allocation alloc)
     {
-        if (waitForSyncToCatchUp(Long.MAX_VALUE))
+        long expectedSyncTime = System.nanoTime() - blockWhenSyncLagsNanos;
+        if (lastSyncedAt < expectedSyncTime)
         {
-            // wait until periodic sync() catches up with its schedule
-            long started = System.currentTimeMillis();
             pending.incrementAndGet();
-            while (waitForSyncToCatchUp(started))
-            {
-                WaitQueue.Signal signal = syncComplete.register(commitLog.metrics.waitingOnCommit.time());
-                if (waitForSyncToCatchUp(started))
-                    signal.awaitUninterruptibly();
-                else
-                    signal.cancel();
-            }
+            awaitSyncAt(expectedSyncTime, commitLog.metrics.waitingOnCommit.time());
             pending.decrementAndGet();
         }
     }

@@ -6,22 +6,11 @@
      */
     public int recoverSegmentsOnDisk() throws IOException
     {
-        // If createReserveSegments is already flipped, the CLSM is running and recovery has already taken place.
-        if (segmentManager.createReserveSegments)
-            return 0;
-
-        FilenameFilter unmanagedFilesFilter = new FilenameFilter()
-        {
-            public boolean accept(File dir, String name)
-            {
-                // we used to try to avoid instantiating commitlog (thus creating an empty segment ready for writes)
-                // until after recover was finished.  this turns out to be fragile; it is less error-prone to go
-                // ahead and allow writes before recover, and just skip active segments when we do.
-                return CommitLogDescriptor.isValid(name) && CommitLogSegment.shouldReplay(name);
-            }
-        };
+        FilenameFilter unmanagedFilesFilter = (dir, name) -> CommitLogDescriptor.isValid(name) && CommitLogSegment.shouldReplay(name);
 
         // submit all files for this segment manager for archiving prior to recovery - CASSANDRA-6904
+        // The files may have already been archived by normal CommitLog operation. This may cause errors in this
+        // archiving pass, which we should not treat as serious. 
         for (File file : new File(segmentManager.storageDirectory).listFiles(unmanagedFilesFilter))
         {
             archiver.maybeArchive(file.getPath(), file.getName());
@@ -31,6 +20,7 @@
         assert archiver.archivePending.isEmpty() : "Not all commit log archive tasks were completed before restore";
         archiver.maybeRestoreArchive();
 
+        // List the files again as archiver may have added segments.
         File[] files = new File(segmentManager.storageDirectory).listFiles(unmanagedFilesFilter);
         int replayed = 0;
         if (files.length == 0)
@@ -48,7 +38,6 @@
                 segmentManager.handleReplayedSegment(f);
         }
 
-        segmentManager.enableReserveSegmentCreation();
         return replayed;
     }
 
