@@ -1,0 +1,55 @@
+    /**
+     * Generates a HEAP dump in the directory specified by the <code>HeapDumpPath</code> JVM option
+     * or in the <code>CASSANDRA_HOME</code> directory.
+     */
+    public static void generateHeapDump()
+    {
+        Long processId = getProcessId();
+        if (processId == null)
+        {
+            logger.error("The process ID could not be retrieved. Skipping heap dump generation.");
+            return;
+        }
+
+        String heapDumpPath = getHeapDumpPathOption();
+        if (heapDumpPath == null)
+        {
+            String cassandraHome = System.getenv("CASSANDRA_HOME");
+            if (cassandraHome == null)
+            {
+                return;
+            }
+
+            heapDumpPath = cassandraHome;
+        }
+
+        Path dumpPath = FileSystems.getDefault().getPath(heapDumpPath);
+        if (Files.isDirectory(dumpPath))
+        {
+            dumpPath = dumpPath.resolve("java_pid" + processId + ".hprof");
+        }
+
+        String jmapPath = getJmapPath();
+
+        // The jmap file could not be found. In this case let's default to jmap in the hope that it is in the path.
+        String jmapCommand = jmapPath == null ? "jmap" : jmapPath;
+
+        String[] dumpCommands = new String[] {jmapCommand,
+                                              "-dump:format=b,file=" + dumpPath,
+                                              processId.toString()};
+
+        // Lets also log the Heap histogram
+        String[] histoCommands = new String[] {jmapCommand,
+                                               "-histo",
+                                               processId.toString()};
+        try
+        {
+            logProcessOutput(Runtime.getRuntime().exec(dumpCommands));
+            logProcessOutput(Runtime.getRuntime().exec(histoCommands));
+        }
+        catch (IOException e)
+        {
+            logger.error("The heap dump could not be generated due to the following error: ", e);
+        }
+    }
+
