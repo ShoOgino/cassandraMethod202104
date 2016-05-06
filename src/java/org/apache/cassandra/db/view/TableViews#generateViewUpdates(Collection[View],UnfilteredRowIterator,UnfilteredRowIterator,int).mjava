@@ -1,0 +1,120 @@
+    /**
+     * Given some updates on the base table of this object and the existing values for the rows affected by that update, generates the
+     * mutation to be applied to the provided views.
+     *
+     * @param views the views potentially affected by {@code updates}.
+     * @param updates the base table updates being applied.
+     * @param existings the existing values for the rows affected by {@code updates}. This is used to decide if a view is
+     * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
+     * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
+     * but has simply some updated values. This will be empty for view building as we want to assume anything we'll pass
+     * to {@code updates} is new.
+     * @param nowInSec the current time in seconds.
+     * @return the mutations to apply to the {@code views}. This can be empty.
+     */
+    public Collection<Mutation> generateViewUpdates(Collection<View> views, UnfilteredRowIterator updates, UnfilteredRowIterator existings, int nowInSec)
+    {
+        assert updates.metadata().cfId.equals(baseTableMetadata.cfId);
+
+        List<ViewUpdateGenerator> generators = new ArrayList<>(views.size());
+        for (View view : views)
+            generators.add(new ViewUpdateGenerator(view, updates.partitionKey(), nowInSec));
+
+        DeletionTracker existingsDeletion = new DeletionTracker(existings.partitionLevelDeletion());
+        DeletionTracker updatesDeletion = new DeletionTracker(updates.partitionLevelDeletion());
+
+        /*
+         * We iterate through the updates and the existing rows in parallel. This allows us to know the consequence
+         * on the view of each update.
+         */
+        PeekingIterator<Unfiltered> existingsIter = Iterators.peekingIterator(existings);
+        PeekingIterator<Unfiltered> updatesIter = Iterators.peekingIterator(updates);
+
+        while (existingsIter.hasNext() && updatesIter.hasNext())
+        {
+            Unfiltered existing = existingsIter.peek();
+            Unfiltered update = updatesIter.peek();
+
+            Row existingRow;
+            Row updateRow;
+            int cmp = baseTableMetadata.comparator.compare(update, existing);
+            if (cmp < 0)
+            {
+                // We have an update where there was nothing before
+                if (update.isRangeTombstoneMarker())
+                {
+                    updatesDeletion.update(updatesIter.next());
+                    continue;
+                }
+
+                updateRow = ((Row)updatesIter.next()).withRowDeletion(updatesDeletion.currentDeletion());
+                existingRow = emptyRow(updateRow.clustering(), existingsDeletion.currentDeletion());
+            }
+            else if (cmp > 0)
+            {
+                // We have something existing but no update (which will happen either because it's a range tombstone marker in
+                // existing, or because we've fetched the existing row due to some partition/range deletion in the updates)
+                if (existing.isRangeTombstoneMarker())
+                {
+                    existingsDeletion.update(existingsIter.next());
+                    continue;
+                }
+
+                existingRow = ((Row)existingsIter.next()).withRowDeletion(existingsDeletion.currentDeletion());
+                updateRow = emptyRow(existingRow.clustering(), updatesDeletion.currentDeletion());
+
+                // The way we build the read command used for existing rows, we should always have updatesDeletion.currentDeletion()
+                // that is not live, since we wouldn't have read the existing row otherwise. And we could assert that, but if we ever
+                // change the read method so that it can slightly over-read in some case, that would be an easily avoiding bug lurking,
+                // so we just handle the case.
+                if (updateRow == null)
+                    continue;
+            }
+            else
+            {
+                // We're updating a row that had pre-existing data
+                if (update.isRangeTombstoneMarker())
+                {
+                    assert existing.isRangeTombstoneMarker();
+                    updatesDeletion.update(updatesIter.next());
+                    existingsDeletion.update(existingsIter.next());
+                    continue;
+                }
+
+                assert !existing.isRangeTombstoneMarker();
+                existingRow = ((Row)existingsIter.next()).withRowDeletion(existingsDeletion.currentDeletion());
+                updateRow = ((Row)updatesIter.next()).withRowDeletion(updatesDeletion.currentDeletion());
+            }
+
+            addToViewUpdateGenerators(existingRow, updateRow, generators, nowInSec);
+        }
+
+        // We only care about more existing rows if the update deletion isn't live, i.e. if we had a partition deletion
+        if (!updatesDeletion.currentDeletion().isLive())
+        {
+            while (existingsIter.hasNext())
+            {
+                Unfiltered existing = existingsIter.next();
+                // If it's a range tombstone, we don't care, we're only looking for existing entry that gets deleted by
+                // the new partition deletion
+                if (existing.isRangeTombstoneMarker())
+                    continue;
+
+                Row existingRow = (Row)existing;
+                addToViewUpdateGenerators(existingRow, emptyRow(existingRow.clustering(), updatesDeletion.currentDeletion()), generators, nowInSec);
+            }
+        }
+        while (updatesIter.hasNext())
+        {
+            Unfiltered update = updatesIter.next();
+            // If it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it for view updates
+            if (update.isRangeTombstoneMarker())
+                continue;
+
+            Row updateRow = (Row)update;
+            addToViewUpdateGenerators(emptyRow(updateRow.clustering(), DeletionTime.LIVE), updateRow, generators, nowInSec);
+        }
+
+        return buildMutations(baseTableMetadata, generators);
+    }
+

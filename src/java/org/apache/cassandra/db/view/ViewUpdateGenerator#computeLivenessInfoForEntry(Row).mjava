@@ -1,0 +1,55 @@
+    private LivenessInfo computeLivenessInfoForEntry(Row baseRow)
+    {
+        /*
+         * We need to compute both the timestamp and expiration.
+         *
+         * For the timestamp, it makes sense to use the bigger timestamp for all view PK columns.
+         *
+         * This is more complex for the expiration. We want to maintain consistency between the base and the view, so the
+         * entry should only exist as long as the base row exists _and_ has non-null values for all the columns that are part
+         * of the view PK.
+         * Which means we really have 2 cases:
+         *   1) either the columns for the base and view PKs are exactly the same: in that case, the view entry should live
+         *      as long as the base row lives. This means the view entry should only expire once *everything* in the base row
+         *      has expired. Which means the row TTL should be the max of any other TTL.
+         *   2) or there is a column that is not in the base PK but is in the view PK (we can only have one so far, we'll need
+         *      to slightly adapt if we allow more later): in that case, as long as that column lives the entry does too, but
+         *      as soon as it expires (or is deleted for that matter) the entry also should expire. So the expiration for the
+         *      view is the one of that column, irregarding of any other expiration.
+         *      To take an example of that case, if you have:
+         *        CREATE TABLE t (a int, b int, c int, PRIMARY KEY (a, b))
+         *        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE c IS NOT NULL AND a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (c, a, b)
+         *        INSERT INTO t(a, b) VALUES (0, 0) USING TTL 3;
+         *        UPDATE t SET c = 0 WHERE a = 0 AND b = 0;
+         *      then even after 3 seconds elapsed, the row will still exist (it just won't have a "row marker" anymore) and so
+         *      the MV should still have a corresponding entry.
+         */
+        assert view.baseNonPKColumnsInViewPK.size() <= 1; // This may change, but is currently an enforced limitation
+
+        LivenessInfo baseLiveness = baseRow.primaryKeyLivenessInfo();
+
+        if (view.baseNonPKColumnsInViewPK.isEmpty())
+        {
+            int ttl = baseLiveness.ttl();
+            int expirationTime = baseLiveness.localExpirationTime();
+            for (Cell cell : baseRow.cells())
+            {
+                if (cell.ttl() > ttl)
+                {
+                    ttl = cell.ttl();
+                    expirationTime = cell.localDeletionTime();
+                }
+            }
+            return ttl == baseLiveness.ttl()
+                 ? baseLiveness
+                 : LivenessInfo.withExpirationTime(baseLiveness.timestamp(), ttl, expirationTime);
+        }
+
+        ColumnDefinition baseColumn = view.baseNonPKColumnsInViewPK.get(0);
+        Cell cell = baseRow.getCell(baseColumn);
+        assert isLive(cell) : "We shouldn't have got there is the base row had no associated entry";
+
+        long timestamp = Math.max(baseLiveness.timestamp(), cell.timestamp());
+        return LivenessInfo.withExpirationTime(timestamp, cell.ttl(), cell.localDeletionTime());
+    }
+
