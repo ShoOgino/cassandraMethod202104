@@ -17,40 +17,52 @@
         // position in the System keyspace.
         logger.trace("truncating {}", name);
 
-        if (keyspace.getMetadata().params.durableWrites || DatabaseDescriptor.isAutoSnapshot())
-        {
-            // flush the CF being truncated before forcing the new segment
-            forceBlockingFlush();
+        final long truncatedAt;
+        final ReplayPosition replayAfter;
 
-            viewManager.forceBlockingFlush();
-
-            // sleep a little to make sure that our truncatedAt comes after any sstable
-            // that was part of the flushed we forced; otherwise on a tie, it won't get deleted.
-            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MILLISECONDS);
-        }
-        else
+        synchronized (data)
         {
-            dumpMemtable();
-            viewManager.dumpMemtables();
+            if (keyspace.getMetadata().params.durableWrites || DatabaseDescriptor.isAutoSnapshot())
+            {
+                replayAfter = forceBlockingFlush();
+                viewManager.forceBlockingFlush();
+            }
+            else
+            {
+                // just nuke the memtable data w/o writing to disk first
+                viewManager.dumpMemtables();
+                try
+                {
+                    replayAfter = dumpMemtable().get();
+                }
+                catch (Exception e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            long now = System.currentTimeMillis();
+            // make sure none of our sstables are somehow in the future (clock drift, perhaps)
+            for (ColumnFamilyStore cfs : concatWithIndexes())
+                for (SSTableReader sstable : cfs.data.getSSTables())
+                    now = Math.max(now, sstable.maxDataAge);
+            truncatedAt = now;
         }
 
         Runnable truncateRunnable = new Runnable()
         {
             public void run()
             {
-                logger.trace("Discarding sstable data for truncated CF + indexes");
-
-                final long truncatedAt = System.currentTimeMillis();
+                logger.debug("Discarding sstable data for truncated CF + indexes");
                 data.notifyTruncated(truncatedAt);
 
                 if (DatabaseDescriptor.isAutoSnapshot())
                     snapshot(Keyspace.getTimestampedSnapshotName(name));
 
-                ReplayPosition replayAfter = discardSSTables(truncatedAt);
+                discardSSTables(truncatedAt);
 
                 indexManager.truncateAllIndexesBlocking(truncatedAt);
-
-                viewManager.truncateBlocking(truncatedAt);
+                viewManager.truncateBlocking(replayAfter, truncatedAt);
 
                 SystemKeyspace.saveTruncationRecord(ColumnFamilyStore.this, truncatedAt, replayAfter);
                 logger.trace("cleaning out row cache");
