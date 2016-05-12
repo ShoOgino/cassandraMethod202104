@@ -10,42 +10,32 @@
              * that all write operations register themselves with, and assigning this barrier to the memtables,
              * after which we *.issue()* the barrier. This barrier is used to direct write operations started prior
              * to the barrier.issue() into the memtable we have switched out, and any started after to its replacement.
-             * In doing so it also tells the write operations to update the lastReplayPosition of the memtable, so
+             * In doing so it also tells the write operations to update the commitLogUpperBound of the memtable, so
              * that we know the CL position we are dirty to, which can be marked clean when we complete.
              */
             writeBarrier = keyspace.writeOrder.newBarrier();
-            memtables = new ArrayList<>();
 
             // submit flushes for the memtable for any indexed sub-cfses, and our own
-            AtomicReference<ReplayPosition> lastReplayPositionHolder = new AtomicReference<>();
+            AtomicReference<ReplayPosition> commitLogUpperBound = new AtomicReference<>();
             for (ColumnFamilyStore cfs : concatWithIndexes())
             {
                 // switch all memtables, regardless of their dirty status, setting the barrier
                 // so that we can reach a coordinated decision about cleanliness once they
                 // are no longer possible to be modified
-                Memtable mt = cfs.data.switchMemtable(truncate);
-                mt.setDiscarding(writeBarrier, lastReplayPositionHolder);
-                memtables.add(mt);
+                Memtable newMemtable = new Memtable(commitLogUpperBound, cfs);
+                Memtable oldMemtable = cfs.data.switchMemtable(truncate, newMemtable);
+                oldMemtable.setDiscarding(writeBarrier, commitLogUpperBound);
+                memtables.add(oldMemtable);
             }
 
-            // we now attempt to define the lastReplayPosition; we do this by grabbing the current limit from the CL
-            // and attempting to set the holder to this value. at the same time all writes to the memtables are
-            // also maintaining this value, so if somebody sneaks ahead of us somehow (should be rare) we simply retry,
-            // so that we know all operations prior to the position have not reached it yet
-            ReplayPosition lastReplayPosition;
-            while (true)
-            {
-                lastReplayPosition = new Memtable.LastReplayPosition(CommitLog.instance.getContext());
-                ReplayPosition currentLast = lastReplayPositionHolder.get();
-                if ((currentLast == null || currentLast.compareTo(lastReplayPosition) <= 0)
-                    && lastReplayPositionHolder.compareAndSet(currentLast, lastReplayPosition))
-                    break;
-            }
+            // we then ensure an atomic decision is made about the upper bound of the continuous range of commit log
+            // records owned by this memtable
+            setCommitLogUpperBound(commitLogUpperBound);
 
             // we then issue the barrier; this lets us wait for all operations started prior to the barrier to complete;
-            // since this happens after wiring up the lastReplayPosition, we also know all operations with earlier
+            // since this happens after wiring up the commitLogUpperBound, we also know all operations with earlier
             // replay positions have also completed, i.e. the memtables are done and ready to flush
             writeBarrier.issue();
-            postFlush = new PostFlush(!truncate, writeBarrier, lastReplayPosition);
+            postFlush = new PostFlush(!truncate, writeBarrier, commitLogUpperBound.get(), memtables, readers);
         }
 

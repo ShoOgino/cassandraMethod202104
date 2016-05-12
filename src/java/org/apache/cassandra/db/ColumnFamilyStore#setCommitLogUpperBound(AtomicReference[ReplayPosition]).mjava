@@ -1,0 +1,17 @@
+    // atomically set the upper bound for the commit log
+    private static void setCommitLogUpperBound(AtomicReference<ReplayPosition> commitLogUpperBound)
+    {
+        // we attempt to set the holder to the current commit log context. at the same time all writes to the memtables are
+        // also maintaining this value, so if somebody sneaks ahead of us somehow (should be rare) we simply retry,
+        // so that we know all operations prior to the position have not reached it yet
+        ReplayPosition lastReplayPosition;
+        while (true)
+        {
+            lastReplayPosition = new Memtable.LastReplayPosition(CommitLog.instance.getContext());
+            ReplayPosition currentLast = commitLogUpperBound.get();
+            if ((currentLast == null || currentLast.compareTo(lastReplayPosition) <= 0)
+                && commitLogUpperBound.compareAndSet(currentLast, lastReplayPosition))
+                break;
+        }
+    }
+
