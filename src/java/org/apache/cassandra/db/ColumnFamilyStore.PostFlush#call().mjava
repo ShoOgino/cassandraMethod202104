@@ -1,5 +1,8 @@
-        public void run()
+        public ReplayPosition call()
         {
+            if (discardFlushResults == ColumnFamilyStore.this)
+                return commitLogUpperBound;
+
             writeBarrier.await();
 
             /**
@@ -14,7 +17,7 @@
 
             try
             {
-                // we wait on the latch for the lastReplayPosition to be set, and so that waiters
+                // we wait on the latch for the commitLogUpperBound to be set, and so that waiters
                 // on this task can rely on all prior flushes being complete
                 latch.await();
             }
@@ -23,17 +26,24 @@
                 throw new IllegalStateException();
             }
 
-            // must check lastReplayPosition != null because Flush may find that all memtables are clean
-            // and so not set a lastReplayPosition
             // If a flush errored out but the error was ignored, make sure we don't discard the commit log.
-            if (lastReplayPosition != null && flushFailure == null)
+            if (flushFailure == null)
             {
-                CommitLog.instance.discardCompletedSegments(metadata.cfId, lastReplayPosition);
+                CommitLog.instance.discardCompletedSegments(metadata.cfId, commitLogUpperBound);
+                for (int i = 0 ; i < memtables.size() ; i++)
+                {
+                    Memtable memtable = memtables.get(i);
+                    Collection<SSTableReader> reader = readers.get(i);
+                    memtable.cfs.data.permitCompactionOfFlushed(reader);
+                    memtable.cfs.compactionStrategyManager.replaceFlushed(memtable, reader);
+                }
             }
 
             metric.pendingFlushes.dec();
 
             if (flushFailure != null)
                 throw Throwables.propagate(flushFailure);
+
+            return commitLogUpperBound;
         }
 
