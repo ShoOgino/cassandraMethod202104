@@ -1,0 +1,37 @@
+    private void testInvalidatePreparedStatementOnAlterUnchangedMetadata(ProtocolVersion version)
+    {
+        Session session = sessions.get(version);
+        String createTableStatement = "CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".qp_cleanup (a int PRIMARY KEY, b int, c int);";
+        String alterTableStatement = "ALTER TABLE " + KEYSPACE + ".qp_cleanup ADD d int;";
+
+        session.execute(dropKsStatement);
+        session.execute(createKsStatement);
+        session.execute(createTableStatement);
+
+        PreparedStatement preparedSelect = session.prepare("SELECT a, b, c FROM " + KEYSPACE + ".qp_cleanup");
+        session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (?, ?, ?);",
+                        1, 2, 3);
+        session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (?, ?, ?);",
+                        2, 3, 4);
+
+        ResultSet rs = session.execute(preparedSelect.bind());
+
+        assertRowsNet(rs,
+                      row(1, 2, 3),
+                      row(2, 3, 4));
+        assertEquals(rs.getColumnDefinitions().size(), 3);
+
+        session.execute(alterTableStatement);
+        session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c, d) VALUES (?, ?, ?, ?);",
+                        3, 4, 5, 6);
+
+        rs = session.execute(preparedSelect.bind());
+        assertRowsNet(rs,
+                      row(1, 2, 3),
+                      row(2, 3, 4),
+                      row(3, 4, 5));
+        assertEquals(rs.getColumnDefinitions().size(), 3);
+
+        session.execute(dropKsStatement);
+    }
+

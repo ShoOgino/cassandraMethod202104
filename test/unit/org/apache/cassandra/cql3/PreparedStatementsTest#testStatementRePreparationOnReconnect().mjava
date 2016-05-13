@@ -1,13 +1,17 @@
     @Test
     public void testStatementRePreparationOnReconnect()
     {
+        Session session = sessions.get(ProtocolVersion.V5);
+        session.execute("USE " + keyspace());
+
         session.execute(dropKsStatement);
         session.execute(createKsStatement);
 
-        session.execute("CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".qp_test (id int PRIMARY KEY, cid int, val text);");
+        createTable("CREATE TABLE %s (id int PRIMARY KEY, cid int, val text);");
 
-        String insertCQL = "INSERT INTO " + KEYSPACE + ".qp_test (id, cid, val) VALUES (?, ?, ?)";
-        String selectCQL = "Select * from " + KEYSPACE + ".qp_test where id = ?";
+
+        String insertCQL = "INSERT INTO " + currentTable() + " (id, cid, val) VALUES (?, ?, ?)";
+        String selectCQL = "Select * from " + currentTable() + " where id = ?";
 
         PreparedStatement preparedInsert = session.prepare(insertCQL);
         PreparedStatement preparedSelect = session.prepare(selectCQL);
@@ -15,17 +19,23 @@
         session.execute(preparedInsert.bind(1, 1, "value"));
         assertEquals(1, session.execute(preparedSelect.bind(1)).all().size());
 
-        cluster.close();
+        try (Cluster newCluster = Cluster.builder()
+                                 .addContactPoints(nativeAddr)
+                                 .withClusterName("Test Cluster")
+                                 .withPort(nativePort)
+                                 .withoutJMXReporting()
+                                 .allowBetaProtocolVersion()
+                                 .build())
+        {
+            try (Session newSession = newCluster.connect())
+            {
+                newSession.execute("USE " + keyspace());
+                preparedInsert = newSession.prepare(insertCQL);
+                preparedSelect = newSession.prepare(selectCQL);
+                session.execute(preparedInsert.bind(1, 1, "value"));
 
-        cluster = Cluster.builder().addContactPoint("127.0.0.1")
-                                   .withPort(DatabaseDescriptor.getNativeTransportPort())
-                                   .build();
-        session = cluster.connect();
-
-        preparedInsert = session.prepare(insertCQL);
-        preparedSelect = session.prepare(selectCQL);
-        session.execute(preparedInsert.bind(1, 1, "value"));
-
-        assertEquals(1, session.execute(preparedSelect.bind(1)).all().size());
+                assertEquals(1, session.execute(preparedSelect.bind(1)).all().size());
+            }
+        }
     }
 

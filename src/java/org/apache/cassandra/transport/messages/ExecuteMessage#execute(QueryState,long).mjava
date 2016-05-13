@@ -55,8 +55,29 @@
             // by wrapping the QueryOptions.
             QueryOptions queryOptions = QueryOptions.addColumnSpecifications(options, prepared.boundNames);
             Message.Response response = handler.processPrepared(statement, state, queryOptions, getCustomPayload(), queryStartNanoTime);
-            if (options.skipMetadata() && response instanceof ResultMessage.Rows)
-                ((ResultMessage.Rows)response).result.metadata.setSkipMetadata();
+
+            if (response instanceof ResultMessage.Rows)
+            {
+                ResultMessage.Rows rows = (ResultMessage.Rows) response;
+
+                ResultSet.ResultMetadata resultMetadata = rows.result.metadata;
+                if (options.getProtocolVersion().isGreaterOrEqualTo(ProtocolVersion.V5))
+                {
+                    // Starting with V5 we can rely on the result metadata id coming with execute message in order to
+                    // check if there was a change, comparing it with metadata that's about to be returned to client.
+                    if (!resultMetadata.getResultMetadataId().equals(resultMetadataId))
+                        resultMetadata.setMetadataChanged();
+                    else if (options.skipMetadata())
+                        resultMetadata.setSkipMetadata();
+                }
+                else
+                {
+                    // Pre-V5 code has to rely on the difference between the metadata in the prepared message cache
+                    // and compare it with the metadata to be returned to client.
+                    if (options.skipMetadata() && prepared.resultMetadataId.equals(resultMetadata.getResultMetadataId()))
+                        resultMetadata.setSkipMetadata();
+                }
+            }
 
             if (tracingId != null)
                 response.setTracingId(tracingId);

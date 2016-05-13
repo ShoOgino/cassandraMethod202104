@@ -6,12 +6,21 @@
 
                 EnumSet<Flag> flags = Flag.deserialize(iflags);
 
+                MD5Digest resultMetadataId = null;
+                if (flags.contains(Flag.METADATA_CHANGED))
+                {
+                    assert version.isGreaterOrEqualTo(ProtocolVersion.V5) : "MetadataChanged flag is not supported before native protocol v5";
+                    assert !flags.contains(Flag.NO_METADATA) : "MetadataChanged and NoMetadata are mutually exclusive flags";
+
+                    resultMetadataId = MD5Digest.wrap(CBUtil.readBytes(body));
+                }
+
                 PagingState state = null;
                 if (flags.contains(Flag.HAS_MORE_PAGES))
                     state = PagingState.deserialize(CBUtil.readValueNoCopy(body), version);
 
                 if (flags.contains(Flag.NO_METADATA))
-                    return new ResultMetadata(flags, null, columnCount, state);
+                    return new ResultMetadata(null, flags, null, columnCount, state);
 
                 boolean globalTablesSpec = flags.contains(Flag.GLOBAL_TABLES_SPEC);
 
@@ -33,6 +42,6 @@
                     AbstractType type = DataType.toType(DataType.codec.decodeOne(body, version));
                     names.add(new ColumnSpecification(ksName, cfName, colName, type));
                 }
-                return new ResultMetadata(flags, names, names.size(), state);
+                return new ResultMetadata(resultMetadataId, flags, names, names.size(), state);
             }
 

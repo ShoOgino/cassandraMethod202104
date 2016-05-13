@@ -1,0 +1,57 @@
+    private void testPrepareWithLWT(ProtocolVersion version) throws Throwable
+    {
+        Session session = sessionNet(version);
+        session.execute("USE " + keyspace());
+        createTable("CREATE TABLE %s (pk int, v1 int, v2 int, PRIMARY KEY (pk))");
+
+        PreparedStatement prepared1 = session.prepare(String.format("UPDATE %s SET v1 = ?, v2 = ?  WHERE pk = 1 IF v1 = ?", currentTable()));
+        PreparedStatement prepared2 = session.prepare(String.format("INSERT INTO %s (pk, v1, v2) VALUES (?, 200, 300) IF NOT EXISTS", currentTable()));
+        execute("INSERT INTO %s (pk, v1, v2) VALUES (1,1,1)");
+        execute("INSERT INTO %s (pk, v1, v2) VALUES (2,2,2)");
+
+        ResultSet rs;
+
+        rs = session.execute(prepared1.bind(10, 20, 1));
+        assertRowsNet(rs,
+                      row(true));
+        assertEquals(rs.getColumnDefinitions().size(), 1);
+
+        rs = session.execute(prepared1.bind(100, 200, 1));
+        assertRowsNet(rs,
+                      row(false, 10));
+        assertEquals(rs.getColumnDefinitions().size(), 2);
+
+        rs = session.execute(prepared1.bind(30, 40, 10));
+        assertRowsNet(rs,
+                      row(true));
+        assertEquals(rs.getColumnDefinitions().size(), 1);
+
+        // Try executing the same message once again
+        rs = session.execute(prepared1.bind(100, 200, 1));
+        assertRowsNet(rs,
+                      row(false, 30));
+        assertEquals(rs.getColumnDefinitions().size(), 2);
+
+        rs = session.execute(prepared2.bind(1));
+        assertRowsNet(rs,
+                      row(false, 1, 30, 40));
+        assertEquals(rs.getColumnDefinitions().size(), 4);
+
+        alterTable("ALTER TABLE %s ADD v3 int;");
+
+        rs = session.execute(prepared2.bind(1));
+        assertRowsNet(rs,
+                      row(false, 1, 30, 40, null));
+        assertEquals(rs.getColumnDefinitions().size(), 5);
+
+        rs = session.execute(prepared2.bind(20));
+        assertRowsNet(rs,
+                      row(true));
+        assertEquals(rs.getColumnDefinitions().size(), 1);
+
+        rs = session.execute(prepared2.bind(20));
+        assertRowsNet(rs,
+                      row(false, 20, 200, 300, null));
+        assertEquals(rs.getColumnDefinitions().size(), 5);
+    }
+
