@@ -1,7 +1,27 @@
     public StressMetrics(PrintStream output, final long logIntervalMillis, StressSettings settings)
     {
         this.output = output;
-        this.settings = settings;
+        if(settings.log.hdrFile != null)
+        {
+            try
+            {
+                histogramWriter = new HistogramLogWriter(settings.log.hdrFile);
+                histogramWriter.outputComment("Logging op latencies for Cassandra Stress");
+                histogramWriter.outputLogFormatVersion();
+                histogramWriter.outputBaseTime(epochMs);
+                histogramWriter.setBaseTime(epochMs);
+                histogramWriter.outputStartTime(epochMs);
+                histogramWriter.outputLegend();
+            }
+            catch (FileNotFoundException e)
+            {
+                throw new IllegalArgumentException(e);
+            }
+        }
+        else
+        {
+            histogramWriter = null;
+        }
         Callable<JmxCollector.GcStats> gcStatsCollector;
         totalGcStats = new JmxCollector.GcStats(0);
         try
@@ -25,10 +45,10 @@
             };
         }
         this.gcStatsCollector = gcStatsCollector;
-        this.timing = new Timing(settings.samples.historyCount, settings.samples.reportCount);
+        this.timing = new Timing(settings.rate.isFixed);
 
         printHeader("", output);
-        thread = tf.newThread(new Runnable()
+        thread = new Thread(new Runnable()
         {
             @Override
             public void run()
@@ -72,5 +92,6 @@
                 }
             }
         });
+        thread.setName("StressMetrics");
     }
 
