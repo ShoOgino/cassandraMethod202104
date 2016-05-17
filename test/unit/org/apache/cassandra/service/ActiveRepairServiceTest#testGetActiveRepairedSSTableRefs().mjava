@@ -1,0 +1,34 @@
+    @Test
+    public void testGetActiveRepairedSSTableRefs()
+    {
+        ColumnFamilyStore store = prepareColumnFamilyStore();
+        Set<SSTableReader> original = store.getUnrepairedSSTables();
+
+        UUID prsId = UUID.randomUUID();
+        ActiveRepairService.instance.registerParentRepairSession(prsId, Collections.singletonList(store), null);
+        ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(prsId);
+
+        //add all sstables to parent repair session
+        prs.addSSTables(store.metadata.cfId, original);
+
+        //retrieve all sstable references from parent repair sessions
+        Refs<SSTableReader> refs = prs.getActiveRepairedSSTableRefs(store.metadata.cfId);
+        Set<SSTableReader> retrieved = Sets.newHashSet(refs.iterator());
+        assertEquals(original, retrieved);
+        refs.release();
+
+        //remove 1 sstable from data data tracker
+        Set<SSTableReader> newLiveSet = new HashSet<>(original);
+        Iterator<SSTableReader> it = newLiveSet.iterator();
+        SSTableReader removed = it.next();
+        it.remove();
+        store.getDataTracker().replaceWithNewInstances(Collections.singleton(removed), Collections.EMPTY_SET);
+
+        //retrieve sstable references from parent repair session again - removed sstable must not be present
+        refs = prs.getActiveRepairedSSTableRefs(store.metadata.cfId);
+        retrieved = Sets.newHashSet(refs.iterator());
+        assertEquals(newLiveSet, retrieved);
+        assertFalse(retrieved.contains(removed));
+        refs.release();
+    }
+
