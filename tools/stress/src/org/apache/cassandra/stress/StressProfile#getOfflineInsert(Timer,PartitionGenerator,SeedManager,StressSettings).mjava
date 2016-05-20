@@ -1,0 +1,41 @@
+    public SchemaInsert getOfflineInsert(Timer timer, PartitionGenerator generator, SeedManager seedManager, StressSettings settings)
+    {
+        assert tableCql != null;
+
+        CFMetaData cfMetaData = CFMetaData.compile(tableCql, keyspaceName);
+
+        List<ColumnDefinition> allColumns = com.google.common.collect.Lists.newArrayList(cfMetaData.allColumnsInSelectOrder());
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("INSERT INTO ").append(quoteIdentifier(keyspaceName) + "." + quoteIdentifier(tableName)).append(" (");
+        StringBuilder value = new StringBuilder();
+        for (ColumnDefinition c : allColumns)
+        {
+            sb.append(quoteIdentifier(c.name.toString())).append(", ");
+            value.append("?, ");
+        }
+        sb.delete(sb.lastIndexOf(","), sb.length());
+        value.delete(value.lastIndexOf(","), value.length());
+        sb.append(") ").append("values(").append(value).append(')');
+
+
+        if (insert == null)
+            insert = new HashMap<>();
+        lowerCase(insert);
+
+        partitions = select(settings.insert.batchsize, "partitions", "fixed(1)", insert, OptionDistribution.BUILDER);
+        selectchance = select(settings.insert.selectRatio, "select", "fixed(1)/1", insert, OptionRatioDistribution.BUILDER);
+        rowPopulation = select(settings.insert.rowPopulationRatio, "row-population", "fixed(1)/1", insert, OptionRatioDistribution.BUILDER);
+
+        if (generator.maxRowCount > 100 * 1000 * 1000)
+            System.err.printf("WARNING: You have defined a schema that permits very large partitions (%.0f max rows (>100M))%n", generator.maxRowCount);
+
+        String statement = sb.toString();
+
+        //CQLTableWriter requires the keyspace name be in the create statement
+        String tableCreate = tableCql.replaceFirst("\\s+\"?"+tableName+"\"?\\s+", " \""+keyspaceName+"\".\""+tableName+"\" ");
+
+
+        return new SchemaInsert(timer, settings, generator, seedManager, selectchance.get(), rowPopulation.get(), thriftInsertId, statement, tableCreate);
+    }
+

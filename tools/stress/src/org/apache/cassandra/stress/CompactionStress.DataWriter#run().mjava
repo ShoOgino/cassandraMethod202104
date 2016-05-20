@@ -1,0 +1,54 @@
+        public void run()
+        {
+            StressProfile stressProfile = getStressProfile();
+            ColumnFamilyStore cfs = initCf(stressProfile, false);
+            Directories directories = cfs.getDirectories();
+
+            StressSettings settings = StressSettings.parse(new String[]{ "write", "-pop seq=1.." + partitions });
+            SeedManager seedManager = new SeedManager(settings);
+            PartitionGenerator generator = stressProfile.getOfflineGenerator();
+            WorkManager workManager = new WorkManager.FixedWorkManager(Long.MAX_VALUE);
+
+            ExecutorService executorService = Executors.newFixedThreadPool(threads);
+            CountDownLatch finished = new CountDownLatch(threads);
+
+            for (int i = 0; i < threads; i++)
+            {
+                //Every thread needs it's own writer
+                final SchemaInsert insert = stressProfile.getOfflineInsert(null, generator, seedManager, settings);
+                final CQLSSTableWriter tableWriter = insert.createWriter(cfs, bufferSize, makeRangeAware);
+                executorService.submit(() -> {
+                    try
+                    {
+                        insert.runOffline(tableWriter, workManager);
+                    }
+                    catch (Exception e)
+                    {
+                        e.printStackTrace();
+                    }
+                    finally
+                    {
+                        FileUtils.closeQuietly(tableWriter);
+                        finished.countDown();
+                    }
+                });
+            }
+
+            double currentSizeGB;
+            while ((currentSizeGB = directories.getRawDiretoriesSize() / BYTES_IN_GB) < totalSizeGb)
+            {
+                if (finished.getCount() == 0)
+                    break;
+
+                System.out.println(String.format("Written %.2fGB of %dGB", currentSizeGB, totalSizeGb));
+
+                Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
+            }
+
+            workManager.stop();
+            Uninterruptibles.awaitUninterruptibly(finished);
+
+            currentSizeGB = directories.getRawDiretoriesSize() / BYTES_IN_GB;
+            System.out.println(String.format("Finished writing %.2fGB", currentSizeGB));
+        }
+

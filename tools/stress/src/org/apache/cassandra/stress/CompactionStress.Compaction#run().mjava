@@ -1,0 +1,48 @@
+        public void run()
+        {
+            //Setup
+            SystemKeyspace.finishStartup(); //needed for early-open
+            CompactionManager.instance.setMaximumCompactorThreads(threads);
+            CompactionManager.instance.setCoreCompactorThreads(threads);
+            CompactionManager.instance.setRate(0);
+
+            StressProfile stressProfile = getStressProfile();
+            ColumnFamilyStore cfs = initCf(stressProfile, true);
+            cfs.getCompactionStrategyManager().compactionLogger.enable();
+
+            List<Future<?>> futures = new ArrayList<>(threads);
+            if (maximal)
+            {
+                futures = CompactionManager.instance.submitMaximal(cfs, FBUtilities.nowInSeconds(), false);
+            }
+            else
+            {
+                cfs.enableAutoCompaction();
+                cfs.getCompactionStrategyManager().enable();
+                for (int i = 0; i < threads; i++)
+                    futures.addAll(CompactionManager.instance.submitBackground(cfs));
+            }
+
+            long working;
+            //Report compaction stats while working
+            while ((working = futures.stream().filter(f -> !f.isDone()).count()) > 0 || CompactionManager.instance.getActiveCompactions() > 0 || (!maximal && cfs.getCompactionStrategyManager().getEstimatedRemainingTasks() > 0))
+            {
+                //Re-up any bg jobs
+                if (!maximal)
+                {
+                    for (long i = working; i < threads; i++)
+                        futures.addAll(CompactionManager.instance.submitBackground(cfs));
+                }
+
+                reportCompactionStats();
+                Uninterruptibles.sleepUninterruptibly(10, TimeUnit.SECONDS);
+            }
+
+            System.out.println("Finished! Shutting down...");
+            CompactionManager.instance.forceShutdown();
+
+            //Wait for cleanup to finish before forcing
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+            LifecycleTransaction.removeUnfinishedLeftovers(cfs);
+        }
+

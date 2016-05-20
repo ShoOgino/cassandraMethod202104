@@ -5,7 +5,8 @@
                               CFMetaData metadata,
                               Directories directories,
                               boolean loadSSTables,
-                              boolean registerBookkeeping)
+                              boolean registerBookeeping,
+                              boolean offline)
     {
         assert directories != null;
         assert metadata != null : "null metadata for " + keyspace + ":" + columnFamilyName;
@@ -34,8 +35,20 @@
             data.addInitialSSTables(sstables);
         }
 
+        /**
+         * When creating a CFS offline we change the default logic needed by CASSANDRA-8671
+         * and link the passed directories to be picked up by the compaction strategy
+         */
+        if (offline)
+            this.directories = directories;
+        else
+            this.directories = new Directories(metadata, Directories.dataDirectories);
+
+
         // compaction strategy should be created after the CFS has been prepared
         compactionStrategyManager = new CompactionStrategyManager(this);
+
+        // Since compaction can re-define data dir we need to reinit directories
         this.directories = compactionStrategyManager.getDirectories();
 
         if (maxCompactionThreshold.value() <= 0 || minCompactionThreshold.value() <=0)
@@ -48,7 +61,7 @@
         for (IndexMetadata info : metadata.getIndexes())
             indexManager.addIndex(info);
 
-        if (registerBookkeeping)
+        if (registerBookeeping)
         {
             // register the mbean
             mbeanName = String.format("org.apache.cassandra.db:type=%s,keyspace=%s,table=%s",
