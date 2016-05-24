@@ -46,30 +46,26 @@
                 throw new InvalidRequestException("Cannot use function when defining a materialized view");
             if (selectable instanceof Selectable.WritetimeOrTTL.Raw)
                 throw new InvalidRequestException("Cannot use function when defining a materialized view");
-            ColumnIdentifier identifier = (ColumnIdentifier) selectable.prepare(cfm);
             if (selector.alias != null)
-                throw new InvalidRequestException(String.format("Cannot alias column '%s' as '%s' when defining a materialized view", identifier.toString(), selector.alias.toString()));
+                throw new InvalidRequestException("Cannot use alias when defining a materialized view");
 
-            ColumnDefinition cdef = cfm.getColumnDefinition(identifier);
+            Selectable s = selectable.prepare(cfm);
+            if (s instanceof Term.Raw)
+                throw new InvalidRequestException("Cannot use terms in selection when defining a materialized view");
 
-            if (cdef == null)
-                throw new InvalidRequestException("Unknown column name detected in CREATE MATERIALIZED VIEW statement : "+identifier);
-
-            included.add(identifier);
+            ColumnDefinition cdef = (ColumnDefinition)s;
+            included.add(cdef.name);
         }
 
-        Set<ColumnIdentifier.Raw> targetPrimaryKeys = new HashSet<>();
-        for (ColumnIdentifier.Raw identifier : Iterables.concat(partitionKeys, clusteringKeys))
+        Set<ColumnDefinition.Raw> targetPrimaryKeys = new HashSet<>();
+        for (ColumnDefinition.Raw identifier : Iterables.concat(partitionKeys, clusteringKeys))
         {
             if (!targetPrimaryKeys.add(identifier))
                 throw new InvalidRequestException("Duplicate entry found in PRIMARY KEY: "+identifier);
 
-            ColumnDefinition cdef = cfm.getColumnDefinition(identifier.prepare(cfm));
+            ColumnDefinition cdef = identifier.prepare(cfm);
 
-            if (cdef == null)
-                throw new InvalidRequestException("Unknown column name detected in CREATE MATERIALIZED VIEW statement : "+identifier);
-
-            if (cfm.getColumnDefinition(identifier.prepare(cfm)).type.isMultiCell())
+            if (cdef.type.isMultiCell())
                 throw new InvalidRequestException(String.format("Cannot use MultiCell column '%s' in PRIMARY KEY of materialized view", identifier));
 
             if (cdef.isStatic())
@@ -77,7 +73,7 @@
         }
 
         // build the select statement
-        Map<ColumnIdentifier.Raw, Boolean> orderings = Collections.emptyMap();
+        Map<ColumnDefinition.Raw, Boolean> orderings = Collections.emptyMap();
         SelectStatement.Parameters parameters = new SelectStatement.Parameters(orderings, false, true, false);
         SelectStatement.RawStatement rawSelect = new SelectStatement.RawStatement(baseName, parameters, selectClause, whereClause, null, null);
 
@@ -113,10 +109,10 @@
 
         // This is only used as an intermediate state; this is to catch whether multiple non-PK columns are used
         boolean hasNonPKColumn = false;
-        for (ColumnIdentifier.Raw raw : partitionKeys)
+        for (ColumnDefinition.Raw raw : partitionKeys)
             hasNonPKColumn |= getColumnIdentifier(cfm, basePrimaryKeyCols, hasNonPKColumn, raw, targetPartitionKeys, restrictions);
 
-        for (ColumnIdentifier.Raw raw : clusteringKeys)
+        for (ColumnDefinition.Raw raw : clusteringKeys)
             hasNonPKColumn |= getColumnIdentifier(cfm, basePrimaryKeyCols, hasNonPKColumn, raw, targetClusteringColumns, restrictions);
 
         // We need to include all of the primary key columns from the base table in order to make sure that we do not
