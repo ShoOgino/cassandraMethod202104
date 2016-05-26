@@ -1,0 +1,36 @@
+    private void bruteForceCorruptionTest(SSTableReader ssTableReader, Consumer<SSTableReader> walker) throws Throwable
+    {
+        RandomAccessFile raf = new RandomAccessFile(ssTableReader.getFilename(), "rw");
+
+        int corruptedCounter = 0;
+
+        int fileLength = (int)raf.length(); // in current test, it does fit into int
+        for (int i = 0; i < numberOfRuns; i++)
+        {
+            final int corruptionPosition = random.nextInt(fileLength - 1); //ensure at least one byte will be corrupted
+            // corrupt max from position to end of file
+            final int corruptionSize = Math.min(maxCorruptionSize, random.nextInt(fileLength - corruptionPosition));
+
+            byte[] backup = corruptSstable(raf, corruptionPosition, corruptionSize);
+
+            try
+            {
+                walker.accept(ssTableReader);
+            }
+            catch (CorruptSSTableException t)
+            {
+                corruptedCounter++;
+            }
+            finally
+            {
+                if (ChunkCache.instance != null)
+                    ChunkCache.instance.invalidateFile(ssTableReader.getFilename());
+
+                restore(raf, corruptionPosition, backup);
+            }
+        }
+
+        assertTrue(corruptedCounter > 0);
+        FileUtils.closeQuietly(raf);
+    }
+
