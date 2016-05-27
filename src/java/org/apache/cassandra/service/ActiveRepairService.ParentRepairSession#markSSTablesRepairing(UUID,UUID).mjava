@@ -1,0 +1,24 @@
+        /**
+         * Marks all the unrepaired sstables as repairing unless we have already done so.
+         *
+         * Any of these sstables that are still on disk are then anticompacted once the streaming and validation phases are done.
+         *
+         * @param cfId
+         * @param parentSessionId used to check that we don't start multiple inc repair sessions over the same sstables
+         */
+        public synchronized void markSSTablesRepairing(UUID cfId, UUID parentSessionId)
+        {
+            if (!marked.contains(cfId))
+            {
+                List<SSTableReader> sstables = columnFamilyStores.get(cfId).select(ColumnFamilyStore.UNREPAIRED_SSTABLES).sstables;
+                Set<SSTableReader> currentlyRepairing = ActiveRepairService.instance.currentlyRepairing(cfId, parentSessionId);
+                if (!Sets.intersection(currentlyRepairing, Sets.newHashSet(sstables)).isEmpty())
+                {
+                    logger.error("Cannot start multiple repair sessions over the same sstables");
+                    throw new RuntimeException("Cannot start multiple repair sessions over the same sstables");
+                }
+                addSSTables(cfId, sstables);
+                marked.add(cfId);
+            }
+        }
+
