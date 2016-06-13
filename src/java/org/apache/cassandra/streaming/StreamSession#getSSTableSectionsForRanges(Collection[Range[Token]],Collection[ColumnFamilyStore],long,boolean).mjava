@@ -1,4 +1,5 @@
-    private List<SSTableStreamingSections> getSSTableSectionsForRanges(Collection<Range<Token>> ranges, Collection<ColumnFamilyStore> stores, long overriddenRepairedAt)
+    @VisibleForTesting
+    public static List<SSTableStreamingSections> getSSTableSectionsForRanges(Collection<Range<Token>> ranges, Collection<ColumnFamilyStore> stores, long overriddenRepairedAt, final boolean isIncremental)
     {
         Refs<SSTableReader> refs = new Refs<>();
         try
@@ -12,10 +13,7 @@
                 {
                     public List<SSTableReader> apply(View view)
                     {
-                        Map<SSTableReader, SSTableReader> permittedInstances = new HashMap<>();
-                        for (SSTableReader reader : ColumnFamilyStore.CANONICAL_SSTABLES.apply(view))
-                            permittedInstances.put(reader, reader);
-
+                        SSTableIntervalTree intervalTree = SSTableIntervalTree.build(ColumnFamilyStore.CANONICAL_SSTABLES.apply(view));
                         Set<SSTableReader> sstables = Sets.newHashSet();
                         for (Range<RowPosition> keyRange : keyRanges)
                         {
@@ -25,13 +23,9 @@
                             // sort after all keys having the token. That "fake" key cannot however be equal to any real key, so that even
                             // including keyRange.left will still exclude any key having the token of the original token range, and so we're
                             // still actually selecting what we wanted.
-                            for (SSTableReader sstable : view.sstablesInBounds(keyRange.left, keyRange.right))
+                            for (SSTableReader sstable : View.sstablesInBounds(keyRange.left, keyRange.right, intervalTree))
                             {
-                                // sstableInBounds may contain early opened sstables
-                                if (isIncremental && sstable.isRepaired())
-                                    continue;
-                                sstable = permittedInstances.get(sstable);
-                                if (sstable != null)
+                                if (!isIncremental || !sstable.isRepaired())
                                     sstables.add(sstable);
                             }
                         }
