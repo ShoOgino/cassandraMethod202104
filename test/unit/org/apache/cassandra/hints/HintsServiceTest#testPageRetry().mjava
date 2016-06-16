@@ -1,0 +1,21 @@
+    @Test
+    public void testPageRetry() throws InterruptedException, ExecutionException, TimeoutException
+    {
+        // create spy for hint messages, but only create responses for 5 hints
+        MockMessagingSpy spy = sendHintsAndResponses(20, 5);
+
+        Futures.allAsList(
+                // the dispatcher will always send all hints within the current page
+                // and only wait for the acks before going to the next page
+                spy.interceptMessageOut(20),
+                spy.interceptNoMsg(200, TimeUnit.MILLISECONDS),
+
+                // next tick will trigger a retry of the same page as we only replied with 5/20 acks
+                spy.interceptMessageOut(20)
+        ).get();
+
+        // marking the destination node as dead should stop sending hints
+        failureDetector.isAlive = false;
+        spy.interceptNoMsg(20, TimeUnit.SECONDS).get();
+    }
+
