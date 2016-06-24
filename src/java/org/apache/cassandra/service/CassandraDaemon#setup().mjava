@@ -198,6 +198,38 @@
             }
         }
 
+        // Alternative metrics
+        String metricsExporterClass = System.getProperty("cassandra.metricsExporter");
+        if (metricsExporterClass != null)
+        {
+            logger.info("Trying to initialize metrics-exporter {}", metricsExporterClass);
+            try
+            {
+                Constructor<?> ctor = Class.forName(metricsExporterClass).getConstructor(MetricRegistry.class);
+                Object metricsExporter = ctor.newInstance(CassandraMetricsRegistry.Metrics);
+                if (metricsExporter.getClass().isAssignableFrom(Closeable.class))
+                {
+                    Runtime.getRuntime().addShutdownHook(new Thread() {
+                        public void run()
+                        {
+                            try
+                            {
+                                ((Closeable)metricsExporter).close();
+                            }
+                            catch (IOException e)
+                            {
+                                e.printStackTrace();
+                            }
+                        }
+                    });
+                }
+            }
+            catch (Exception e)
+            {
+                logger.warn("Failed to initialize metrics-exporter", e);
+            }
+        }
+
         // start server internals
         StorageService.instance.registerDaemon(this);
         try
