@@ -1,0 +1,62 @@
+        /**
+         * Legacy leaf storage format (used for reading data formats before AC):
+         *
+         *    [(short) leaf type][(short) offset extra bytes][(long) token][(int) offsetData]
+         *
+         * Many pairs can be encoded into long+int.
+         *
+         * Simple entry: offset fits into (int)
+         *
+         *    [(short) leaf type][(short) offset extra bytes][(long) token][(int) offsetData]
+         *
+         * FactoredOffset: a single offset, offset fits into (long)+(int) bits:
+         *
+         *    [(short) leaf type][(short) 16 bytes of remained offset][(long) token][(int) top 32 bits of offset]
+         *
+         * PackedCollisionEntry: packs the two offset entries into int and a short (if both of them fit into
+         * (long) and one of them fits into (int))
+         *
+         *    [(short) leaf type][(short) 16 the offset that'd fit into short][(long) token][(int) 32 bits of offset that'd fit into int]
+         *
+         * Otherwise, the rest gets packed into limited-size overflow collision entry
+         *
+         *    [(short) leaf type][(short) count][(long) token][(int) start index]
+         */
+        private KeyOffsets fetchOffsetsLegacy()
+        {
+            short info = buffer.getShort(position);
+            // offset extra is unsigned short (right-most 16 bits of 48 bits allowed for an offset)
+            int offsetExtra = buffer.getShort(position + Short.BYTES) & 0xFFFF;
+            // is the it left-most (32-bit) base of the actual offset in the index file
+            int offsetData = buffer.getInt(position + (2 * Short.BYTES) + Long.BYTES);
+
+            EntryType type = EntryType.of(info & TokenTreeBuilder.ENTRY_TYPE_MASK);
+
+            KeyOffsets rowOffsets = new KeyOffsets();
+            switch (type)
+            {
+                case SIMPLE:
+                    rowOffsets.put(offsetData, KeyOffsets.NO_OFFSET);
+                    break;
+                case OVERFLOW:
+                    long offsetPos = (buffer.position() + (2 * (leafSize * Long.BYTES)) + (offsetData * Long.BYTES));
+
+                    for (int i = 0; i < offsetExtra; i++)
+                    {
+                        long offset = buffer.getLong(offsetPos + (i * Long.BYTES));;
+                        rowOffsets.put(offset, KeyOffsets.NO_OFFSET);
+                    }
+                    break;
+                case FACTORED:
+                    long offset = (((long) offsetData) << Short.SIZE) + offsetExtra;
+                    rowOffsets.put(offset, KeyOffsets.NO_OFFSET);
+                    break;
+                case PACKED:
+                    rowOffsets.put(offsetExtra, KeyOffsets.NO_OFFSET);
+                    rowOffsets.put(offsetData, KeyOffsets.NO_OFFSET);
+                default:
+                    throw new IllegalStateException("Unknown entry type: " + type);
+            }
+            return rowOffsets;
+        }
+

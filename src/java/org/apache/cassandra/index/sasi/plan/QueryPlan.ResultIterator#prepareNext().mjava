@@ -1,0 +1,82 @@
+        private boolean prepareNext()
+        {
+            if (operationTree == null)
+                return false;
+
+            if (nextPartition != null)
+                nextPartition.close();
+
+            for (;;)
+            {
+                if (currentKeys == null || !currentKeys.hasNext())
+                {
+                    if (!operationTree.hasNext())
+                        return false;
+
+                    Token token = operationTree.next();
+                    currentKeys = token.iterator();
+                }
+
+                CFMetaData metadata = controller.metadata();
+                BTreeSet.Builder<Clustering> clusterings = BTreeSet.builder(metadata.comparator);
+                // results have static clustering, the whole partition has to be read
+                boolean fetchWholePartition = false;
+
+                while (true)
+                {
+                    if (!currentKeys.hasNext())
+                    {
+                        // No more keys for this token.
+                        // If no clusterings were collected yet, exit this inner loop so the operation
+                        // tree iterator can move on to the next token.
+                        // If some clusterings were collected, build an iterator for those rows
+                        // and return.
+                        if ((clusterings.isEmpty() && !fetchWholePartition) || lastPartitionKey == null)
+                            break;
+
+                        UnfilteredRowIterator partition = fetchPartition(lastPartitionKey, clusterings.build(), fetchWholePartition);
+                        // Prepare for next partition, reset partition key and clusterings
+                        lastPartitionKey = null;
+                        clusterings = BTreeSet.builder(metadata.comparator);
+
+                        if (partition.isEmpty())
+                        {
+                            partition.close();
+                            continue;
+                        }
+
+                        nextPartition = partition;
+                        return true;
+                    }
+
+                    RowKey fullKey = currentKeys.next();
+                    DecoratedKey key = fullKey.decoratedKey;
+
+                    if (!keyRange.right.isMinimum() && keyRange.right.compareTo(key) < 0)
+                        return false;
+
+                    if (lastPartitionKey != null && metadata.getKeyValidator().compare(lastPartitionKey.getKey(), key.getKey()) != 0)
+                    {
+                        UnfilteredRowIterator partition = fetchPartition(lastPartitionKey, clusterings.build(), fetchWholePartition);
+
+                        if (partition.isEmpty())
+                            partition.close();
+                        else
+                        {
+                            nextPartition = partition;
+                            return true;
+                        }
+                    }
+
+                    lastPartitionKey = key;
+
+                    // We fetch whole partition for versions before AC and in case static column index is queried in AC
+                    if (fullKey.clustering == null || fullKey.clustering.clustering().kind() == ClusteringPrefix.Kind.STATIC_CLUSTERING)
+                        fetchWholePartition = true;
+                    else
+                        clusterings.add(fullKey.clustering);
+
+                }
+            }
+        }
+

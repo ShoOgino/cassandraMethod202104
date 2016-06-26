@@ -17,11 +17,14 @@
         indexWriter.begin();
         indexWriter.indexes.put(column, indexWriter.newIndex(sasi.getIndex()));
 
-        populateSegment(cfs.metadata, indexWriter.getIndex(column), new HashMap<Long, Set<Integer>>()
+        populateSegment(cfs.metadata, indexWriter.getIndex(column), new HashMap<Long, KeyOffsets>()
         {{
-            put(now,     new HashSet<>(Arrays.asList(0, 1)));
-            put(now + 1, new HashSet<>(Arrays.asList(2, 3)));
-            put(now + 2, new HashSet<>(Arrays.asList(4, 5, 6, 7, 8, 9)));
+            put(now,     new KeyOffsets() {{ put(0, 0); put(1, 1); }});
+            put(now + 1, new KeyOffsets() {{ put(2, 2); put(3, 3); }});
+            put(now + 2, new KeyOffsets() {{
+                put(4, 4); put(5, 5); put(6, 6);
+                put(7, 7); put(8, 8); put(9, 9);
+            }});
         }});
 
         Callable<OnDiskIndex> segmentBuilder = indexWriter.getIndex(column).scheduleSegmentFlush(false);
@@ -31,15 +34,21 @@
         PerSSTableIndexWriter.Index index = indexWriter.getIndex(column);
         Random random = ThreadLocalRandom.current();
 
+        Supplier<KeyOffsets> offsetSupplier = () -> new KeyOffsets() {{
+            put(random.nextInt(), random.nextInt());
+            put(random.nextInt(), random.nextInt());
+            put(random.nextInt(), random.nextInt());
+        }};
+
         Set<String> segments = new HashSet<>();
         // now let's test multiple correct segments with yield incorrect final segment
         for (int i = 0; i < 3; i++)
         {
-            populateSegment(cfs.metadata, index, new HashMap<Long, Set<Integer>>()
+            populateSegment(cfs.metadata, index, new HashMap<Long, KeyOffsets>()
             {{
-                put(now,     new HashSet<>(Arrays.asList(random.nextInt(), random.nextInt(), random.nextInt())));
-                put(now + 1, new HashSet<>(Arrays.asList(random.nextInt(), random.nextInt(), random.nextInt())));
-                put(now + 2, new HashSet<>(Arrays.asList(random.nextInt(), random.nextInt(), random.nextInt())));
+                put(now,     offsetSupplier.get());
+                put(now + 1, offsetSupplier.get());
+                put(now + 2, offsetSupplier.get());
             }});
 
             try

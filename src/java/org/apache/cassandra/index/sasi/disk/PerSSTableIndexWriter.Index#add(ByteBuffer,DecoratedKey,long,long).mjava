@@ -1,0 +1,48 @@
+        public void add(ByteBuffer term, DecoratedKey key, long partitoinOffset, long rowOffset)
+        {
+            if (term.remaining() == 0)
+                return;
+
+            boolean isAdded = false;
+
+            analyzer.reset(term);
+            while (analyzer.hasNext())
+            {
+                ByteBuffer token = analyzer.next();
+                int size = token.remaining();
+
+                if (token.remaining() >= OnDiskIndexBuilder.MAX_TERM_SIZE)
+                {
+                    logger.info("Rejecting value (size {}, maximum {}) for column {} (analyzed {}) at {} SSTable.",
+                            FBUtilities.prettyPrintMemory(term.remaining()),
+                            FBUtilities.prettyPrintMemory(OnDiskIndexBuilder.MAX_TERM_SIZE),
+                            columnIndex.getColumnName(),
+                            columnIndex.getMode().isAnalyzed,
+                            descriptor);
+                    continue;
+                }
+
+                if (!TypeUtil.isValid(token, columnIndex.getValidator()))
+                {
+                    if ((token = TypeUtil.tryUpcast(token, columnIndex.getValidator())) == null)
+                    {
+                        logger.info("({}) Failed to add {} to index for key: {}, value size was {}, validator is {}.",
+                                    outputFile,
+                                    columnIndex.getColumnName(),
+                                    keyValidator.getString(key.getKey()),
+                                    FBUtilities.prettyPrintMemory(size),
+                                    columnIndex.getValidator());
+                        continue;
+                    }
+                }
+
+                currentBuilder.add(token, key, partitoinOffset, rowOffset);
+                isAdded = true;
+            }
+
+            if (!isAdded || currentBuilder.estimatedMemoryUse() < maxMemorySize)
+                return; // non of the generated tokens were added to the index or memory size wasn't reached
+
+            segments.add(getExecutor().submit(scheduleSegmentFlush(false)));
+        }
+
