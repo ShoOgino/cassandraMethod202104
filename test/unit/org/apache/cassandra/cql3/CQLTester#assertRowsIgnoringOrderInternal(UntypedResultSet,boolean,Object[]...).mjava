@@ -1,0 +1,56 @@
+    private static void assertRowsIgnoringOrderInternal(UntypedResultSet result, boolean ignoreExtra, Object[]... rows)
+    {
+        if (result == null)
+        {
+            if (rows.length > 0)
+                Assert.fail(String.format("No rows returned by query but %d expected", rows.length));
+            return;
+        }
+
+        List<ColumnSpecification> meta = result.metadata();
+
+        Set<List<ByteBuffer>> expectedRows = new HashSet<>(rows.length);
+        for (Object[] expected : rows)
+        {
+            Assert.assertEquals("Invalid number of (expected) values provided for row", expected.length, meta.size());
+            List<ByteBuffer> expectedRow = new ArrayList<>(meta.size());
+            for (int j = 0; j < meta.size(); j++)
+                expectedRow.add(makeByteBuffer(expected[j], meta.get(j).type));
+            expectedRows.add(expectedRow);
+        }
+
+        Set<List<ByteBuffer>> actualRows = new HashSet<>(result.size());
+        for (UntypedResultSet.Row actual : result)
+        {
+            List<ByteBuffer> actualRow = new ArrayList<>(meta.size());
+            for (int j = 0; j < meta.size(); j++)
+                actualRow.add(actual.getBytes(meta.get(j).name.toString()));
+            actualRows.add(actualRow);
+        }
+
+        com.google.common.collect.Sets.SetView<List<ByteBuffer>> extra = com.google.common.collect.Sets.difference(actualRows, expectedRows);
+        com.google.common.collect.Sets.SetView<List<ByteBuffer>> missing = com.google.common.collect.Sets.difference(expectedRows, actualRows);
+        if ((!ignoreExtra && !extra.isEmpty()) || !missing.isEmpty())
+        {
+            List<String> extraRows = makeRowStrings(extra, meta);
+            List<String> missingRows = makeRowStrings(missing, meta);
+            StringBuilder sb = new StringBuilder();
+            if (!extra.isEmpty())
+            {
+                sb.append("Got ").append(extra.size()).append(" extra row(s) ");
+                if (!missing.isEmpty())
+                    sb.append("and ").append(missing.size()).append(" missing row(s) ");
+                sb.append("in result.  Extra rows:\n    ");
+                sb.append(extraRows.stream().collect(Collectors.joining("\n    ")));
+                if (!missing.isEmpty())
+                    sb.append("\nMissing Rows:\n    ").append(missingRows.stream().collect(Collectors.joining("\n    ")));
+                Assert.fail(sb.toString());
+            }
+
+            if (!missing.isEmpty())
+                Assert.fail("Missing " + missing.size() + " row(s) in result: \n    " + missingRows.stream().collect(Collectors.joining("\n    ")));
+        }
+
+        assert ignoreExtra || expectedRows.size() == actualRows.size();
+    }
+
