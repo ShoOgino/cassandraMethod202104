@@ -21,12 +21,21 @@
         if ((flags & HAS_ALL_COLUMNS) == 0)
             Columns.serializer.serializeSubset(Collections2.transform(row, ColumnData::column), headerColumns, out);
 
+        SearchIterator<ColumnDefinition, ColumnDefinition> si = headerColumns.iterator();
         for (ColumnData data : row)
         {
+            // We can obtain the column for data directly from data.column(). However, if the cell/complex data
+            // originates from a sstable, the column we'll get will have the type used when the sstable was serialized,
+            // and if that type have been recently altered, that may not be the type we want to serialize the column
+            // with. So we use the ColumnDefinition from the "header" which is "current". Also see #11810 for what
+            // happens if we don't do that.
+            ColumnDefinition column = si.next(data.column());
+            assert column != null;
+
             if (data.column.isSimple())
-                Cell.serializer.serialize((Cell) data, out, pkLiveness, header);
+                Cell.serializer.serialize((Cell) data, column, out, pkLiveness, header);
             else
-                writeComplexColumn((ComplexColumnData) data, (flags & HAS_COMPLEX_DELETION) != 0, pkLiveness, header, out);
+                writeComplexColumn((ComplexColumnData) data, column, (flags & HAS_COMPLEX_DELETION) != 0, pkLiveness, header, out);
         }
     }
 
