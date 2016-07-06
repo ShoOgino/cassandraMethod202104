@@ -1,56 +1,39 @@
     private static void testResetAndTruncate(File f, boolean compressed, boolean usemmap, int junkSize) throws IOException
     {
         final String filename = f.getAbsolutePath();
-        try(ChannelProxy channel = new ChannelProxy(f))
-        {
-            MetadataCollector sstableMetadataCollector = new MetadataCollector(new ClusteringComparator(BytesType.instance));
-            try(SequentialWriter writer = compressed
+        MetadataCollector sstableMetadataCollector = new MetadataCollector(new ClusteringComparator(BytesType.instance));
+        try(SequentialWriter writer = compressed
                 ? new CompressedSequentialWriter(f, filename + ".metadata",
-                                                 null, SequentialWriterOption.DEFAULT,
-                                                 CompressionParams.snappy(), sstableMetadataCollector)
+                null, SequentialWriterOption.DEFAULT,
+                CompressionParams.snappy(), sstableMetadataCollector)
                 : new SequentialWriter(f))
+        {
+            writer.write("The quick ".getBytes());
+            DataPosition mark = writer.mark();
+            writer.write("blue fox jumps over the lazy dog".getBytes());
+
+            // write enough to be sure to change chunk
+            for (int i = 0; i < junkSize; ++i)
             {
-                writer.write("The quick ".getBytes());
-                DataPosition mark = writer.mark();
-                writer.write("blue fox jumps over the lazy dog".getBytes());
-
-                // write enough to be sure to change chunk
-                for (int i = 0; i < junkSize; ++i)
-                {
-                    writer.write((byte) 1);
-                }
-
-                writer.resetAndTruncate(mark);
-                writer.write("brown fox jumps over the lazy dog".getBytes());
-                writer.finish();
-            }
-            assert f.exists();
-
-            CompressionMetadata compressionMetadata = compressed ? new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32) : null;
-            RandomAccessReader.Builder builder = RandomAccessReader.builder(channel);
-            if (compressed)
-                builder.compression(compressionMetadata);
-
-            MmappedRegions regions = null;
-            if (usemmap)
-            {
-                regions = compressed
-                        ? MmappedRegions.map(channel, compressionMetadata)
-                        : MmappedRegions.map(channel, f.length());
-                builder.regions(regions);
+                writer.write((byte) 1);
             }
 
-            try(RandomAccessReader reader = builder.build())
-            {
-                String expected = "The quick brown fox jumps over the lazy dog";
-                assertEquals(expected.length(), reader.length());
-                byte[] b = new byte[expected.length()];
-                reader.readFully(b);
-                assert new String(b).equals(expected) : "Expecting '" + expected + "', got '" + new String(b) + '\'';
-            }
+            writer.resetAndTruncate(mark);
+            writer.write("brown fox jumps over the lazy dog".getBytes());
+            writer.finish();
+        }
+        assert f.exists();
 
-            if (regions != null)
-                regions.close();
+        CompressionMetadata compressionMetadata = compressed ? new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32) : null;
+        try (FileHandle.Builder builder = new FileHandle.Builder(filename).mmapped(usemmap).withCompressionMetadata(compressionMetadata);
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
+        {
+            String expected = "The quick brown fox jumps over the lazy dog";
+            assertEquals(expected.length(), reader.length());
+            byte[] b = new byte[expected.length()];
+            reader.readFully(b);
+            assert new String(b).equals(expected) : "Expecting '" + expected + "', got '" + new String(b) + '\'';
         }
         finally
         {

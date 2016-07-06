@@ -1,0 +1,59 @@
+        @Override
+        public void readChunk(long position, ByteBuffer uncompressed)
+        {
+            try
+            {
+                // accesses must always be aligned
+                assert (position & -uncompressed.capacity()) == position;
+                assert position <= fileLength;
+
+                CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
+                ByteBuffer compressed = compressedHolder.get();
+
+                if (compressed.capacity() < chunk.length)
+                {
+                    compressed = allocateBuffer(chunk.length);
+                    compressedHolder.set(compressed);
+                }
+                else
+                {
+                    compressed.clear();
+                }
+
+                compressed.limit(chunk.length);
+                if (channel.read(compressed, chunk.offset) != chunk.length)
+                    throw new CorruptBlockException(channel.filePath(), chunk);
+
+                compressed.flip();
+                uncompressed.clear();
+
+                try
+                {
+                    metadata.compressor().uncompress(compressed, uncompressed);
+                }
+                catch (IOException e)
+                {
+                    throw new CorruptBlockException(channel.filePath(), chunk);
+                }
+                finally
+                {
+                    uncompressed.flip();
+                }
+
+                if (getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
+                {
+                    compressed.rewind();
+                    int checksum = (int) metadata.checksumType.of(compressed);
+
+                    compressed.clear().limit(Integer.BYTES);
+                    if (channel.read(compressed, chunk.offset + chunk.length) != Integer.BYTES
+                                || compressed.getInt(0) != checksum)
+                        throw new CorruptBlockException(channel.filePath(), chunk);
+                }
+            }
+            catch (CorruptBlockException e)
+            {
+                throw new CorruptSSTableException(e, channel.filePath());
+            }
+        }
+

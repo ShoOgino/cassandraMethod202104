@@ -13,25 +13,26 @@
         w.write(data);
         w.sync();
 
-        final ChannelProxy channel = new ChannelProxy(w.getPath());
-        final RandomAccessReader r = RandomAccessReader.open(channel);
+        try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
+        {
 
-        ByteBuffer content = ByteBufferUtil.read(r, (int) r.length());
+            ByteBuffer content = ByteBufferUtil.read(r, (int) r.length());
 
-        // after reading whole file we should be at EOF
-        assertEquals(0, ByteBufferUtil.compare(content, data));
-        assert r.bytesRemaining() == 0 && r.isEOF();
+            // after reading whole file we should be at EOF
+            assertEquals(0, ByteBufferUtil.compare(content, data));
+            assert r.bytesRemaining() == 0 && r.isEOF();
 
-        r.seek(0);
-        content = ByteBufferUtil.read(r, 10); // reading first 10 bytes
-        assertEquals(ByteBufferUtil.compare(content, "cccccccccc".getBytes()), 0);
-        assertEquals(r.bytesRemaining(), r.length() - content.limit());
+            r.seek(0);
+            content = ByteBufferUtil.read(r, 10); // reading first 10 bytes
+            assertEquals(ByteBufferUtil.compare(content, "cccccccccc".getBytes()), 0);
+            assertEquals(r.bytesRemaining(), r.length() - content.limit());
 
-        // trying to read more than file has right now
-        expectEOF(() -> ByteBufferUtil.read(r, (int) r.length() + 10));
+            // trying to read more than file has right now
+            expectEOF(() -> ByteBufferUtil.read(r, (int) r.length() + 10));
 
-        w.finish();
-        r.close();
-        channel.close();
+            w.finish();
+        }
     }
 

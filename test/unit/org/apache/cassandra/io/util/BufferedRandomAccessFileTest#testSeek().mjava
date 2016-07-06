@@ -6,23 +6,28 @@
         w.write(data);
         w.finish();
 
-        final ChannelProxy channel = new ChannelProxy(w.getPath());
-        final RandomAccessReader file = RandomAccessReader.open(channel);
+        try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
+             FileHandle fh = builder.complete();
+             RandomAccessReader file = fh.createReader())
+        {
+            file.seek(0);
+            assertEquals(file.getFilePointer(), 0);
+            assertEquals(file.bytesRemaining(), file.length());
 
-        file.seek(0);
-        assertEquals(file.getFilePointer(), 0);
-        assertEquals(file.bytesRemaining(), file.length());
+            file.seek(20);
+            assertEquals(file.getFilePointer(), 20);
+            assertEquals(file.bytesRemaining(), file.length() - 20);
 
-        file.seek(20);
-        assertEquals(file.getFilePointer(), 20);
-        assertEquals(file.bytesRemaining(), file.length() - 20);
+            // trying to seek past the end of the file should produce EOFException
+            expectException(() -> {
+                file.seek(file.length() + 30);
+                return null;
+            }, IllegalArgumentException.class);
 
-        // trying to seek past the end of the file should produce EOFException
-        expectException(() -> { file.seek(file.length() + 30); return null; }, IllegalArgumentException.class);
-
-        expectException(() -> { file.seek(-1); return null; }, IllegalArgumentException.class); // throws IllegalArgumentException
-
-        file.close();
-        channel.close();
+            expectException(() -> {
+                file.seek(-1);
+                return null;
+            }, IllegalArgumentException.class); // throws IllegalArgumentException
+        }
     }
 

@@ -2,9 +2,8 @@
     public void testReadAndWrite() throws Exception
     {
         SequentialWriter w = createTempFile("braf");
-        ChannelProxy channel = new ChannelProxy(w.getPath());
 
-        // writting string of data to the file
+        // writing string of data to the file
         byte[] data = "Hello".getBytes();
         w.write(data);
         assertEquals(data.length, w.length());
@@ -13,78 +12,84 @@
         w.sync();
 
         // reading small amount of data from file, this is handled by initial buffer
-        RandomAccessReader r = RandomAccessReader.open(channel);
-
-        byte[] buffer = new byte[data.length];
-        assertEquals(data.length, r.read(buffer));
-        assertTrue(Arrays.equals(buffer, data)); // we read exactly what we wrote
-        assertEquals(r.read(), -1); // nothing more to read EOF
-        assert r.bytesRemaining() == 0 && r.isEOF();
-
-        r.close();
-
-        // writing buffer bigger than page size, which will trigger reBuffer()
-        byte[] bigData = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE + 10];
-
-        for (int i = 0; i < bigData.length; i++)
-            bigData[i] = 'd';
-
-        long initialPosition = w.position();
-        w.write(bigData); // writing data
-        assertEquals(w.position(), initialPosition + bigData.length);
-        assertEquals(w.length(), initialPosition + bigData.length); // file size should equals to last position
-
-        w.sync();
-
-        r = RandomAccessReader.open(channel); // re-opening file in read-only mode
-
-        // reading written buffer
-        r.seek(initialPosition); // back to initial (before write) position
-        data = new byte[bigData.length];
-        long sizeRead = 0;
-        for (int i = 0; i < data.length; i++)
+        try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath()))
         {
-            data[i] = (byte) r.read();
-            sizeRead++;
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader r = fh.createReader())
+            {
+
+                byte[] buffer = new byte[data.length];
+                assertEquals(data.length, r.read(buffer));
+                assertTrue(Arrays.equals(buffer, data)); // we read exactly what we wrote
+                assertEquals(r.read(), -1); // nothing more to read EOF
+                assert r.bytesRemaining() == 0 && r.isEOF();
+            }
+
+            // writing buffer bigger than page size, which will trigger reBuffer()
+            byte[] bigData = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE + 10];
+
+            for (int i = 0; i < bigData.length; i++)
+                bigData[i] = 'd';
+
+            long initialPosition = w.position();
+            w.write(bigData); // writing data
+            assertEquals(w.position(), initialPosition + bigData.length);
+            assertEquals(w.length(), initialPosition + bigData.length); // file size should equals to last position
+
+            w.sync();
+
+            // re-opening file in read-only mode
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader r = fh.createReader())
+            {
+
+                // reading written buffer
+                r.seek(initialPosition); // back to initial (before write) position
+                data = new byte[bigData.length];
+                long sizeRead = 0;
+                for (int i = 0; i < data.length; i++)
+                {
+                    data[i] = (byte) r.read();
+                    sizeRead++;
+                }
+
+                assertEquals(sizeRead, data.length); // read exactly data.length bytes
+                assertEquals(r.getFilePointer(), initialPosition + data.length);
+                assertEquals(r.length(), initialPosition + bigData.length);
+                assertTrue(Arrays.equals(bigData, data));
+                assertTrue(r.bytesRemaining() == 0 && r.isEOF()); // we are at the of the file
+
+                // test readBytes(int) method
+                r.seek(0);
+                ByteBuffer fileContent = ByteBufferUtil.read(r, (int) w.length());
+                assertEquals(fileContent.limit(), w.length());
+                assert ByteBufferUtil.string(fileContent).equals("Hello" + new String(bigData));
+
+                // read the same buffer but using readFully(int)
+                data = new byte[bigData.length];
+                r.seek(initialPosition);
+                r.readFully(data);
+                assert r.bytesRemaining() == 0 && r.isEOF(); // we should be at EOF
+                assertTrue(Arrays.equals(bigData, data));
+
+                // try to read past mark (all methods should return -1)
+                data = new byte[10];
+                assertEquals(r.read(), -1);
+                assertEquals(r.read(data), -1);
+                assertEquals(r.read(data, 0, data.length), -1);
+
+                // test read(byte[], int, int)
+                r.seek(0);
+                data = new byte[20];
+                assertEquals(15, r.read(data, 0, 15));
+                assertTrue(new String(data).contains("Hellodddddddddd"));
+                for (int i = 16; i < data.length; i++)
+                {
+                    assert data[i] == 0;
+                }
+
+                w.finish();
+            }
         }
-
-        assertEquals(sizeRead, data.length); // read exactly data.length bytes
-        assertEquals(r.getFilePointer(), initialPosition + data.length);
-        assertEquals(r.length(), initialPosition + bigData.length);
-        assertTrue(Arrays.equals(bigData, data));
-        assertTrue(r.bytesRemaining() == 0 && r.isEOF()); // we are at the of the file
-
-        // test readBytes(int) method
-        r.seek(0);
-        ByteBuffer fileContent = ByteBufferUtil.read(r, (int) w.length());
-        assertEquals(fileContent.limit(), w.length());
-        assert ByteBufferUtil.string(fileContent).equals("Hello" + new String(bigData));
-
-        // read the same buffer but using readFully(int)
-        data = new byte[bigData.length];
-        r.seek(initialPosition);
-        r.readFully(data);
-        assert r.bytesRemaining() == 0 && r.isEOF(); // we should be at EOF
-        assertTrue(Arrays.equals(bigData, data));
-
-        // try to read past mark (all methods should return -1)
-        data = new byte[10];
-        assertEquals(r.read(), -1);
-        assertEquals(r.read(data), -1);
-        assertEquals(r.read(data, 0, data.length), -1);
-
-        // test read(byte[], int, int)
-        r.seek(0);
-        data = new byte[20];
-        assertEquals(15, r.read(data, 0, 15));
-        assertTrue(new String(data).contains("Hellodddddddddd"));
-        for (int i = 16; i < data.length; i++)
-        {
-            assert data[i] == 0;
-        }
-
-        w.finish();
-        r.close();
-        channel.close();
     }
 

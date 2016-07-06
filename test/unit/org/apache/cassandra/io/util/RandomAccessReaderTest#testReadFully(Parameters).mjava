@@ -1,19 +1,12 @@
     private static void testReadFully(Parameters params) throws IOException
     {
         final File f = writeFile(params);
-        try(ChannelProxy channel = new ChannelProxy(f))
+        try (FileHandle.Builder builder = new FileHandle.Builder(f.getPath())
+                                                     .bufferType(params.bufferType).bufferSize(params.bufferSize))
         {
-            RandomAccessReader.Builder builder = RandomAccessReader.builder(channel)
-                                                 .bufferType(params.bufferType)
-                                                 .bufferSize(params.bufferSize);
-            MmappedRegions regions = null;
-            if (params.mmappedRegions)
-            {
-                regions = MmappedRegions.map(channel, f.length());
-                builder.regions(regions);
-            }
-
-            try(RandomAccessReader reader = builder.build())
+            builder.mmapped(params.mmappedRegions);
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader reader = fh.createReader())
             {
                 assertEquals(f.getAbsolutePath(), reader.getPath());
                 assertEquals(f.length(), reader.length());
@@ -32,9 +25,6 @@
                 assertTrue(reader.isEOF());
                 assertEquals(0, reader.bytesRemaining());
             }
-
-            if (regions != null)
-                assertNull(regions.close(null));
         }
     }
 
