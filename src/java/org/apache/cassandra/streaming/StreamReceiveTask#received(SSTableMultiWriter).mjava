@@ -6,11 +6,25 @@
     public synchronized void received(SSTableMultiWriter sstable)
     {
         if (done)
+        {
+            logger.warn("[{}] Received sstable {} on already finished stream received task. Aborting sstable.", session.planId(),
+                        sstable.getFilename());
+            Throwables.maybeFail(sstable.abort(null));
             return;
+        }
+
         remoteSSTablesReceived++;
         assert cfId.equals(sstable.getCfId());
 
-        Collection<SSTableReader> finished = sstable.finish(true);
+        Collection<SSTableReader> finished = null;
+        try
+        {
+            finished = sstable.finish(true);
+        }
+        catch (Throwable t)
+        {
+            Throwables.maybeFail(sstable.abort(t));
+        }
         txn.update(finished, false);
         sstables.addAll(finished);
 
