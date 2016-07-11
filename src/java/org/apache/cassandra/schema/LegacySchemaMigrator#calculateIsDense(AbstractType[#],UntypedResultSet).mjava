@@ -6,7 +6,7 @@
      * information for table just created through thrift, nor for table prior to CASSANDRA-7744, so this
      * method does its best to infer whether the table is dense or not based on other elements.
      */
-    public static boolean calculateIsDense(AbstractType<?> comparator, UntypedResultSet columnRows)
+    private static boolean calculateIsDense(AbstractType<?> comparator, UntypedResultSet columnRows)
     {
         /*
          * As said above, this method is only here because we need to deal with thrift upgrades.
@@ -27,24 +27,17 @@
          * in which case it should not be dense. However, we can limit our margin of error by assuming we are
          * in the latter case only if the comparator is exactly CompositeType(UTF8Type).
          */
-        boolean hasRegular = false;
-        int maxClusteringIdx = -1;
-
         for (UntypedResultSet.Row columnRow : columnRows)
-        {
-            switch (columnRow.getString("type"))
-            {
-                case "clustering_key":
-                    maxClusteringIdx = Math.max(maxClusteringIdx, columnRow.has("component_index") ? columnRow.getInt("component_index") : 0);
-                    break;
-                case "regular":
-                    hasRegular = true;
-                    break;
-            }
-        }
+            if ("regular".equals(columnRow.getString("type")))
+                return false;
+
+        int maxClusteringIdx = -1;
+        for (UntypedResultSet.Row columnRow : columnRows)
+            if ("clustering_key".equals(columnRow.getString("type")))
+                maxClusteringIdx = Math.max(maxClusteringIdx, columnRow.has("component_index") ? columnRow.getInt("component_index") : 0);
 
         return maxClusteringIdx >= 0
-               ? maxClusteringIdx == comparator.componentsCount() - 1
-               : !hasRegular && !isCQL3OnlyPKComparator(comparator);
+             ? maxClusteringIdx == comparator.componentsCount() - 1
+             : !isCQL3OnlyPKComparator(comparator);
     }
 
