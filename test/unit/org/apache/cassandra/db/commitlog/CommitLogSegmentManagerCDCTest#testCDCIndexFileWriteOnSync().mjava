@@ -1,0 +1,24 @@
+    @Test
+    public void testCDCIndexFileWriteOnSync() throws IOException
+    {
+        createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+        new RowUpdateBuilder(currentTableMetadata(), 0, 1)
+            .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+            .build().apply();
+
+        CommitLog.instance.sync();
+        CommitLogSegment currentSegment = CommitLog.instance.segmentManager.allocatingFrom();
+        int syncOffset = currentSegment.lastSyncedOffset;
+
+        // Confirm index file is written
+        File cdcIndexFile = currentSegment.getCDCIndexFile();
+        Assert.assertTrue("Index file not written: " + cdcIndexFile, cdcIndexFile.exists());
+
+        // Read index value and confirm it's == end from last sync
+        BufferedReader in = new BufferedReader(new FileReader(cdcIndexFile));
+        String input = in.readLine();
+        Integer offset = Integer.parseInt(input);
+        Assert.assertEquals(syncOffset, (long)offset);
+        in.close();
+    }
+

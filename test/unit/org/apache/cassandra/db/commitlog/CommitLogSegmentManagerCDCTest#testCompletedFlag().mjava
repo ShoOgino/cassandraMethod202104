@@ -1,0 +1,34 @@
+    @Test
+    public void testCompletedFlag() throws IOException
+    {
+        createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+        CommitLogSegment initialSegment = CommitLog.instance.segmentManager.allocatingFrom();
+        DatabaseDescriptor.setCDCSpaceInMB(8);
+        try
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                new RowUpdateBuilder(currentTableMetadata(), 0, 1)
+                .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+                .build().apply();
+            }
+        }
+        catch (CDCWriteException ce)
+        {
+            // pass. Expected since we'll have a file or two linked on restart of CommitLog due to replay
+        }
+
+        CommitLog.instance.forceRecycleAllSegments();
+
+        // Confirm index file is written
+        File cdcIndexFile = initialSegment.getCDCIndexFile();
+        Assert.assertTrue("Index file not written: " + cdcIndexFile, cdcIndexFile.exists());
+
+        // Read index file and confirm second line is COMPLETED
+        BufferedReader in = new BufferedReader(new FileReader(cdcIndexFile));
+        String input = in.readLine();
+        input = in.readLine();
+        Assert.assertTrue("Expected COMPLETED in index file, got: " + input, input.equals("COMPLETED"));
+        in.close();
+    }
+

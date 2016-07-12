@@ -1,0 +1,90 @@
+    @Test
+    public void testReplayLogic() throws IOException
+    {
+        // Assert.assertEquals(0, new File(DatabaseDescriptor.getCDCLogLocation()).listFiles().length);
+        String table_name = createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+
+        DatabaseDescriptor.setCDCSpaceInMB(8);
+        TableMetadata ccfm = Keyspace.open(keyspace()).getColumnFamilyStore(table_name).metadata();
+        try
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                new RowUpdateBuilder(ccfm, 0, i)
+                    .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+                    .build().apply();
+            }
+            Assert.fail("Expected CDCWriteException from full CDC but did not receive it.");
+        }
+        catch (CDCWriteException e)
+        {
+            // pass
+        }
+
+        CommitLog.instance.sync();
+        CommitLog.instance.stopUnsafe(false);
+
+        // Build up a list of expected index files after replay and then clear out cdc_raw
+        List<CDCIndexData> oldData = parseCDCIndexData();
+        for (File f : new File(DatabaseDescriptor.getCDCLogLocation()).listFiles())
+            FileUtils.deleteWithConfirm(f.getAbsolutePath());
+
+        try
+        {
+            Assert.assertEquals("Expected 0 files in CDC folder after deletion. ",
+                                0, new File(DatabaseDescriptor.getCDCLogLocation()).listFiles().length);
+        }
+        finally
+        {
+            // If we don't have a started commitlog, assertions will cause the test to hang. I assume it's some assumption
+            // hang in the shutdown on CQLTester trying to clean up / drop keyspaces / tables and hanging applying
+            // mutations.
+            CommitLog.instance.start();
+            CommitLog.instance.segmentManager.awaitManagementTasksCompletion();
+        }
+        CDCTestReplayer replayer = new CDCTestReplayer();
+        replayer.examineCommitLog();
+
+        // Rough sanity check -> should be files there now.
+        Assert.assertTrue("Expected non-zero number of files in CDC folder after restart.",
+                          new File(DatabaseDescriptor.getCDCLogLocation()).listFiles().length > 0);
+
+        // Confirm all the old indexes in old are present and >= the original offset, as we flag the entire segment
+        // as cdc written on a replay.
+        List<CDCIndexData> newData = parseCDCIndexData();
+        for (CDCIndexData cid : oldData)
+        {
+            boolean found = false;
+            for (CDCIndexData ncid : newData)
+            {
+                if (cid.fileName.equals(ncid.fileName))
+                {
+                    Assert.assertTrue("New CDC index file expected to have >= offset in old.", ncid.offset >= cid.offset);
+                    found = true;
+                }
+            }
+            if (!found)
+            {
+                StringBuilder errorMessage = new StringBuilder();
+                errorMessage.append(String.format("Missing old CDCIndexData in new set after replay: %s\n", cid));
+                errorMessage.append("List of CDCIndexData in new set of indexes after replay:\n");
+                for (CDCIndexData ncid : newData)
+                    errorMessage.append(String.format("   %s\n", ncid));
+                Assert.fail(errorMessage.toString());
+            }
+        }
+
+        // And make sure we don't have new CDC Indexes we don't expect
+        for (CDCIndexData ncid : newData)
+        {
+            boolean found = false;
+            for (CDCIndexData cid : oldData)
+            {
+                if (cid.fileName.equals(ncid.fileName))
+                    found = true;
+            }
+            if (!found)
+                Assert.fail(String.format("Unexpected new CDCIndexData found after replay: %s\n", ncid));
+        }
+    }
+

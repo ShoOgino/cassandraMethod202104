@@ -1,0 +1,27 @@
+    /**
+     * Upon replay completion, CDC needs to hard-link files in the CDC folder and calculate index files so consumers can
+     * begin their work.
+     */
+    private void handleCDCReplayCompletion(File f) throws IOException
+    {
+        // Can only reach this point if CDC is enabled, thus we have a CDCSegmentManager
+        ((CommitLogSegmentManagerCDC)CommitLog.instance.segmentManager).addCDCSize(f.length());
+
+        File dest = new File(DatabaseDescriptor.getCDCLogLocation(), f.getName());
+
+        // If hard link already exists, assume it's from a previous node run. If people are mucking around in the cdc_raw
+        // directory that's on them.
+        if (!dest.exists())
+            FileUtils.createHardLink(f, dest);
+
+        // The reader has already verified we can deserialize the descriptor.
+        CommitLogDescriptor desc;
+        try(RandomAccessReader reader = RandomAccessReader.open(f))
+        {
+            desc = CommitLogDescriptor.readHeader(reader, DatabaseDescriptor.getEncryptionContext());
+            assert desc != null;
+            assert f.length() < Integer.MAX_VALUE;
+            CommitLogSegment.writeCDCIndexFile(desc, (int)f.length(), true);
+        }
+    }
+

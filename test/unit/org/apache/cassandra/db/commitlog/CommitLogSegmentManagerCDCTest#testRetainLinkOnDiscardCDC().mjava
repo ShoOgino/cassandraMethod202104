@@ -1,0 +1,27 @@
+    @Test
+    public void testRetainLinkOnDiscardCDC() throws Throwable
+    {
+        createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=true;");
+        CommitLogSegment currentSegment = CommitLog.instance.segmentManager.allocatingFrom();
+        File cdcIndexFile = currentSegment.getCDCIndexFile();
+        Assert.assertFalse("Expected no index file before flush but found: " + cdcIndexFile, cdcIndexFile.exists());
+
+        new RowUpdateBuilder(currentTableMetadata(), 0, 1)
+            .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+            .build().apply();
+
+        Path linked = new File(DatabaseDescriptor.getCDCLogLocation(), currentSegment.logFile.getName()).toPath();
+        // Confirm that, with CDC data present but not yet flushed, we've hard-linked but have no index file
+        Assert.assertTrue("File does not exist: " + linked, Files.exists(linked));
+
+        // Sync and confirm index written as index is written on flush
+        CommitLog.instance.sync();
+        Assert.assertTrue("File does not exist: " + linked, Files.exists(linked));
+        Assert.assertTrue("Expected cdc index file after flush but found none: " + cdcIndexFile, cdcIndexFile.exists());
+
+        // Force a full recycle and confirm all files remain
+        CommitLog.instance.forceRecycleAllSegments();
+        Assert.assertTrue("File does not exist: " + linked, Files.exists(linked));
+        Assert.assertTrue("Expected cdc index file after recycle but found none: " + cdcIndexFile, cdcIndexFile.exists());
+    }
+

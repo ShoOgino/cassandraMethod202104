@@ -1,0 +1,26 @@
+    @Test
+    public void testDeleteLinkOnDiscardNoCDC() throws Throwable
+    {
+        createTable("CREATE TABLE %s (idx int, data text, primary key(idx)) WITH cdc=false;");
+        new RowUpdateBuilder(currentTableMetadata(), 0, 1)
+            .add("data", randomizeBuffer(DatabaseDescriptor.getCommitLogSegmentSize() / 3))
+            .build().apply();
+        CommitLogSegment currentSegment = CommitLog.instance.segmentManager.allocatingFrom();
+
+        // Confirm that, with no CDC data present, we've hard-linked but have no index file
+        Path linked = new File(DatabaseDescriptor.getCDCLogLocation(), currentSegment.logFile.getName()).toPath();
+        File cdcIndexFile = currentSegment.getCDCIndexFile();
+        Assert.assertTrue("File does not exist: " + linked, Files.exists(linked));
+        Assert.assertFalse("Expected index file to not be created but found: " + cdcIndexFile, cdcIndexFile.exists());
+
+        // Sync and confirm no index written as index is written on flush
+        CommitLog.instance.sync();
+        Assert.assertTrue("File does not exist: " + linked, Files.exists(linked));
+        Assert.assertFalse("Expected index file to not be created but found: " + cdcIndexFile, cdcIndexFile.exists());
+
+        // Force a full recycle and confirm hard-link is deleted
+        CommitLog.instance.forceRecycleAllSegments();
+        CommitLog.instance.segmentManager.awaitManagementTasksCompletion();
+        Assert.assertFalse("Expected hard link to CLS to be deleted on non-cdc segment: " + linked, Files.exists(linked));
+    }
+
