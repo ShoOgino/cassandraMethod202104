@@ -1,0 +1,56 @@
+    /**
+     * Respond a limited number of times with the message created by the provided function that will be called with
+     * each intercepted outbound message.
+     * @param fnResponse    function to call for creating reply based on intercepted message and target address
+     */
+    public <T, S> MockMessagingSpy respondN(BiFunction<MessageOut<T>, InetAddress, MessageIn<S>> fnResponse, int limit)
+    {
+        limitCounter.set(limit);
+
+        assert sink == null: "destroy() must be called first to register new response";
+
+        sink = new IMessageSink()
+        {
+            public boolean allowOutgoingMessage(MessageOut message, int id, InetAddress to)
+            {
+                // prevent outgoing message from being send in case matcher indicates a match
+                // and instead send the mocked response
+                if (matcher.matches(message, to))
+                {
+                    spy.matchingMessage(message);
+
+                    if (limitCounter.decrementAndGet() < 0)
+                        return false;
+
+                    synchronized (sendResponses)
+                    {
+                        // I'm not sure about retry semantics regarding message/ID relationships, but I assume
+                        // sending a message multiple times using the same ID shouldn't happen..
+                        assert !sendResponses.contains(id) : "ID re-use for outgoing message";
+                        sendResponses.add(id);
+                    }
+                    MessageIn<?> response = fnResponse.apply(message, to);
+                    if (response != null)
+                    {
+                        CallbackInfo cb = MessagingService.instance().getRegisteredCallback(id);
+                        if (cb != null)
+                            cb.callback.response(response);
+                        else
+                            MessagingService.instance().receive(response, id, Clock.instance.currentTimeMillis(), false);
+                        spy.matchingResponse(response);
+                    }
+                    return false;
+                }
+                return true;
+            }
+
+            public boolean allowIncomingMessage(MessageIn message, int id)
+            {
+                return true;
+            }
+        };
+        MessagingService.instance().addMessageSink(sink);
+
+        return spy;
+    }
+
