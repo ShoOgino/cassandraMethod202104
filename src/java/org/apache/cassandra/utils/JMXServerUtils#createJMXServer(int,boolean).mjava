@@ -16,12 +16,8 @@
         }
 
         // Configure the RMI client & server socket factories, including SSL config.
-        env.putAll(configureJmxSocketFactories(serverAddress));
+        env.putAll(configureJmxSocketFactories(serverAddress, local));
 
-        String url = String.format(urlTemplate, (serverAddress != null ? serverAddress.getHostAddress() : "0.0.0.0"), port);
-        LocateRegistry.createRegistry(port,
-                                     (RMIClientSocketFactory) env.get(RMIConnectorServer.RMI_CLIENT_SOCKET_FACTORY_ATTRIBUTE),
-                                     (RMIServerSocketFactory) env.get(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE));
 
         // Configure authn, using a JMXAuthenticator which either wraps a set log LoginModules configured
         // via a JAAS configuration entry, or one which delegates to the standard file based authenticator.
@@ -38,14 +34,22 @@
         // sun.rmi.dgc.server.gcInterval millis (default is 3600000ms/1 hour)
         env.put(RMIExporter.EXPORTER_ATTRIBUTE, new Exporter());
 
+        String url = String.format(urlTemplate, (serverAddress != null ? serverAddress.getHostAddress() : "0.0.0.0"), port);
+
+        int rmiPort = Integer.getInteger("com.sun.management.jmxremote.rmi.port", 0);
         JMXConnectorServer jmxServer =
-            JMXConnectorServerFactory.newJMXConnectorServer(new JMXServiceURL(url),
+            JMXConnectorServerFactory.newJMXConnectorServer(new JMXServiceURL("rmi", null, rmiPort),
                                                             env,
                                                             ManagementFactory.getPlatformMBeanServer());
 
         // If a custom authz proxy was created, attach it to the server now.
         if (authzProxy != null)
             jmxServer.setMBeanServerForwarder(authzProxy);
+
+        jmxServer.start();
+
+        // use a custom Registry to avoid having to interact with it internally using the remoting interface
+        configureRMIRegistry(port, env);
 
         logger.info("Configured JMX server at: {}", url);
         return jmxServer;
