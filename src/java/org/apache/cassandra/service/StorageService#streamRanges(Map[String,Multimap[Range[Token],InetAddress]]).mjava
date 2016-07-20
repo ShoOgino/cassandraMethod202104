@@ -8,6 +8,7 @@
     {
         // First, we build a list of ranges to stream to each host, per table
         Map<String, Map<InetAddress, List<Range<Token>>>> sessionsToStreamByKeyspace = new HashMap<>();
+
         for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : rangesToStreamByKeyspace.entrySet())
         {
             String keyspace = entry.getKey();
@@ -16,11 +17,21 @@
             if (rangesWithEndpoints.isEmpty())
                 continue;
 
+            Map<InetAddress, Set<Range<Token>>> transferredRangePerKeyspace = SystemKeyspace.getTransferredRanges("Unbootstrap",
+                                                                                                                  keyspace,
+                                                                                                                  StorageService.instance.getTokenMetadata().partitioner);
             Map<InetAddress, List<Range<Token>>> rangesPerEndpoint = new HashMap<>();
             for (Map.Entry<Range<Token>, InetAddress> endPointEntry : rangesWithEndpoints.entries())
             {
                 Range<Token> range = endPointEntry.getKey();
                 InetAddress endpoint = endPointEntry.getValue();
+
+                Set<Range<Token>> transferredRanges = transferredRangePerKeyspace.get(endpoint);
+                if (transferredRanges != null && transferredRanges.contains(range))
+                {
+                    logger.debug("Skipping transferred range {} of keyspace {}, endpoint {}", range, keyspace, endpoint);
+                    continue;
+                }
 
                 List<Range<Token>> curRanges = rangesPerEndpoint.get(endpoint);
                 if (curRanges == null)
@@ -35,6 +46,10 @@
         }
 
         StreamPlan streamPlan = new StreamPlan("Unbootstrap");
+
+        // Vinculate StreamStateStore to current StreamPlan to update transferred ranges per StreamSession
+        streamPlan.listeners(streamStateStore);
+
         for (Map.Entry<String, Map<InetAddress, List<Range<Token>>>> entry : sessionsToStreamByKeyspace.entrySet())
         {
             String keyspaceName = entry.getKey();
