@@ -1,0 +1,55 @@
+        private Row.SimpleBuilder add(String columnName, Object value, boolean overwriteForCollection)
+        {
+            maybeInit();
+            ColumnDefinition column = getColumn(columnName);
+
+            if (!overwriteForCollection && !(column.type.isMultiCell() && column.type.isCollection()))
+                throw new IllegalArgumentException("appendAll() can only be called on non-frozen colletions");
+
+            columns.add(column);
+
+            if (!column.type.isMultiCell())
+            {
+                builder.addCell(cell(column, toByteBuffer(value, column.type), null));
+                return this;
+            }
+
+            assert column.type instanceof CollectionType : "Collection are the only multi-cell types supported so far";
+
+            if (value == null)
+            {
+                builder.addComplexDeletion(column, new DeletionTime(timestamp, nowInSec));
+                return this;
+            }
+
+            // Erase previous entry if any.
+            if (overwriteForCollection)
+                builder.addComplexDeletion(column, new DeletionTime(timestamp - 1, nowInSec));
+            switch (((CollectionType)column.type).kind)
+            {
+                case LIST:
+                    ListType lt = (ListType)column.type;
+                    assert value instanceof List;
+                    for (Object elt : (List)value)
+                        builder.addCell(cell(column, toByteBuffer(elt, lt.getElementsType()), CellPath.create(ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes()))));
+                    break;
+                case SET:
+                    SetType st = (SetType)column.type;
+                    assert value instanceof Set;
+                    for (Object elt : (Set)value)
+                        builder.addCell(cell(column, ByteBufferUtil.EMPTY_BYTE_BUFFER, CellPath.create(toByteBuffer(elt, st.getElementsType()))));
+                    break;
+                case MAP:
+                    MapType mt = (MapType)column.type;
+                    assert value instanceof Map;
+                    for (Map.Entry entry : ((Map<?, ?>)value).entrySet())
+                        builder.addCell(cell(column,
+                                             toByteBuffer(entry.getValue(), mt.getValuesType()),
+                                             CellPath.create(toByteBuffer(entry.getKey(), mt.getKeysType()))));
+                    break;
+                default:
+                    throw new AssertionError();
+            }
+            return this;
+        }
+
