@@ -36,15 +36,27 @@
                     MoreExecutors.sameThreadExecutor().execute(memtable.flushRunnable());
                     reclaim(memtable);
                 }
+
+                // signal the post-flush we've done our work
+                // Note: This should not be done in case of error. Read more below.
+                postFlush.latch.countDown();
             }
             catch (FSWriteError e)
             {
                 JVMStabilityInspector.inspectThrowable(e);
-                // If we weren't killed, try to continue work but do not allow CommitLog to be discarded.
-                postFlush.flushFailure = e;
-            }
+                // The call above may kill the process or the transports, or ignore the error.
+                // In any case we should not be passing on control to post-flush as a subsequent succeeding flush
+                // could mask the error and:
+                //   - let the commit log discard unpersisted data, resulting in data loss
+                //   - let truncations proceed, with the possibility of resurrecting the unflushed data
+                //   - let snapshots succeed with incomplete data
 
-            // signal the post-flush we've done our work
-            postFlush.latch.countDown();
+                // Not passing control on means that all flushes from the moment of failure cannot complete
+                // (including snapshots).
+                // If the disk failure policy is ignore, this will cause memtables and the commit log to grow
+                // unboundedly until the node eventually fails.
+                previousFlushFailure = e;
+                throw e;
+            }
         }
 
