@@ -1,19 +1,19 @@
     private static Mutation makeLegacyCreateKeyspaceMutation(KeyspaceMetadata keyspace, long timestamp)
     {
-        // Note that because Keyspaces is a COMPACT TABLE, we're really only setting static columns internally and shouldn't set any clustering.
-        RowUpdateBuilder adder = new RowUpdateBuilder(SystemKeyspace.LegacyKeyspaces, timestamp, keyspace.name);
+        Mutation.SimpleBuilder builder = Mutation.simpleBuilder(SystemKeyspace.NAME, decorate(SystemKeyspace.LegacyKeyspaces, keyspace.name))
+                                                 .timestamp(timestamp);
 
-        adder.add("durable_writes", keyspace.params.durableWrites)
-             .add("strategy_class", keyspace.params.replication.klass.getName())
-             .add("strategy_options", json(keyspace.params.replication.options));
+        builder.update(SystemKeyspace.LegacyKeyspaces)
+               .row()
+               .add("durable_writes", keyspace.params.durableWrites)
+               .add("strategy_class", keyspace.params.replication.klass.getName())
+               .add("strategy_options", json(keyspace.params.replication.options));
 
-        Mutation mutation = adder.build();
+        keyspace.tables.forEach(table -> addTableToSchemaMutation(table, true, builder));
+        keyspace.types.forEach(type -> addTypeToSchemaMutation(type, builder));
+        keyspace.functions.udfs().forEach(udf -> addFunctionToSchemaMutation(udf, builder));
+        keyspace.functions.udas().forEach(uda -> addAggregateToSchemaMutation(uda, builder));
 
-        keyspace.tables.forEach(table -> addTableToSchemaMutation(table, timestamp, true, mutation));
-        keyspace.types.forEach(type -> addTypeToSchemaMutation(type, timestamp, mutation));
-        keyspace.functions.udfs().forEach(udf -> addFunctionToSchemaMutation(udf, timestamp, mutation));
-        keyspace.functions.udas().forEach(uda -> addAggregateToSchemaMutation(uda, timestamp, mutation));
-
-        return mutation;
+        return builder.build();
     }
 
