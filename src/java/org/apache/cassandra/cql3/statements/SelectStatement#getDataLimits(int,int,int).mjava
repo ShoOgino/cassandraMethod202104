@@ -1,0 +1,37 @@
+    private DataLimits getDataLimits(int userLimit, int perPartitionLimit, int pageSize)
+    {
+        int cqlRowLimit = DataLimits.NO_LIMIT;
+        int cqlPerPartitionLimit = DataLimits.NO_LIMIT;
+
+        // If we do post ordering we need to get all the results sorted before we can trim them.
+        if (aggregationSpec != AggregationSpecification.AGGREGATE_EVERYTHING)
+        {
+            if (!needsPostQueryOrdering())
+                cqlRowLimit = userLimit;
+            cqlPerPartitionLimit = perPartitionLimit;
+        }
+
+        // Group by and aggregation queries will always be paged internally to avoid OOM.
+        // If the user provided a pageSize we'll use that to page internally (because why not), otherwise we use our default
+        if (pageSize <= 0)
+            pageSize = DEFAULT_PAGE_SIZE;
+
+        // Aggregation queries work fine on top of the group by paging but to maintain
+        // backward compatibility we need to use the old way.
+        if (aggregationSpec != null && aggregationSpec != AggregationSpecification.AGGREGATE_EVERYTHING)
+        {
+            if (parameters.isDistinct)
+                return DataLimits.distinctLimits(cqlRowLimit);
+
+            return DataLimits.groupByLimits(cqlRowLimit,
+                                            cqlPerPartitionLimit,
+                                            pageSize,
+                                            aggregationSpec);
+        }
+
+        if (parameters.isDistinct)
+            return cqlRowLimit == DataLimits.NO_LIMIT ? DataLimits.DISTINCT_NONE : DataLimits.distinctLimits(cqlRowLimit);
+
+        return DataLimits.cqlLimits(cqlRowLimit, cqlPerPartitionLimit);
+    }
+

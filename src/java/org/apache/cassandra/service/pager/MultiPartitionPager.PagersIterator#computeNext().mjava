@@ -3,13 +3,25 @@
             while (result == null || !result.hasNext())
             {
                 if (result != null)
+                {
                     result.close();
+                    counted += pagerMaxRemaining - pagers[current].maxRemaining();
+                }
 
-                // This sets us on the first non-exhausted pager
-                if (isExhausted())
+                // We are done if we have reached the page size or in the case of GROUP BY if the current pager
+                // is not exhausted.
+                boolean isDone = counted >= pageSize
+                        || (result != null && limit.isGroupByLimit() && !pagers[current].isExhausted());
+
+                // isExhausted() will sets us on the first non-exhausted pager
+                if (isDone || isExhausted())
+                {
+                    closed = true;
                     return endOfData();
+                }
 
-                int toQuery = pageSize - counter.counted();
+                pagerMaxRemaining = pagers[current].maxRemaining();
+                int toQuery = pageSize - counted;
                 result = consistency == null
                        ? pagers[current].fetchPageInternal(toQuery, executionController)
                        : pagers[current].fetchPage(toQuery, consistency, clientState);

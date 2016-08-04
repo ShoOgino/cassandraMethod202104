@@ -5,7 +5,7 @@
 
             Selection selection = selectClause.isEmpty()
                                   ? Selection.wildcard(cfm)
-                                  : Selection.fromSelectors(cfm, selectClause, boundNames);
+                                  : Selection.fromSelectors(cfm, selectClause, boundNames, !parameters.groups.isEmpty());
 
             StatementRestrictions restrictions = prepareRestrictions(cfm, boundNames, selection, forView);
 
@@ -15,7 +15,12 @@
                 validateDistinctSelection(cfm, selection, restrictions);
             }
 
-            checkFalse(selection.isAggregate() && perPartitionLimit != null,
+            AggregationSpecification aggregationSpec = getAggregationSpecification(cfm,
+                                                                                   selection,
+                                                                                   restrictions,
+                                                                                   parameters.isDistinct);
+
+            checkFalse(aggregationSpec == AggregationSpecification.AGGREGATE_EVERYTHING && perPartitionLimit != null,
                        "PER PARTITION LIMIT is not allowed with aggregate queries.");
 
             Comparator<List<ByteBuffer>> orderingComparator = null;
@@ -34,14 +39,15 @@
             checkNeedsFiltering(restrictions);
 
             SelectStatement stmt = new SelectStatement(cfm,
-                                                        boundNames.size(),
-                                                        parameters,
-                                                        selection,
-                                                        restrictions,
-                                                        isReversed,
-                                                        orderingComparator,
-                                                        prepareLimit(boundNames, limit, keyspace(), limitReceiver()),
-                                                        prepareLimit(boundNames, perPartitionLimit, keyspace(), perPartitionLimitReceiver()));
+                                                       boundNames.size(),
+                                                       parameters,
+                                                       selection,
+                                                       restrictions,
+                                                       isReversed,
+                                                       aggregationSpec,
+                                                       orderingComparator,
+                                                       prepareLimit(boundNames, limit, keyspace(), limitReceiver()),
+                                                       prepareLimit(boundNames, perPartitionLimit, keyspace(), perPartitionLimitReceiver()));
 
             return new ParsedStatement.Prepared(stmt, boundNames, boundNames.getPartitionKeyBindIndexes(cfm));
         }
