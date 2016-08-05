@@ -1,0 +1,47 @@
+        /**
+         * Adds an interval to the set, performing the necessary normalization.
+         */
+        public synchronized void add(int start, int end)
+        {
+            assert start <= end;
+            long[] ranges, newRanges;
+            {
+                ranges = this.ranges; // take local copy to avoid risk of it changing in the midst of operation
+
+                // extend ourselves to cover any ranges we overlap
+                // record directly preceding our end may extend past us, so take the max of our end and its
+                int rpos = Arrays.binarySearch(ranges, ((end & 0xFFFFFFFFL) << 32) | 0xFFFFFFFFL); // floor (i.e. greatest <=) of the end position
+                if (rpos < 0)
+                    rpos = (-1 - rpos) - 1;
+                if (rpos >= 0)
+                {
+                    int extend = upper(ranges[rpos]);
+                    if (extend > end)
+                        end = extend;
+                }
+    
+                // record directly preceding our start may extend into us; if it does, we take it as our start
+                int lpos = Arrays.binarySearch(ranges, ((start & 0xFFFFFFFFL) << 32) | 0); // lower (i.e. greatest <) of the start position
+                if (lpos < 0)
+                    lpos = -1 - lpos;
+                lpos -= 1;
+                if (lpos >= 0)
+                {
+                    if (upper(ranges[lpos]) >= start)
+                    {
+                        start = lower(ranges[lpos]);
+                        --lpos;
+                    }
+                }
+    
+                newRanges = new long[ranges.length - (rpos - lpos) + 1];
+                int dest = 0;
+                for (int i = 0; i <= lpos; ++i)
+                    newRanges[dest++] = ranges[i];
+                newRanges[dest++] = make(start, end);
+                for (int i = rpos + 1; i < ranges.length; ++i)
+                    newRanges[dest++] = ranges[i];
+            }
+            this.ranges = newRanges;
+        }
+
