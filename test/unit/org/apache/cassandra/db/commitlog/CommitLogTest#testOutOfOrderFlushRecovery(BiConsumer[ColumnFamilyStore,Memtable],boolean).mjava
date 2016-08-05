@@ -1,0 +1,34 @@
+    public void testOutOfOrderFlushRecovery(BiConsumer<ColumnFamilyStore, Memtable> flushAction, boolean performCompaction)
+            throws ExecutionException, InterruptedException, IOException
+    {
+        CommitLog.instance.resetUnsafe(true);
+
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
+
+        for (int i = 0 ; i < 5 ; i++)
+        {
+            new RowUpdateBuilder(cfs.metadata, 0, "k")
+                .clustering("c" + i).add("val", ByteBuffer.allocate(100))
+                .build()
+                .apply();
+
+            Memtable current = cfs.getTracker().getView().getCurrentMemtable();
+            if (i == 2)
+                current.makeUnflushable();
+
+            flushAction.accept(cfs, current);
+        }
+        if (performCompaction)
+            cfs.forceMajorCompaction();
+        // Make sure metadata saves and reads fine
+        for (SSTableReader reader : cfs.getLiveSSTables())
+            reader.reloadSSTableMetadata();
+
+        CommitLog.instance.sync();
+        System.setProperty("cassandra.replayList", KEYSPACE1 + "." + STANDARD1);
+        // In the absence of error, this should be 0 because forceBlockingFlush/forceRecycleAllSegments would have
+        // persisted all data in the commit log. Because we know there was an error, there must be something left to
+        // replay.
+        Assert.assertEquals(1, CommitLog.instance.resetUnsafe(false));
+    }
+

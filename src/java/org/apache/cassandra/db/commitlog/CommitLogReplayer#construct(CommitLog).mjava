@@ -1,9 +1,9 @@
     public static CommitLogReplayer construct(CommitLog commitLog)
     {
-        // compute per-CF and global commit log segment positions
-        Map<UUID, ReplayPositionFilter> cfPersisted = new HashMap<>();
+        // compute per-CF and global replay intervals
+        Map<UUID, IntervalSet<CommitLogPosition>> cfPersisted = new HashMap<>();
         ReplayFilter replayFilter = ReplayFilter.create();
-        CommitLogPosition globalPosition = null;
+
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
         {
             // but, if we've truncated the cf in question, then we need to need to start replay after the truncation
@@ -28,15 +28,11 @@
                 }
             }
 
-            ReplayPositionFilter filter = new ReplayPositionFilter(cfs.getSSTables(), truncatedAt);
-            if (!filter.isEmpty())
-                cfPersisted.put(cfs.metadata.cfId, filter);
-            else
-                globalPosition = CommitLogPosition.NONE; // if we have no ranges for this CF, we must replay everything and filter
+            IntervalSet<CommitLogPosition> filter = persistedIntervals(cfs.getLiveSSTables(), truncatedAt);
+            cfPersisted.put(cfs.metadata.cfId, filter);
         }
-        if (globalPosition == null)
-            globalPosition = firstNotCovered(cfPersisted.values());
-        logger.trace("Global commit log segment position is {} from columnfamilies {}", globalPosition, FBUtilities.toString(cfPersisted));
+        CommitLogPosition globalPosition = firstNotCovered(cfPersisted.values());
+        logger.debug("Global replay position is {} from columnfamilies {}", globalPosition, FBUtilities.toString(cfPersisted));
         return new CommitLogReplayer(commitLog, globalPosition, cfPersisted, replayFilter);
     }
 
