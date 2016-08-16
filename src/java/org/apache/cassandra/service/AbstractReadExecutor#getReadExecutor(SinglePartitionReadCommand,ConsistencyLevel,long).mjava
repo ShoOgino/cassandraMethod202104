@@ -1,0 +1,63 @@
+    /**
+     * @return an executor appropriate for the configured speculative read policy
+     */
+    public static AbstractReadExecutor getReadExecutor(SinglePartitionReadCommand command, ConsistencyLevel consistencyLevel, long queryStartNanoTime) throws UnavailableException
+    {
+        Keyspace keyspace = Keyspace.open(command.metadata().ksName);
+        List<InetAddress> allReplicas = StorageProxy.getLiveSortedEndpoints(keyspace, command.partitionKey());
+        // 11980: Excluding EACH_QUORUM reads from potential RR, so that we do not miscount DC responses
+        ReadRepairDecision repairDecision = consistencyLevel == ConsistencyLevel.EACH_QUORUM
+                                            ? ReadRepairDecision.NONE
+                                            : command.metadata().newReadRepairDecision();
+        List<InetAddress> targetReplicas = consistencyLevel.filterForQuery(keyspace, allReplicas, repairDecision);
+
+        // Throw UAE early if we don't have enough replicas.
+        consistencyLevel.assureSufficientLiveNodes(keyspace, targetReplicas);
+
+        if (repairDecision != ReadRepairDecision.NONE)
+        {
+            Tracing.trace("Read-repair {}", repairDecision);
+            ReadRepairMetrics.attempted.mark();
+        }
+
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.metadata().cfId);
+        SpeculativeRetryParam retry = cfs.metadata.params.speculativeRetry;
+
+        // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
+        // 11980: Disable speculative retry if using EACH_QUORUM in order to prevent miscounting DC responses
+        if (retry.equals(SpeculativeRetryParam.NONE)
+            || consistencyLevel == ConsistencyLevel.EACH_QUORUM
+            || consistencyLevel.blockFor(keyspace) == allReplicas.size())
+            return new NeverSpeculatingReadExecutor(keyspace, command, consistencyLevel, targetReplicas, queryStartNanoTime);
+
+        if (targetReplicas.size() == allReplicas.size())
+        {
+            // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
+            // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
+            // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
+            return new AlwaysSpeculatingReadExecutor(keyspace, cfs, command, consistencyLevel, targetReplicas, queryStartNanoTime);
+        }
+
+        // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
+        InetAddress extraReplica = allReplicas.get(targetReplicas.size());
+        // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
+        // we might have to find a replacement that's not already in targetReplicas.
+        if (repairDecision == ReadRepairDecision.DC_LOCAL && targetReplicas.contains(extraReplica))
+        {
+            for (InetAddress address : allReplicas)
+            {
+                if (!targetReplicas.contains(address))
+                {
+                    extraReplica = address;
+                    break;
+                }
+            }
+        }
+        targetReplicas.add(extraReplica);
+
+        if (retry.equals(SpeculativeRetryParam.ALWAYS))
+            return new AlwaysSpeculatingReadExecutor(keyspace, cfs, command, consistencyLevel, targetReplicas, queryStartNanoTime);
+        else // PERCENTILE or CUSTOM.
+            return new SpeculatingReadExecutor(keyspace, cfs, command, consistencyLevel, targetReplicas, queryStartNanoTime);
+    }
+

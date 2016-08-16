@@ -1,0 +1,42 @@
+    /**
+     * Handle counter mutation on the coordinator host.
+     *
+     * A counter mutation needs to first be applied to a replica (that we'll call the leader for the mutation) before being
+     * replicated to the other endpoint. To achieve so, there is two case:
+     *   1) the coordinator host is a replica: we proceed to applying the update locally and replicate throug
+     *   applyCounterMutationOnCoordinator
+     *   2) the coordinator is not a replica: we forward the (counter)mutation to a chosen replica (that will proceed through
+     *   applyCounterMutationOnLeader upon receive) and wait for its acknowledgment.
+     *
+     * Implementation note: We check if we can fulfill the CL on the coordinator host even if he is not a replica to allow
+     * quicker response and because the WriteResponseHandlers don't make it easy to send back an error. We also always gather
+     * the write latencies at the coordinator node to make gathering point similar to the case of standard writes.
+     */
+    public static AbstractWriteResponseHandler<IMutation> mutateCounter(CounterMutation cm, String localDataCenter, long queryStartNanoTime) throws UnavailableException, OverloadedException
+    {
+        InetAddress endpoint = findSuitableEndpoint(cm.getKeyspaceName(), cm.key(), localDataCenter, cm.consistency());
+
+        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+        {
+            return applyCounterMutationOnCoordinator(cm, localDataCenter, queryStartNanoTime);
+        }
+        else
+        {
+            // Exit now if we can't fulfill the CL here instead of forwarding to the leader replica
+            String keyspaceName = cm.getKeyspaceName();
+            AbstractReplicationStrategy rs = Keyspace.open(keyspaceName).getReplicationStrategy();
+            Token tk = cm.key().getToken();
+            List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(keyspaceName, tk);
+            Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, keyspaceName);
+
+            rs.getWriteResponseHandler(naturalEndpoints, pendingEndpoints, cm.consistency(), null, WriteType.COUNTER, queryStartNanoTime).assureSufficientLiveNodes();
+
+            // Forward the actual update to the chosen leader replica
+            AbstractWriteResponseHandler<IMutation> responseHandler = new WriteResponseHandler<>(endpoint, WriteType.COUNTER, queryStartNanoTime);
+
+            Tracing.trace("Enqueuing counter update to {}", endpoint);
+            MessagingService.instance().sendRR(cm.makeMutationMessage(), endpoint, responseHandler, false);
+            return responseHandler;
+        }
+    }
+

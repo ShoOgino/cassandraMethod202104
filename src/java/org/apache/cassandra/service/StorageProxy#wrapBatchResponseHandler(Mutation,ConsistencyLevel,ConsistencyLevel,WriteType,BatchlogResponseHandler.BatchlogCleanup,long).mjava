@@ -1,0 +1,19 @@
+    // same as performWrites except does not initiate writes (but does perform availability checks).
+    private static WriteResponseHandlerWrapper wrapBatchResponseHandler(Mutation mutation,
+                                                                        ConsistencyLevel consistency_level,
+                                                                        ConsistencyLevel batchConsistencyLevel,
+                                                                        WriteType writeType,
+                                                                        BatchlogResponseHandler.BatchlogCleanup cleanup,
+                                                                        long queryStartNanoTime)
+    {
+        Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+        AbstractReplicationStrategy rs = keyspace.getReplicationStrategy();
+        String keyspaceName = mutation.getKeyspaceName();
+        Token tk = mutation.key().getToken();
+        List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(keyspaceName, tk);
+        Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, keyspaceName);
+        AbstractWriteResponseHandler<IMutation> writeHandler = rs.getWriteResponseHandler(naturalEndpoints, pendingEndpoints, consistency_level, null, writeType, queryStartNanoTime);
+        BatchlogResponseHandler<IMutation> batchHandler = new BatchlogResponseHandler<>(writeHandler, batchConsistencyLevel.blockFor(keyspace), cleanup, queryStartNanoTime);
+        return new WriteResponseHandlerWrapper(batchHandler, mutation);
+    }
+
