@@ -1,0 +1,56 @@
+    @Override
+    public List<Composite> boundsAsComposites(CFMetaData cfm, Bound bound, QueryOptions options) throws InvalidRequestException
+    {
+        CompositesBuilder builder = new CompositesBuilder(ctype);
+        // The end-of-component of composite doesn't depend on whether the
+        // component type is reversed or not (i.e. the ReversedType is applied
+        // to the component comparator but not to the end-of-component itself),
+        // it only depends on whether the slice is reversed
+        int keyPosition = 0;
+        for (Restriction r : restrictions)
+        {
+            ColumnDefinition def = r.getFirstColumn();
+
+            if (keyPosition != def.position() || r.isContains())
+                break;
+
+            if (r.isSlice())
+            {
+                r.appendBoundTo(cfm, builder, bound, options);
+
+                // Since CASSANDRA-7281, the composites might not end with the same components and it is possible
+                // that one of the composites is an empty one. Unfortunatly, AbstractCType will always sort
+                // Composites.EMPTY before all the other components due to its EOC, even if it is not the desired
+                // behaviour in some cases. To avoid that problem the code will use normal composites for the empty
+                // ones until the composites are properly sorted. They will then be replaced by Composites.EMPTY as
+                // it is what is expected by the intra-node serialization.
+                // It is clearly a hack but it does not make a lot of sense to refactor 2.2 for that as the problem is
+                // already solved in 3.0.
+                List<Composite> composites = filterAndSort(setEocs(r, bound, builder.build()));
+                return Lists.transform(composites, new com.google.common.base.Function<Composite, Composite>()
+                {
+                    @Override
+                    public Composite apply(Composite composite)
+                    {
+                        return composite.isEmpty() ? Composites.EMPTY: composite;
+                    }
+                });
+            }
+
+            r.appendBoundTo(cfm, builder, bound, options);
+
+            if (builder.hasMissingElements())
+                return Collections.emptyList();
+
+            keyPosition = r.getLastColumn().position() + 1;
+        }
+        // Means no relation at all or everything was an equal
+        // Note: if the builder is "full", there is no need to use the end-of-component bit. For columns selection,
+        // it would be harmless to do it. However, we use this method got the partition key too. And when a query
+        // with 2ndary index is done, and with the the partition provided with an EQ, we'll end up here, and in that
+        // case using the eoc would be bad, since for the random partitioner we have no guarantee that
+        // prefix.end() will sort after prefix (see #5240).
+        EOC eoc = !builder.hasRemaining() ? EOC.NONE : (bound.isEnd() ? EOC.END : EOC.START);
+        return filterAndSort(builder.buildWithEOC(eoc));
+    }
+

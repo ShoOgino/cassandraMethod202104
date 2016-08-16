@@ -1,0 +1,26 @@
+    @SuppressWarnings("resource")
+    private boolean tryAppend(DecoratedKey prevKey, DecoratedKey key, SSTableRewriter writer)
+    {
+        // OrderCheckerIterator will check, at iteration time, that the cells are in the proper order. If it detects
+        // that one cell is out of order, it will stop returning them. The remaining cells will be sorted and added
+        // to the outOfOrderRows that will be later written to a new SSTable.
+        OrderCheckerIterator atoms = new OrderCheckerIterator(new SSTableIdentityIterator(sstable, dataFile, key, checkData),
+                                                              cfs.metadata.comparator.onDiskAtomComparator());
+        if (prevKey != null && prevKey.compareTo(key) > 0)
+        {
+            saveOutOfOrderRow(prevKey, key, atoms);
+            return false;
+        }
+
+        AbstractCompactedRow compactedRow = new LazilyCompactedRow(controller, Collections.singletonList(atoms));
+        if (writer.tryAppend(compactedRow) == null)
+            emptyRows++;
+        else
+            goodRows++;
+
+        if (atoms.hasOutOfOrderCells())
+            saveOutOfOrderRow(key, atoms);
+
+        return true;
+    }
+

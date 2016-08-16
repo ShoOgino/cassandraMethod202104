@@ -1,0 +1,43 @@
+    /**
+     * Converts the specified slice into a range set.
+     *
+     * @param cfm the table metadata
+     * @param slice the slice to convert
+     * @param options the query option
+     * @return the range set corresponding to the specified slice
+     * @throws InvalidRequestException if the request is invalid
+     */
+    private static RangeSet<Token> toRangeSet(CFMetaData cfm, TokenRestriction slice, QueryOptions options) throws InvalidRequestException
+    {
+        if (slice.hasBound(START))
+        {
+            Token start = deserializeToken(slice.bounds(cfm, START, options).get(0));
+
+            BoundType startBoundType = toBoundType(slice.isInclusive(START));
+
+            if (slice.hasBound(END))
+            {
+                BoundType endBoundType = toBoundType(slice.isInclusive(END));
+                Token end = deserializeToken(slice.bounds(cfm, END, options).get(0));
+
+                if (start.equals(end) && (BoundType.OPEN == startBoundType || BoundType.OPEN == endBoundType))
+                    return ImmutableRangeSet.of();
+
+                if (start.compareTo(end) <= 0)
+                    return ImmutableRangeSet.of(Range.range(start,
+                                                            startBoundType,
+                                                            end,
+                                                            endBoundType));
+
+                return ImmutableRangeSet.<Token> builder()
+                                        .add(Range.upTo(end, endBoundType))
+                                        .add(Range.downTo(start, startBoundType))
+                                        .build();
+            }
+            return ImmutableRangeSet.of(Range.downTo(start,
+                                                     startBoundType));
+        }
+        Token end = deserializeToken(slice.bounds(cfm, END, options).get(0));
+        return ImmutableRangeSet.of(Range.upTo(end, toBoundType(slice.isInclusive(END))));
+    }
+
