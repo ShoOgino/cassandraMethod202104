@@ -1,0 +1,41 @@
+    /**
+     * Checks if the query will never return any rows.
+     *
+     * @param options the query options
+     * @return {@code true} if the query will never return any rows, {@false} otherwise
+     * @throws InvalidRequestException if the request is invalid
+     */
+    private boolean isNotReturningAnyRows(QueryOptions options) throws InvalidRequestException
+    {
+        // Dense non-compound tables do not accept empty ByteBuffers. By consequence, we know that:
+        // - any query with an EQ restriction containing an empty value will not return any result
+        // - any query with a slice restriction with an empty value for the END bound will not return any result
+
+        if (cfm.comparator.isDense() && !cfm.comparator.isCompound())
+        {
+            for (Restriction restriction : columnRestrictions)
+            {
+                if (restriction != null)
+                {
+                    if (restriction.isEQ())
+                    {
+                        for (ByteBuffer value : restriction.values(options))
+                        {
+                            if (!value.hasRemaining())
+                                return true;
+                        }
+                    }
+                    else if (restriction.isSlice() && ((Slice) restriction).hasBound(Bound.END))
+                    {
+                        ByteBuffer value = restriction.isMultiColumn()
+                                ? ((MultiColumnRestriction.Slice) restriction).componentBounds(Bound.END, options).get(0)
+                                : ((Slice) restriction).bound(Bound.END, options);
+
+                        return !value.hasRemaining();
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
