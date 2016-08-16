@@ -1,0 +1,32 @@
+    @SuppressWarnings("resource")
+    private boolean tryAppend(DecoratedKey prevKey, DecoratedKey key, SSTableRewriter writer)
+    {
+        // OrderCheckerIterator will check, at iteration time, that the rows are in the proper order. If it detects
+        // that one row is out of order, it will stop returning them. The remaining rows will be sorted and added
+        // to the outOfOrder set that will be later written to a new SSTable.
+        OrderCheckerIterator sstableIterator = new OrderCheckerIterator(new RowMergingSSTableIterator(SSTableIdentityIterator.create(sstable, dataFile, key)),
+                                                                        cfs.metadata.comparator);
+
+        try (UnfilteredRowIterator iterator = withValidation(sstableIterator, dataFile.getPath()))
+        {
+            if (prevKey != null && prevKey.compareTo(key) > 0)
+            {
+                saveOutOfOrderRow(prevKey, key, iterator);
+                return false;
+            }
+
+            if (writer.tryAppend(iterator) == null)
+                emptyRows++;
+            else
+                goodRows++;
+        }
+
+        if (sstableIterator.hasRowsOutOfOrder())
+        {
+            outputHandler.warn(String.format("Out of order rows found in partition: %s", key));
+            outOfOrder.add(sstableIterator.getRowsOutOfOrder());
+        }
+
+        return true;
+    }
+
