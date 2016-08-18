@@ -1,0 +1,40 @@
+    public void assertNoUnexpectedThreadsStarted(String[] expectedThreadNames, String[] optionalThreadNames)
+    {
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+
+        Set<String> initial = initialThreads
+                              .stream()
+                              .map(ThreadInfo::getThreadName)
+                              .collect(Collectors.toSet());
+
+        Set<String> current = Arrays.stream(threads.getThreadInfo(threads.getAllThreadIds()))
+                                    .map(ThreadInfo::getThreadName)
+                                    .collect(Collectors.toSet());
+
+        List<Pattern> expected = expectedThreadNames != null
+                                 ? Arrays.stream(expectedThreadNames).map(Pattern::compile).collect(Collectors.toList())
+                                 : Collections.emptyList();
+
+        List<Pattern> optional = optionalThreadNames != null
+                                 ? Arrays.stream(optionalThreadNames).map(Pattern::compile).collect(Collectors.toList())
+                                 : Collections.emptyList();
+
+        current.removeAll(initial);
+
+        List<Pattern> notPresent = expected.stream()
+                                           .filter(threadNamePattern -> !current.stream().anyMatch(threadName -> threadNamePattern.matcher(threadName).matches()))
+                                           .collect(Collectors.toList());
+
+        Set<String> remain = current.stream()
+                                    .filter(threadName -> expected.stream().anyMatch(pattern -> pattern.matcher(threadName).matches()))
+                                    .filter(threadName -> optional.stream().anyMatch(pattern -> pattern.matcher(threadName).matches()))
+                                    .collect(Collectors.toSet());
+
+        if (!current.isEmpty())
+            System.err.println("Unexpected thread names: " + remain);
+        if (!notPresent.isEmpty())
+            System.err.println("Mandatory thread missing: " + notPresent);
+
+        assertTrue("Wrong thread status", remain.isEmpty() && notPresent.isEmpty());
+    }
+
