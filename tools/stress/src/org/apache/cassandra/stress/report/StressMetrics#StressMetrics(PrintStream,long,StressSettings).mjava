@@ -1,0 +1,56 @@
+    public StressMetrics(PrintStream output, final long logIntervalMillis, StressSettings settings)
+    {
+        this.output = output;
+        if(settings.log.hdrFile != null)
+        {
+            try
+            {
+                histogramWriter = new HistogramLogWriter(settings.log.hdrFile);
+                histogramWriter.outputComment("Logging op latencies for Cassandra Stress");
+                histogramWriter.outputLogFormatVersion();
+                final long roundedEpoch = epochMs - (epochMs%1000);
+                histogramWriter.outputBaseTime(roundedEpoch);
+                histogramWriter.setBaseTime(roundedEpoch);
+                histogramWriter.outputStartTime(roundedEpoch);
+                histogramWriter.outputLegend();
+            }
+            catch (FileNotFoundException e)
+            {
+                throw new IllegalArgumentException(e);
+            }
+        }
+        else
+        {
+            histogramWriter = null;
+        }
+        Callable<JmxCollector.GcStats> gcStatsCollector;
+        totalGcStats = new JmxCollector.GcStats(0);
+        try
+        {
+            gcStatsCollector = new JmxCollector(settings.node.resolveAllPermitted(settings), settings.port.jmxPort);
+        }
+        catch (Throwable t)
+        {
+            if (settings.log.level == Level.VERBOSE)
+            {
+                t.printStackTrace();
+            }
+            System.err.println("Failed to connect over JMX; not collecting these stats");
+            gcStatsCollector = new Callable<JmxCollector.GcStats>()
+            {
+                public JmxCollector.GcStats call() throws Exception
+                {
+                    return totalGcStats;
+                }
+            };
+        }
+        this.gcStatsCollector = gcStatsCollector;
+        this.totalCurrentInterval = new TimingInterval(settings.rate.isFixed);
+        this.totalSummaryInterval = new TimingInterval(settings.rate.isFixed);
+        printHeader("", output);
+        thread = new Thread(() -> {
+            reportingLoop(logIntervalMillis);
+        });
+        thread.setName("StressMetrics");
+    }
+
