@@ -1,0 +1,32 @@
+    @Test
+    public void sstableRepairStatusChanged()
+    {
+        UUID repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+
+        // add as unrepaired
+        SSTableReader sstable = makeSSTable(false);
+        Assert.assertTrue(unrepairedContains(sstable));
+        Assert.assertFalse(repairedContains(sstable));
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNull);
+
+        SSTableRepairStatusChanged notification;
+
+        // change to pending repaired
+        mutateRepaired(sstable, repairID);
+        notification = new SSTableRepairStatusChanged(Collections.singleton(sstable));
+        csm.handleNotification(notification, cfs.getTracker());
+        Assert.assertFalse(unrepairedContains(sstable));
+        Assert.assertFalse(repairedContains(sstable));
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNotNull);
+        Assert.assertTrue(pendingContains(repairID, sstable));
+
+        // change to repaired
+        mutateRepaired(sstable, System.currentTimeMillis());
+        notification = new SSTableRepairStatusChanged(Collections.singleton(sstable));
+        csm.handleNotification(notification, cfs.getTracker());
+        Assert.assertFalse(unrepairedContains(sstable));
+        Assert.assertTrue(repairedContains(sstable));
+        Assert.assertFalse(pendingContains(repairID, sstable));
+    }
+

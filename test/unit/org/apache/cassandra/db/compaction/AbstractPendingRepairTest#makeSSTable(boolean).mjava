@@ -1,0 +1,24 @@
+    /**
+     * creates and returns an sstable
+     *
+     * @param orphan if true, the sstable will be removed from the unrepaired strategy
+     */
+    SSTableReader makeSSTable(boolean orphan)
+    {
+        int pk = nextSSTableKey++;
+        Set<SSTableReader> pre = cfs.getLiveSSTables();
+        QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES(?, ?)", ks, tbl), pk, pk);
+        cfs.forceBlockingFlush();
+        Set<SSTableReader> post = cfs.getLiveSSTables();
+        Set<SSTableReader> diff = new HashSet<>(post);
+        diff.removeAll(pre);
+        assert diff.size() == 1;
+        SSTableReader sstable = diff.iterator().next();
+        if (orphan)
+        {
+            Iterables.any(csm.getUnrepaired(), s -> s.getSSTables().contains(sstable));
+            csm.getUnrepaired().forEach(s -> s.removeSSTable(sstable));
+        }
+        return sstable;
+    }
+

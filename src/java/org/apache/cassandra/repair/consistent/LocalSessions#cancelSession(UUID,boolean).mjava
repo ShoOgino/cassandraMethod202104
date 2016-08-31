@@ -1,0 +1,21 @@
+    /**
+     * hook for operators to cancel sessions, cancelling from a non-coordinator is an error, unless
+     * force is set to true. Messages are sent out to other participants, but we don't wait for a response
+     */
+    public void cancelSession(UUID sessionID, boolean force)
+    {
+        logger.debug("cancelling session {}", sessionID);
+        LocalSession session = getSession(sessionID);
+        Preconditions.checkArgument(session != null, "Session {} does not exist", sessionID);
+        Preconditions.checkArgument(force || session.coordinator.equals(getBroadcastAddress()),
+                                    "Cancel session %s from it's coordinator (%s) or use --force",
+                                    sessionID, session.coordinator);
+
+        setStateAndSave(session, FAILED);
+        for (InetAddress participant : session.participants)
+        {
+            if (!participant.equals(getBroadcastAddress()))
+                sendMessage(participant, new FailSession(sessionID));
+        }
+    }
+

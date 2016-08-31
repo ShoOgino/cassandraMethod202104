@@ -1,0 +1,54 @@
+    /**
+     * The PrepareConsistentRequest effectively promotes the parent repair session to a consistent
+     * incremental session, and begins the 'pending anti compaction' which moves all sstable data
+     * that is to be repaired into it's own silo, preventing it from mixing with other data.
+     *
+     * No response is sent to the repair coordinator until the pending anti compaction has completed
+     * successfully. If the pending anti compaction fails, a failure message is sent to the coordinator,
+     * cancelling the session.
+     */
+    public void handlePrepareMessage(InetAddress from, PrepareConsistentRequest request)
+    {
+        logger.debug("received {} from {}", request, from);
+        UUID sessionID = request.parentSession;
+        InetAddress coordinator = request.coordinator;
+        Set<InetAddress> peers = request.participants;
+
+        ActiveRepairService.ParentRepairSession parentSession;
+        try
+        {
+            parentSession = getParentRepairSession(sessionID);
+        }
+        catch (Throwable e)
+        {
+            logger.debug("Error retrieving ParentRepairSession for session {}, responding with failure", sessionID);
+            sendMessage(coordinator, new FailSession(sessionID));
+            return;
+        }
+
+        LocalSession session = createSessionUnsafe(sessionID, parentSession, peers);
+        putSessionUnsafe(session);
+        logger.debug("created local session for {}", sessionID);
+
+        ExecutorService executor = Executors.newFixedThreadPool(parentSession.getColumnFamilyStores().size());
+
+        ListenableFuture pendingAntiCompaction = submitPendingAntiCompaction(session, executor);
+        Futures.addCallback(pendingAntiCompaction, new FutureCallback()
+        {
+            public void onSuccess(@Nullable Object result)
+            {
+                logger.debug("pending anti-compaction for {} completed", sessionID);
+                setStateAndSave(session, PREPARED);
+                sendMessage(coordinator, new PrepareConsistentResponse(sessionID, getBroadcastAddress(), true));
+                executor.shutdown();
+            }
+
+            public void onFailure(Throwable t)
+            {
+                logger.debug("pending anti-compaction for {} failed", sessionID);
+                failSession(sessionID);
+                executor.shutdown();
+            }
+        });
+    }
+

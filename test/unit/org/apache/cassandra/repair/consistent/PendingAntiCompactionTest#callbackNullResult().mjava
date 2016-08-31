@@ -1,0 +1,24 @@
+    /**
+     * If one of the supplied AcquireResults is null, either an Exception was thrown, or
+     * we couldn't get a transaction for the sstables. In either case we need to cancel the repair, and release
+     * any sstables acquired for other tables
+     */
+    @Test
+    public void callbackNullResult() throws Exception
+    {
+        cfs.disableAutoCompaction();
+        makeSSTables(2);
+
+        PendingAntiCompaction.AcquisitionCallable acquisitionCallable = new PendingAntiCompaction.AcquisitionCallable(cfs, FULL_RANGE, UUIDGen.getTimeUUID());
+        PendingAntiCompaction.AcquireResult result = acquisitionCallable.call();
+        Assert.assertNotNull(result);
+        Assert.assertEquals(Transactional.AbstractTransactional.State.IN_PROGRESS, result.txn.state());
+
+        InstrumentedAcquisitionCallback cb = new InstrumentedAcquisitionCallback(UUIDGen.getTimeUUID(), FULL_RANGE);
+        Assert.assertTrue(cb.submittedCompactions.isEmpty());
+        cb.apply(Lists.newArrayList(result, null));
+
+        Assert.assertTrue(cb.submittedCompactions.isEmpty());
+        Assert.assertEquals(Transactional.AbstractTransactional.State.ABORTED, result.txn.state());
+    }
+

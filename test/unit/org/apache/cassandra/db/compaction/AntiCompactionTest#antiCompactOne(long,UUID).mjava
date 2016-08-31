@@ -1,0 +1,55 @@
+    private void antiCompactOne(long repairedAt, UUID pendingRepair) throws Exception
+    {
+        assert repairedAt != UNREPAIRED_SSTABLE || pendingRepair != null;
+
+        ColumnFamilyStore store = prepareColumnFamilyStore();
+        Collection<SSTableReader> sstables = getUnrepairedSSTables(store);
+        assertEquals(store.getLiveSSTables().size(), sstables.size());
+        Range<Token> range = new Range<Token>(new BytesToken("0".getBytes()), new BytesToken("4".getBytes()));
+        List<Range<Token>> ranges = Arrays.asList(range);
+
+        int repairedKeys = 0;
+        int pendingKeys = 0;
+        int nonRepairedKeys = 0;
+        try (LifecycleTransaction txn = store.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+             Refs<SSTableReader> refs = Refs.ref(sstables))
+        {
+            if (txn == null)
+                throw new IllegalStateException();
+            UUID parentRepairSession = UUID.randomUUID();
+            CompactionManager.instance.performAnticompaction(store, ranges, refs, txn, repairedAt, pendingRepair, parentRepairSession);
+        }
+
+        assertEquals(2, store.getLiveSSTables().size());
+        for (SSTableReader sstable : store.getLiveSSTables())
+        {
+            try (ISSTableScanner scanner = sstable.getScanner())
+            {
+                while (scanner.hasNext())
+                {
+                    UnfilteredRowIterator row = scanner.next();
+                    if (sstable.isRepaired() || sstable.isPendingRepair())
+                    {
+                        assertTrue(range.contains(row.partitionKey().getToken()));
+                        repairedKeys += sstable.isRepaired() ? 1 : 0;
+                        pendingKeys += sstable.isPendingRepair() ? 1 : 0;
+                    }
+                    else
+                    {
+                        assertFalse(range.contains(row.partitionKey().getToken()));
+                        nonRepairedKeys++;
+                    }
+                }
+            }
+        }
+        for (SSTableReader sstable : store.getLiveSSTables())
+        {
+            assertFalse(sstable.isMarkedCompacted());
+            assertEquals(1, sstable.selfRef().globalCount());
+        }
+        assertEquals(0, store.getTracker().getCompacting().size());
+        assertEquals(repairedKeys, repairedAt != UNREPAIRED_SSTABLE ? 4 : 0);
+        assertEquals(pendingKeys, pendingRepair != NO_PENDING_REPAIR ? 4 : 0);
+        assertEquals(nonRepairedKeys, 6);
+    }
+

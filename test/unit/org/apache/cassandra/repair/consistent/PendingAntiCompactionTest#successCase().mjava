@@ -1,0 +1,52 @@
+    /**
+     * verify the pending anti compaction happy path
+     */
+    @Test
+    public void successCase() throws Exception
+    {
+        Assert.assertSame(ByteOrderedPartitioner.class, DatabaseDescriptor.getPartitioner().getClass());
+        cfs.disableAutoCompaction();
+
+        // create 2 sstables, one that will be split, and another that will be moved
+        for (int i = 0; i < 8; i++)
+        {
+            QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?)", ks, tbl), i, i);
+        }
+        cfs.forceBlockingFlush();
+        for (int i = 8; i < 12; i++)
+        {
+            QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (?, ?)", ks, tbl), i, i);
+        }
+        cfs.forceBlockingFlush();
+        Assert.assertEquals(2, cfs.getLiveSSTables().size());
+
+        Token left = ByteOrderedPartitioner.instance.getToken(ByteBufferUtil.bytes((int) 6));
+        Token right = ByteOrderedPartitioner.instance.getToken(ByteBufferUtil.bytes((int) 16));
+        Collection<Range<Token>> ranges = Collections.singleton(new Range<>(left, right));
+
+        // create a session so the anti compaction can fine it
+        UUID sessionID = UUIDGen.getTimeUUID();
+        ActiveRepairService.instance.registerParentRepairSession(sessionID, InetAddress.getLocalHost(), Lists.newArrayList(cfs), ranges, true, 1, true);
+
+        PendingAntiCompaction pac;
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try
+        {
+            pac = new PendingAntiCompaction(sessionID, ranges, executor);
+            pac.run().get();
+        }
+        finally
+        {
+            executor.shutdown();
+        }
+
+        Assert.assertEquals(3, cfs.getLiveSSTables().size());
+        int pendingRepair = 0;
+        for (SSTableReader sstable : cfs.getLiveSSTables())
+        {
+            if (sstable.isPendingRepair())
+                pendingRepair++;
+        }
+        Assert.assertEquals(2, pendingRepair);
+    }
+

@@ -1,0 +1,31 @@
+    @Test
+    public void prepareSuccessCase()
+    {
+        UUID sessionID = registerSession();
+        InstrumentedLocalSessions sessions = new InstrumentedLocalSessions();
+        sessions.start();
+
+        // replacing future so we can inspect state before and after anti compaction callback
+        sessions.pendingAntiCompactionFuture = SettableFuture.create();
+        Assert.assertFalse(sessions.submitPendingAntiCompactionCalled);
+        sessions.handlePrepareMessage(PARTICIPANT1, new PrepareConsistentRequest(sessionID, COORDINATOR, PARTICIPANTS));
+        Assert.assertTrue(sessions.submitPendingAntiCompactionCalled);
+        Assert.assertTrue(sessions.sentMessages.isEmpty());
+
+        // anti compaction hasn't finished yet, so state in memory and on disk should be PREPARING
+        LocalSession session = sessions.getSession(sessionID);
+        Assert.assertNotNull(session);
+        Assert.assertEquals(PREPARING, session.getState());
+        Assert.assertEquals(session, sessions.loadUnsafe(sessionID));
+
+        // anti compaction has now finished, so state in memory and on disk should be PREPARED
+        sessions.pendingAntiCompactionFuture.set(new Object());
+        session = sessions.getSession(sessionID);
+        Assert.assertNotNull(session);
+        Assert.assertEquals(PREPARED, session.getState());
+        Assert.assertEquals(session, sessions.loadUnsafe(sessionID));
+
+        // ...and we should have sent a success message back to the coordinator
+        assertMessagesSent(sessions, COORDINATOR, new PrepareConsistentResponse(sessionID, PARTICIPANT1, true));
+    }
+

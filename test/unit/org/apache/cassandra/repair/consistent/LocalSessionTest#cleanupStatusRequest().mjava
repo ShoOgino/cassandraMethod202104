@@ -1,0 +1,28 @@
+    /**
+     * Sessions should start checking the status of their participants if
+     * there hasn't been activity for the CHECK_STATUS_TIMEOUT period
+     */
+    @Test
+    public void cleanupStatusRequest() throws Exception
+    {
+        AtomicReference<LocalSession> checkedSession = new AtomicReference<>();
+        InstrumentedLocalSessions sessions = new InstrumentedLocalSessions() {
+            public void sendStatusRequest(LocalSession session)
+            {
+                Assert.assertTrue(checkedSession.compareAndSet(null, session));
+            }
+        };
+        sessions.start();
+
+        int time = FBUtilities.nowInSeconds() - LocalSessions.CHECK_STATUS_TIMEOUT - 1;
+        LocalSession session = sessionWithTime(time - 1, time);
+        session.setState(REPAIRING);
+
+        sessions.putSessionUnsafe(session);
+        Assert.assertNotNull(sessions.getSession(session.sessionID));
+
+        sessions.cleanup();
+
+        Assert.assertEquals(session, checkedSession.get());
+    }
+

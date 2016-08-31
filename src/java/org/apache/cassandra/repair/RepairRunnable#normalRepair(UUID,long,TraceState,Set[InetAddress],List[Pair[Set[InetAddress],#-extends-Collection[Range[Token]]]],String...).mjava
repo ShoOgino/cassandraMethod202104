@@ -1,0 +1,41 @@
+    private void normalRepair(UUID parentSession,
+                              long startTime,
+                              TraceState traceState,
+                              Set<InetAddress> allNeighbors,
+                              List<Pair<Set<InetAddress>, ? extends Collection<Range<Token>>>> commonRanges,
+                              String... cfnames)
+    {
+
+        // Set up RepairJob executor for this repair command.
+        ListeningExecutorService executor = createExecutor();
+
+        // Setting the repairedAt time to UNREPAIRED_SSTABLE causes the repairedAt times to be preserved across streamed sstables
+        final ListenableFuture<List<RepairSessionResult>> allSessions = submitRepairSessions(parentSession, ActiveRepairService.UNREPAIRED_SSTABLE, false, executor, commonRanges, cfnames);
+
+        // After all repair sessions completes(successful or not),
+        // run anticompaction if necessary and send finish notice back to client
+        final Collection<Range<Token>> successfulRanges = new ArrayList<>();
+        final AtomicBoolean hasFailure = new AtomicBoolean();
+        ListenableFuture repairResult = Futures.transform(allSessions, new AsyncFunction<List<RepairSessionResult>, Object>()
+        {
+            @SuppressWarnings("unchecked")
+            public ListenableFuture apply(List<RepairSessionResult> results)
+            {
+                // filter out null(=failed) results and get successful ranges
+                for (RepairSessionResult sessionResult : results)
+                {
+                    if (sessionResult != null)
+                    {
+                        successfulRanges.addAll(sessionResult.ranges);
+                    }
+                    else
+                    {
+                        hasFailure.compareAndSet(false, true);
+                    }
+                }
+                return Futures.immediateFuture(null);
+            }
+        });
+        Futures.addCallback(repairResult, new RepairCompleteCallback(parentSession, successfulRanges, startTime, traceState, hasFailure, executor));
+    }
+

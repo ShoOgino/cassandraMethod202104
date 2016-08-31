@@ -1,0 +1,27 @@
+    @Test
+    public void getNextBackgroundTask()
+    {
+        PendingRepairManager prm = csm.getPendingRepairManagers().get(0);
+
+        UUID repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+        SSTableReader sstable = makeSSTable(true);
+        mutateRepaired(sstable, repairID);
+        prm.addSSTable(sstable);
+
+        repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+        sstable = makeSSTable(true);
+        mutateRepaired(sstable, repairID);
+        prm.addSSTable(sstable);
+        LocalSessionAccessor.finalizeUnsafe(repairID);
+
+        Assert.assertEquals(2, prm.getSessions().size());
+        Assert.assertNull(prm.getNextBackgroundTask(FBUtilities.nowInSeconds()));
+        AbstractCompactionTask compactionTask = prm.getNextRepairFinishedTask();
+        Assert.assertNotNull(compactionTask);
+        Assert.assertSame(PendingRepairManager.RepairFinishedCompactionTask.class, compactionTask.getClass());
+        PendingRepairManager.RepairFinishedCompactionTask cleanupTask = (PendingRepairManager.RepairFinishedCompactionTask) compactionTask;
+        Assert.assertEquals(repairID, cleanupTask.getSessionID());
+    }
+

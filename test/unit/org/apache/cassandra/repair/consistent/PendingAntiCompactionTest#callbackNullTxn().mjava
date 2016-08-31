@@ -1,0 +1,26 @@
+    /**
+     * If an AcquireResult has a null txn, there were no sstables to acquire references
+     * for, so no anti compaction should have been submitted.
+     */
+    @Test
+    public void callbackNullTxn() throws Exception
+    {
+        cfs.disableAutoCompaction();
+        makeSSTables(2);
+
+        PendingAntiCompaction.AcquisitionCallable acquisitionCallable = new PendingAntiCompaction.AcquisitionCallable(cfs, FULL_RANGE, UUIDGen.getTimeUUID());
+        PendingAntiCompaction.AcquireResult result = acquisitionCallable.call();
+        Assert.assertNotNull(result);
+
+        ColumnFamilyStore cfs2 = Schema.instance.getColumnFamilyStoreInstance(Schema.instance.getTableMetadata("system", "peers").id);
+        PendingAntiCompaction.AcquireResult fakeResult = new PendingAntiCompaction.AcquireResult(cfs2, null, null);
+
+        InstrumentedAcquisitionCallback cb = new InstrumentedAcquisitionCallback(UUIDGen.getTimeUUID(), FULL_RANGE);
+        Assert.assertTrue(cb.submittedCompactions.isEmpty());
+        cb.apply(Lists.newArrayList(result, fakeResult));
+
+        Assert.assertEquals(1, cb.submittedCompactions.size());
+        Assert.assertTrue(cb.submittedCompactions.contains(cfm.id));
+        Assert.assertFalse(cb.submittedCompactions.contains(cfs2.metadata.id));
+    }
+

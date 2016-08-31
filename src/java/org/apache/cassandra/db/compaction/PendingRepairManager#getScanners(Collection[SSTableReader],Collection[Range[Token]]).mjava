@@ -1,0 +1,24 @@
+    @SuppressWarnings("resource")
+    synchronized Set<ISSTableScanner> getScanners(Collection<SSTableReader> sstables, Collection<Range<Token>> ranges)
+    {
+        if (sstables.isEmpty())
+        {
+            return Collections.emptySet();
+        }
+
+        Map<UUID, Set<SSTableReader>> sessionSSTables = new HashMap<>();
+        for (SSTableReader sstable : sstables)
+        {
+            UUID sessionID = sstable.getSSTableMetadata().pendingRepair;
+            assert sessionID != null;
+            sessionSSTables.computeIfAbsent(sessionID, k -> new HashSet<>()).add(sstable);
+        }
+
+        Set<ISSTableScanner> scanners = new HashSet<>(sessionSSTables.size());
+        for (Map.Entry<UUID, Set<SSTableReader>> entry : sessionSSTables.entrySet())
+        {
+            scanners.addAll(get(entry.getKey()).getScanners(entry.getValue(), ranges).scanners);
+        }
+        return scanners;
+    }
+

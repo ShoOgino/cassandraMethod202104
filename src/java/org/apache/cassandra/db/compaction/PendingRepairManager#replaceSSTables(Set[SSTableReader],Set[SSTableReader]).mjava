@@ -1,0 +1,40 @@
+    synchronized void replaceSSTables(Set<SSTableReader> removed, Set<SSTableReader> added)
+    {
+        if (removed.isEmpty() && added.isEmpty())
+            return;
+
+        // left=removed, right=added
+        Map<UUID, Pair<Set<SSTableReader>, Set<SSTableReader>>> groups = new HashMap<>();
+        for (SSTableReader sstable : removed)
+        {
+            UUID sessionID = sstable.getSSTableMetadata().pendingRepair;
+            if (!groups.containsKey(sessionID))
+            {
+                groups.put(sessionID, Pair.create(new HashSet<>(), new HashSet<>()));
+            }
+            groups.get(sessionID).left.add(sstable);
+        }
+
+        for (SSTableReader sstable : added)
+        {
+            UUID sessionID = sstable.getSSTableMetadata().pendingRepair;
+            if (!groups.containsKey(sessionID))
+            {
+                groups.put(sessionID, Pair.create(new HashSet<>(), new HashSet<>()));
+            }
+            groups.get(sessionID).right.add(sstable);
+        }
+
+        for (Map.Entry<UUID, Pair<Set<SSTableReader>, Set<SSTableReader>>> entry : groups.entrySet())
+        {
+            AbstractCompactionStrategy strategy = getOrCreate(entry.getKey());
+            Set<SSTableReader> groupRemoved = entry.getValue().left;
+            Set<SSTableReader> groupAdded = entry.getValue().right;
+
+            if (!groupRemoved.isEmpty())
+                strategy.replaceSSTables(groupRemoved, groupAdded);
+            else
+                strategy.addSSTables(groupAdded);
+        }
+    }
+

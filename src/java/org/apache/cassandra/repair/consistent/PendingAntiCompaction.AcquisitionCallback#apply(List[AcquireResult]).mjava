@@ -1,0 +1,31 @@
+        public ListenableFuture apply(List<AcquireResult> results) throws Exception
+        {
+            if (Iterables.any(results, t -> t == null))
+            {
+                // Release all sstables, and report failure back to coordinator
+                for (AcquireResult result : results)
+                {
+                    if (result != null)
+                    {
+                        logger.info("Releasing acquired sstables for {}.{}", result.cfs.metadata.keyspace, result.cfs.metadata.name);
+                        result.abort();
+                    }
+                }
+                return Futures.immediateFailedFuture(new RuntimeException("unable to acquire sstables"));
+            }
+            else
+            {
+                List<ListenableFuture<?>> pendingAntiCompactions = new ArrayList<>(results.size());
+                for (AcquireResult result : results)
+                {
+                    if (result.txn != null)
+                    {
+                        ListenableFuture<?> future = submitPendingAntiCompaction(result);
+                        pendingAntiCompactions.add(future);
+                    }
+                }
+
+                return Futures.allAsList(pendingAntiCompactions);
+            }
+        }
+

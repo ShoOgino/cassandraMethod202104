@@ -1,0 +1,56 @@
+    @Test
+    public void failedPrepare()
+    {
+        InstrumentedCoordinatorSession coordinator = createInstrumentedSession();
+        Executor executor = MoreExecutors.directExecutor();
+        AtomicBoolean repairSubmitted = new AtomicBoolean(false);
+        SettableFuture<List<RepairSessionResult>> repairFuture = SettableFuture.create();
+        Supplier<ListenableFuture<List<RepairSessionResult>>> sessionSupplier = () ->
+        {
+            repairSubmitted.set(true);
+            return repairFuture;
+        };
+
+        // coordinator sends prepare requests to create local session and perform anticompaction
+        AtomicBoolean hasFailures = new AtomicBoolean(false);
+        Assert.assertFalse(repairSubmitted.get());
+        Assert.assertTrue(coordinator.sentMessages.isEmpty());
+        ListenableFuture sessionResult = coordinator.execute(executor, sessionSupplier, hasFailures);
+        for (InetAddress participant : PARTICIPANTS)
+        {
+            PrepareConsistentRequest expected = new PrepareConsistentRequest(coordinator.sessionID, COORDINATOR, new HashSet<>(PARTICIPANTS));
+            assertMessageSent(coordinator, participant, expected);
+        }
+
+        coordinator.sentMessages.clear();
+
+        // participants respond to coordinator, and repair begins once all participants have responded with success
+        Assert.assertEquals(ConsistentSession.State.PREPARING, coordinator.getState());
+
+        coordinator.handlePrepareResponse(PARTICIPANT1, true);
+        Assert.assertEquals(ConsistentSession.State.PREPARING, coordinator.getState());
+
+        // participant 2 fails to prepare for consistent repair
+        Assert.assertFalse(coordinator.failCalled);
+        coordinator.handlePrepareResponse(PARTICIPANT2, false);
+        Assert.assertEquals(ConsistentSession.State.FAILED, coordinator.getState());
+        Assert.assertTrue(coordinator.failCalled);
+
+        // additional success messages should be ignored
+        Assert.assertFalse(coordinator.setRepairingCalled);
+        coordinator.onSetRepairing = Assert::fail;
+        coordinator.handlePrepareResponse(PARTICIPANT3, true);
+        Assert.assertFalse(coordinator.setRepairingCalled);
+        Assert.assertFalse(repairSubmitted.get());
+
+        // all participants should have been notified of session failure
+        for (InetAddress participant : PARTICIPANTS)
+        {
+            RepairMessage expected = new FailSession(coordinator.sessionID);
+            assertMessageSent(coordinator, participant, expected);
+        }
+
+        Assert.assertTrue(sessionResult.isDone());
+        Assert.assertTrue(hasFailures.get());
+    }
+

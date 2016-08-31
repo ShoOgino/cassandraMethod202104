@@ -1,0 +1,26 @@
+    /**
+     * Splits the given token ranges of the given sstables into a pending repair silo
+     */
+    public ListenableFuture<?> submitPendingAntiCompaction(ColumnFamilyStore cfs, Collection<Range<Token>> ranges, Refs<SSTableReader> sstables, LifecycleTransaction txn, UUID sessionId)
+    {
+        Runnable runnable = new WrappedRunnable()
+        {
+            protected void runMayThrow() throws Exception
+            {
+                performAnticompaction(cfs, ranges, sstables, txn, ActiveRepairService.UNREPAIRED_SSTABLE, sessionId, sessionId);
+            }
+        };
+
+        ListenableFutureTask<?> task = ListenableFutureTask.create(runnable, null);
+        try
+        {
+            executor.submitIfRunning(task, "pending anticompaction");
+            return task;
+        }
+        finally
+        {
+            if (task.isCancelled())
+                sstables.release();
+        }
+    }
+

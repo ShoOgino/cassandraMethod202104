@@ -1,0 +1,36 @@
+    /**
+     * Auto fails and auto deletes timed out and old sessions
+     * Compaction will clean up the sstables still owned by a deleted session
+     */
+    public void cleanup()
+    {
+        logger.debug("Running LocalSessions.cleanup");
+        if (!isNodeInitialized())
+        {
+            logger.debug("node not initialized, aborting local session cleanup");
+            return;
+        }
+        Set<LocalSession> currentSessions = new HashSet<>(sessions.values());
+        for (LocalSession session : currentSessions)
+        {
+            synchronized (session)
+            {
+                int now = FBUtilities.nowInSeconds();
+                if (shouldFail(session, now))
+                {
+                    logger.warn("Auto failing timed out repair session {}", session);
+                    failSession(session.sessionID, false);
+                }
+                else if (shouldDelete(session, now))
+                {
+                    logger.warn("Auto deleting repair session {}", session);
+                    deleteSession(session.sessionID);
+                }
+                else if (shouldCheckStatus(session, now))
+                {
+                    sendStatusRequest(session);
+                }
+            }
+        }
+    }
+

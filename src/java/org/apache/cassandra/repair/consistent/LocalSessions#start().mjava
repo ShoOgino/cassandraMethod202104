@@ -1,0 +1,25 @@
+    /**
+     * Loads sessions out of the repairs table and sets state to started
+     */
+    public synchronized void start()
+    {
+        Preconditions.checkArgument(!started, "LocalSessions.start can only be called once");
+        Preconditions.checkArgument(sessions.isEmpty(), "No sessions should be added before start");
+        UntypedResultSet rows = QueryProcessor.executeInternalWithPaging(String.format("SELECT * FROM %s.%s", keyspace, table), 1000);
+        Map<UUID, LocalSession> loadedSessions = new HashMap<>();
+        for (UntypedResultSet.Row row : rows)
+        {
+            try
+            {
+                LocalSession session = load(row);
+                loadedSessions.put(session.sessionID, session);
+            }
+            catch (IllegalArgumentException | NullPointerException e)
+            {
+                logger.warn("Unable to load malformed repair session {}, ignoring", row.has("parent_id") ? row.getUUID("parent_id") : null);
+            }
+        }
+        sessions = ImmutableMap.copyOf(loadedSessions);
+        started = true;
+    }
+

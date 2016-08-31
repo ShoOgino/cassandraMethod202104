@@ -1,0 +1,47 @@
+    @Test
+    public void sstableListChangedAddAndRemove()
+    {
+        UUID repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+
+        SSTableReader sstable1 = makeSSTable(true);
+        mutateRepaired(sstable1, repairID);
+
+        SSTableReader sstable2 = makeSSTable(true);
+        mutateRepaired(sstable2, repairID);
+
+        Assert.assertFalse(repairedContains(sstable1));
+        Assert.assertFalse(unrepairedContains(sstable1));
+        Assert.assertFalse(repairedContains(sstable2));
+        Assert.assertFalse(unrepairedContains(sstable2));
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNull);
+
+        // add only
+        SSTableListChangedNotification notification;
+        notification = new SSTableListChangedNotification(Collections.singleton(sstable1),
+                                                          Collections.emptyList(),
+                                                          OperationType.COMPACTION);
+        csm.handleNotification(notification, cfs.getTracker());
+
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNotNull);
+        Assert.assertFalse(repairedContains(sstable1));
+        Assert.assertFalse(unrepairedContains(sstable1));
+        Assert.assertTrue(pendingContains(repairID, sstable1));
+        Assert.assertFalse(repairedContains(sstable2));
+        Assert.assertFalse(unrepairedContains(sstable2));
+        Assert.assertFalse(pendingContains(repairID, sstable2));
+
+        // remove and add
+        notification = new SSTableListChangedNotification(Collections.singleton(sstable2),
+                                                          Collections.singleton(sstable1),
+                                                          OperationType.COMPACTION);
+        csm.handleNotification(notification, cfs.getTracker());
+
+        Assert.assertFalse(repairedContains(sstable1));
+        Assert.assertFalse(unrepairedContains(sstable1));
+        Assert.assertFalse(pendingContains(repairID, sstable1));
+        Assert.assertFalse(repairedContains(sstable2));
+        Assert.assertFalse(unrepairedContains(sstable2));
+        Assert.assertTrue(pendingContains(repairID, sstable2));
+    }
+

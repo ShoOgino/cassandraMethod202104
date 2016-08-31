@@ -1,0 +1,27 @@
+    /**
+     * Pending repair strategy should be created when we encounter a new pending id
+     */
+    @Test
+    public void sstableAdded()
+    {
+        UUID repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+        Assert.assertTrue(csm.pendingRepairs().isEmpty());
+
+        SSTableReader sstable = makeSSTable(true);
+        Assert.assertFalse(sstable.isRepaired());
+        Assert.assertFalse(sstable.isPendingRepair());
+
+        mutateRepaired(sstable, repairID);
+        Assert.assertFalse(sstable.isRepaired());
+        Assert.assertTrue(sstable.isPendingRepair());
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNull);
+
+        // add the sstable
+        csm.handleNotification(new SSTableAddedNotification(Collections.singleton(sstable)), cfs.getTracker());
+        Assert.assertFalse(repairedContains(sstable));
+        Assert.assertFalse(unrepairedContains(sstable));
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNotNull);
+        Assert.assertTrue(pendingContains(repairID, sstable));
+    }
+

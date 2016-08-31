@@ -1,0 +1,16 @@
+    public ListenableFuture run()
+    {
+        ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(prsId);
+        List<ListenableFutureTask<AcquireResult>> tasks = new ArrayList<>();
+        for (ColumnFamilyStore cfs : prs.getColumnFamilyStores())
+        {
+            cfs.forceBlockingFlush();
+            ListenableFutureTask<AcquireResult> task = ListenableFutureTask.create(new AcquisitionCallable(cfs, ranges, prsId));
+            executor.submit(task);
+            tasks.add(task);
+        }
+        ListenableFuture<List<AcquireResult>> acquisitionResults = Futures.successfulAsList(tasks);
+        ListenableFuture compactionResult = Futures.transform(acquisitionResults, new AcquisitionCallback(prsId, ranges));
+        return compactionResult;
+    }
+

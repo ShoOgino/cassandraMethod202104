@@ -1,0 +1,36 @@
+    /**
+     * Tests that failed repairs result in cleanup compaction tasks
+     * which reclassify the sstables as unrepaired
+     */
+    @Test
+    public void cleanupCompactionFailed()
+    {
+        UUID repairID = registerSession(cfs);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+        SSTableReader sstable = makeSSTable(true);
+        mutateRepaired(sstable, repairID);
+        csm.handleNotification(new SSTableAddedNotification(Collections.singleton(sstable)), cfs.getTracker());
+        LocalSessionAccessor.failUnsafe(repairID);
+
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNotNull);
+        Assert.assertNotNull(pendingContains(repairID, sstable));
+        Assert.assertTrue(sstable.isPendingRepair());
+        Assert.assertFalse(sstable.isRepaired());
+
+        AbstractCompactionTask compactionTask = csm.getNextBackgroundTask(FBUtilities.nowInSeconds());
+        Assert.assertNotNull(compactionTask);
+        Assert.assertSame(PendingRepairManager.RepairFinishedCompactionTask.class, compactionTask.getClass());
+
+        // run the compaction
+        compactionTask.execute(null);
+
+        Assert.assertFalse(repairedContains(sstable));
+        Assert.assertTrue(unrepairedContains(sstable));
+        csm.getForPendingRepair(repairID).forEach(Assert::assertNull);
+
+        // sstable should have pendingRepair cleared, and repairedAt set correctly
+        Assert.assertFalse(sstable.isPendingRepair());
+        Assert.assertFalse(sstable.isRepaired());
+        Assert.assertEquals(ActiveRepairService.UNREPAIRED_SSTABLE, sstable.getSSTableMetadata().repairedAt);
+    }
+
