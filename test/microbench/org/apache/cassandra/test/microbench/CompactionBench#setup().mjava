@@ -1,0 +1,34 @@
+    @Setup(Level.Trial)
+    public void setup() throws Throwable
+    {
+        CQLTester.prepareServer();
+        keyspace = createKeyspace("CREATE KEYSPACE %s with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 } and durable_writes = false");
+        table = createTable(keyspace, "CREATE TABLE %s ( userid bigint, picid bigint, commentid bigint, PRIMARY KEY(userid, picid))");
+        execute("use "+keyspace+";");
+        writeStatement = "INSERT INTO "+table+"(userid,picid,commentid)VALUES(?,?,?)";
+        readStatement = "SELECT * from "+table+" limit 100";
+
+        Keyspace.system().forEach(k -> k.getColumnFamilyStores().forEach(c -> c.disableAutoCompaction()));
+
+        cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
+        cfs.disableAutoCompaction();
+
+        //Warm up
+        System.err.println("Writing 50k");
+        for (long i = 0; i < 50000; i++)
+            execute(writeStatement, i, i, i );
+
+
+        cfs.forceBlockingFlush();
+
+        System.err.println("Writing 50k again...");
+        for (long i = 0; i < 50000; i++)
+            execute(writeStatement, i, i, i );
+
+        cfs.forceBlockingFlush();
+
+        cfs.snapshot("originals");
+
+        snapshotFiles = cfs.getDirectories().sstableLister(Directories.OnTxnErr.IGNORE).snapshots("originals").listFiles();
+    }
+
