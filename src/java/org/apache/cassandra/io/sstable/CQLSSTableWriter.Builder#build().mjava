@@ -1,30 +1,30 @@
         @SuppressWarnings("resource")
         public CQLSSTableWriter build()
         {
-            if (directoryList.isEmpty() && cfs == null)
-                throw new IllegalStateException("No output directories specified, you should provide a directory with inDirectory()");
-            if (schemaStatement == null && cfs == null)
+            if (directory == null)
+                throw new IllegalStateException("No ouptut directory specified, you should provide a directory with inDirectory()");
+            if (schemaStatement == null)
                 throw new IllegalStateException("Missing schema, you should provide the schema for the SSTable to create with forTable()");
             if (insertStatement == null)
                 throw new IllegalStateException("No insert statement specified, you should provide an insert statement through using()");
 
             synchronized (CQLSSTableWriter.class)
             {
-                if (cfs == null)
-                    cfs = createOfflineTable(schemaStatement, typeStatements, directoryList);
+                String keyspace = schemaStatement.keyspace();
 
-                if (partitioner == null)
-                    partitioner = cfs.getPartitioner();
+                if (Schema.instance.getKSMetaData(keyspace) == null)
+                    Schema.instance.load(KeyspaceMetadata.create(keyspace, KeyspaceParams.simple(1)));
 
+                createTypes(keyspace);
+                CFMetaData cfMetaData = createTable(keyspace);
                 Pair<UpdateStatement, List<ColumnSpecification>> preparedInsert = prepareInsert();
+
                 AbstractSSTableSimpleWriter writer = sorted
-                                                     ? new SSTableSimpleWriter(cfs, partitioner, preparedInsert.left.updatedColumns())
-                                                     : new SSTableSimpleUnsortedWriter(cfs, partitioner, preparedInsert.left.updatedColumns(), bufferSizeInMB);
+                                                     ? new SSTableSimpleWriter(directory, cfMetaData, preparedInsert.left.updatedColumns())
+                                                     : new SSTableSimpleUnsortedWriter(directory, cfMetaData, preparedInsert.left.updatedColumns(), bufferSizeInMB);
 
                 if (formatType != null)
                     writer.setSSTableFormatType(formatType);
-
-                writer.setRangeAwareWriting(makeRangeAware);
 
                 return new CQLSSTableWriter(writer, preparedInsert.left, preparedInsert.right);
             }

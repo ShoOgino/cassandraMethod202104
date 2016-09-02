@@ -1,0 +1,46 @@
+    /**
+     * Adds a new row to the writer given already serialized values.
+     * <p>
+     * This is a shortcut for {@code rawAddRow(Arrays.asList(values))}.
+     *
+     * @param values the row values (corresponding to the bind variables of the
+     * insertion statement used when creating by this writer) as binary.
+     * @return this writer.
+     */
+    public StressCQLSSTableWriter rawAddRow(List<ByteBuffer> values)
+    throws InvalidRequestException, IOException
+    {
+        if (values.size() != boundNames.size())
+            throw new InvalidRequestException(String.format("Invalid number of arguments, expecting %d values but got %d", boundNames.size(), values.size()));
+
+        QueryOptions options = QueryOptions.forInternalCalls(null, values);
+        List<ByteBuffer> keys = insert.buildPartitionKeyNames(options);
+        SortedSet<Clustering> clusterings = insert.createClustering(options);
+
+        long now = System.currentTimeMillis() * 1000;
+        // Note that we asks indexes to not validate values (the last 'false' arg below) because that triggers a 'Keyspace.open'
+        // and that forces a lot of initialization that we don't want.
+        UpdateParameters params = new UpdateParameters(insert.cfm,
+                                                       insert.updatedColumns(),
+                                                       options,
+                                                       insert.getTimestamp(now, options),
+                                                       insert.getTimeToLive(options),
+                                                       Collections.<DecoratedKey, Partition>emptyMap());
+
+        try
+        {
+            for (ByteBuffer key : keys)
+            {
+                for (Clustering clustering : clusterings)
+                    insert.addUpdateForKey(writer.getUpdateFor(key), clustering, params);
+            }
+            return this;
+        }
+        catch (SSTableSimpleUnsortedWriter.SyncException e)
+        {
+            // If we use a BufferedWriter and had a problem writing to disk, the IOException has been
+            // wrapped in a SyncException (see BufferedWriter below). We want to extract that IOE.
+            throw (IOException)e.getCause();
+        }
+    }
+

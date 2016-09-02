@@ -8,8 +8,6 @@
         String schema = "CREATE TABLE %s.%s (key ascii, name ascii, val ascii, val1 ascii, PRIMARY KEY (key, name))";
         String query = "INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)";
 
-
-        File outputDir;
         try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
                                                        .inDirectory(dataDir)
                                                        .forTable(String.format(schema, KEYSPACE1, CF_STANDARD1))
@@ -17,22 +15,22 @@
                                                        .build())
         {
             writer.addRow("key1", "col1", "100");
-            outputDir = writer.getInnermostDirectory();
         }
 
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD1);
+        cfs.forceBlockingFlush(); // wait for sstables to be on disk else we won't be able to stream them
+
         final CountDownLatch latch = new CountDownLatch(1);
-        SSTableLoader loader = new SSTableLoader(outputDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
+        SSTableLoader loader = new SSTableLoader(dataDir, new TestClient(), new OutputHandler.SystemOutput(false, false));
         loader.stream(Collections.emptySet(), completionStreamListener(latch)).get();
 
-        UntypedResultSet rs = QueryProcessor.executeInternal(String.format("SELECT * FROM %s.%s;", KEYSPACE1, CF_STANDARD1));
+        List<FilteredPartition> partitions = Util.getAll(Util.cmd(cfs).build());
 
-        assertEquals(1, rs.size());
-
-        Iterator<UntypedResultSet.Row> iter = rs.iterator();
-        UntypedResultSet.Row row;
-
-        row = iter.next();
-        assertEquals("key1", row.getString("key"));
+        assertEquals(1, partitions.size());
+        assertEquals("key1", AsciiType.instance.getString(partitions.get(0).partitionKey().getKey()));
+        assertEquals(ByteBufferUtil.bytes("100"), partitions.get(0).getRow(Clustering.make(ByteBufferUtil.bytes("col1")))
+                                                                   .getCell(cfmeta.getColumnDefinition(ByteBufferUtil.bytes("val")))
+                                                                   .value());
 
         // The stream future is signalled when the work is complete but before releasing references. Wait for release
         // before cleanup (CASSANDRA-10118).
