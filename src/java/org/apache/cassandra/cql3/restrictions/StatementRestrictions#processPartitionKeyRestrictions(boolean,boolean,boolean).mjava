@@ -1,0 +1,49 @@
+    private void processPartitionKeyRestrictions(boolean hasQueriableIndex, boolean allowFiltering, boolean forView)
+    {
+        if (!type.allowPartitionKeyRanges())
+        {
+            checkFalse(partitionKeyRestrictions.isOnToken(),
+                       "The token function cannot be used in WHERE clauses for %s statements", type);
+
+            if (partitionKeyRestrictions.hasUnrestrictedPartitionKeyComponents(cfm))
+                throw invalidRequest("Some partition key parts are missing: %s",
+                                     Joiner.on(", ").join(getPartitionKeyUnrestrictedComponents()));
+
+            // slice query
+            checkFalse(partitionKeyRestrictions.hasSlice(),
+                    "Only EQ and IN relation are supported on the partition key (unless you use the token() function)"
+                            + " for %s statements", type);
+        }
+        else
+        {
+            // If there are no partition restrictions or there's only token restriction, we have to set a key range
+            if (partitionKeyRestrictions.isOnToken())
+                isKeyRange = true;
+
+            if (partitionKeyRestrictions.isEmpty() && partitionKeyRestrictions.hasUnrestrictedPartitionKeyComponents(cfm))
+            {
+                isKeyRange = true;
+                usesSecondaryIndexing = hasQueriableIndex;
+            }
+
+            // If there is a queriable index, no special condition is required on the other restrictions.
+            // But we still need to know 2 things:
+            // - If we don't have a queriable index, is the query ok
+            // - Is it queriable without 2ndary index, which is always more efficient
+            // If a component of the partition key is restricted by a relation, all preceding
+            // components must have a EQ. Only the last partition key component can be in IN relation.
+            if (partitionKeyRestrictions.needFiltering(cfm))
+            {
+                if (!allowFiltering && !forView && !hasQueriableIndex
+                    && (partitionKeyRestrictions.hasUnrestrictedPartitionKeyComponents(cfm) || partitionKeyRestrictions.hasSlice()))
+                    throw new InvalidRequestException(REQUIRES_ALLOW_FILTERING_MESSAGE);
+
+                if (partitionKeyRestrictions.hasIN())
+                    throw new InvalidRequestException("IN restrictions are not supported when the query involves filtering");
+
+                isKeyRange = true;
+                usesSecondaryIndexing = hasQueriableIndex;
+            }
+        }
+    }
+

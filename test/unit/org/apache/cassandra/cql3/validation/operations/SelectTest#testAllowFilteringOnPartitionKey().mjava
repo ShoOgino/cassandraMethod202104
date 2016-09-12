@@ -1,0 +1,154 @@
+    @Test
+    public void testAllowFilteringOnPartitionKey() throws Throwable
+    {
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, PRIMARY KEY ((a, b), c))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 15, 16, 17)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 22, 23, 24)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)");
+
+        beforeAndAfterFlush(() -> {
+
+            assertInvalidMessage("IN restrictions are not supported when the query involves filtering",
+                    "SELECT * FROM %s WHERE b in (11,12) ALLOW FILTERING");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a = 11");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a > 11");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a > 11 and b = 1");
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE a in (11) and b in (12,15,22)"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE b in (12,15,22)");
+
+            assertRows(execute("SELECT * FROM %s WHERE a in (11) and b in (12,15,22) ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE a in (11) ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE b = 15 ALLOW FILTERING"),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE b >= 15 ALLOW FILTERING"),
+                    row(11, 15, 16, 17),
+                    row(31, 32, 33, 34),
+                    row(21, 22, 23, 24));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 11 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17),
+                    row(31, 32, 33, 34),
+                    row(21, 22, 23, 24));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 11 AND b <= 15 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE a <= 11 AND b >= 14 ALLOW FILTERING"),
+                    row(11, 15, 16, 17));
+
+            Object[][] res = getRows(execute("SELECT * FROM %s WHERE a < 11 ALLOW FILTERING"));
+            assertEquals(0, res.length);
+            res = getRows(execute("SELECT * FROM %s WHERE b > 32 ALLOW FILTERING"));
+            assertEquals(0, res.length);
+        });
+
+        // Checks filtering with unset
+        assertInvalidMessage("Unsupported unset value for column a",
+                             "SELECT * FROM %s WHERE a = ? ALLOW FILTERING",
+                             unset());
+        assertInvalidMessage("Unsupported unset value for column a",
+                             "SELECT * FROM %s WHERE a > ? ALLOW FILTERING",
+                             unset());
+
+        // No clustering key
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, PRIMARY KEY ((a, b)))");
+
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (11, 15, 16, 17)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (21, 22, 23, 24)");
+        execute("INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)");
+
+        beforeAndAfterFlush(() -> {
+
+             assertInvalidMessage("IN restrictions are not supported when the query involves filtering",
+                    "SELECT * FROM %s WHERE b in (11,12) ALLOW FILTERING");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a = 11");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a > 11");
+
+            assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a > 11 and b = 1");
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 11 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17),
+                    row(31, 32, 33, 34),
+                    row(21, 22, 23, 24));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 11 AND b <= 15 ALLOW FILTERING"),
+                    row(11, 12, 13, 14),
+                    row(11, 15, 16, 17));
+
+            assertRows(execute("SELECT * FROM %s WHERE a <= 11 AND b >= 14 ALLOW FILTERING"),
+                    row(11, 15, 16, 17));
+        });
+
+        // ----------------------------------------------
+        // one partition key
+        // ----------------------------------------------
+        createTable("CREATE TABLE %s (a int primary key, b int, c int)");
+
+        execute("INSERT INTO %s (a, b, c) VALUES (1, 2, 4)");
+        execute("INSERT INTO %s (a, b, c) VALUES (2, 1, 6)");
+        execute("INSERT INTO %s (a, b, c) VALUES (3, 2, 4)");
+        execute("INSERT INTO %s (a, b, c) VALUES (4, 1, 7)");
+
+        // Adds tomstones
+        execute("INSERT INTO %s (a, b, c) VALUES (0, 1, 4)");
+        execute("INSERT INTO %s (a, b, c) VALUES (5, 2, 7)");
+        execute("DELETE FROM %s WHERE a = 0");
+        execute("DELETE FROM %s WHERE a = 5");
+
+        beforeAndAfterFlush(() -> {
+            assertRows(execute("SELECT * FROM %s WHERE a = 1 ALLOW FILTERING"),
+                    row(1, 2, 4));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 1 ALLOW FILTERING"),
+                    row(1, 2, 4),
+                    row(2, 1, 6),
+                    row(4, 1, 7),
+                    row(3, 2, 4));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 1 AND b >= 2  ALLOW FILTERING"),
+                    row(1, 2, 4),
+                    row(3, 2, 4));
+
+            assertRows(execute("SELECT * FROM %s WHERE a >= 1 AND b >= 2 AND c <= 4 ALLOW FILTERING"),
+                    row(1, 2, 4),
+                    row(3, 2, 4));
+        });
+    }
+

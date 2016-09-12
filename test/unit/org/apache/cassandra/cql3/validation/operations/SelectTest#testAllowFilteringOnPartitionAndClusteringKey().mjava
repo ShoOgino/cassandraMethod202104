@@ -1,0 +1,68 @@
+    @Test
+    public void testAllowFilteringOnPartitionAndClusteringKey() throws Throwable
+    {
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d))");
+
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 12, 13, 14, 15)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 15, 16, 17, 18)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (21, 22, 23, 24, 25)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (31, 32, 33, 34, 35)");
+
+        beforeAndAfterFlush(() -> {
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 AND b = 15 AND c = 16"),
+                    row(11, 15, 16, 17, 18));
+
+            assertInvalidMessage(
+                    "Clustering column \"d\" cannot be restricted (preceding column \"c\" is restricted by a non-EQ relation)",
+                    "SELECT * FROM %s WHERE a = 11 AND b = 12 AND c > 13 AND d = 14");
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 AND b = 15 AND c = 16 AND d > 16"),
+                    row(11, 15, 16, 17, 18));
+
+            assertRows(execute("SELECT * FROM %s WHERE a = 11 AND b = 15 AND c > 13 AND d >= 17 ALLOW FILTERING"),
+                    row(11, 15, 16, 17, 18));
+            assertInvalidMessage(
+                    "Clustering column \"d\" cannot be restricted (preceding column \"c\" is restricted by a non-EQ relation)",
+                    "SELECT * FROM %s WHERE a = 11 AND b = 12 AND c > 13 AND d > 17");
+
+            assertRows(execute("SELECT * FROM %s WHERE c > 30 AND d >= 34 ALLOW FILTERING"),
+                    row(31, 32, 33, 34, 35));
+
+            assertRows(execute("SELECT * FROM %s WHERE a <= 11 AND c > 15 AND d >= 16 ALLOW FILTERING"),
+                    row(11, 15, 16, 17, 18));
+
+            assertRows(execute("SELECT * FROM %s WHERE a <= 11 AND b >= 15 AND c > 15 AND d >= 16 ALLOW FILTERING"),
+                    row(11, 15, 16, 17, 18));
+
+            assertRows(execute("SELECT * FROM %s WHERE a <= 100 AND b >= 15 AND c > 0 AND d <= 100 ALLOW FILTERING"),
+                    row(11, 15, 16, 17, 18),
+                    row(31, 32, 33, 34, 35),
+                    row(21, 22, 23, 24, 25));
+
+            assertInvalidMessage(
+                    "Clustering column \"d\" cannot be restricted (preceding column \"c\" is restricted by a non-EQ relation)",
+                    "SELECT * FROM %s WHERE a <= 11 AND c > 15 AND d >= 16");
+        });
+
+        // test clutering order
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d)) WITH CLUSTERING ORDER BY (c DESC)");
+
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 11, 13, 14, 15)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 11, 14, 17, 18)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 12, 15, 14, 15)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (11, 12, 16, 17, 18)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (21, 11, 23, 24, 25)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (21, 11, 24, 34, 35)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (21, 12, 25, 24, 25)");
+        execute("INSERT INTO %s (a,b,c,d,e) VALUES (21, 12, 26, 34, 35)");
+
+        beforeAndAfterFlush(() -> {
+            assertRowsIgnoringOrder(execute("SELECT * FROM %s WHERE b >= 12 ALLOW FILTERING"),
+                                    row(11, 12, 15, 14, 15),
+                                    row(11, 12, 16, 17, 18),
+                                    row(21, 12, 25, 24, 25),
+                                    row(21, 12, 26, 34, 35));
+        });
+    }
+
