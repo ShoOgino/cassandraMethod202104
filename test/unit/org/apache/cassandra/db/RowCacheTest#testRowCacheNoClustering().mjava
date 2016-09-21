@@ -1,0 +1,68 @@
+    @Test
+    public void testRowCacheNoClustering() throws Exception
+    {
+        CompactionManager.instance.disableAutoCompaction();
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE_CACHED);
+        ColumnFamilyStore cachedStore  = keyspace.getColumnFamilyStore(CF_CACHEDNOCLUSTER);
+
+        // empty the row cache
+        CacheService.instance.invalidateRowCache();
+
+        // set global row cache size to 1 MB
+        CacheService.instance.setRowCacheCapacityInMB(1);
+
+        // inserting 100 rows into column family
+        SchemaLoader.insertData(KEYSPACE_CACHED, CF_CACHEDNOCLUSTER, 0, 100);
+
+        // now reading rows one by one and checking if row cache grows
+        for (int i = 0; i < 100; i++)
+        {
+            DecoratedKey key = Util.dk("key" + i);
+
+            Util.getAll(Util.cmd(cachedStore, key).build());
+
+            assertEquals(CacheService.instance.rowCache.size(), i + 1);
+            assert(cachedStore.containsCachedParition(key)); // current key should be stored in the cache
+        }
+
+        // insert 10 more keys
+        SchemaLoader.insertData(KEYSPACE_CACHED, CF_CACHEDNOCLUSTER, 100, 10);
+
+        for (int i = 100; i < 110; i++)
+        {
+            DecoratedKey key = Util.dk("key" + i);
+
+            Util.getAll(Util.cmd(cachedStore, key).build());
+            assert cachedStore.containsCachedParition(key); // cache should be populated with the latest rows read (old ones should be popped)
+
+            // checking if cell is read correctly after cache
+            CachedPartition cp = cachedStore.getRawCachedPartition(key);
+            try (UnfilteredRowIterator ai = cp.unfilteredIterator(ColumnFilter.selection(cp.columns()), Slices.ALL, false))
+            {
+                assert ai.hasNext();
+                Row r = (Row)ai.next();
+                assertFalse(ai.hasNext());
+
+                Iterator<Cell> ci = r.cells().iterator();
+                assert(ci.hasNext());
+                Cell cell = ci.next();
+
+                assert cell.column().name.bytes.equals(ByteBufferUtil.bytes("val"));
+                assert cell.value().equals(ByteBufferUtil.bytes("val" + i));
+            }
+        }
+
+        // clear 100 rows from the cache
+        int keysLeft = 109;
+        for (int i = 109; i >= 10; i--)
+        {
+            cachedStore.invalidateCachedPartition(Util.dk("key" + i));
+            assert CacheService.instance.rowCache.size() == keysLeft;
+            keysLeft--;
+        }
+
+        CacheService.instance.setRowCacheCapacityInMB(0);
+
+    }
+
