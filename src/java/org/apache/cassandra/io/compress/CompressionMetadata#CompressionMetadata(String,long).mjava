@@ -1,0 +1,42 @@
+    @VisibleForTesting
+    public CompressionMetadata(String indexFilePath, long compressedLength)
+    {
+        this.indexFilePath = indexFilePath;
+
+        try (DataInputStream stream = new DataInputStream(new FileInputStream(indexFilePath)))
+        {
+            String compressorName = stream.readUTF();
+            int optionCount = stream.readInt();
+            Map<String, String> options = new HashMap<>(optionCount);
+            for (int i = 0; i < optionCount; ++i)
+            {
+                String key = stream.readUTF();
+                String value = stream.readUTF();
+                options.put(key, value);
+            }
+            int chunkLength = stream.readInt();
+            try
+            {
+                parameters = new CompressionParams(compressorName, chunkLength, options);
+            }
+            catch (ConfigurationException e)
+            {
+                throw new RuntimeException("Cannot create CompressionParams for stored parameters", e);
+            }
+
+            dataLength = stream.readLong();
+            compressedFileLength = compressedLength;
+            chunkOffsets = readChunkOffsets(stream);
+        }
+        catch (FileNotFoundException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (IOException e)
+        {
+            throw new CorruptSSTableException(e, indexFilePath);
+        }
+
+        this.chunkOffsetsSize = chunkOffsets.size();
+    }
+

@@ -34,12 +34,6 @@
                 //   - we're querying static columns.
                 boolean needSeekAtPartitionStart = !indexEntry.isIndexed() || !columns.fetchedColumns().statics.isEmpty();
 
-                // For CQL queries on static compact tables, we only want to consider static value (only those are exposed),
-                // but readStaticRow have already read them and might in fact have consumed the whole partition (when reading
-                // the legacy file format), so set the reader to null so we don't try to read anything more. We can remove this
-                // once we drop support for the legacy file format
-                boolean needsReader = sstable.descriptor.version.storeRows() || isForThrift || !sstable.metadata.isStaticCompactTable();
-
                 if (needSeekAtPartitionStart)
                 {
                     // Not indexed (or is reading static), set to the beginning of the partition and read partition level deletion there
@@ -53,14 +47,14 @@
 
                     // Note that this needs to be called after file != null and after the partitionDeletion has been set, but before readStaticRow
                     // (since it uses it) so we can't move that up (but we'll be able to simplify as soon as we drop support for the old file format).
-                    this.reader = needsReader ? createReader(indexEntry, file, shouldCloseFile) : null;
-                    this.staticRow = readStaticRow(sstable, file, helper, columns.fetchedColumns().statics, isForThrift, reader == null ? null : reader.deserializer);
+                    this.reader = createReader(indexEntry, file, shouldCloseFile);
+                    this.staticRow = readStaticRow(sstable, file, helper, columns.fetchedColumns().statics, isForThrift, reader.deserializer);
                 }
                 else
                 {
                     this.partitionLevelDeletion = indexEntry.deletionTime();
                     this.staticRow = Rows.EMPTY_STATIC_ROW;
-                    this.reader = needsReader ? createReader(indexEntry, file, shouldCloseFile) : null;
+                    this.reader = createReader(indexEntry, file, shouldCloseFile);
                 }
 
                 if (reader != null && !slices.isEmpty())

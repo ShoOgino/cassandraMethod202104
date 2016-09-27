@@ -1,0 +1,89 @@
+    /**
+     * Parse a sstable filename, extracting both the {@code Descriptor} and {@code Component} part.
+     *
+     * @param file the {@code File} object for the filename to parse.
+     * @return a pair of the descriptor and component corresponding to the provided {@code file}.
+     *
+     * @throws IllegalArgumentException if the provided {@code file} does point to a valid sstable filename. This could
+     * mean either that the filename doesn't look like a sstable file, or that it is for an old and unsupported
+     * versions.
+     */
+    public static Pair<Descriptor, Component> fromFilenameWithComponent(File file)
+    {
+        // We need to extract the keyspace and table names from the parent directories, so make sure we deal with the
+        // absolute path.
+        if (!file.isAbsolute())
+            file = file.getAbsoluteFile();
+
+        String name = file.getName();
+        List<String> tokens = filenameSplitter.splitToList(name);
+        int size = tokens.size();
+
+        if (size != 4)
+        {
+            // This is an invalid sstable file for this version. But to provide a more helpful error message, we detect
+            // old format sstable, which had the format:
+            //   <keyspace>-<table>-(tmp-)?<version>-<gen>-<component>
+            // Note that we assume it's an old format sstable if it has the right number of tokens: this is not perfect
+            // but we're just trying to be helpful, not perfect.
+            if (size == 5 || size == 6)
+                throw new IllegalArgumentException(String.format("%s is of version %s which is now unsupported and cannot be read.",
+                                                                 name,
+                                                                 tokens.get(size - 3)));
+            throw new IllegalArgumentException(String.format("Invalid sstable file %s: the name doesn't look like a supported sstable file name", name));
+        }
+
+        String versionString = tokens.get(0);
+        if (!Version.validate(versionString))
+            throw invalidSSTable(name, "invalid version %s", versionString);
+
+        int generation;
+        try
+        {
+            generation = Integer.parseInt(tokens.get(1));
+        }
+        catch (NumberFormatException e)
+        {
+            throw invalidSSTable(name, "the 'generation' part of the name doesn't parse as a number");
+        }
+
+        String formatString = tokens.get(2);
+        SSTableFormat.Type format;
+        try
+        {
+            format = SSTableFormat.Type.validate(formatString);
+        }
+        catch (IllegalArgumentException e)
+        {
+            throw invalidSSTable(name, "unknown 'format' part (%s)", formatString);
+        }
+
+        Component component = Component.parse(tokens.get(3));
+
+        Version version = format.info.getVersion(versionString);
+        if (!version.isCompatible())
+            throw invalidSSTable(name, "incompatible sstable version (%s); you should have run upgradesstables before upgrading", versionString);
+
+        File directory = parentOf(name, file);
+        File tableDir = directory;
+
+        // Check if it's a 2ndary index directory (not that it doesn't exclude it to be also a backup or snapshot)
+        String indexName = "";
+        if (tableDir.getName().startsWith(Directories.SECONDARY_INDEX_NAME_SEPARATOR))
+        {
+            indexName = tableDir.getName();
+            tableDir = parentOf(name, tableDir);
+        }
+
+        // Then it can be a backup or a snapshot
+        if (tableDir.getName().equals(Directories.BACKUPS_SUBDIR))
+            tableDir = tableDir.getParentFile();
+        else if (parentOf(name, tableDir).getName().equals(Directories.SNAPSHOT_SUBDIR))
+            tableDir = parentOf(name, parentOf(name, tableDir));
+
+        String table = tableDir.getName().split("-")[0] + indexName;
+        String keyspace = parentOf(name, tableDir).getName();
+
+        return Pair.create(new Descriptor(version, directory, keyspace, table, generation, format), component);
+    }
+
