@@ -24,15 +24,17 @@
                 performAnticompaction(cfs, ranges, sstables, modifier, repairedAt);
             }
         };
-        if (executor.isShutdown())
-        {
-            logger.info("Compaction executor has shut down, not submitting anticompaction");
-            sstables.release();
-            return Futures.immediateCancelledFuture();
-        }
 
-        ListenableFutureTask<?> task = ListenableFutureTask.create(runnable, null);
-        executor.submit(task);
-        return task;
+        ListenableFuture<?> ret = null;
+        try
+        {
+            ret = executor.submitIfRunning(runnable, "anticompaction");
+            return ret;
+        }
+        finally
+        {
+            if (ret == null || ret.isCancelled())
+                sstables.release();
+        }
     }
 

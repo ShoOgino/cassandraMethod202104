@@ -21,16 +21,10 @@
                 return AllSSTableOpStatus.SUCCESSFUL;
             }
 
-            List<Future<Object>> futures = new ArrayList<>();
+            List<Future<?>> futures = new ArrayList<>();
 
             for (final SSTableReader sstable : sstables)
             {
-                if (executor.isShutdown())
-                {
-                    logger.info("Executor has shut down, not submitting task");
-                    return AllSSTableOpStatus.ABORTED;
-                }
-
                 final LifecycleTransaction txn = compacting.split(singleton(sstable));
                 transactions.add(txn);
                 Callable<Object> callable = new Callable<Object>()
@@ -42,7 +36,12 @@
                         return this;
                     }
                 };
-                futures.add(executor.submit(callable));
+                Future<?> fut = executor.submitIfRunning(callable, "paralell sstable operation");
+                if (!fut.isCancelled())
+                    futures.add(fut);
+                else
+                    return AllSSTableOpStatus.ABORTED;
+
                 if (jobs > 0 && futures.size() == jobs)
                 {
                     FBUtilities.waitOnFutures(futures);
