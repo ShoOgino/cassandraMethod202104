@@ -1,0 +1,48 @@
+    @Test
+    public void testUpdateStatement() throws Exception
+    {
+        final String KS = "cql_keyspace6";
+        final String TABLE = "table6";
+
+        final String schema = "CREATE TABLE " + KS + "." + TABLE + " ("
+                              + "  k int,"
+                              + "  c1 int,"
+                              + "  c2 int,"
+                              + "  v text,"
+                              + "  PRIMARY KEY (k, c1, c2)"
+                              + ")";
+
+        File tempdir = Files.createTempDir();
+        File dataDir = new File(tempdir.getAbsolutePath() + File.separator + KS + File.separator + TABLE);
+        assert dataDir.mkdirs();
+
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .forTable(schema)
+                                                  .using("UPDATE " + KS + "." + TABLE + " SET v = ? " +
+                                                         "WHERE k = ? AND c1 = ? AND c2 = ?")
+                                                  .build();
+
+        writer.addRow("a", 1, 2, 3);
+        writer.addRow("b", 4, 5, 6);
+        writer.addRow(null, 7, 8, 9);
+        writer.close();
+        loadSSTables(dataDir, KS);
+
+        UntypedResultSet resultSet = QueryProcessor.executeInternal("SELECT * FROM " + KS + "." + TABLE);
+        assertEquals(2, resultSet.size());
+
+        Iterator<UntypedResultSet.Row> iter = resultSet.iterator();
+        UntypedResultSet.Row r1 = iter.next();
+        assertEquals(1, r1.getInt("k"));
+        assertEquals(2, r1.getInt("c1"));
+        assertEquals(3, r1.getInt("c2"));
+        assertEquals("a", r1.getString("v"));
+        UntypedResultSet.Row r2 = iter.next();
+        assertEquals(4, r2.getInt("k"));
+        assertEquals(5, r2.getInt("c1"));
+        assertEquals(6, r2.getInt("c2"));
+        assertEquals("b", r2.getString("v"));
+        assertFalse(iter.hasNext());
+    }
+
