@@ -1,0 +1,35 @@
+    @Test
+    public void testSparseTableCqlInserts() throws Throwable
+    {
+        execute(String.format("insert into %s.%s (key, column1, col1, col2) values ('key1', 'val1', 1, 2)", KEYSPACE, currentSparseTable()));
+        execute(String.format("insert into %s.%s (key, column1, col1, col2) values ('key1', 'val2', 3, 4)", KEYSPACE, currentSparseTable()));
+        execute(String.format("insert into %s.%s (key, column1, col1, col2) values ('key2', 'val1', 5, 6)", KEYSPACE, currentSparseTable()));
+        execute(String.format("insert into %s.%s (key, column1, col1, col2) values ('key2', 'val2', 7, 8)", KEYSPACE, currentSparseTable()));
+
+        assertRows(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentSparseTable())),
+                   row("key1", "val1", 1L, 2L),
+                   row("key1", "val2", 3L, 4L),
+                   row("key2", "val1", 5L, 6L),
+                   row("key2", "val2", 7L, 8L));
+
+        execute(String.format("truncate %s.%s", KEYSPACE, currentSparseTable()));
+
+        execute(String.format("insert into %s.%s (key, column1) values ('key1', 'val1')", KEYSPACE, currentSparseTable()));
+        assertRows(execute(String.format("select * from %s.%s", KEYSPACE, currentSparseTable())));
+
+        execute(String.format("insert into %s.%s (key, column1, col1) values ('key1', 'val1', 1)", KEYSPACE, currentSparseTable()));
+        execute(String.format("insert into %s.%s (key, column1, col2) values ('key1', 'val1', 2)", KEYSPACE, currentSparseTable()));
+        assertRows(execute(String.format("select * from %s.%s", KEYSPACE, currentSparseTable())),
+                   row("key1", "val1", 1L, 2L));
+
+        Cassandra.Client client = getClient();
+        ColumnPath path = new ColumnPath(currentSparseTable());
+        path.setSuper_column(ByteBufferUtil.bytes("val1"));
+
+        ColumnOrSuperColumn cosc = client.get(ByteBufferUtil.bytes("key1"), path, ONE);
+        assertEquals(cosc.getSuper_column().columns.get(0).value, ByteBufferUtil.bytes(1L));
+        assertEquals(cosc.getSuper_column().columns.get(0).name, ByteBufferUtil.bytes("col1"));
+        assertEquals(cosc.getSuper_column().columns.get(1).value, ByteBufferUtil.bytes(2L));
+        assertEquals(cosc.getSuper_column().columns.get(1).name, ByteBufferUtil.bytes("col2"));
+    }
+

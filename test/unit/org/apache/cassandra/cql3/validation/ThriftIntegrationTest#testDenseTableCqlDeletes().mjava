@@ -1,0 +1,64 @@
+    @Test
+    public void testDenseTableCqlDeletes() throws Throwable
+    {
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key1', 'val1', 1, 'value1')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key1', 'val1', 2, 'value2')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key1', 'val2', 4, 'value4')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key1', 'val2', 5, 'value5')", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key2', 'val1', 1, 'value1')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key2', 'val1', 2, 'value2')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key2', 'val2', 4, 'value4')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key2', 'val2', 5, 'value5')", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("DELETE FROM %s.%s WHERE key = 'key1' AND column1 = 'val2' AND column2 = 5", KEYSPACE, currentDenseTable()));
+        assertRows(execute(String.format("SELECT * FROM %s.%s WHERE key = 'key1'", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val1", 2, "value2"),
+                   row("key1", "val2", 4, "value4"));
+        execute(String.format("DELETE FROM %s.%s WHERE key = 'key1' AND column1 = 'val2'", KEYSPACE, currentDenseTable()));
+        assertRows(execute(String.format("SELECT * FROM %s.%s WHERE key = 'key1'", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val1", 2, "value2"));
+        execute(String.format("DELETE FROM %s.%s WHERE key = 'key1'", KEYSPACE, currentDenseTable()));
+        assertEmpty(execute(String.format("SELECT * FROM %s.%s WHERE key = 'key1'", KEYSPACE, currentDenseTable())));
+
+        Cassandra.Client client = getClient();
+
+        Mutation mutation1 = new Mutation();
+        SlicePredicate slicePredicate = new SlicePredicate();
+        slicePredicate.setSlice_range(new SliceRange(ByteBufferUtil.bytes("val1"), ByteBufferUtil.bytes("val1"), false, 1));
+        Deletion deletion1 = new Deletion();
+        deletion1.setTimestamp(FBUtilities.timestampMicros());
+        deletion1.setPredicate(slicePredicate);
+        mutation1.setDeletion(deletion1);
+        client.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes("key2"),
+                                                     Collections.singletonMap(currentDenseTable(), Arrays.asList(mutation1))),
+                            ONE);
+        assertRows(execute(String.format("SELECT * FROM %s.%s WHERE key = 'key2'", KEYSPACE, currentDenseTable())),
+                   row("key2", "val2", 4, "value4"),
+                   row("key2", "val2", 5, "value5"));
+
+        Mutation mutation2 = new Mutation();
+        Deletion deletion2 = new Deletion();
+        deletion2.setTimestamp(FBUtilities.timestampMicros());
+        deletion2.setSuper_column(ByteBufferUtil.bytes("val2"));
+        mutation2.setDeletion(deletion2);
+        client.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes("key2"),
+                                                     Collections.singletonMap(currentDenseTable(), Arrays.asList(mutation2))),
+                            ONE);
+
+        assertEmpty(execute(String.format("SELECT * FROM %s.%s WHERE key = 'key2'", KEYSPACE, currentDenseTable())));
+
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key1', 'val1', 1, 'value1')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key2', 'val1', 1, 'value1')", KEYSPACE, currentDenseTable()));
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES ('key3', 'val1', 1, 'value1')", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("DELETE FROM %s.%s WHERE key IN ('key1', 'key2')", KEYSPACE, currentDenseTable()));
+        assertRows(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())),
+                   row("key3", "val1", 1, "value1"));
+
+        assertInvalidMessage("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: (column1, column2) = ('val1', 1)",
+                             String.format("DELETE FROM %s.%s WHERE key = 'key3' AND (column1, column2) = ('val1', 1)", KEYSPACE, currentDenseTable()));
+    }
+
