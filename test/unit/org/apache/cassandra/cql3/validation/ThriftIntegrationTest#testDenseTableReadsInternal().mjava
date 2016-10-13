@@ -1,0 +1,118 @@
+    private void testDenseTableReadsInternal() throws Throwable
+    {
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s", KEYSPACE, currentDenseTable()));
+        assertEquals("key", resultSet.metadata().get(0).name.toString());
+        assertEquals("column1", resultSet.metadata().get(1).name.toString());
+        assertEquals("column2", resultSet.metadata().get(2).name.toString());
+        assertEquals("value", resultSet.metadata().get(3).name.toString());
+
+
+        assertRows(resultSet,
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val1", 2, "value2"),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"),
+                   row("key2", "val1", 1, "value1"),
+                   row("key2", "val1", 2, "value2"),
+                   row("key2", "val2", 4, "value4"),
+                   row("key2", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s LIMIT 5", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val1", 2, "value2"),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"),
+                   row("key2", "val1", 1, "value1"));
+
+        assertRows(execute(String.format("select value, column2, column1, key from %s.%s", KEYSPACE, currentDenseTable())),
+                   row("value1", 1, "val1", "key1"),
+                   row("value2", 2, "val1", "key1"),
+                   row("value4", 4, "val2", "key1"),
+                   row("value5", 5, "val2", "key1"),
+                   row("value1", 1, "val1", "key2"),
+                   row("value2", 2, "val1", "key2"),
+                   row("value4", 4, "val2", "key2"),
+                   row("value5", 5, "val2", "key2"));
+
+        assertRows(execute(String.format("select * from %s.%s WHERE key = ? AND column1 = ?", KEYSPACE, currentDenseTable()), "key1", "val2"),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s where key IN ('key1', 'key2') and column1 = 'val1' and column2 = 2", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 2, "value2"),
+                   row("key2", "val1", 2, "value2"));
+        assertRows(execute(String.format("select * from %s.%s where key IN ('key1', 'key2') and column1 = 'val1' and column2 > 1", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 2, "value2"),
+                   row("key2", "val1", 2, "value2"));
+        assertRows(execute(String.format("select * from %s.%s where key IN ('key1', 'key2') and column1 = 'val1' and column2 >= 2", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 2, "value2"),
+                   row("key2", "val1", 2, "value2"));
+        assertEmpty(execute(String.format("select * from %s.%s where key IN ('key1', 'key2') and column1 = 'val1' and column2 > 2", KEYSPACE, currentDenseTable())));
+
+        assertRows(execute(String.format("select column2, key from %s.%s WHERE key = ? AND column1 = ? and column2 = 5", KEYSPACE, currentDenseTable()), "key1", "val2"),
+                   row(5, "key1"));
+        assertRows(execute(String.format("select * from %s.%s WHERE key = ? AND column1 = ? and column2 >= ?", KEYSPACE, currentDenseTable()), "key1", "val2", 5),
+                   row("key1", "val2", 5, "value5"));
+        assertRows(execute(String.format("select * from %s.%s WHERE key = ? AND column1 = ? and column2 > ?", KEYSPACE, currentDenseTable()), "key1", "val2", 4),
+                   row("key1", "val2", 5, "value5"));
+        assertRows(execute(String.format("select * from %s.%s WHERE key = ? AND column1 = ? and column2 < ?", KEYSPACE, currentDenseTable()), "key1", "val2", 5),
+                   row("key1", "val2", 4, "value4"));
+        assertRows(execute(String.format("select * from %s.%s WHERE key = ? AND column1 = ? and column2 <= ?", KEYSPACE, currentDenseTable()), "key1", "val2", 5),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and column1 in ('val1', 'val2') and column2 IN (1, 4)", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val2", 4, "value4"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and column1 in ('val1', 'val2')", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"),
+                   row("key1", "val1", 2, "value2"),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and column1 in ('val1', 'val2') and column2 = 1", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and (column1, column2) = ('val2', 4)", KEYSPACE, currentDenseTable())),
+                   row("key1", "val2", 4, "value4"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and (column1, column2) >= ('val2', 4)", KEYSPACE, currentDenseTable())),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and (column1, column2) > ('val1', 1)", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 2, "value2"),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        assertRows(execute(String.format("select * from %s.%s where key = 'key1' and (column1, column2) > ('val2', 1)", KEYSPACE, currentDenseTable())),
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+
+        resultSet = execute(String.format("select key as a, column1 as b, column2 as c, value as d " +
+                                          "from %s.%s WHERE key = ? AND column1 = ?", KEYSPACE, currentDenseTable()), "key1", "val2");
+        assertRows(resultSet,
+                   row("key1", "val2", 4, "value4"),
+                   row("key1", "val2", 5, "value5"));
+        assertEquals(resultSet.metadata().get(2).type, Int32Type.instance);
+        assertEquals(resultSet.metadata().get(3).type, AsciiType.instance);
+
+        assertRows(execute(String.format("select column2, value from %s.%s WHERE key = ? AND column1 = ?", KEYSPACE, currentDenseTable()), "key1", "val2"),
+                   row(4, "value4"),
+                   row(5, "value5"));
+
+        assertRows(execute(String.format("select column1, value from %s.%s WHERE key = ? AND column1 = ?", KEYSPACE, currentDenseTable()), "key2", "val1"),
+                   row("val1", "value1"),
+                   row("val1", "value2"));
+
+        assertInvalidMessage("Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns",
+                             String.format("CREATE INDEX ON %s.%s (column2)", KEYSPACE, currentDenseTable()));
+        assertInvalidMessage("Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns",
+                             String.format("CREATE INDEX ON %s.%s (value)", KEYSPACE, currentDenseTable()));
+
+        assertRows(execute(String.format("SELECT JSON * FROM %s.%s WHERE key = ? AND column1 = ?", KEYSPACE, currentDenseTable()), "key1", "val2"),
+                   row("{\"key\": \"key1\", \"column1\": \"val2\", \"column2\": 4, \"value\": \"value4\"}"),
+                   row("{\"key\": \"key1\", \"column1\": \"val2\", \"column2\": 5, \"value\": \"value5\"}"));
+    }
+

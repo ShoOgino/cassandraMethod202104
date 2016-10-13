@@ -1,0 +1,55 @@
+    @Test
+    public void testLwt() throws Throwable
+    {
+        assertRows(execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES (?, ?, ?, ?) IF NOT EXISTS", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "value1"),
+                   row(true));
+        assertRows(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "value1"));
+        assertRows(execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES (?, ?, ?, ?) IF NOT EXISTS", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "value1"),
+                   row(false, "key1", "val1", 1, "value1"));
+
+        // in 2.2 this query was a no-op
+        assertInvalidMessage("Lightweight transactions on SuperColumn tables are only supported with supplied SuperColumn key",
+                             String.format("UPDATE %s.%s SET value = 'changed' WHERE key = ? AND column1 = ? IF value = ?", KEYSPACE, currentDenseTable()));
+
+        assertRows(execute(String.format("UPDATE %s.%s SET value = 'changed' WHERE key = ? AND column1 = ? AND column2 = ? IF value = ?", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "value1"),
+                   row(true));
+        assertRows(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "changed"));
+        assertRows(execute(String.format("UPDATE %s.%s SET value = 'changed' WHERE key = ? AND column1 = ? AND column2 = ? IF value = ?", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "value1"),
+                   row(false, "changed"));
+
+        assertRows(execute(String.format("UPDATE %s.%s SET value = 'changed2' WHERE key = ? AND column1 = ? AND column2 = ? IF value > ?", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "a"),
+                   row(true));
+        assertRows(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())),
+                   row("key1", "val1", 1, "changed2"));
+        assertRows(execute(String.format("UPDATE %s.%s SET value = 'changed2' WHERE key = ? AND column1 = ? AND column2 = ? IF value < ?", KEYSPACE, currentDenseTable()),
+                           "key1", "val1", 1, "a"),
+                   row(false, "changed2"));
+
+        assertInvalidMessage("PRIMARY KEY column 'column2' cannot have IF conditions",
+                             String.format("UPDATE %s.%s SET value = 'changed2' WHERE key = ? AND column1 = ? AND column2 = ? IF value > ? AND column2 = ?", KEYSPACE, currentDenseTable()));
+
+        assertInvalidMessage("Lightweight transactions on SuperColumn tables are only supported with supplied SuperColumn key",
+                             String.format("UPDATE %s.%s SET value = 'changed2' WHERE key = ? AND column1 = ? IF value > ?", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("DELETE FROM %s.%s WHERE key = 'key1' AND column1 = 'val1' AND column2 = 1 IF EXISTS", KEYSPACE, currentDenseTable()));
+        assertEmpty(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())));
+
+        execute(String.format("INSERT INTO %s.%s (key, column1, column2, value) VALUES (?, ?, ?, ?)", KEYSPACE, currentDenseTable()),
+                "key1", "val1", 1, "value1");
+
+        assertRows(execute(String.format("DELETE FROM %s.%s WHERE key = 'key1' AND column1 = 'val1' AND column2 = 1 IF value = 'value1'", KEYSPACE, currentDenseTable())),
+                   row(true));
+        assertEmpty(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())));
+
+        assertRows(execute(String.format("DELETE FROM %s.%s WHERE key = 'key1' AND column1 = 'val1' AND column2 = 1 IF value = 'value1'", KEYSPACE, currentDenseTable())),
+                   row(false));
+        assertEmpty(execute(String.format("SELECT * FROM %s.%s", KEYSPACE, currentDenseTable())));
+    }
+

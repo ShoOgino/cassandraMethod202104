@@ -2,22 +2,49 @@
     // are kept because they are often useful in a different format.
     private void rebuild()
     {
-        this.comparator = new ClusteringComparator(extractTypes(clusteringColumns));
+        if (isCompactTable())
+        {
+            this.compactValueColumn = isSuper() ?
+                                      SuperColumnCompatibility.getCompactValueColumn(partitionColumns) :
+                                      CompactTables.getCompactValueColumn(partitionColumns);
+        }
 
-        Map<ByteBuffer, ColumnDefinition> newColumnMetadata = new HashMap<>();
-        for (ColumnDefinition def : partitionKeyColumns)
-            newColumnMetadata.put(def.name.bytes, def);
-        for (ColumnDefinition def : clusteringColumns)
-            newColumnMetadata.put(def.name.bytes, def);
-        for (ColumnDefinition def : partitionColumns)
-            newColumnMetadata.put(def.name.bytes, def);
+        Map<ByteBuffer, ColumnDefinition> newColumnMetadata = Maps.newHashMapWithExpectedSize(partitionKeyColumns.size() + clusteringColumns.size() + partitionColumns.size());
 
+        if (isSuper() && isDense())
+        {
+            CompactTables.DefaultNames defaultNames = SuperColumnCompatibility.columnNameGenerator(partitionKeyColumns, clusteringColumns, partitionColumns);
+            if (superCfKeyColumn == null)
+                superCfKeyColumn = SuperColumnCompatibility.getSuperCfKeyColumn(this, clusteringColumns, defaultNames);
+            if (superCfValueColumn == null)
+                superCfValueColumn = SuperColumnCompatibility.getSuperCfValueColumn(this, partitionColumns, superCfKeyColumn, defaultNames);
+
+            for (ColumnDefinition def : partitionKeyColumns)
+                newColumnMetadata.put(def.name.bytes, def);
+            newColumnMetadata.put(clusteringColumns.get(0).name.bytes, clusteringColumns.get(0));
+            newColumnMetadata.put(superCfKeyColumn.name.bytes, SuperColumnCompatibility.getSuperCfSschemaRepresentation(superCfKeyColumn));
+            newColumnMetadata.put(superCfValueColumn.name.bytes, superCfValueColumn);
+            newColumnMetadata.put(compactValueColumn.name.bytes, compactValueColumn);
+            clusteringColumns = Arrays.asList(clusteringColumns().get(0));
+            partitionColumns = PartitionColumns.of(compactValueColumn);
+        }
+        else
+        {
+            for (ColumnDefinition def : partitionKeyColumns)
+                newColumnMetadata.put(def.name.bytes, def);
+            for (ColumnDefinition def : clusteringColumns)
+                newColumnMetadata.put(def.name.bytes, def);
+            for (ColumnDefinition def : partitionColumns)
+                newColumnMetadata.put(def.name.bytes, def);
+        }
         this.columnMetadata = newColumnMetadata;
 
         List<AbstractType<?>> keyTypes = extractTypes(partitionKeyColumns);
         this.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
 
-        if (isCompactTable())
-            this.compactValueColumn = CompactTables.getCompactValueColumn(partitionColumns, isSuper());
+        if (isSuper())
+            this.comparator = new ClusteringComparator(clusteringColumns.get(0).type);
+        else
+            this.comparator = new ClusteringComparator(extractTypes(clusteringColumns));
     }
 

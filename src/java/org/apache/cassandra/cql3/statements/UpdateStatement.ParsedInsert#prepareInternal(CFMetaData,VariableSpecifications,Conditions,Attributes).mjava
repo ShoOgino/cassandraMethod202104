@@ -17,24 +17,33 @@
             Operations operations = new Operations(type);
             boolean hasClusteringColumnsSet = false;
 
-            for (int i = 0; i < columnNames.size(); i++)
+            if (cfm.isSuper() && cfm.isDense())
             {
-                ColumnDefinition def = getColumnDefinition(cfm, columnNames.get(i));
-
-                if (def.isClusteringColumn())
-                    hasClusteringColumnsSet = true;
-
-                Term.Raw value = columnValues.get(i);
-
-                if (def.isPrimaryKeyColumn())
+                // SuperColumn familiy updates are always row-level
+                hasClusteringColumnsSet = true;
+                SuperColumnCompatibility.prepareInsertOperations(cfm, columnNames, whereClause, columnValues, boundNames, operations);
+            }
+            else
+            {
+                for (int i = 0; i < columnNames.size(); i++)
                 {
-                    whereClause.add(new SingleColumnRelation(columnNames.get(i), Operator.EQ, value));
-                }
-                else
-                {
-                    Operation operation = new Operation.SetValue(value).prepare(keyspace(), def);
-                    operation.collectMarkerSpecification(boundNames);
-                    operations.add(operation);
+                    ColumnDefinition def = getColumnDefinition(cfm, columnNames.get(i));
+
+                    if (def.isClusteringColumn())
+                        hasClusteringColumnsSet = true;
+
+                    Term.Raw value = columnValues.get(i);
+
+                    if (def.isPrimaryKeyColumn())
+                    {
+                        whereClause.add(new SingleColumnRelation(columnNames.get(i), Operator.EQ, value));
+                    }
+                    else
+                    {
+                        Operation operation = new Operation.SetValue(value).prepare(cfm.ksName, def);
+                        operation.collectMarkerSpecification(boundNames);
+                        operations.add(operation);
+                    }
                 }
             }
 

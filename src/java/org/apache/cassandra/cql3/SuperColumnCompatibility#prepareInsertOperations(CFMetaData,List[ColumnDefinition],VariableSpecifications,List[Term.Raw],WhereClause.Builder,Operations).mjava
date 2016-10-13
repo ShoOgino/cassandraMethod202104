@@ -1,0 +1,47 @@
+    private static void prepareInsertOperations(CFMetaData cfm,
+                                                List<ColumnDefinition> defs,
+                                                VariableSpecifications boundNames,
+                                                List<Term.Raw> columnValues,
+                                                WhereClause.Builder whereClause,
+                                                Operations operations)
+    {
+        assert cfm.isDense();
+        assert defs.size() == columnValues.size();
+
+        Term.Raw superColumnKey = null;
+        Term.Raw superColumnValue = null;
+
+        for (int i = 0, size = defs.size(); i < size; i++)
+        {
+            ColumnDefinition def = defs.get(i);
+            Term.Raw raw = columnValues.get(i);
+
+            if (cfm.isSuperColumnKeyColumn(def))
+            {
+                superColumnKey = raw;
+                collectMarkerSpecifications(raw, boundNames, def);
+            }
+            else if (cfm.isSuperColumnValueColumn(def))
+            {
+                superColumnValue = raw;
+                collectMarkerSpecifications(raw, boundNames, def);
+            }
+            else if (def.isPrimaryKeyColumn())
+            {
+                whereClause.add(new SingleColumnRelation(new ColumnIdentifier.ColumnIdentifierValue(def.name), Operator.EQ, raw));
+            }
+            else
+            {
+                throw invalidRequest("Invalid column {} in where clause");
+            }
+        }
+
+        checkTrue(superColumnValue != null,
+                  "Column value is mandatory for SuperColumn tables");
+        checkTrue(superColumnKey != null,
+                  "Column key is mandatory for SuperColumn tables");
+
+        Operation operation = new Operation.SetElement(superColumnKey, superColumnValue).prepare(cfm.ksName, cfm.compactValueColumn());
+        operations.add(operation);
+    }
+

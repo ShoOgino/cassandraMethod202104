@@ -1,0 +1,48 @@
+    /**
+     * For _dense_ SuperColumn Families, the supercolumn key column has to be translated to the collection subselection
+     * query in order to avoid reading an entire collection and then filtering out the results.
+     */
+    public static ColumnFilter getColumnFilter(CFMetaData cfm, QueryOptions queryOptions, SuperColumnRestrictions restrictions)
+    {
+        assert cfm.isSuper() && cfm.isDense();
+
+        ColumnFilter.Builder builder = ColumnFilter.selectionBuilder();
+        builder.add(cfm.compactValueColumn());
+
+        if (restrictions.keySliceRestriction != null)
+        {
+            SingleColumnRestriction.SuperColumnKeySliceRestriction restriction = restrictions.keySliceRestriction;
+            TermSlice slice = restriction.slice;
+
+            ByteBuffer start = slice.hasBound(Bound.START) ? slice.bound(Bound.START).bindAndGet(queryOptions) : null;
+            ByteBuffer end = slice.hasBound(Bound.END) ? slice.bound(Bound.END).bindAndGet(queryOptions) : null;
+
+            builder.slice(cfm.compactValueColumn(),
+                          start == null ? CellPath.BOTTOM : CellPath.create(start),
+                          end == null ? CellPath.TOP : CellPath.create(end));
+        }
+        else if (restrictions.keyEQRestriction != null)
+        {
+            SingleColumnRestriction.SuperColumnKeyEQRestriction restriction = restrictions.keyEQRestriction;
+            ByteBuffer value = restriction.bindValue(queryOptions);
+            builder.select(cfm.compactValueColumn(), CellPath.create(value));
+        }
+        else if (restrictions.keyINRestriction != null)
+        {
+            SingleColumnRestriction.SuperColumnKeyINRestriction cast = restrictions.keyINRestriction;
+            Set<ByteBuffer> keyINRestrictionValues = new TreeSet<ByteBuffer>(((MapType) cfm.compactValueColumn().type).getKeysType());
+            keyINRestrictionValues.addAll(cast.getValues(queryOptions));
+
+            for (ByteBuffer value : keyINRestrictionValues)
+                builder.select(cfm.compactValueColumn(), CellPath.create(value));
+        }
+        else if (restrictions.multiEQRestriction != null)
+        {
+            SingleColumnRestriction.SuperColumnMultiEQRestriction restriction = restrictions.multiEQRestriction;
+            ByteBuffer value = restriction.secondValue;
+            builder.select(cfm.compactValueColumn(), CellPath.create(value));
+        }
+
+        return builder.build();
+    }
+
