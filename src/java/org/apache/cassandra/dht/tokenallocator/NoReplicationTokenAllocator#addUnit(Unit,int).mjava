@@ -1,0 +1,105 @@
+    public Collection<Token> addUnit(Unit newUnit, int numTokens)
+    {
+        assert !tokensInUnits.containsKey(newUnit);
+
+        Map<Object, GroupInfo> groups = Maps.newHashMap();
+        UnitInfo<Unit> newUnitInfo = new UnitInfo<>(newUnit, 0, groups, strategy);
+        Map<Unit, UnitInfo<Unit>> unitInfos = createUnitInfos(groups);
+
+        if (unitInfos.isEmpty())
+            return generateRandomTokens(newUnitInfo, numTokens, unitInfos);
+
+        if (numTokens > sortedTokens.size())
+            return generateRandomTokens(newUnitInfo, numTokens, unitInfos);
+
+        TokenInfo<Unit> head = createTokenInfos(unitInfos);
+
+        // Select the nodes we will work with, extract them from sortedUnits and calculate targetAverage
+        double targetAverage = 0.0;
+        double sum = 0.0;
+        List<Weighted<UnitInfo>> unitsToChange = new ArrayList<>();
+
+        for (int i = 0; i < numTokens; i++)
+        {
+            Weighted<UnitInfo> unit = sortedUnits.peek();
+
+            if (unit == null)
+                break;
+
+            sum += unit.weight;
+            double average = sum / (unitsToChange.size() + 2); // unit and newUnit must be counted
+            if (unit.weight <= average)
+                // No point to include later nodes, target can only decrease from here.
+                break;
+
+            sortedUnits.remove();
+            unitsToChange.add(unit);
+            targetAverage = average;
+        }
+
+        List<Token> newTokens = Lists.newArrayListWithCapacity(numTokens);
+
+        int nr = 0;
+        // calculate the tokens
+        for (Weighted<UnitInfo> unit : unitsToChange)
+        {
+            // TODO: Any better ways to assign how many tokens to change in each node?
+            int tokensToChange = numTokens / unitsToChange.size() + (nr < numTokens % unitsToChange.size() ? 1 : 0);
+
+            Queue<Weighted<TokenInfo>> unitTokens = tokensInUnits.get(unit.value.unit);
+            List<Weighted<TokenInfo>> tokens = Lists.newArrayListWithCapacity(tokensToChange);
+
+            double workWeight = 0;
+            // Extract biggest vnodes and calculate how much weight we can work with.
+            for (int i = 0; i < tokensToChange; i++)
+            {
+                Weighted<TokenInfo> wt = unitTokens.remove();
+                tokens.add(wt);
+                workWeight += wt.weight;
+                unit.value.ownership -= wt.weight;
+            }
+
+            double toTakeOver = unit.weight - targetAverage;
+            // Split toTakeOver proportionally between the vnodes.
+            for (Weighted<TokenInfo> wt : tokens)
+            {
+                double slice;
+                Token token;
+
+                if (toTakeOver < workWeight)
+                {
+                    // Spread decrease.
+                    slice = toTakeOver / workWeight;
+
+                    if (slice < MIN_TAKEOVER_RATIO)
+                        slice = MIN_TAKEOVER_RATIO;
+                    if (slice > MAX_TAKEOVER_RATIO)
+                        slice = MAX_TAKEOVER_RATIO;
+                }
+                else
+                {
+                    slice = MAX_TAKEOVER_RATIO;
+                }
+                token = partitioner.split(wt.value.prevInRing().token, wt.value.token, slice);
+
+                //Token selected, now change all data
+                sortedTokens.put(token, newUnit);
+
+                TokenInfo<Unit> ti = new TokenInfo<>(token, newUnitInfo);
+
+                ti.insertAfter(head, wt.value.prevInRing());
+
+                populateTokenInfoAndAdjustUnit(ti);
+                populateTokenInfoAndAdjustUnit(wt.value);
+                newTokens.add(token);
+            }
+
+            // adjust the weight for current unit
+            sortedUnits.add(new Weighted<>(unit.value.ownership, unit.value));
+            ++nr;
+        }
+        sortedUnits.add(new Weighted<>(newUnitInfo.ownership, newUnitInfo));
+
+        return newTokens;
+    }
+
