@@ -2,11 +2,8 @@
         {
             Connection connection = ctx.channel().attr(Connection.attributeKey).get();
             // The only case the connection can be null is when we send the initial STARTUP message (client side thus)
-            int version = connection == null ? Server.CURRENT_VERSION : connection.getVersion();
-
+            ProtocolVersion version = connection == null ? ProtocolVersion.CURRENT : connection.getVersion();
             EnumSet<Frame.Header.Flag> flags = EnumSet.noneOf(Frame.Header.Flag.class);
-            if (version == Server.BETA_VERSION)
-                flags.add(Frame.Header.Flag.USE_BETA);
 
             Codec<Message> codec = (Codec<Message>)message.type.codec;
             try
@@ -22,13 +19,13 @@
                     List<String> warnings = ((Response)message).getWarnings();
                     if (warnings != null)
                     {
-                        if (version < Server.VERSION_4)
+                        if (version.isSmallerThan(ProtocolVersion.V4))
                             throw new ProtocolException("Must not send frame with WARNING flag for native protocol version < 4");
                         messageSize += CBUtil.sizeOfStringList(warnings);
                     }
                     if (customPayload != null)
                     {
-                        if (version < Server.VERSION_4)
+                        if (version.isSmallerThan(ProtocolVersion.V4))
                             throw new ProtocolException("Must not send frame with CUSTOM_PAYLOAD flag for native protocol version < 4");
                         messageSize += CBUtil.sizeOfBytesMap(customPayload);
                     }
@@ -77,9 +74,13 @@
 
                 // if the driver attempted to connect with a protocol version lower than the minimum supported
                 // version, respond with a protocol error message with the correct frame header for that version
-                int responseVersion = message.forcedProtocolVersion == null
+                ProtocolVersion responseVersion = message.forcedProtocolVersion == null
                                     ? version
                                     : message.forcedProtocolVersion;
+
+                if (responseVersion.isBeta())
+                    flags.add(Frame.Header.Flag.USE_BETA);
+
                 results.add(Frame.create(message.type, message.getStreamId(), responseVersion, flags, body));
             }
             catch (Throwable e)

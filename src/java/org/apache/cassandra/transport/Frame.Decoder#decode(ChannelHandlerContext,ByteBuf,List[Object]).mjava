@@ -21,9 +21,8 @@
             // 1 and 2 use a shorter header, so we may never have a complete header's worth of bytes.
             int firstByte = buffer.getByte(idx++);
             Message.Direction direction = Message.Direction.extractFromVersion(firstByte);
-            int version = firstByte & PROTOCOL_VERSION_MASK;
-            if (version < Server.MIN_SUPPORTED_VERSION)
-                throw new ProtocolException(protocolVersionExceptionMessage(version), version);
+            int versionNum = firstByte & PROTOCOL_VERSION_MASK;
+            ProtocolVersion version = ProtocolVersion.decode(versionNum);
 
             // Wait until we have the complete header
             if (readableBytes < Header.LENGTH)
@@ -31,17 +30,10 @@
 
             int flags = buffer.getByte(idx++);
             EnumSet<Header.Flag> decodedFlags = Header.Flag.deserialize(flags);
-            if (version > Server.CURRENT_VERSION)
-            {
-                if (version == Server.BETA_VERSION)
-                {
-                    if (!decodedFlags.contains(Header.Flag.USE_BETA))
-                        throw new ProtocolException(String.format("Beta version of the protocol used (%d), but USE_BETA flag is unset",
-                                                                  version));
-                }
-                else
-                    throw new ProtocolException(protocolVersionExceptionMessage(version));
-            }
+
+            if (version.isBeta() && !decodedFlags.contains(Header.Flag.USE_BETA))
+                throw new ProtocolException(String.format("Beta version of the protocol used (%s), but USE_BETA flag is unset", version),
+                                            version);
 
             int streamId = buffer.getShort(idx);
             idx += 2;
@@ -79,7 +71,7 @@
             // extract body
             ByteBuf body = buffer.slice(idx, (int) bodyLength);
             body.retain();
-            
+
             idx += bodyLength;
             buffer.readerIndex(idx);
 
@@ -95,7 +87,7 @@
             {
                 throw ErrorMessage.wrap(
                         new ProtocolException(String.format(
-                                "Invalid message version. Got %d but previous messages on this connection had version %d",
+                                "Invalid message version. Got %s but previous messages on this connection had version %s",
                                 version, connection.getVersion())),
                         streamId);
             }
