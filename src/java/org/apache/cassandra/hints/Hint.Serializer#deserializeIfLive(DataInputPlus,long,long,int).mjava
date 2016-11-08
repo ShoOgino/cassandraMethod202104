@@ -1,0 +1,22 @@
+        /**
+         * Will short-circuit Mutation deserialization if the hint is definitely dead. If a Hint instance is
+         * returned, there is a chance it's live, if gcgs on one of the table involved got reduced between
+         * hint creation and deserialization, but this does not impact correctness - an extra liveness check will
+         * also be performed on the receiving end.
+         *
+         * @return null if the hint is definitely dead, a Hint instance if it's likely live
+         */
+        @Nullable
+        Hint deserializeIfLive(DataInputPlus in, long now, long size, int version) throws IOException
+        {
+            long creationTime = in.readLong();
+            int gcgs = (int) in.readUnsignedVInt();
+            int bytesRead = sizeof(creationTime) + sizeofUnsignedVInt(gcgs);
+
+            if (isLive(creationTime, now, gcgs))
+                return new Hint(Mutation.serializer.deserialize(in, version), creationTime, gcgs);
+
+            in.skipBytesFully(Ints.checkedCast(size) - bytesRead);
+            return null;
+        }
+

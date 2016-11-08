@@ -1,0 +1,25 @@
+    @BeforeClass
+    public static void setupClass() throws Exception
+    {
+        System.setProperty("cassandra.maxHintTTL", Integer.toString(TTL));
+        SchemaLoader.prepareServer();
+        TableMetadata tbm = CreateTableStatement.parse("CREATE TABLE tbl (k INT PRIMARY KEY, v INT)", "ks").gcGraceSeconds(GC_GRACE).build();
+        SchemaLoader.createKeyspace("ks", KeyspaceParams.simple(1), tbm);
+
+        int nowInSeconds = FBUtilities.nowInSeconds();
+        liveHint = makeHint(tbm, 1, nowInSeconds, GC_GRACE);
+        ttldHint = makeHint(tbm, 2, nowInSeconds - (TTL + 1), GC_GRACE);
+
+
+        File directory = Files.createTempDirectory(null).toFile();
+        HintsDescriptor descriptor = new HintsDescriptor(UUIDGen.getTimeUUID(), s2m(nowInSeconds));
+
+        try (HintsWriter writer = HintsWriter.create(directory, descriptor);
+             HintsWriter.Session session = writer.newSession(ByteBuffer.allocate(1024)))
+        {
+            session.append(liveHint);
+            session.append(ttldHint);
+            hintFile = writer.getFile();
+        }
+    }
+

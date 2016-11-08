@@ -1,0 +1,33 @@
+        /**
+         * Will short-circuit ByteBuffer allocation if the hint is definitely dead. If a ByteBuffer instance is
+         * returned, there is a chance it's live, if gcgs on one of the table involved got reduced between
+         * hint creation and deserialization, but this does not impact correctness - an extra liveness check will
+         * also be performed on the receiving end.
+         *
+         * @return null if the hint is definitely dead, a ByteBuffer instance if it's likely live
+         */
+        @Nullable
+        ByteBuffer readBufferIfLive(DataInputPlus in, long now, int size, int version) throws IOException
+        {
+            int maxHeaderSize = Math.min(sizeof(Long.MAX_VALUE) + VIntCoding.MAX_SIZE, size);
+            byte[] header = new byte[maxHeaderSize];
+            in.readFully(header);
+
+            try (DataInputBuffer input = new DataInputBuffer(header))
+            {
+                long creationTime = input.readLong();
+                int gcgs = (int) input.readUnsignedVInt();
+
+                if (!isLive(creationTime, now, gcgs))
+                {
+                    in.skipBytesFully(size - maxHeaderSize);
+                    return null;
+                }
+            }
+
+            byte[] bytes = new byte[size];
+            System.arraycopy(header, 0, bytes, 0, header.length);
+            in.readFully(bytes, header.length, size - header.length);
+            return ByteBuffer.wrap(bytes);
+        }
+
