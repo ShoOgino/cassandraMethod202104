@@ -1,0 +1,43 @@
+    private void alterKeyspace(KeyspaceDiff delta)
+    {
+        // drop tables and views
+        delta.views.dropped.forEach(this::dropView);
+        delta.tables.dropped.forEach(this::dropTable);
+
+        load(delta.after);
+
+        // add tables and views
+        delta.tables.created.forEach(this::createTable);
+        delta.views.created.forEach(this::createView);
+
+        // update tables and views
+        delta.tables.altered.forEach(diff -> alterTable(diff.after));
+        delta.views.altered.forEach(diff -> alterView(diff.after));
+
+        // deal with all removed, added, and altered views
+        Keyspace.open(delta.after.name).viewManager.reload(true);
+
+        // notify on everything dropped
+        delta.udas.dropped.forEach(uda -> notifyDropAggregate((UDAggregate) uda));
+        delta.udfs.dropped.forEach(udf -> notifyDropFunction((UDFunction) udf));
+        delta.views.dropped.forEach(this::notifyDropView);
+        delta.tables.dropped.forEach(this::notifyDropTable);
+        delta.types.dropped.forEach(this::notifyDropType);
+
+        // notify on everything created
+        delta.types.created.forEach(this::notifyCreateType);
+        delta.tables.created.forEach(this::notifyCreateTable);
+        delta.views.created.forEach(this::notifyCreateView);
+        delta.udfs.created.forEach(udf -> notifyCreateFunction((UDFunction) udf));
+        delta.udas.created.forEach(uda -> notifyCreateAggregate((UDAggregate) uda));
+
+        // notify on everything altered
+        if (!delta.before.params.equals(delta.after.params))
+            notifyAlterKeyspace(delta.before, delta.after);
+        delta.types.altered.forEach(diff -> notifyAlterType(diff.before, diff.after));
+        delta.tables.altered.forEach(diff -> notifyAlterTable(diff.before, diff.after));
+        delta.views.altered.forEach(diff -> notifyAlterView(diff.before, diff.after));
+        delta.udfs.altered.forEach(diff -> notifyAlterFunction(diff.before, diff.after));
+        delta.udas.altered.forEach(diff -> notifyAlterAggregate(diff.before, diff.after));
+    }
+

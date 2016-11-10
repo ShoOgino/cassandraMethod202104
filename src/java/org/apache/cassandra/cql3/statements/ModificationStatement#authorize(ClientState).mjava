@@ -1,0 +1,24 @@
+    public void authorize(ClientState state) throws InvalidRequestException, UnauthorizedException
+    {
+        state.ensureTablePermission(metadata, Permission.MODIFY);
+
+        // CAS updates can be used to simulate a SELECT query, so should require Permission.SELECT as well.
+        if (hasConditions())
+            state.ensureTablePermission(metadata, Permission.SELECT);
+
+        // MV updates need to get the current state from the table, and might update the views
+        // Require Permission.SELECT on the base table, and Permission.MODIFY on the views
+        Iterator<ViewMetadata> views = View.findAll(keyspace(), columnFamily()).iterator();
+        if (views.hasNext())
+        {
+            state.ensureTablePermission(metadata, Permission.SELECT);
+            do
+            {
+                state.ensureTablePermission(views.next().metadata, Permission.MODIFY);
+            } while (views.hasNext());
+        }
+
+        for (Function function : getFunctions())
+            state.ensurePermission(Permission.EXECUTE, function);
+    }
+

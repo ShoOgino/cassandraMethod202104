@@ -1,0 +1,48 @@
+        private void renameColumn(KeyspaceMetadata keyspace,
+                                  TableMetadata table,
+                                  ColumnMetadata.Raw oldName,
+                                  ColumnMetadata.Raw newName,
+                                  TableMetadata.Builder tableBuilder,
+                                  Views.Builder viewsBuilder)
+        {
+            ColumnIdentifier oldColumnName = oldName.getIdentifier(table);
+            ColumnIdentifier newColumnName = newName.getIdentifier(table);
+
+            ColumnMetadata column = table.getColumn(oldColumnName);
+            if (null == column)
+                throw ire("Column %s was not found in table %s", oldColumnName, table);
+
+            if (!column.isPrimaryKeyColumn())
+                throw ire("Cannot rename non PRIMARY KEY column %s", oldColumnName);
+
+            if (null != table.getColumn(newColumnName))
+            {
+                throw ire("Cannot rename column %s to %s in table '%s'; another column with that name already exists",
+                          oldColumnName,
+                          newColumnName,
+                          table);
+            }
+
+            // TODO: some day try and find a way to not rely on Keyspace/IndexManager/Index to find dependent indexes
+            Set<IndexMetadata> dependentIndexes = Keyspace.openAndGetStore(table).indexManager.getDependentIndexes(column);
+            if (!dependentIndexes.isEmpty())
+            {
+                throw ire("Can't rename column %s because it has dependent secondary indexes (%s)",
+                          oldColumnName,
+                          join(", ", transform(dependentIndexes, i -> i.name)));
+            }
+
+            for (ViewMetadata view : keyspace.views.forTable(table.id))
+            {
+                if (view.includes(oldColumnName))
+                {
+                    ColumnIdentifier oldViewColumn = oldName.getIdentifier(view.metadata);
+                    ColumnIdentifier newViewColumn = newName.getIdentifier(view.metadata);
+
+                    viewsBuilder.put(viewsBuilder.get(view.name()).withRenamedPrimaryKeyColumn(oldViewColumn, newViewColumn));
+                }
+            }
+
+            tableBuilder.renamePrimaryKeyColumn(oldColumnName, newColumnName);
+        }
+

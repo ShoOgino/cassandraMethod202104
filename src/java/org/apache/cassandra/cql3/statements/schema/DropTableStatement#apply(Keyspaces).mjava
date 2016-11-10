@@ -1,0 +1,30 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+
+        TableMetadata table = null == keyspace
+                            ? null
+                            : keyspace.getTableOrViewNullable(tableName);
+
+        if (null == table)
+        {
+            if (ifExists)
+                return schema;
+
+            throw ire("Table '%s.%s' doesn't exist", keyspaceName, tableName);
+        }
+
+        if (table.isView())
+            throw ire("Cannot use DROP TABLE on a materialized view. Please use DROP MATERIALIZED VIEW instead.");
+
+        Iterable<ViewMetadata> views = keyspace.views.forTable(table.id);
+        if (!isEmpty(views))
+        {
+            throw ire("Cannot drop a table when materialized views still depend on it (%s)",
+                      keyspaceName,
+                      join(", ", transform(views, ViewMetadata::name)));
+        }
+
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.tables.without(table)));
+    }
+

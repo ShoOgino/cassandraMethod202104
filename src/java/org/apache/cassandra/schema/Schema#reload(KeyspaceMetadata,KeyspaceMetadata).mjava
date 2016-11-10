@@ -1,50 +1,33 @@
     private void reload(KeyspaceMetadata previous, KeyspaceMetadata updated)
     {
         Keyspace keyspace = getKeyspaceInstance(updated.name);
-        if (keyspace != null)
+        if (null != keyspace)
             keyspace.setMetadata(updated);
 
-        MapDifference<TableId, TableMetadata> tablesDiff = previous.tables.diff(updated.tables);
-        MapDifference<TableId, ViewMetadata> viewsDiff = previous.views.diff(updated.views);
+        Tables.TablesDiff tablesDiff = Tables.diff(previous.tables, updated.tables);
+        Views.ViewsDiff viewsDiff = Views.diff(previous.views, updated.views);
+
         MapDifference<String, TableMetadata> indexesDiff = previous.tables.indexesDiff(updated.tables);
 
         // clean up after removed entries
-
-        tablesDiff.entriesOnlyOnLeft()
-                  .values()
-                  .forEach(table -> metadataRefs.remove(table.id));
-
-        viewsDiff.entriesOnlyOnLeft()
-                 .values()
-                 .forEach(view -> metadataRefs.remove(view.metadata.id));
+        tablesDiff.dropped.forEach(table -> metadataRefs.remove(table.id));
+        viewsDiff.dropped.forEach(view -> metadataRefs.remove(view.metadata.id));
 
         indexesDiff.entriesOnlyOnLeft()
                    .values()
                    .forEach(indexTable -> indexMetadataRefs.remove(Pair.create(indexTable.keyspace, indexTable.indexName().get())));
 
         // load up new entries
-
-        tablesDiff.entriesOnlyOnRight()
-                  .values()
-                  .forEach(table -> metadataRefs.put(table.id, new TableMetadataRef(table)));
-
-        viewsDiff.entriesOnlyOnRight()
-                 .values()
-                 .forEach(view -> metadataRefs.put(view.metadata.id, new TableMetadataRef(view.metadata)));
+        tablesDiff.created.forEach(table -> metadataRefs.put(table.id, new TableMetadataRef(table)));
+        viewsDiff.created.forEach(view -> metadataRefs.put(view.metadata.id, new TableMetadataRef(view.metadata)));
 
         indexesDiff.entriesOnlyOnRight()
                    .values()
                    .forEach(indexTable -> indexMetadataRefs.put(Pair.create(indexTable.keyspace, indexTable.indexName().get()), new TableMetadataRef(indexTable)));
 
         // refresh refs to updated ones
-
-        tablesDiff.entriesDiffering()
-                  .values()
-                  .forEach(diff -> metadataRefs.get(diff.rightValue().id).set(diff.rightValue()));
-
-        viewsDiff.entriesDiffering()
-                 .values()
-                 .forEach(diff -> metadataRefs.get(diff.rightValue().metadata.id).set(diff.rightValue().metadata));
+        tablesDiff.altered.forEach(diff -> metadataRefs.get(diff.after.id).set(diff.after));
+        viewsDiff.altered.forEach(diff -> metadataRefs.get(diff.after.metadata.id).set(diff.after.metadata));
 
         indexesDiff.entriesDiffering()
                    .values()

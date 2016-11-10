@@ -1,0 +1,21 @@
+    public static KeyspacesDiff announce(SchemaTransformation transformation, boolean locally)
+    {
+        long now = FBUtilities.timestampMicros();
+
+        Future<Schema.TransformationResult> future =
+            StageManager.getStage(Stage.MIGRATION).submit(() -> Schema.instance.transform(transformation, locally, now));
+
+        Schema.TransformationResult result = Futures.getUnchecked(future);
+        if (!result.success)
+            throw result.exception;
+
+        if (locally || result.diff.isEmpty())
+            return result.diff;
+
+        for (InetAddressAndPort endpoint : Gossiper.instance.getLiveMembers())
+            if (shouldPushSchemaTo(endpoint))
+                pushSchemaMutation(endpoint, result.mutations);
+
+        return result.diff;
+    }
+

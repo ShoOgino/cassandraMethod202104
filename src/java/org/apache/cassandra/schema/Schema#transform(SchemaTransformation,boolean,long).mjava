@@ -1,0 +1,28 @@
+    public synchronized TransformationResult transform(SchemaTransformation transformation, boolean locally, long now)
+    {
+        KeyspacesDiff diff;
+        try
+        {
+            Keyspaces before = keyspaces;
+            Keyspaces after = transformation.apply(before);
+            diff = Keyspaces.diff(before, after);
+        }
+        catch (RuntimeException e)
+        {
+            return new TransformationResult(e);
+        }
+
+        if (diff.isEmpty())
+            return new TransformationResult(diff, Collections.emptyList());
+
+        Collection<Mutation> mutations = SchemaKeyspace.convertSchemaDiffToMutations(diff, now);
+        SchemaKeyspace.applyChanges(mutations);
+
+        merge(diff);
+        updateVersion();
+        if (!locally)
+            passiveAnnounceVersion();
+
+        return new TransformationResult(diff, mutations);
+    }
+

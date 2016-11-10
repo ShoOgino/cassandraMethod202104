@@ -1,0 +1,38 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+        if (null == keyspace)
+            throw ire("Keyspace '%s' doesn't exist", keyspaceName);
+
+        UserType existingType = keyspace.types.getNullable(bytes(typeName));
+        if (null != existingType)
+        {
+            if (ifNotExists)
+                return schema;
+
+            throw ire("A user type with name '%s' already exists", typeName);
+        }
+
+        Set<FieldIdentifier> usedNames = new HashSet<>();
+        for (FieldIdentifier name : fieldNames)
+            if (!usedNames.add(name))
+                throw ire("Duplicate field name '%s' in type '%s'", name, typeName);
+
+        for (CQL3Type.Raw type : rawFieldTypes)
+        {
+            if (type.isCounter())
+                throw ire("A user type cannot contain counters");
+
+            if (type.isUDT() && !type.isFrozen())
+                throw ire("A user type cannot contain non-frozen UDTs");
+        }
+
+        List<AbstractType<?>> fieldTypes =
+            rawFieldTypes.stream()
+                         .map(t -> t.prepare(keyspaceName, keyspace.types).getType())
+                         .collect(toList());
+
+        UserType udt = new UserType(keyspaceName, bytes(typeName), fieldNames, fieldTypes, true);
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.types.with(udt)));
+    }
+

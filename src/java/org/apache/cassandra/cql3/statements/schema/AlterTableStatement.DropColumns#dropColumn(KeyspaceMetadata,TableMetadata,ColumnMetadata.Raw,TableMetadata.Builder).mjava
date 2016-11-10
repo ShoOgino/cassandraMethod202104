@@ -1,0 +1,35 @@
+        private void dropColumn(KeyspaceMetadata keyspace, TableMetadata table, ColumnMetadata.Raw column, TableMetadata.Builder builder)
+        {
+            ColumnIdentifier name = column.getIdentifier(table);
+
+            ColumnMetadata currentColumn = table.getColumn(name);
+            if (null == currentColumn)
+                throw ire("Column %s was not found in table '%s'", name, table);
+
+            if (currentColumn.isPrimaryKeyColumn())
+                throw ire("Cannot drop PRIMARY KEY column %s", name);
+
+            /*
+             * Cannot allow dropping top-level columns of user defined types that aren't frozen because we cannot convert
+             * the type into an equivalent tuple: we only support frozen tuples currently. And as such we cannot persist
+             * the correct type in system_schema.dropped_columns.
+             */
+            if (currentColumn.type.isUDT() && currentColumn.type.isMultiCell())
+                throw ire("Cannot drop non-frozen column %s of user type %s", name, currentColumn.type.asCQL3Type());
+
+            // TODO: some day try and find a way to not rely on Keyspace/IndexManager/Index to find dependent indexes
+            Set<IndexMetadata> dependentIndexes = Keyspace.openAndGetStore(table).indexManager.getDependentIndexes(currentColumn);
+            if (!dependentIndexes.isEmpty())
+            {
+                throw ire("Cannot drop column %s because it has dependent secondary indexes (%s)",
+                          currentColumn,
+                          join(", ", transform(dependentIndexes, i -> i.name)));
+            }
+
+            if (!isEmpty(keyspace.views.forTable(table.id)))
+                throw ire("Cannot drop column %s on base table %s with materialized views", currentColumn, table.name);
+
+            builder.removeRegularOrStaticColumn(name);
+            builder.recordColumnDrop(currentColumn, timestamp);
+        }
+

@@ -1,0 +1,49 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        String name =
+            argumentsSpeficied
+          ? format("%s.%s(%s)", keyspaceName, aggregateName, join(", ", transform(arguments, CQL3Type.Raw::toString)))
+          : format("%s.%s", keyspaceName, aggregateName);
+
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+        if (null == keyspace)
+        {
+            if (ifExists)
+                return schema;
+
+            throw ire("Aggregate '%s' doesn't exist", name);
+        }
+
+        Collection<Function> aggregates = keyspace.functions.get(new FunctionName(keyspaceName, aggregateName));
+        if (aggregates.size() > 1 && !argumentsSpeficied)
+        {
+            throw ire("'DROP AGGREGATE %s' matches multiple function definitions; " +
+                      "specify the argument types by issuing a statement like " +
+                      "'DROP AGGREGATE %s (type, type, ...)'. You can use cqlsh " +
+                      "'DESCRIBE AGGREGATE %s' command to find all overloads",
+                      aggregateName, aggregateName, aggregateName);
+        }
+
+        arguments.stream()
+                 .filter(CQL3Type.Raw::isFrozen)
+                 .findFirst()
+                 .ifPresent(t -> { throw ire("Argument '%s' cannot be frozen; remove frozen<> modifier from '%s'", t, t); });
+
+        List<AbstractType<?>> argumentTypes = prepareArgumentTypes(keyspace.types);
+
+        Predicate<Function> filter = Functions.Filter.UDA;
+        if (argumentsSpeficied)
+            filter = filter.and(f -> Functions.typesMatch(f.argTypes(), argumentTypes));
+
+        Function aggregate = aggregates.stream().filter(filter).findAny().orElse(null);
+        if (null == aggregate)
+        {
+            if (ifExists)
+                return schema;
+
+            throw ire("Aggregate '%s' doesn't exist", name);
+        }
+
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.functions.without(aggregate)));
+    }
+

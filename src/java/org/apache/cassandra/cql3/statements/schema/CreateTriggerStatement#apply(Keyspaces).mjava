@@ -1,0 +1,35 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+        if (null == keyspace)
+            throw ire("Keyspace '%s' doesn't exist", keyspaceName);
+
+        TableMetadata table = keyspace.getTableOrViewNullable(tableName);
+        if (null == table)
+            throw ire("Table '%s' doesn't exist", tableName);
+
+        if (table.isView())
+            throw ire("Cannot CREATE TRIGGER for a materialized view");
+
+        TriggerMetadata existingTrigger = table.triggers.get(triggerName).orElse(null);
+        if (null != existingTrigger)
+        {
+            if (ifNotExists)
+                return schema;
+
+            throw ire("Trigger '%s' already exists", triggerName);
+        }
+
+        try
+        {
+            TriggerExecutor.instance.loadTriggerInstance(triggerClass);
+        }
+        catch (Exception e)
+        {
+            throw ire("Trigger class '%s' couldn't be loaded", triggerClass);
+        }
+
+        TableMetadata newTable = table.withSwapped(table.triggers.with(TriggerMetadata.create(triggerName, triggerClass)));
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.tables.withSwapped(newTable)));
+    }
+

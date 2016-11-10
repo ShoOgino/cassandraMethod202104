@@ -1,0 +1,52 @@
+        private void addColumn(KeyspaceMetadata keyspace,
+                               TableMetadata table,
+                               Column column,
+                               TableMetadata.Builder tableBuilder,
+                               Views.Builder viewsBuilder)
+        {
+            ColumnIdentifier name = column.name.getIdentifier(table);
+            AbstractType<?> type = column.type.prepare(keyspaceName, keyspace.types).getType();
+            boolean isStatic = column.isStatic;
+
+            if (null != tableBuilder.getColumn(name))
+                throw ire("Column with name '%s' already exists", name);
+
+            if (isStatic && table.clusteringColumns().isEmpty())
+                throw ire("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+
+            ColumnMetadata droppedColumn = table.getDroppedColumn(name.bytes);
+            if (null != droppedColumn)
+            {
+                // After #8099, not safe to re-add columns of incompatible types - until *maybe* deser logic with dropped
+                // columns is pushed deeper down the line. The latter would still be problematic in cases of schema races.
+                if (!droppedColumn.type.isValueCompatibleWith(type))
+                {
+                    throw ire("Cannot re-add a previously dropped column '%s' of type %s, incompatible with previous type %s",
+                              name,
+                              type.asCQL3Type(),
+                              droppedColumn.type.asCQL3Type());
+                }
+
+                // Cannot re-add a dropped counter column. See #7831.
+                if (table.isCounter())
+                    throw ire("Cannot re-add previously dropped counter column %s", name);
+            }
+
+            if (isStatic)
+                tableBuilder.addStaticColumn(name, type);
+            else
+                tableBuilder.addRegularColumn(name, type);
+
+            if (!isStatic)
+            {
+                for (ViewMetadata view : keyspace.views.forTable(table.id))
+                {
+                    if (view.includeAllColumns)
+                    {
+                        ColumnMetadata viewColumn = ColumnMetadata.regularColumn(view.metadata, name.bytes, type);
+                        viewsBuilder.put(viewsBuilder.get(view.name()).withAddedRegularColumn(viewColumn));
+                    }
+                }
+            }
+        }
+

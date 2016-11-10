@@ -1,0 +1,32 @@
+    public ResultMessage execute(QueryState state, boolean locally)
+    {
+        if (SchemaConstants.isLocalSystemKeyspace(keyspaceName))
+            throw ire("System keyspace '%s' is not user-modifiable", keyspaceName);
+
+        KeyspaceMetadata keyspace = Schema.instance.getKeyspaceMetadata(keyspaceName);
+        if (null != keyspace && keyspace.isVirtual())
+            throw ire("Virtual keyspace '%s' is not user-modifiable", keyspaceName);
+
+        validateKeyspaceName();
+
+        KeyspacesDiff diff = MigrationManager.announce(this, locally);
+
+        clientWarnings(diff).forEach(ClientWarn.instance::warn);
+
+        if (diff.isEmpty())
+            return new ResultMessage.Void();
+
+        /*
+         * When a schema alteration results in a new db object being created, we grant permissions on the new
+         * object to the user performing the request if:
+         * - the user is not anonymous
+         * - the configured IAuthorizer supports granting of permissions (not all do, AllowAllAuthorizer doesn't and
+         *   custom external implementations may not)
+         */
+        AuthenticatedUser user = state.getClientState().getUser();
+        if (null != user && !user.isAnonymous())
+            createdResources(diff).forEach(r -> grantPermissionsOnResource(r, user));
+
+        return new ResultMessage.SchemaChange(schemaChangeEvent(diff));
+    }
+

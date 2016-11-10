@@ -1,0 +1,58 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        String name =
+            argumentsSpeficied
+          ? format("%s.%s(%s)", keyspaceName, functionName, join(", ", transform(arguments, CQL3Type.Raw::toString)))
+          : format("%s.%s", keyspaceName, functionName);
+
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+        if (null == keyspace)
+        {
+            if (ifExists)
+                return schema;
+
+            throw ire("Function '%s' doesn't exist", name);
+        }
+
+        Collection<Function> functions = keyspace.functions.get(new FunctionName(keyspaceName, functionName));
+        if (functions.size() > 1 && !argumentsSpeficied)
+        {
+            throw ire("'DROP FUNCTION %s' matches multiple function definitions; " +
+                      "specify the argument types by issuing a statement like " +
+                      "'DROP FUNCTION %s (type, type, ...)'. You can use cqlsh " +
+                      "'DESCRIBE FUNCTION %s' command to find all overloads",
+                      functionName, functionName, functionName);
+        }
+
+        arguments.stream()
+                 .filter(CQL3Type.Raw::isFrozen)
+                 .findFirst()
+                 .ifPresent(t -> { throw ire("Argument '%s' cannot be frozen; remove frozen<> modifier from '%s'", t, t); });
+
+        List<AbstractType<?>> argumentTypes = prepareArgumentTypes(keyspace.types);
+
+        Predicate<Function> filter = Functions.Filter.UDF;
+        if (argumentsSpeficied)
+            filter = filter.and(f -> Functions.typesMatch(f.argTypes(), argumentTypes));
+
+        Function function = functions.stream().filter(filter).findAny().orElse(null);
+        if (null == function)
+        {
+            if (ifExists)
+                return schema;
+
+            throw ire("Function '%s' doesn't exist", name);
+        }
+
+        String dependentAggregates =
+            keyspace.functions
+                    .aggregatesUsingFunction(function)
+                    .map(a -> a.name().toString())
+                    .collect(joining(", "));
+
+        if (!dependentAggregates.isEmpty())
+            throw ire("Function '%s' is still referenced by aggregates %s", name, dependentAggregates);
+
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.functions.without(function)));
+    }
+

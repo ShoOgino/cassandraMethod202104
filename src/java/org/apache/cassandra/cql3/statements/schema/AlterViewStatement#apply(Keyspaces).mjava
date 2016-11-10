@@ -1,0 +1,33 @@
+    public Keyspaces apply(Keyspaces schema)
+    {
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+
+        ViewMetadata view = null == keyspace
+                          ? null
+                          : keyspace.views.getNullable(viewName);
+
+        if (null == view)
+            throw ire("Materialized view '%s.%s' doesn't exist", keyspaceName, viewName);
+
+        attrs.validate();
+
+        TableParams params = attrs.asAlteredTableParams(view.metadata.params);
+
+        if (params.gcGraceSeconds == 0)
+        {
+            throw ire("Cannot alter gc_grace_seconds of a materialized view to 0, since this " +
+                      "value is used to TTL undelivered updates. Setting gc_grace_seconds too " +
+                      "low might cause undelivered updates to expire before being replayed.");
+        }
+
+        if (params.defaultTimeToLive > 0)
+        {
+            throw ire("Cannot set or alter default_time_to_live for a materialized view. " +
+                      "Data in a materialized view always expire at the same time than " +
+                      "the corresponding data in the parent table.");
+        }
+
+        ViewMetadata newView = view.copy(view.metadata.withSwapped(params));
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.views.withSwapped(newView)));
+    }
+

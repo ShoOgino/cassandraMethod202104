@@ -9,7 +9,7 @@
         TableId baseTableId = TableId.fromUUID(row.getUUID("base_table_id"));
         String baseTableName = row.getString("base_table_name");
         boolean includeAll = row.getBoolean("include_all_columns");
-        String whereClause = row.getString("where_clause");
+        String whereClauseString = row.getString("where_clause");
 
         List<ColumnMetadata> columns = fetchColumns(keyspaceName, viewName, types);
 
@@ -21,9 +21,17 @@
                          .params(createTableParamsFromRow(row))
                          .build();
 
-        String rawSelect = View.buildSelectStatement(baseTableName, columns, whereClause);
-        SelectStatement.RawStatement rawStatement = (SelectStatement.RawStatement) QueryProcessor.parseStatement(rawSelect);
+        WhereClause whereClause;
 
-        return new ViewMetadata(keyspaceName, viewName, baseTableId, baseTableName, includeAll, rawStatement, whereClause, metadata);
+        try
+        {
+            whereClause = WhereClause.parse(whereClauseString);
+        }
+        catch (RecognitionException e)
+        {
+            throw new RuntimeException(format("Unexpected error while parsing materialized view's where clause for '%s' (got %s)", viewName, whereClauseString));
+        }
+
+        return new ViewMetadata(baseTableId, baseTableName, includeAll, whereClause, metadata);
     }
 

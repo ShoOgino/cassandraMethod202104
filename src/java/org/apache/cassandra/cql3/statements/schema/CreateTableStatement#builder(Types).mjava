@@ -1,0 +1,124 @@
+    public TableMetadata.Builder builder(Types types)
+    {
+        attrs.validate();
+        TableParams params = attrs.asNewTableParams();
+
+        // use a TreeMap to preserve ordering across JDK versions (see CASSANDRA-9492) - important for stable unit tests
+        Map<ColumnIdentifier, CQL3Type> columns = new TreeMap<>(comparing(o -> o.bytes));
+        rawColumns.forEach((column, type) -> columns.put(column, type.prepare(keyspaceName, types)));
+
+        // check for nested non-frozen UDTs or collections in a non-frozen UDT
+        columns.forEach((column, type) ->
+        {
+            if (type.isUDT() && type.getType().isMultiCell())
+            {
+                ((UserType) type.getType()).fieldTypes().forEach(field ->
+                {
+                    if (field.isMultiCell())
+                        throw ire("Non-frozen UDTs with nested non-frozen collections are not supported");
+                });
+            }
+        });
+
+        /*
+         * Deal with PRIMARY KEY columns
+         */
+
+        HashSet<ColumnIdentifier> primaryKeyColumns = new HashSet<>();
+        concat(partitionKeyColumns, clusteringColumns).forEach(column ->
+        {
+            CQL3Type type = columns.get(column);
+            if (null == type)
+                throw ire("Unknown column '%s' referenced in PRIMARY KEY for table '%s'", column, tableName);
+
+            if (!primaryKeyColumns.add(column))
+                throw ire("Duplicate column '%s' in PRIMARY KEY clause for table '%s'", column, tableName);
+
+            if (type.getType().isMultiCell())
+            {
+                if (type.isCollection())
+                    throw ire("Invalid non-frozen collection type %s for PRIMARY KEY column '%s'", type, column);
+                else
+                    throw ire("Invalid non-frozen user-defined type %s for PRIMARY KEY column '%s'", type, column);
+            }
+
+            if (type.getType().isCounter())
+                throw ire("counter type is not supported for PRIMARY KEY column '%s'", column);
+
+            if (type.getType().referencesDuration())
+                throw ire("duration type is not supported for PRIMARY KEY column '%s'", column);
+
+            if (staticColumns.contains(column))
+                throw ire("Static column '%s' cannot be part of the PRIMARY KEY", column);
+        });
+
+        List<AbstractType<?>> partitionKeyTypes = new ArrayList<>();
+        List<AbstractType<?>> clusteringTypes = new ArrayList<>();
+
+        partitionKeyColumns.forEach(column ->
+        {
+            CQL3Type type = columns.remove(column);
+            partitionKeyTypes.add(type.getType());
+        });
+
+        clusteringColumns.forEach(column ->
+        {
+            CQL3Type type = columns.remove(column);
+            boolean reverse = !clusteringOrder.getOrDefault(column, true);
+            clusteringTypes.add(reverse ? ReversedType.getInstance(type.getType()) : type.getType());
+        });
+
+        // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
+        // This wasn't previously enforced because of a bug in the implementation
+        if (!clusteringOrder.isEmpty() && !clusteringColumns.equals(new ArrayList<>(clusteringOrder.keySet())))
+            throw ire("Clustering key columns must exactly match columns in CLUSTERING ORDER BY directive");
+
+        // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
+        if (clusteringColumns.isEmpty() && !staticColumns.isEmpty())
+            throw ire("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+
+        /*
+         * Counter table validation
+         */
+
+        boolean hasCounters = rawColumns.values().stream().anyMatch(CQL3Type.Raw::isCounter);
+        if (hasCounters)
+        {
+            // We've handled anything that is not a PRIMARY KEY so columns only contains NON-PK columns. So
+            // if it's a counter table, make sure we don't have non-counter types
+            if (columns.values().stream().anyMatch(t -> !t.getType().isCounter()))
+                throw ire("Cannot mix counter and non counter columns in the same table");
+
+            if (params.defaultTimeToLive > 0)
+                throw ire("Cannot set %s on a table with counters", TableParams.Option.DEFAULT_TIME_TO_LIVE);
+        }
+
+        /*
+         * Create the builder
+         */
+
+        TableMetadata.Builder builder = TableMetadata.builder(keyspaceName, tableName);
+
+        if (attrs.hasProperty(TableAttributes.ID))
+            builder.id(attrs.getId());
+
+        builder.isCounter(hasCounters)
+               .params(params);
+
+        for (int i = 0; i < partitionKeyColumns.size(); i++)
+            builder.addPartitionKeyColumn(partitionKeyColumns.get(i), partitionKeyTypes.get(i));
+
+        for (int i = 0; i < clusteringColumns.size(); i++)
+            builder.addClusteringColumn(clusteringColumns.get(i), clusteringTypes.get(i));
+
+        columns.forEach((column, type) ->
+        {
+            if (staticColumns.contains(column))
+                builder.addStaticColumn(column, type.getType());
+            else
+                builder.addRegularColumn(column, type.getType());
+        });
+
+        return builder;
+    }
+

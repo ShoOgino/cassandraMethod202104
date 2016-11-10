@@ -1,0 +1,40 @@
+    private void validateIndexTarget(TableMetadata table, IndexTarget target)
+    {
+        ColumnMetadata column = table.getColumn(target.column);
+
+        if (null == column)
+            throw ire("Column '%s' doesn't exist", target.column);
+
+        if (column.type.referencesDuration())
+        {
+            if (column.type.isCollection())
+                throw ire("Secondary indexes are not supported on collections containing durations");
+
+            if (column.type.isTuple())
+                throw ire("Secondary indexes are not supported on tuples containing durations");
+
+            if (column.type.isUDT())
+                throw  ire("Secondary indexes are not supported on UDTs containing durations");
+
+            throw ire("Secondary indexes are not supported on duration columns");
+        }
+
+        if (column.isPartitionKey() && table.partitionKeyColumns().size() == 1)
+            throw ire("Cannot create secondary index on the only partition key column %s", column);
+
+        if (column.type.isFrozenCollection() && target.type != Type.FULL)
+            throw ire("Cannot create %s() index on frozen column %s. Frozen collections only support full() indexes", target.type, column);
+
+        if (!column.type.isFrozenCollection() && target.type == Type.FULL)
+            throw ire("full() indexes can only be created on frozen collections");
+
+        if (!column.type.isCollection() && target.type != Type.SIMPLE)
+            throw ire("Cannot create %s() index on %s. Non-collection columns only support simple indexes", target.type, column);
+
+        if (!(column.type instanceof MapType && column.type.isMultiCell()) && (target.type == Type.KEYS || target.type == Type.KEYS_AND_VALUES))
+            throw ire("Cannot create index on %s of column %s with non-map type", target.type, column);
+
+        if (column.type.isUDT() && column.type.isMultiCell())
+            throw ire("Cannot create index on non-frozen UDT column %s", column);
+    }
+

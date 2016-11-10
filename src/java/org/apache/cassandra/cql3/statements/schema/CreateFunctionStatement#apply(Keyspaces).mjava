@@ -1,0 +1,71 @@
+    // TODO: replace affected aggregates !!
+    public Keyspaces apply(Keyspaces schema)
+    {
+        if (ifNotExists && orReplace)
+            throw ire("Cannot use both 'OR REPLACE' and 'IF NOT EXISTS' directives");
+
+        UDFunction.assertUdfsEnabled(language);
+
+        if (new HashSet<>(argumentNames).size() != argumentNames.size())
+            throw ire("Duplicate argument names for given function %s with argument names %s", functionName, argumentNames);
+
+        rawArgumentTypes.stream()
+                        .filter(CQL3Type.Raw::isFrozen)
+                        .findFirst()
+                        .ifPresent(t -> { throw ire("Argument '%s' cannot be frozen; remove frozen<> modifier from '%s'", t, t); });
+
+        if (rawReturnType.isFrozen())
+            throw ire("Return type '%s' cannot be frozen; remove frozen<> modifier from '%s'", rawReturnType, rawReturnType);
+
+        KeyspaceMetadata keyspace = schema.getNullable(keyspaceName);
+        if (null == keyspace)
+            throw ire("Keyspace '%s' doesn't exist", keyspaceName);
+
+        List<AbstractType<?>> argumentTypes =
+            rawArgumentTypes.stream()
+                            .map(t -> t.prepare(keyspaceName, keyspace.types).getType())
+                            .collect(toList());
+        AbstractType<?> returnType = rawReturnType.prepare(keyspaceName, keyspace.types).getType();
+
+        UDFunction function =
+            UDFunction.create(new FunctionName(keyspaceName, functionName),
+                              argumentNames,
+                              argumentTypes,
+                              returnType,
+                              calledOnNullInput,
+                              language,
+                              body);
+
+        Function existingFunction = keyspace.functions.find(function.name(), argumentTypes).orElse(null);
+        if (null != existingFunction)
+        {
+            if (existingFunction.isAggregate())
+                throw ire("Function '%s' cannot replace an aggregate", functionName);
+
+            if (ifNotExists)
+                return schema;
+
+            if (!orReplace)
+                throw ire("Function '%s' already exists", functionName);
+
+            if (calledOnNullInput != ((UDFunction) existingFunction).isCalledOnNullInput())
+            {
+                throw ire("Function '%s' must have %s directive",
+                          functionName,
+                          calledOnNullInput ? "CALLED ON NULL INPUT" : "RETURNS NULL ON NULL INPUT");
+            }
+
+            if (!returnType.isCompatibleWith(existingFunction.returnType()))
+            {
+                throw ire("Cannot replace function '%s', the new return type %s is not compatible with the return type %s of existing function",
+                          functionName,
+                          returnType.asCQL3Type(),
+                          existingFunction.returnType().asCQL3Type());
+            }
+
+            // TODO: update dependent aggregates
+        }
+
+        return schema.withAddedOrUpdated(keyspace.withSwapped(keyspace.functions.withAddedOrUpdated(function)));
+    }
+
