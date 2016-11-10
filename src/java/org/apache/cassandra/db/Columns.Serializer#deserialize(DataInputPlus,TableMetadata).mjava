@@ -1,0 +1,23 @@
+        public Columns deserialize(DataInputPlus in, TableMetadata metadata) throws IOException
+        {
+            int length = (int)in.readUnsignedVInt();
+            BTree.Builder<ColumnMetadata> builder = BTree.builder(Comparator.naturalOrder());
+            builder.auto(false);
+            for (int i = 0; i < length; i++)
+            {
+                ByteBuffer name = ByteBufferUtil.readWithVIntLength(in);
+                ColumnMetadata column = metadata.getColumn(name);
+                if (column == null)
+                {
+                    // If we don't find the definition, it could be we have data for a dropped column, and we shouldn't
+                    // fail deserialization because of that. So we grab a "fake" ColumnMetadata that ensure proper
+                    // deserialization. The column will be ignore later on anyway.
+                    column = metadata.getDroppedColumn(name);
+                    if (column == null)
+                        throw new RuntimeException("Unknown column " + UTF8Type.instance.getString(name) + " during deserialization");
+                }
+                builder.add(column);
+            }
+            return new Columns(builder.build());
+        }
+

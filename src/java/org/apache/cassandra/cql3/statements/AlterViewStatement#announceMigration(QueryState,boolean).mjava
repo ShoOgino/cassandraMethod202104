@@ -1,17 +1,17 @@
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws RequestValidationException
     {
-        CFMetaData meta = Validation.validateColumnFamily(keyspace(), columnFamily());
+        TableMetadata meta = Schema.instance.validateTable(keyspace(), columnFamily());
         if (!meta.isView())
             throw new InvalidRequestException("Cannot use ALTER MATERIALIZED VIEW on Table");
 
-        ViewDefinition viewCopy = Schema.instance.getView(keyspace(), columnFamily()).copy();
+        ViewMetadata current = Schema.instance.getView(keyspace(), columnFamily());
 
         if (attrs == null)
             throw new InvalidRequestException("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
 
         attrs.validate();
 
-        TableParams params = attrs.asAlteredTableParams(viewCopy.metadata.params);
+        TableParams params = attrs.asAlteredTableParams(current.metadata.params);
         if (params.gcGraceSeconds == 0)
         {
             throw new InvalidRequestException("Cannot alter gc_grace_seconds of a materialized view to 0, since this " +
@@ -26,9 +26,9 @@
                                               "the corresponding data in the parent table.");
         }
 
-        viewCopy.metadata.params(params);
+        ViewMetadata updated = current.copy(current.metadata.unbuild().params(params).build());
 
-        MigrationManager.announceViewUpdate(viewCopy, isLocalOnly);
+        MigrationManager.announceViewUpdate(updated, isLocalOnly);
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 

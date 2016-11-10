@@ -1,0 +1,57 @@
+        /**
+         * Creates the <code>AggregationSpecification</code>s used to make the aggregates.
+         *
+         * @param metadata the table metadata
+         * @param selection the selection
+         * @param restrictions the restrictions
+         * @param isDistinct <code>true</code> if the query is a DISTINCT one. 
+         * @return the <code>AggregationSpecification</code>s used to make the aggregates
+         */
+        private AggregationSpecification getAggregationSpecification(TableMetadata metadata,
+                                                                     Selection selection,
+                                                                     StatementRestrictions restrictions,
+                                                                     boolean isDistinct)
+        {
+            if (parameters.groups.isEmpty())
+                return selection.isAggregate() ? AggregationSpecification.AGGREGATE_EVERYTHING
+                                               : null;
+
+            int clusteringPrefixSize = 0;
+
+            Iterator<ColumnMetadata> pkColumns = metadata.primaryKeyColumns().iterator();
+            for (ColumnMetadata.Raw raw : parameters.groups)
+            {
+                ColumnMetadata def = raw.prepare(metadata);
+
+                checkTrue(def.isPartitionKey() || def.isClusteringColumn(),
+                          "Group by is currently only supported on the columns of the PRIMARY KEY, got %s", def.name);
+
+                while (true)
+                {
+                    checkTrue(pkColumns.hasNext(),
+                              "Group by currently only support groups of columns following their declared order in the PRIMARY KEY");
+
+                    ColumnMetadata pkColumn = pkColumns.next();
+
+                    if (pkColumn.isClusteringColumn())
+                        clusteringPrefixSize++;
+
+                    // As we do not support grouping on only part of the partition key, we only need to know
+                    // which clustering columns need to be used to build the groups
+                    if (pkColumn.equals(def))
+                        break;
+
+                    checkTrue(restrictions.isColumnRestrictedByEq(pkColumn),
+                              "Group by currently only support groups of columns following their declared order in the PRIMARY KEY");
+                }
+            }
+
+            checkFalse(pkColumns.hasNext() && pkColumns.next().isPartitionKey(),
+                       "Group by is not supported on only a part of the partition key");
+
+            checkFalse(clusteringPrefixSize > 0 && isDistinct,
+                       "Grouping on clustering columns is not allowed for SELECT DISTINCT queries");
+
+            return AggregationSpecification.aggregatePkPrefix(metadata.comparator, clusteringPrefixSize);
+        }
+

@@ -1,19 +1,19 @@
     public void validate(ClientState state) throws RequestValidationException
     {
-        CFMetaData cfm = Validation.validateColumnFamily(keyspace(), columnFamily());
+        TableMetadata table = Schema.instance.validateTable(keyspace(), columnFamily());
 
-        if (cfm.isCounter())
+        if (table.isCounter())
             throw new InvalidRequestException("Secondary indexes are not supported on counter tables");
 
-        if (cfm.isView())
+        if (table.isView())
             throw new InvalidRequestException("Secondary indexes are not supported on materialized views");
 
-        if (cfm.isCompactTable() && !cfm.isStaticCompactTable())
+        if (table.isCompactTable() && !table.isStaticCompactTable())
             throw new InvalidRequestException("Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns");
 
         List<IndexTarget> targets = new ArrayList<>(rawTargets.size());
         for (IndexTarget.Raw rawTarget : rawTargets)
-            targets.add(rawTarget.prepare(cfm));
+            targets.add(rawTarget.prepare(table));
 
         if (targets.isEmpty() && !properties.isCustom)
             throw new InvalidRequestException("Only CUSTOM indexes can be created without specifying a target column");
@@ -23,16 +23,16 @@
 
         for (IndexTarget target : targets)
         {
-            ColumnDefinition cd = cfm.getColumnDefinition(target.column);
+            ColumnMetadata cd = table.getColumn(target.column);
 
             if (cd == null)
                 throw new InvalidRequestException("No column definition found for column " + target.column);
 
             // TODO: we could lift that limitation
-            if (cfm.isCompactTable() && cd.isPrimaryKeyColumn())
+            if (table.isCompactTable() && cd.isPrimaryKeyColumn())
                 throw new InvalidRequestException("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
 
-            if (cd.kind == ColumnDefinition.Kind.PARTITION_KEY && cfm.getKeyValidatorAsClusteringComparator().size() == 1)
+            if (cd.kind == ColumnMetadata.Kind.PARTITION_KEY && table.partitionKeyColumns().size() == 1)
                 throw new InvalidRequestException(String.format("Cannot create secondary index on partition key column %s", target.column));
 
             boolean isMap = cd.type instanceof MapType;
@@ -51,7 +51,7 @@
 
         if (!Strings.isNullOrEmpty(indexName))
         {
-            if (Schema.instance.getKSMetaData(keyspace()).existingIndexNames(null).contains(indexName))
+            if (Schema.instance.getKeyspaceMetadata(keyspace()).existingIndexNames(null).contains(indexName))
             {
                 if (ifNotExists)
                     return;

@@ -1,0 +1,34 @@
+            public Expression deserialize(DataInputPlus in, int version, TableMetadata metadata) throws IOException
+            {
+                Kind kind = Kind.values()[in.readByte()];
+
+                // custom expressions (3.0+ only) do not contain a column or operator, only a value
+                if (kind == Kind.CUSTOM)
+                {
+                    return new CustomExpression(metadata,
+                            IndexMetadata.serializer.deserialize(in, version, metadata),
+                            ByteBufferUtil.readWithShortLength(in));
+                }
+
+                if (kind == Kind.USER)
+                    return UserExpression.deserialize(in, version, metadata);
+
+                ByteBuffer name = ByteBufferUtil.readWithShortLength(in);
+                Operator operator = Operator.readFrom(in);
+                ColumnMetadata column = metadata.getColumn(name);
+
+                if (!metadata.isCompactTable() && column == null)
+                    throw new RuntimeException("Unknown (or dropped) column " + UTF8Type.instance.getString(name) + " during deserialization");
+
+                switch (kind)
+                {
+                    case SIMPLE:
+                        return new SimpleExpression(column, operator, ByteBufferUtil.readWithShortLength(in));
+                    case MAP_EQUALITY:
+                        ByteBuffer key = ByteBufferUtil.readWithShortLength(in);
+                        ByteBuffer value = ByteBufferUtil.readWithShortLength(in);
+                        return new MapEqualityExpression(column, key, operator, value);
+                }
+                throw new AssertionError();
+            }
+

@@ -1,9 +1,9 @@
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws RequestValidationException
     {
-        CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
+        TableMetadata current = Schema.instance.getTableMetadata(keyspace(), columnFamily());
         List<IndexTarget> targets = new ArrayList<>(rawTargets.size());
         for (IndexTarget.Raw rawTarget : rawTargets)
-            targets.add(rawTarget.prepare(cfm));
+            targets.add(rawTarget.prepare(current));
 
         String acceptedName = indexName;
         if (Strings.isNullOrEmpty(acceptedName))
@@ -13,7 +13,7 @@
                                                          targets.size() == 1 ? targets.get(0).column.toString() : null);
         }
 
-        if (Schema.instance.getKSMetaData(keyspace()).existingIndexNames(null).contains(acceptedName))
+        if (Schema.instance.getKeyspaceMetadata(keyspace()).existingIndexNames(null).contains(acceptedName))
         {
             if (ifNotExists)
                 return null;
@@ -31,13 +31,13 @@
         else
         {
             indexOptions = Collections.emptyMap();
-            kind = cfm.isCompound() ? IndexMetadata.Kind.COMPOSITES : IndexMetadata.Kind.KEYS;
+            kind = current.isCompound() ? IndexMetadata.Kind.COMPOSITES : IndexMetadata.Kind.KEYS;
         }
 
-        IndexMetadata index = IndexMetadata.fromIndexTargets(cfm, targets, acceptedName, kind, indexOptions);
+        IndexMetadata index = IndexMetadata.fromIndexTargets(targets, acceptedName, kind, indexOptions);
 
         // check to disallow creation of an index which duplicates an existing one in all but name
-        Optional<IndexMetadata> existingIndex = Iterables.tryFind(cfm.getIndexes(), existing -> existing.equalsWithoutName(index));
+        Optional<IndexMetadata> existingIndex = Iterables.tryFind(current.indexes, existing -> existing.equalsWithoutName(index));
         if (existingIndex.isPresent())
         {
             if (ifNotExists)
@@ -48,10 +48,14 @@
                                                                 existingIndex.get().name));
         }
 
-        logger.trace("Updating index definition for {}", indexName);
-        cfm.indexes(cfm.getIndexes().with(index));
+        TableMetadata updated =
+            current.unbuild()
+                   .indexes(current.indexes.with(index))
+                   .build();
 
-        MigrationManager.announceColumnFamilyUpdate(cfm, isLocalOnly);
+        logger.trace("Updating index definition for {}", indexName);
+
+        MigrationManager.announceTableUpdate(updated, isLocalOnly);
 
         // Creating an index is akin to updating the CF
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());

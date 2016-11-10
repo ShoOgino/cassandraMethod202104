@@ -1,0 +1,30 @@
+    @Test
+    public void addNewTable() throws ConfigurationException
+    {
+        final String ksName = KEYSPACE1;
+        final String tableName = "anewtable";
+        KeyspaceMetadata original = Schema.instance.getKeyspaceMetadata(ksName);
+
+        TableMetadata cfm = addTestTable(original.name, tableName, "A New Table");
+
+        assertFalse(Schema.instance.getKeyspaceMetadata(ksName).tables.get(cfm.name).isPresent());
+        MigrationManager.announceNewTable(cfm);
+
+        assertTrue(Schema.instance.getKeyspaceMetadata(ksName).tables.get(cfm.name).isPresent());
+        assertEquals(cfm, Schema.instance.getKeyspaceMetadata(ksName).tables.get(cfm.name).get());
+
+        // now read and write to it.
+        QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (key, col, val) VALUES (?, ?, ?)",
+                                                     ksName, tableName),
+                                       "key0", "col0", "val0");
+
+        // flush to exercise more than just hitting the memtable
+        ColumnFamilyStore cfs = Keyspace.open(ksName).getColumnFamilyStore(tableName);
+        assertNotNull(cfs);
+        cfs.forceBlockingFlush();
+
+        // and make sure we get out what we put in
+        UntypedResultSet rows = QueryProcessor.executeInternal(String.format("SELECT * FROM %s.%s", ksName, tableName));
+        assertRows(rows, row("key0", "col0", "val0"));
+    }
+

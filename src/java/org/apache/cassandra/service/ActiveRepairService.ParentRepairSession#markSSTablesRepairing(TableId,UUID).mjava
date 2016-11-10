@@ -1,0 +1,24 @@
+        /**
+         * Mark sstables repairing - either all sstables or only the unrepaired ones depending on
+         *
+         * whether this is an incremental or full repair
+         *
+         * @param tableId the table
+         * @param parentSessionId the parent repair session id, used to make sure we don't start multiple repairs over the same sstables
+         */
+        public synchronized void markSSTablesRepairing(TableId tableId, UUID parentSessionId)
+        {
+            if (!marked.contains(tableId))
+            {
+                List<SSTableReader> sstables = columnFamilyStores.get(tableId).select(View.select(SSTableSet.CANONICAL, (s) -> !isIncremental || !s.isRepaired())).sstables;
+                Set<SSTableReader> currentlyRepairing = ActiveRepairService.instance.currentlyRepairing(tableId, parentSessionId);
+                if (!Sets.intersection(currentlyRepairing, Sets.newHashSet(sstables)).isEmpty())
+                {
+                    logger.error("Cannot start multiple repair sessions over the same sstables");
+                    throw new RuntimeException("Cannot start multiple repair sessions over the same sstables");
+                }
+                addSSTables(tableId, sstables);
+                marked.add(tableId);
+            }
+        }
+

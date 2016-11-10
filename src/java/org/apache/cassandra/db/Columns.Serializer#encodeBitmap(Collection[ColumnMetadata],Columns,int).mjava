@@ -1,0 +1,26 @@
+        // encodes a 1 bit for every *missing* column, on the assumption presence is more common,
+        // and because this is consistent with encoding 0 to represent all present
+        private static long encodeBitmap(Collection<ColumnMetadata> columns, Columns superset, int supersetCount)
+        {
+            long bitmap = 0L;
+            BTreeSearchIterator<ColumnMetadata, ColumnMetadata> iter = superset.iterator();
+            // the index we would encounter next if all columns are present
+            int expectIndex = 0;
+            for (ColumnMetadata column : columns)
+            {
+                if (iter.next(column) == null)
+                    throw new IllegalStateException(columns + " is not a subset of " + superset);
+
+                int currentIndex = iter.indexOfCurrent();
+                int count = currentIndex - expectIndex;
+                // (1L << count) - 1 gives us count bits set at the bottom of the register
+                // so << expectIndex moves these bits to start at expectIndex, which is where our missing portion
+                // begins (assuming count > 0; if not, we're adding 0 bits, so it's a no-op)
+                bitmap |= ((1L << count) - 1) << expectIndex;
+                expectIndex = currentIndex + 1;
+            }
+            int count = supersetCount - expectIndex;
+            bitmap |= ((1L << count) - 1) << expectIndex;
+            return bitmap;
+        }
+

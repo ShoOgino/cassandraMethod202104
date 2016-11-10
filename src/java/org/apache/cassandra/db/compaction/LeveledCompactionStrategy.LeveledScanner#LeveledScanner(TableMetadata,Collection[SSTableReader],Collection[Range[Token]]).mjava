@@ -1,0 +1,32 @@
+        public LeveledScanner(TableMetadata metadata, Collection<SSTableReader> sstables, Collection<Range<Token>> ranges)
+        {
+            this.metadata = metadata;
+            this.ranges = ranges;
+
+            // add only sstables that intersect our range, and estimate how much data that involves
+            this.sstables = new ArrayList<>(sstables.size());
+            long length = 0;
+            long cLength = 0;
+            for (SSTableReader sstable : sstables)
+            {
+                this.sstables.add(sstable);
+                long estimatedKeys = sstable.estimatedKeys();
+                double estKeysInRangeRatio = 1.0;
+
+                if (estimatedKeys > 0 && ranges != null)
+                    estKeysInRangeRatio = ((double) sstable.estimatedKeysForRanges(ranges)) / estimatedKeys;
+
+                length += sstable.uncompressedLength() * estKeysInRangeRatio;
+                cLength += sstable.onDiskLength() * estKeysInRangeRatio;
+            }
+
+            totalLength = length;
+            compressedLength = cLength;
+            Collections.sort(this.sstables, SSTableReader.sstableComparator);
+            sstableIterator = this.sstables.iterator();
+            assert sstableIterator.hasNext(); // caller should check intersecting first
+            SSTableReader currentSSTable = sstableIterator.next();
+            currentScanner = currentSSTable.getScanner(ranges);
+
+        }
+

@@ -3,8 +3,6 @@
     {
         long now = FBUtilities.timestampMicros();
         String key = "testApplyWithGCGSReducedLater";
-        Mutation mutation = createMutation(key, now);
-        Hint hint = Hint.create(mutation, now / 1000);
 
         // sanity check that there is no data inside yet
         assertNoPartitions(key, TABLE0);
@@ -12,8 +10,16 @@
         assertNoPartitions(key, TABLE2);
 
         // lower the GC GS on TABLE0 AFTER the hint is already created
-        Schema.instance.getCFMetaData(KEYSPACE, TABLE0).gcGraceSeconds(0);
+        TableMetadata updated =
+            Schema.instance
+                  .getTableMetadata(KEYSPACE, TABLE0)
+                  .unbuild()
+                  .gcGraceSeconds(0)
+                  .build();
+        MigrationManager.announceTableUpdate(updated, true);
 
+        Mutation mutation = createMutation(key, now);
+        Hint hint = Hint.create(mutation, now / 1000);
         hint.apply();
 
         // all updates should have been skipped and not applied, as expired

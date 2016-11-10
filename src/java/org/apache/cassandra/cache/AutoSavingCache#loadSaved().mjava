@@ -25,13 +25,17 @@
                 ArrayDeque<Future<Pair<K, V>>> futures = new ArrayDeque<Future<Pair<K, V>>>();
                 while (in.available() > 0)
                 {
-                    //ksname and cfname are serialized by the serializers in CacheService
+                    //tableId and indexName are serialized by the serializers in CacheService
                     //That is delegated there because there are serializer specific conditions
                     //where a cache key is skipped and not written
-                    String ksname = in.readUTF();
-                    String cfname = in.readUTF();
+                    TableId tableId = TableId.deserialize(in);
+                    String indexName = in.readUTF();
+                    if (indexName.isEmpty())
+                        indexName = null;
 
-                    ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreIncludingIndexes(Pair.create(ksname, cfname));
+                    ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(tableId);
+                    if (indexName != null && cfs != null)
+                        cfs = cfs.indexManager.getIndexByName(indexName).getBackingTable().orElse(null);
 
                     Future<Pair<K, V>> entryFuture = cacheLoader.deserialize(in, cfs);
                     // Key cache entry can return null, if the SSTable doesn't exist.

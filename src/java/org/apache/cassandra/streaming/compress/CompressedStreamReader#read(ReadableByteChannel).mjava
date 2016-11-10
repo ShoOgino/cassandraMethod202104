@@ -8,15 +8,12 @@
     {
         long totalSize = totalSize();
 
-        Pair<String, String> kscf = Schema.instance.getCF(cfId);
-        ColumnFamilyStore cfs = null;
-        if (kscf != null)
-            cfs = Keyspace.open(kscf.left).getColumnFamilyStore(kscf.right);
+        ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
 
-        if (kscf == null || cfs == null)
+        if (cfs == null)
         {
             // schema was dropped during streaming
-            throw new IOException("CF " + cfId + " was dropped during streaming");
+            throw new IOException("CF " + tableId + " was dropped during streaming");
         }
 
         logger.debug("[Stream #{}] Start receiving file #{} from {}, repairedAt = {}, size = {}, ks = '{}', table = '{}'.",
@@ -27,7 +24,7 @@
                                                               ChecksumType.CRC32, cfs::getCrcCheckChance);
         TrackedInputStream in = new TrackedInputStream(cis);
 
-        StreamDeserializer deserializer = new StreamDeserializer(cfs.metadata, in, inputVersion, getHeader(cfs.metadata),
+        StreamDeserializer deserializer = new StreamDeserializer(cfs.metadata(), in, inputVersion, getHeader(cfs.metadata()),
                                                                  totalSize, session.planId());
         SSTableMultiWriter writer = null;
         try

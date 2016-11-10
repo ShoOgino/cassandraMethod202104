@@ -1,0 +1,41 @@
+    /**
+     * Construct the TableMetadata for an index table, the clustering columns in the index table
+     * vary dependent on the kind of the indexed value.
+     * @param baseCfsMetadata
+     * @param indexMetadata
+     * @return
+     */
+    public static TableMetadata indexCfsMetadata(TableMetadata baseCfsMetadata, IndexMetadata indexMetadata)
+    {
+        Pair<ColumnMetadata, IndexTarget.Type> target = TargetParser.parse(baseCfsMetadata, indexMetadata);
+        CassandraIndexFunctions utils = getFunctions(indexMetadata, target);
+        ColumnMetadata indexedColumn = target.left;
+        AbstractType<?> indexedValueType = utils.getIndexedValueType(indexedColumn);
+
+        TableMetadata.Builder builder =
+            TableMetadata.builder(baseCfsMetadata.keyspace, baseCfsMetadata.indexTableName(indexMetadata), baseCfsMetadata.id)
+                         // tables for legacy KEYS indexes are non-compound and dense
+                         .isDense(indexMetadata.isKeys())
+                         .isCompound(!indexMetadata.isKeys())
+                         .partitioner(new LocalPartitioner(indexedValueType))
+                         .addPartitionKeyColumn(indexedColumn.name, indexedColumn.type)
+                         .addClusteringColumn("partition_key", baseCfsMetadata.partitioner.partitionOrdering());
+
+        if (indexMetadata.isKeys())
+        {
+            // A dense, compact table for KEYS indexes must have a compact
+            // value column defined, even though it is never used
+            CompactTables.DefaultNames names =
+                CompactTables.defaultNameGenerator(ImmutableSet.of(indexedColumn.name.toString(), "partition_key"));
+            builder.addRegularColumn(names.defaultCompactValueName(), EmptyType.instance);
+        }
+        else
+        {
+            // The clustering columns for a table backing a COMPOSITES index are dependent
+            // on the specific type of index (there are specializations for indexes on collections)
+            utils.addIndexClusteringColumns(builder, baseCfsMetadata, indexedColumn);
+        }
+
+        return builder.build().updateIndexTableMetadata(baseCfsMetadata.params);
+    }
+

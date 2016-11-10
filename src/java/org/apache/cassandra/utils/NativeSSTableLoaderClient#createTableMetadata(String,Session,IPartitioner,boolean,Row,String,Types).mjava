@@ -1,36 +1,24 @@
-    private static CFMetaData createTableMetadata(String keyspace,
-                                                  Session session,
-                                                  IPartitioner partitioner,
-                                                  boolean isView,
-                                                  Row row,
-                                                  String name,
-                                                  Types types)
+    private static TableMetadataRef createTableMetadata(String keyspace,
+                                                        Session session,
+                                                        IPartitioner partitioner,
+                                                        boolean isView,
+                                                        Row row,
+                                                        String name,
+                                                        Types types)
     {
-        UUID id = row.getUUID("id");
-        Set<CFMetaData.Flag> flags = isView ? Collections.emptySet() : CFMetaData.flagsFromStrings(row.getSet("flags", String.class));
+        TableMetadata.Builder builder = TableMetadata.builder(keyspace, name, TableId.fromUUID(row.getUUID("id")))
+                                                     .partitioner(partitioner);
 
-        boolean isSuper = flags.contains(CFMetaData.Flag.SUPER);
-        boolean isCounter = flags.contains(CFMetaData.Flag.COUNTER);
-        boolean isDense = flags.contains(CFMetaData.Flag.DENSE);
-        boolean isCompound = isView || flags.contains(CFMetaData.Flag.COMPOUND);
+        if (!isView)
+            builder.flags(TableMetadata.Flag.fromStringSet(row.getSet("flags", String.class)));
 
         String columnsQuery = String.format("SELECT * FROM %s.%s WHERE keyspace_name = ? AND table_name = ?",
                                             SchemaConstants.SCHEMA_KEYSPACE_NAME,
                                             SchemaKeyspace.COLUMNS);
 
-        List<ColumnDefinition> defs = new ArrayList<>();
         for (Row colRow : session.execute(columnsQuery, keyspace, name))
-            defs.add(createDefinitionFromRow(colRow, keyspace, name, types));
+            builder.addColumn(createDefinitionFromRow(colRow, keyspace, name, types));
 
-        return CFMetaData.create(keyspace,
-                                 name,
-                                 id,
-                                 isDense,
-                                 isCompound,
-                                 isSuper,
-                                 isCounter,
-                                 isView,
-                                 defs,
-                                 partitioner);
+        return TableMetadataRef.forOfflineTools(builder.build());
     }
 

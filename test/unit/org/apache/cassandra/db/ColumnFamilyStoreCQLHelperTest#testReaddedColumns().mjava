@@ -4,34 +4,32 @@
         String keyspace = "cql_test_keyspace_readded_columns";
         String table = "test_table_readded_columns";
 
-        CFMetaData cfm = CFMetaData.Builder.create(keyspace, table)
-                                           .addPartitionKey("pk1", IntegerType.instance)
-                                           .addClusteringColumn("ck1", IntegerType.instance)
-                                           .addRegularColumn("reg1", IntegerType.instance)
-                                           .addStaticColumn("reg2", IntegerType.instance)
-                                           .addRegularColumn("reg3", IntegerType.instance)
-                                           .build();
+        TableMetadata.Builder builder =
+            TableMetadata.builder(keyspace, table)
+                         .addPartitionKeyColumn("pk1", IntegerType.instance)
+                         .addClusteringColumn("ck1", IntegerType.instance)
+                         .addRegularColumn("reg1", IntegerType.instance)
+                         .addStaticColumn("reg2", IntegerType.instance)
+                         .addRegularColumn("reg3", IntegerType.instance);
 
-        ColumnDefinition reg1 = cfm.getColumnDefinition(ByteBufferUtil.bytes("reg1"));
-        ColumnDefinition reg2 = cfm.getColumnDefinition(ByteBufferUtil.bytes("reg2"));
+        ColumnMetadata reg1 = builder.getColumn(ByteBufferUtil.bytes("reg1"));
+        ColumnMetadata reg2 = builder.getColumn(ByteBufferUtil.bytes("reg2"));
 
-        cfm.removeColumnDefinition(reg1);
-        cfm.removeColumnDefinition(reg2);
+        builder.removeRegularOrStaticColumn(reg1.name);
+        builder.removeRegularOrStaticColumn(reg2.name);
 
-        cfm.recordColumnDrop(reg1, 10000);
-        cfm.recordColumnDrop(reg2, 20000);
+        builder.recordColumnDrop(reg1, 10000);
+        builder.recordColumnDrop(reg2, 20000);
 
-        cfm.addColumnDefinition(reg1);
-        cfm.addColumnDefinition(reg2);
+        builder.addColumn(reg1);
+        builder.addColumn(reg2);
 
-        SchemaLoader.createKeyspace(keyspace,
-                                    KeyspaceParams.simple(1),
-                                    cfm);
+        SchemaLoader.createKeyspace(keyspace, KeyspaceParams.simple(1), builder);
 
         ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
 
         // when re-adding, column is present in CREATE, then in DROP and then in ADD again, to record DROP with a proper timestamp
-        assertTrue(ColumnFamilyStoreCQLHelper.getCFMetadataAsCQL(cfs.metadata, true).startsWith(
+        assertTrue(ColumnFamilyStoreCQLHelper.getTableMetadataAsCQL(cfs.metadata(), true).startsWith(
         "CREATE TABLE IF NOT EXISTS cql_test_keyspace_readded_columns.test_table_readded_columns (\n" +
         "\tpk1 varint,\n" +
         "\tck1 varint,\n" +
@@ -44,6 +42,6 @@
                                       "ALTER TABLE cql_test_keyspace_readded_columns.test_table_readded_columns ADD reg1 varint;",
                                       "ALTER TABLE cql_test_keyspace_readded_columns.test_table_readded_columns DROP reg2 USING TIMESTAMP 20000;",
                                       "ALTER TABLE cql_test_keyspace_readded_columns.test_table_readded_columns ADD reg2 varint static;"),
-                     ColumnFamilyStoreCQLHelper.getDroppedColumnsAsCQL(cfs.metadata));
+                     ColumnFamilyStoreCQLHelper.getDroppedColumnsAsCQL(cfs.metadata()));
     }
 

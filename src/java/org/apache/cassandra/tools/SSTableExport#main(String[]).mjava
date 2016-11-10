@@ -42,7 +42,7 @@
         Descriptor desc = Descriptor.fromFilename(ssTableFileName);
         try
         {
-            CFMetaData metadata = metadataFromSSTable(desc);
+            TableMetadata metadata = metadataFromSSTable(desc);
             if (cmd.hasOption(ENUMERATE_KEYS_OPTION))
             {
                 try (KeyIterator iter = new KeyIterator(desc, metadata))
@@ -55,14 +55,14 @@
             }
             else
             {
-                SSTableReader sstable = SSTableReader.openNoValidation(desc, metadata);
+                SSTableReader sstable = SSTableReader.openNoValidation(desc, TableMetadataRef.forOfflineTools(metadata));
                 IPartitioner partitioner = sstable.getPartitioner();
                 final ISSTableScanner currentScanner;
                 if ((keys != null) && (keys.length > 0))
                 {
                     List<AbstractBounds<PartitionPosition>> bounds = Arrays.stream(keys)
                             .filter(key -> !excludes.contains(key))
-                            .map(metadata.getKeyValidator()::fromString)
+                            .map(metadata.partitionKeyType::fromString)
                             .map(partitioner::decorateKey)
                             .sorted()
                             .map(DecoratedKey::getToken)
@@ -74,7 +74,7 @@
                     currentScanner = sstable.getScanner();
                 }
                 Stream<UnfilteredRowIterator> partitions = iterToStream(currentScanner).filter(i ->
-                    excludes.isEmpty() || !excludes.contains(metadata.getKeyValidator().getString(i.partitionKey().getKey()))
+                    excludes.isEmpty() || !excludes.contains(metadata.partitionKeyType.getString(i.partitionKey().getKey()))
                 );
                 if (cmd.hasOption(DEBUG_OUTPUT_OPTION))
                 {
@@ -85,19 +85,19 @@
 
                         if (!partition.partitionLevelDeletion().isLive())
                         {
-                            System.out.println("[" + metadata.getKeyValidator().getString(partition.partitionKey().getKey()) + "]@" +
+                            System.out.println("[" + metadata.partitionKeyType.getString(partition.partitionKey().getKey()) + "]@" +
                                                position.get() + " " + partition.partitionLevelDeletion());
                         }
                         if (!partition.staticRow().isEmpty())
                         {
-                            System.out.println("[" + metadata.getKeyValidator().getString(partition.partitionKey().getKey()) + "]@" +
+                            System.out.println("[" + metadata.partitionKeyType.getString(partition.partitionKey().getKey()) + "]@" +
                                                position.get() + " " + partition.staticRow().toString(metadata, true));
                         }
                         partition.forEachRemaining(row ->
                         {
                             System.out.println(
-                                    "[" + metadata.getKeyValidator().getString(partition.partitionKey().getKey()) + "]@"
-                                            + position.get() + " " + row.toString(metadata, false, true));
+                            "[" + metadata.partitionKeyType.getString(partition.partitionKey().getKey()) + "]@"
+                            + position.get() + " " + row.toString(metadata, false, true));
                             position.set(currentScanner.getCurrentPosition());
                         });
                     });

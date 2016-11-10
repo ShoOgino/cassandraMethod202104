@@ -1,0 +1,73 @@
+    /**
+     * Removes unnecessary files from the cf directory at startup: these include temp files, orphans, zero-length files
+     * and compacted sstables. Files that cannot be recognized will be ignored.
+     */
+    public static void  scrubDataDirectories(TableMetadata metadata) throws StartupException
+    {
+        Directories directories = new Directories(metadata, initialDirectories);
+        Set<File> cleanedDirectories = new HashSet<>();
+
+         // clear ephemeral snapshots that were not properly cleared last session (CASSANDRA-7357)
+        clearEphemeralSnapshots(directories);
+
+        directories.removeTemporaryDirectories();
+
+        logger.trace("Removing temporary or obsoleted files from unfinished operations for table {}", metadata.name);
+        if (!LifecycleTransaction.removeUnfinishedLeftovers(metadata))
+            throw new StartupException(StartupException.ERR_WRONG_DISK_STATE,
+                                       String.format("Cannot remove temporary or obsoleted files for %s due to a problem with transaction " +
+                                                     "log files. Please check records with problems in the log messages above and fix them. " +
+                                                     "Refer to the 3.0 upgrading instructions in NEWS.txt " +
+                                                     "for a description of transaction log files.", metadata.toString()));
+
+        logger.trace("Further extra check for orphan sstable files for {}", metadata.name);
+        for (Map.Entry<Descriptor,Set<Component>> sstableFiles : directories.sstableLister(Directories.OnTxnErr.IGNORE).list().entrySet())
+        {
+            Descriptor desc = sstableFiles.getKey();
+            File directory = desc.directory;
+            Set<Component> components = sstableFiles.getValue();
+
+            if (!cleanedDirectories.contains(directory))
+            {
+                cleanedDirectories.add(directory);
+                for (File tmpFile : desc.getTemporaryFiles())
+                    tmpFile.delete();
+            }
+
+            File dataFile = new File(desc.filenameFor(Component.DATA));
+            if (components.contains(Component.DATA) && dataFile.length() > 0)
+                // everything appears to be in order... moving on.
+                continue;
+
+            // missing the DATA file! all components are orphaned
+            logger.warn("Removing orphans for {}: {}", desc, components);
+            for (Component component : components)
+            {
+                File file = new File(desc.filenameFor(component));
+                if (file.exists())
+                    FileUtils.deleteWithConfirm(desc.filenameFor(component));
+            }
+        }
+
+        // cleanup incomplete saved caches
+        Pattern tmpCacheFilePattern = Pattern.compile(metadata.keyspace + "-" + metadata.name + "-(Key|Row)Cache.*\\.tmp$");
+        File dir = new File(DatabaseDescriptor.getSavedCachesLocation());
+
+        if (dir.exists())
+        {
+            assert dir.isDirectory();
+            for (File file : dir.listFiles())
+                if (tmpCacheFilePattern.matcher(file.getName()).matches())
+                    if (!file.delete())
+                        logger.warn("could not delete {}", file.getAbsolutePath());
+        }
+
+        // also clean out any index leftovers.
+        for (IndexMetadata index : metadata.indexes)
+            if (!index.isCustom())
+            {
+                TableMetadata indexMetadata = CassandraIndex.indexCfsMetadata(metadata, index);
+                scrubDataDirectories(indexMetadata);
+            }
+    }
+

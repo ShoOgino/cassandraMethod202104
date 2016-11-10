@@ -5,8 +5,8 @@
             ColumnFamilyStore cfs = null;
             try
             {
-                Pair<String, String> kscf = Schema.instance.getCF(task.cfId);
-                if (kscf == null)
+                cfs = ColumnFamilyStore.getIfExists(task.tableId);
+                if (cfs == null)
                 {
                     // schema was dropped during streaming
                     task.sstables.clear();
@@ -14,9 +14,8 @@
                     task.session.taskCompleted(task);
                     return;
                 }
-                cfs = Keyspace.open(kscf.left).getColumnFamilyStore(kscf.right);
-                hasViews = !Iterables.isEmpty(View.findAll(kscf.left, kscf.right));
-                hasCDC = cfs.metadata.params.cdc;
+                hasViews = !Iterables.isEmpty(View.findAll(cfs.metadata.keyspace, cfs.getTableName()));
+                hasCDC = cfs.metadata().params.cdc;
 
                 Collection<SSTableReader> readers = task.sstables;
 
@@ -42,7 +41,7 @@
                                 {
                                     try (UnfilteredRowIterator rowIterator = scanner.next())
                                     {
-                                        Mutation m = new Mutation(PartitionUpdate.fromIterator(rowIterator, ColumnFilter.all(cfs.metadata)));
+                                        Mutation m = new Mutation(PartitionUpdate.fromIterator(rowIterator, ColumnFilter.all(cfs.metadata())));
 
                                         // MV *can* be applied unsafe if there's no CDC on the CFS as we flush below
                                         // before transaction is done.
@@ -64,7 +63,7 @@
                         cfs.indexManager.buildAllIndexesBlocking(readers);
 
                         //invalidate row and counter cache
-                        if (cfs.isRowCacheEnabled() || cfs.metadata.isCounter())
+                        if (cfs.isRowCacheEnabled() || cfs.metadata().isCounter())
                         {
                             List<Bounds<Token>> boundsToInvalidate = new ArrayList<>(readers.size());
                             readers.forEach(sstable -> boundsToInvalidate.add(new Bounds<Token>(sstable.first.getToken(), sstable.last.getToken())));
@@ -79,7 +78,7 @@
                                                  cfs.keyspace.getName(), cfs.getTableName());
                             }
 
-                            if (cfs.metadata.isCounter())
+                            if (cfs.metadata().isCounter())
                             {
                                 int invalidatedKeys = cfs.invalidateCounterCache(nonOverlappingBounds);
                                 if (invalidatedKeys > 0)

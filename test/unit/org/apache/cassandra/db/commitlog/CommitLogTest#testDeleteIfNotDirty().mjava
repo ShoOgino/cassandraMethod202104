@@ -6,7 +6,7 @@
         ColumnFamilyStore cfs2 = ks.getColumnFamilyStore(STANDARD2);
 
         // Roughly 32 MB mutation
-         Mutation rm = new RowUpdateBuilder(cfs1.metadata, 0, "k")
+         Mutation rm = new RowUpdateBuilder(cfs1.metadata(), 0, "k")
                   .clustering("bytes")
                   .add("val", ByteBuffer.allocate((DatabaseDescriptor.getCommitLogSegmentSize()/4) - 1))
                   .build();
@@ -18,14 +18,14 @@
         assertEquals(1, CommitLog.instance.segmentManager.getActiveSegments().size());
 
         // "Flush": this won't delete anything
-        UUID cfid1 = rm.getColumnFamilyIds().iterator().next();
+        TableId id1 = rm.getTableIds().iterator().next();
         CommitLog.instance.sync();
-        CommitLog.instance.discardCompletedSegments(cfid1, CommitLogPosition.NONE, CommitLog.instance.getCurrentPosition());
+        CommitLog.instance.discardCompletedSegments(id1, CommitLogPosition.NONE, CommitLog.instance.getCurrentPosition());
 
         assertEquals(1, CommitLog.instance.segmentManager.getActiveSegments().size());
 
         // Adding new mutation on another CF, large enough (including CL entry overhead) that a new segment is created
-        Mutation rm2 = new RowUpdateBuilder(cfs2.metadata, 0, "k")
+        Mutation rm2 = new RowUpdateBuilder(cfs2.metadata(), 0, "k")
                        .clustering("bytes")
                        .add("val", ByteBuffer.allocate(DatabaseDescriptor.getMaxMutationSize() - 200))
                        .build();
@@ -43,8 +43,8 @@
         // "Flush" second cf: The first segment should be deleted since we
         // didn't write anything on cf1 since last flush (and we flush cf2)
 
-        UUID cfid2 = rm2.getColumnFamilyIds().iterator().next();
-        CommitLog.instance.discardCompletedSegments(cfid2, CommitLogPosition.NONE, CommitLog.instance.getCurrentPosition());
+        TableId id2 = rm2.getTableIds().iterator().next();
+        CommitLog.instance.discardCompletedSegments(id2, CommitLogPosition.NONE, CommitLog.instance.getCurrentPosition());
 
         segments = CommitLog.instance.segmentManager.getActiveSegments();
 

@@ -1,0 +1,25 @@
+        private static void validateDistinctSelection(TableMetadata metadata,
+                                                      Selection selection,
+                                                      StatementRestrictions restrictions)
+                                                      throws InvalidRequestException
+        {
+            checkFalse(restrictions.hasClusteringColumnsRestrictions() ||
+                       (restrictions.hasNonPrimaryKeyRestrictions() && !restrictions.nonPKRestrictedColumns(true).stream().allMatch(ColumnMetadata::isStatic)),
+                       "SELECT DISTINCT with WHERE clause only supports restriction by partition key and/or static columns.");
+
+            Collection<ColumnMetadata> requestedColumns = selection.getColumns();
+            for (ColumnMetadata def : requestedColumns)
+                checkFalse(!def.isPartitionKey() && !def.isStatic(),
+                           "SELECT DISTINCT queries must only request partition key columns and/or static columns (not %s)",
+                           def.name);
+
+            // If it's a key range, we require that all partition key columns are selected so we don't have to bother
+            // with post-query grouping.
+            if (!restrictions.isKeyRange())
+                return;
+
+            for (ColumnMetadata def : metadata.partitionKeyColumns())
+                checkTrue(requestedColumns.contains(def),
+                          "SELECT DISTINCT queries must request all the partition key columns (missing %s)", def.name);
+        }
+

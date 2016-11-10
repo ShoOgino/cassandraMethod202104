@@ -1,0 +1,29 @@
+    /**
+     * Replace the column 'from' with 'to' in this materialized view definition's partition,
+     * clustering, or included columns.
+     * @param from the existing column
+     * @param to the new column
+     */
+    public ViewMetadata renamePrimaryKeyColumn(ColumnIdentifier from, ColumnIdentifier to)
+    {
+        // convert whereClause to Relations, rename ids in Relations, then convert back to whereClause
+        List<Relation> relations = whereClauseToRelations(whereClause);
+        ColumnMetadata.Raw fromRaw = ColumnMetadata.Raw.forQuoted(from.toString());
+        ColumnMetadata.Raw toRaw = ColumnMetadata.Raw.forQuoted(to.toString());
+        List<Relation> newRelations =
+            relations.stream()
+                     .map(r -> r.renameIdentifier(fromRaw, toRaw))
+                     .collect(Collectors.toList());
+
+        String rawSelect = View.buildSelectStatement(baseTableName, metadata.columns(), whereClause);
+
+        return new ViewMetadata(keyspace,
+                                name,
+                                baseTableId,
+                                baseTableName,
+                                includeAllColumns,
+                                (SelectStatement.RawStatement) QueryProcessor.parseStatement(rawSelect),
+                                View.relationsToWhereClause(newRelations),
+                                metadata.unbuild().renamePrimaryKeyColumn(from, to).build());
+    }
+

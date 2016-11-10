@@ -1,0 +1,27 @@
+        public synchronized void maybeSnapshot(TableId tableId, UUID parentSessionId)
+        {
+            String snapshotName = parentSessionId.toString();
+            if (!columnFamilyStores.get(tableId).snapshotExists(snapshotName))
+            {
+                Set<SSTableReader> snapshottedSSTables = columnFamilyStores.get(tableId).snapshot(snapshotName, new Predicate<SSTableReader>()
+                {
+                    public boolean apply(SSTableReader sstable)
+                    {
+                        return sstable != null &&
+                               (!isIncremental || !sstable.isRepaired()) &&
+                               !(sstable.metadata().isIndex()) && // exclude SSTables from 2i
+                               new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(ranges);
+                    }
+                }, true, false);
+
+                if (isAlreadyRepairing(tableId, parentSessionId, snapshottedSSTables))
+                {
+                    columnFamilyStores.get(tableId).clearSnapshot(snapshotName);
+                    logger.error("Cannot start multiple repair sessions over the same sstables");
+                    throw new RuntimeException("Cannot start multiple repair sessions over the same sstables");
+                }
+                addSSTables(tableId, snapshottedSSTables);
+                marked.add(tableId);
+            }
+        }
+

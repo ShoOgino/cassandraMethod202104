@@ -9,17 +9,25 @@
         cfs.truncateBlocking();
         cfs.disableAutoCompaction();
 
-        ColumnDefinition cd = cfs.metadata.getColumnDefinition(indexedColumnName).copy();
+        ColumnMetadata cd = cfs.metadata().getColumn(indexedColumnName).copy();
         IndexMetadata indexDef =
-            IndexMetadata.fromIndexTargets(cfs.metadata,
-                                           Collections.singletonList(new IndexTarget(cd.name, IndexTarget.Type.VALUES)),
+            IndexMetadata.fromIndexTargets(
+            Collections.singletonList(new IndexTarget(cd.name, IndexTarget.Type.VALUES)),
                                            "test_index",
                                            IndexMetadata.Kind.CUSTOM,
                                            ImmutableMap.of(IndexTarget.CUSTOM_INDEX_OPTION_NAME,
                                                            StubIndex.class.getName()));
 
-        if (!cfs.metadata.getIndexes().get("test_index").isPresent())
-            cfs.metadata.indexes(cfs.metadata.getIndexes().with(indexDef));
+        TableMetadata current = cfs.metadata();
+
+        if (!current.indexes.get("test_index").isPresent())
+        {
+            TableMetadata updated =
+                current.unbuild()
+                       .indexes(current.indexes.with(indexDef))
+                       .build();
+            MigrationManager.announceTableUpdate(updated, true);
+        }
 
         Future<?> rebuild = cfs.indexManager.addIndex(indexDef);
         // If rebuild there is, wait for the rebuild to finish so it doesn't race with the following insertions
@@ -29,13 +37,13 @@
         StubIndex index = (StubIndex)cfs.indexManager.getIndexByName("test_index");
         index.reset();
 
-        UpdateBuilder.create(cfs.metadata, key).withTimestamp(0).newRow(1).add("val", 1).applyUnsafe();
+        UpdateBuilder.create(cfs.metadata(), key).withTimestamp(0).newRow(1).add("val", 1).applyUnsafe();
 
         // add a RT which hides the column we just inserted
-        new RowUpdateBuilder(cfs.metadata, 1, key).addRangeTombstone(0, 1).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata(), 1, key).addRangeTombstone(0, 1).build().applyUnsafe();
 
         // now re-insert that column
-        UpdateBuilder.create(cfs.metadata, key).withTimestamp(2).newRow(1).add("val", 1).applyUnsafe();
+        UpdateBuilder.create(cfs.metadata(), key).withTimestamp(2).newRow(1).add("val", 1).applyUnsafe();
 
         cfs.forceBlockingFlush();
 

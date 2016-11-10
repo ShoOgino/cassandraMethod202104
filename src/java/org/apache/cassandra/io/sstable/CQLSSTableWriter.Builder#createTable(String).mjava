@@ -3,25 +3,24 @@
          *
          * @param keyspace name of the keyspace where table should be created
          */
-        private CFMetaData createTable(String keyspace)
+        private TableMetadata createTable(String keyspace)
         {
-            KeyspaceMetadata ksm = Schema.instance.getKSMetaData(keyspace);
+            KeyspaceMetadata ksm = Schema.instance.getKeyspaceMetadata(keyspace);
 
-            CFMetaData cfMetaData = ksm.tables.getNullable(schemaStatement.columnFamily());
-            if (cfMetaData == null)
-            {
-                CreateTableStatement statement = (CreateTableStatement) schemaStatement.prepare(ksm.types).statement;
-                statement.validate(ClientState.forInternalCalls());
+            TableMetadata tableMetadata = ksm.tables.getNullable(schemaStatement.columnFamily());
 
-                cfMetaData = statement.getCFMetaData();
+            if (tableMetadata != null)
+                return tableMetadata;
 
-                Schema.instance.load(cfMetaData);
-                Schema.instance.setKeyspaceMetadata(ksm.withSwapped(ksm.tables.with(cfMetaData)));
-            }
+            CreateTableStatement statement = (CreateTableStatement) schemaStatement.prepare(ksm.types).statement;
+            statement.validate(ClientState.forInternalCalls());
 
+            TableMetadata.Builder builder = statement.builder();
             if (partitioner != null)
-                return cfMetaData.copy(partitioner);
-            else
-                return cfMetaData;
+                builder.partitioner(partitioner);
+            TableMetadata metadata = builder.build();
+
+            Schema.instance.load(ksm.withSwapped(ksm.tables.with(metadata)));
+            return metadata;
         }
 

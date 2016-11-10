@@ -1,0 +1,32 @@
+        /**
+         * Get the still active sstables we should run anticompaction on
+         *
+         * note that validation and streaming do not call this method - they have to work on the actual active sstables on the node, we only call this
+         * to know which sstables are still there that were there when we started the repair
+         *
+         * @param tableId
+         * @param parentSessionId for checking if there exists a snapshot for this repair
+         * @return
+         */
+        @SuppressWarnings("resource")
+        public synchronized Refs<SSTableReader> getActiveRepairedSSTableRefsForAntiCompaction(TableId tableId, UUID parentSessionId)
+        {
+            assert marked.contains(tableId);
+            if (!columnFamilyStores.containsKey(tableId))
+                throw new RuntimeException("Not possible to get sstables for anticompaction for " + tableId);
+            boolean isSnapshotRepair = columnFamilyStores.get(tableId).snapshotExists(parentSessionId.toString());
+            ImmutableMap.Builder<SSTableReader, Ref<SSTableReader>> references = ImmutableMap.builder();
+            Iterable<SSTableReader> sstables = isSnapshotRepair ? getSSTablesForSnapshotRepair(tableId, parentSessionId) : getActiveSSTables(tableId);
+            // we check this above - if columnFamilyStores contains the tableId sstables will not be null
+            assert sstables != null;
+            for (SSTableReader sstable : sstables)
+            {
+                Ref<SSTableReader> ref = sstable.tryRef();
+                if (ref == null)
+                    sstableMap.get(tableId).remove(sstable.getFilename());
+                else
+                    references.put(sstable, ref);
+            }
+            return new Refs<>(references.build());
+        }
+

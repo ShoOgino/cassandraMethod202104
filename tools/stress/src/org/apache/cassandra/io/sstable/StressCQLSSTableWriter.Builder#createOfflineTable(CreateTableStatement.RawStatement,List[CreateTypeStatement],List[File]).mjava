@@ -6,34 +6,31 @@
         {
             String keyspace = schemaStatement.keyspace();
 
-            if (Schema.instance.getKSMetaData(keyspace) == null)
+            if (Schema.instance.getKeyspaceMetadata(keyspace) == null)
                 Schema.instance.load(KeyspaceMetadata.create(keyspace, KeyspaceParams.simple(1)));
 
             createTypes(keyspace, typeStatements);
 
-            KeyspaceMetadata ksm = Schema.instance.getKSMetaData(keyspace);
+            KeyspaceMetadata ksm = Schema.instance.getKeyspaceMetadata(keyspace);
 
-            CFMetaData cfMetaData = ksm.tables.getNullable(schemaStatement.columnFamily());
-            assert cfMetaData == null;
+            assert ksm.tables.getNullable(schemaStatement.columnFamily()) == null;
 
             CreateTableStatement statement = (CreateTableStatement) schemaStatement.prepare(ksm.types).statement;
             statement.validate(ClientState.forInternalCalls());
 
-            //Build metatdata with a portable cfId
-            cfMetaData = statement.metadataBuilder()
-                                  .withId(CFMetaData.generateLegacyCfId(keyspace, statement.columnFamily()))
-                                  .build()
-                                  .params(statement.params());
+            //Build metadata with a portable tableId
+            TableMetadata tableMetadata = statement.builder()
+                                                   .id(deterministicId(statement.keyspace(), statement.columnFamily()))
+                                                   .build();
 
             Keyspace.setInitialized();
-            Directories directories = new Directories(cfMetaData, directoryList.stream().map(Directories.DataDirectory::new).collect(Collectors.toList()));
+            Directories directories = new Directories(tableMetadata, directoryList.stream().map(Directories.DataDirectory::new).collect(Collectors.toList()));
 
             Keyspace ks = Keyspace.openWithoutSSTables(keyspace);
-            ColumnFamilyStore cfs =  ColumnFamilyStore.createColumnFamilyStore(ks, cfMetaData.cfName, cfMetaData, directories, false, false, true);
+            ColumnFamilyStore cfs =  ColumnFamilyStore.createColumnFamilyStore(ks, tableMetadata.name, TableMetadataRef.forOfflineTools(tableMetadata), directories, false, false, true);
 
             ks.initCfCustom(cfs);
-            Schema.instance.load(cfs.metadata);
-            Schema.instance.setKeyspaceMetadata(ksm.withSwapped(ksm.tables.with(cfs.metadata)));
+            Schema.instance.load(ksm.withSwapped(ksm.tables.with(cfs.metadata())));
 
             return cfs;
         }

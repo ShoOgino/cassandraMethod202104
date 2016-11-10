@@ -1,0 +1,39 @@
+        public ColumnFilter deserialize(DataInputPlus in, int version, TableMetadata metadata) throws IOException
+        {
+            int header = in.readUnsignedByte();
+            boolean isFetchAll = (header & FETCH_ALL_MASK) != 0;
+            boolean hasQueried = (header & HAS_QUERIED_MASK) != 0;
+            boolean hasSubSelections = (header & HAS_SUB_SELECTIONS_MASK) != 0;
+
+            RegularAndStaticColumns queried = null;
+            if (hasQueried)
+            {
+                Columns statics = Columns.serializer.deserialize(in, metadata);
+                Columns regulars = Columns.serializer.deserialize(in, metadata);
+                queried = new RegularAndStaticColumns(statics, regulars);
+            }
+
+            SortedSetMultimap<ColumnIdentifier, ColumnSubselection> subSelections = null;
+            if (hasSubSelections)
+            {
+                subSelections = TreeMultimap.create(Comparator.<ColumnIdentifier>naturalOrder(), Comparator.<ColumnSubselection>naturalOrder());
+                int size = (int)in.readUnsignedVInt();
+                for (int i = 0; i < size; i++)
+                {
+                    ColumnSubselection subSel = ColumnSubselection.serializer.deserialize(in, version, metadata);
+                    subSelections.put(subSel.column().name, subSel);
+                }
+            }
+
+            // Same concern than in serialize/serializedSize: we should be wary of the change in meaning for isFetchAll.
+            // If we get a filter with isFetchAll from 3.0/3.x, it actually expects all static columns to be fetched,
+            // make sure we do that (note that if queried == null, that's already what we do).
+            // Note that here again this will make us do a bit more work that necessary, namely we'll _query_ all
+            // statics even though we only care about _fetching_ them all, but that's a minor inefficiency, so fine
+            // during upgrade.
+            if (version <= MessagingService.VERSION_30 && isFetchAll && queried != null)
+                queried = new RegularAndStaticColumns(metadata.staticColumns(), queried.regulars);
+
+            return new ColumnFilter(isFetchAll, isFetchAll ? metadata : null, queried, subSelections);
+        }
+

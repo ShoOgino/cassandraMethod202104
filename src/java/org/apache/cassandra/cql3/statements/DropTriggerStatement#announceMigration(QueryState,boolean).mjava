@@ -1,7 +1,7 @@
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws ConfigurationException, InvalidRequestException
     {
-        CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
-        Triggers triggers = cfm.getTriggers();
+        TableMetadata current = Schema.instance.getTableMetadata(keyspace(), columnFamily());
+        Triggers triggers = current.triggers;
 
         if (!triggers.get(triggerName).isPresent())
         {
@@ -12,8 +12,14 @@
         }
 
         logger.info("Dropping trigger with name {}", triggerName);
-        cfm.triggers(triggers.without(triggerName));
-        MigrationManager.announceColumnFamilyUpdate(cfm, isLocalOnly);
+
+        TableMetadata updated =
+            current.unbuild()
+                   .triggers(triggers.without(triggerName))
+                   .build();
+
+        MigrationManager.announceTableUpdate(updated, isLocalOnly);
+
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 

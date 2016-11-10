@@ -1,21 +1,22 @@
     @Test
     public void testSecondaryIndexDirectories()
     {
-        UUID tableID = CFMetaData.generateLegacyCfId(KS, "cf");
-        CFMetaData PARENT_CFM = CFMetaData.Builder.create(KS, "cf")
-                                  .withId(tableID)
-                                  .addPartitionKey("thekey", UTF8Type.instance)
-                                  .addClusteringColumn("col", UTF8Type.instance)
-                                  .build();
-        ColumnDefinition col = PARENT_CFM.getColumnDefinition(ByteBufferUtil.bytes("col"));
+        TableMetadata.Builder builder =
+            TableMetadata.builder(KS, "cf")
+                         .addPartitionKeyColumn("thekey", UTF8Type.instance)
+                         .addClusteringColumn("col", UTF8Type.instance);
+
+        ColumnIdentifier col = ColumnIdentifier.getInterned("col", true);
         IndexMetadata indexDef =
-            IndexMetadata.fromIndexTargets(PARENT_CFM,
-                                           Collections.singletonList(new IndexTarget(col.name, IndexTarget.Type.VALUES)),
+            IndexMetadata.fromIndexTargets(
+            Collections.singletonList(new IndexTarget(col, IndexTarget.Type.VALUES)),
                                            "idx",
                                            IndexMetadata.Kind.KEYS,
                                            Collections.emptyMap());
-        PARENT_CFM.indexes(PARENT_CFM.getIndexes().with(indexDef));
-        CFMetaData INDEX_CFM = CassandraIndex.indexCfsMetadata(PARENT_CFM, indexDef);
+        builder.indexes(Indexes.of(indexDef));
+
+        TableMetadata PARENT_CFM = builder.build();
+        TableMetadata INDEX_CFM = CassandraIndex.indexCfsMetadata(PARENT_CFM, indexDef);
         Directories parentDirectories = new Directories(PARENT_CFM);
         Directories indexDirectories = new Directories(INDEX_CFM);
         // secondary index has its own directory
@@ -23,8 +24,8 @@
         {
             assertEquals(cfDir(INDEX_CFM), dir);
         }
-        Descriptor parentDesc = new Descriptor(parentDirectories.getDirectoryForNewSSTables(), KS, PARENT_CFM.cfName, 0, SSTableFormat.Type.BIG);
-        Descriptor indexDesc = new Descriptor(indexDirectories.getDirectoryForNewSSTables(), KS, INDEX_CFM.cfName, 0, SSTableFormat.Type.BIG);
+        Descriptor parentDesc = new Descriptor(parentDirectories.getDirectoryForNewSSTables(), KS, PARENT_CFM.name, 0, SSTableFormat.Type.BIG);
+        Descriptor indexDesc = new Descriptor(indexDirectories.getDirectoryForNewSSTables(), KS, INDEX_CFM.name, 0, SSTableFormat.Type.BIG);
 
         // snapshot dir should be created under its parent's
         File parentSnapshotDirectory = Directories.getSnapshotDirectory(parentDesc, "test");
@@ -41,9 +42,9 @@
                      indexDirectories.snapshotCreationTime("test"));
 
         // check true snapshot size
-        Descriptor parentSnapshot = new Descriptor(parentSnapshotDirectory, KS, PARENT_CFM.cfName, 0, SSTableFormat.Type.BIG);
+        Descriptor parentSnapshot = new Descriptor(parentSnapshotDirectory, KS, PARENT_CFM.name, 0, SSTableFormat.Type.BIG);
         createFile(parentSnapshot.filenameFor(Component.DATA), 30);
-        Descriptor indexSnapshot = new Descriptor(indexSnapshotDirectory, KS, INDEX_CFM.cfName, 0, SSTableFormat.Type.BIG);
+        Descriptor indexSnapshot = new Descriptor(indexSnapshotDirectory, KS, INDEX_CFM.name, 0, SSTableFormat.Type.BIG);
         createFile(indexSnapshot.filenameFor(Component.DATA), 40);
 
         assertEquals(30, parentDirectories.trueSnapshotsSize());

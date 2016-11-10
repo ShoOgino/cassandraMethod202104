@@ -1,0 +1,23 @@
+    // Returns a future on the local application of the schema
+    private static Future<?> announce(final Collection<Mutation> schema)
+    {
+        Future<?> f = StageManager.getStage(Stage.MIGRATION).submit(new WrappedRunnable()
+        {
+            protected void runMayThrow() throws ConfigurationException
+            {
+                Schema.instance.mergeAndAnnounceVersion(schema);
+            }
+        });
+
+        for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
+        {
+            // only push schema to nodes with known and equal versions
+            if (!endpoint.equals(FBUtilities.getBroadcastAddress()) &&
+                    MessagingService.instance().knowsVersion(endpoint) &&
+                    MessagingService.instance().getRawVersion(endpoint) == MessagingService.current_version)
+                pushSchemaMutation(endpoint, schema);
+        }
+
+        return f;
+    }
+

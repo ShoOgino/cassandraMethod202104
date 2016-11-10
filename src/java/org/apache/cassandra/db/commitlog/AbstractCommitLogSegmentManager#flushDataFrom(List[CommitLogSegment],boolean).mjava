@@ -10,27 +10,26 @@
         final CommitLogPosition maxCommitLogPosition = segments.get(segments.size() - 1).getCurrentCommitLogPosition();
 
         // a map of CfId -> forceFlush() to ensure we only queue one flush per cf
-        final Map<UUID, ListenableFuture<?>> flushes = new LinkedHashMap<>();
+        final Map<TableId, ListenableFuture<?>> flushes = new LinkedHashMap<>();
 
         for (CommitLogSegment segment : segments)
         {
-            for (UUID dirtyCFId : segment.getDirtyCFIDs())
+            for (TableId dirtyTableId : segment.getDirtyTableIds())
             {
-                Pair<String,String> pair = Schema.instance.getCF(dirtyCFId);
-                if (pair == null)
+                TableMetadata metadata = Schema.instance.getTableMetadata(dirtyTableId);
+                if (metadata == null)
                 {
                     // even though we remove the schema entry before a final flush when dropping a CF,
                     // it's still possible for a writer to race and finish his append after the flush.
-                    logger.trace("Marking clean CF {} that doesn't exist anymore", dirtyCFId);
-                    segment.markClean(dirtyCFId, CommitLogPosition.NONE, segment.getCurrentCommitLogPosition());
+                    logger.trace("Marking clean CF {} that doesn't exist anymore", dirtyTableId);
+                    segment.markClean(dirtyTableId, CommitLogPosition.NONE, segment.getCurrentCommitLogPosition());
                 }
-                else if (!flushes.containsKey(dirtyCFId))
+                else if (!flushes.containsKey(dirtyTableId))
                 {
-                    String keyspace = pair.left;
-                    final ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(dirtyCFId);
+                    final ColumnFamilyStore cfs = Keyspace.open(metadata.keyspace).getColumnFamilyStore(dirtyTableId);
                     // can safely call forceFlush here as we will only ever block (briefly) for other attempts to flush,
                     // no deadlock possibility since switchLock removal
-                    flushes.put(dirtyCFId, force ? cfs.forceFlush() : cfs.forceFlush(maxCommitLogPosition));
+                    flushes.put(dirtyTableId, force ? cfs.forceFlush() : cfs.forceFlush(maxCommitLogPosition));
                 }
             }
         }

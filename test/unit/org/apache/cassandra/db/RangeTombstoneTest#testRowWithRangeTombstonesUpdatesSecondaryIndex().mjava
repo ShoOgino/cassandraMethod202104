@@ -9,17 +9,25 @@
         cfs.truncateBlocking();
         cfs.disableAutoCompaction();
 
-        ColumnDefinition cd = cfs.metadata.getColumnDefinition(indexedColumnName).copy();
+        ColumnMetadata cd = cfs.metadata().getColumn(indexedColumnName).copy();
         IndexMetadata indexDef =
-            IndexMetadata.fromIndexTargets(cfs.metadata,
-                                           Collections.singletonList(new IndexTarget(cd.name, IndexTarget.Type.VALUES)),
+            IndexMetadata.fromIndexTargets(
+            Collections.singletonList(new IndexTarget(cd.name, IndexTarget.Type.VALUES)),
                                            "test_index",
                                            IndexMetadata.Kind.CUSTOM,
                                            ImmutableMap.of(IndexTarget.CUSTOM_INDEX_OPTION_NAME,
                                                            StubIndex.class.getName()));
 
-        if (!cfs.metadata.getIndexes().get("test_index").isPresent())
-            cfs.metadata.indexes(cfs.metadata.getIndexes().with(indexDef));
+        TableMetadata current = cfs.metadata();
+
+        if (!current.indexes.get("test_index").isPresent())
+        {
+            TableMetadata updated =
+                current.unbuild()
+                       .indexes(current.indexes.with(indexDef))
+                       .build();
+            MigrationManager.announceTableUpdate(updated, true);
+        }
 
         Future<?> rebuild = cfs.indexManager.addIndex(indexDef);
         // If rebuild there is, wait for the rebuild to finish so it doesn't race with the following insertions
@@ -33,13 +41,13 @@
                                                      .orElseThrow(() -> new RuntimeException(new AssertionError("Index not found")));
         index.reset();
 
-        UpdateBuilder builder = UpdateBuilder.create(cfs.metadata, key).withTimestamp(0);
+        UpdateBuilder builder = UpdateBuilder.create(cfs.metadata(), key).withTimestamp(0);
         for (int i = 0; i < 10; i++)
             builder.newRow(i).add("val", i);
         builder.applyUnsafe();
         cfs.forceBlockingFlush();
 
-        new RowUpdateBuilder(cfs.metadata, 0, key).addRangeTombstone(0, 7).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata(), 0, key).addRangeTombstone(0, 7).build().applyUnsafe();
         cfs.forceBlockingFlush();
 
         assertEquals(10, index.rowsInserted.size());

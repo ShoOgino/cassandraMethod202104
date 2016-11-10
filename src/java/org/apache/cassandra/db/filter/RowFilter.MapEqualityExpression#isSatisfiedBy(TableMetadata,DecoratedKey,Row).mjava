@@ -1,0 +1,27 @@
+        public boolean isSatisfiedBy(TableMetadata metadata, DecoratedKey partitionKey, Row row)
+        {
+            assert key != null;
+            // We support null conditions for LWT (in ColumnCondition) but not for RowFilter.
+            // TODO: we should try to merge both code someday.
+            assert value != null;
+
+            if (row.isStatic() != column.isStatic())
+                return true;
+
+            MapType<?, ?> mt = (MapType<?, ?>)column.type;
+            if (column.isComplex())
+            {
+                Cell cell = row.getCell(column, CellPath.create(key));
+                return cell != null && mt.valueComparator().compare(cell.value(), value) == 0;
+            }
+            else
+            {
+                ByteBuffer serializedMap = getValue(metadata, partitionKey, row);
+                if (serializedMap == null)
+                    return false;
+
+                ByteBuffer foundValue = mt.getSerializer().getSerializedValue(serializedMap, key, mt.getKeysType());
+                return foundValue != null && mt.valueComparator().compare(foundValue, value) == 0;
+            }
+        }
+

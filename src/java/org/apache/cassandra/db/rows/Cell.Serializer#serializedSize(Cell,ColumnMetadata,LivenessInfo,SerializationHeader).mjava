@@ -1,0 +1,26 @@
+        public long serializedSize(Cell cell, ColumnMetadata column, LivenessInfo rowLiveness, SerializationHeader header)
+        {
+            long size = 1; // flags
+            boolean hasValue = cell.value().hasRemaining();
+            boolean isDeleted = cell.isTombstone();
+            boolean isExpiring = cell.isExpiring();
+            boolean useRowTimestamp = !rowLiveness.isEmpty() && cell.timestamp() == rowLiveness.timestamp();
+            boolean useRowTTL = isExpiring && rowLiveness.isExpiring() && cell.ttl() == rowLiveness.ttl() && cell.localDeletionTime() == rowLiveness.localExpirationTime();
+
+            if (!useRowTimestamp)
+                size += header.timestampSerializedSize(cell.timestamp());
+
+            if ((isDeleted || isExpiring) && !useRowTTL)
+                size += header.localDeletionTimeSerializedSize(cell.localDeletionTime());
+            if (isExpiring && !useRowTTL)
+                size += header.ttlSerializedSize(cell.ttl());
+
+            if (column.isComplex())
+                size += column.cellPathSerializer().serializedSize(cell.path());
+
+            if (hasValue)
+                size += header.getType(column).writtenLength(cell.value());
+
+            return size;
+        }
+

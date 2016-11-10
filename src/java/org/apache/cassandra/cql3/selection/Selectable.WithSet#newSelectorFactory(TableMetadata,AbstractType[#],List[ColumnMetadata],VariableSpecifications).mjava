@@ -1,0 +1,37 @@
+        @Override
+        public Factory newSelectorFactory(TableMetadata cfm,
+                                          AbstractType<?> expectedType,
+                                          List<ColumnMetadata> defs,
+                                          VariableSpecifications boundNames)
+        {
+            AbstractType<?> type = getExactTypeIfKnown(cfm.keyspace);
+            if (type == null)
+            {
+                type = expectedType;
+                if (type == null)
+                    throw invalidRequest("Cannot infer type for term %s in selection clause (try using a cast to force a type)",
+                                         this);
+            }
+
+            // The parser treats empty Maps as Sets so if the type is a MapType we know that the Map is empty
+            if (type instanceof MapType)
+                return MapSelector.newFactory(type, Collections.emptyList());
+
+            SetType<?> setType = (SetType<?>) type;
+
+            if (setType.getElementsType() == DurationType.instance)
+                throw invalidRequest("Durations are not allowed inside sets: %s", setType.asCQL3Type());
+
+            List<AbstractType<?>> expectedTypes = new ArrayList<>(selectables.size());
+            for (int i = 0, m = selectables.size(); i < m; i++)
+                expectedTypes.add(setType.getElementsType());
+
+            SelectorFactories factories = createFactoriesAndCollectColumnDefinitions(selectables,
+                                                                                     expectedTypes,
+                                                                                     cfm,
+                                                                                     defs,
+                                                                                     boundNames);
+
+            return SetSelector.newFactory(type, factories);
+        }
+

@@ -1,0 +1,35 @@
+    @Test
+    public void testDropIndex() throws ConfigurationException
+    {
+        // persist keyspace definition in the system keyspace
+        SchemaKeyspace.makeCreateKeyspaceMutation(Schema.instance.getKeyspaceMetadata(KEYSPACE6), FBUtilities.timestampMicros()).build().applyUnsafe();
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE6).getColumnFamilyStore(TABLE1i);
+        String indexName = TABLE1i + "_birthdate_key_index";
+
+        // insert some data.  save the sstable descriptor so we can make sure it's marked for delete after the drop
+        QueryProcessor.executeInternal(String.format(
+                                                    "INSERT INTO %s.%s (key, c1, birthdate, notbirthdate) VALUES (?, ?, ?, ?)",
+                                                    KEYSPACE6,
+                                                    TABLE1i),
+                                       "key0", "col0", 1L, 1L);
+
+        cfs.forceBlockingFlush();
+        ColumnFamilyStore indexCfs = cfs.indexManager.getIndexByName(indexName)
+                                                     .getBackingTable()
+                                                     .orElseThrow(throwAssert("Cannot access index cfs"));
+        Descriptor desc = indexCfs.getLiveSSTables().iterator().next().descriptor;
+
+        // drop the index
+        TableMetadata meta = cfs.metadata();
+        IndexMetadata existing = meta.indexes
+                                     .get(indexName)
+                                     .orElseThrow(throwAssert("Index not found"));
+
+        MigrationManager.announceTableUpdate(meta.unbuild().indexes(meta.indexes.without(existing.name)).build());
+
+        // check
+        assertTrue(cfs.indexManager.listIndexes().isEmpty());
+        LifecycleTransaction.waitForDeletions();
+        assertFalse(new File(desc.filenameFor(Component.DATA)).exists());
+    }
+

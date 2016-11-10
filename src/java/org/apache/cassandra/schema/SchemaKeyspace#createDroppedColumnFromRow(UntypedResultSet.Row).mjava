@@ -1,19 +1,22 @@
-    private static CFMetaData.DroppedColumn createDroppedColumnFromRow(UntypedResultSet.Row row)
+    private static DroppedColumn createDroppedColumnFromRow(UntypedResultSet.Row row)
     {
         String keyspace = row.getString("keyspace_name");
+        String table = row.getString("table_name");
         String name = row.getString("column_name");
         /*
          * we never store actual UDT names in dropped column types (so that we can safely drop types if nothing refers to
          * them anymore), so before storing dropped columns in schema we expand UDTs to tuples. See expandUserTypes method.
          * Because of that, we can safely pass Types.none() to parse()
          */
-        AbstractType<?> type = parse(keyspace, row.getString("type"), org.apache.cassandra.schema.Types.none());
+        AbstractType<?> type = CQLTypeParser.parse(keyspace, row.getString("type"), org.apache.cassandra.schema.Types.none());
+        ColumnMetadata.Kind kind = row.has("kind")
+                                 ? ColumnMetadata.Kind.valueOf(row.getString("kind").toUpperCase())
+                                 : ColumnMetadata.Kind.REGULAR;
+        assert kind == ColumnMetadata.Kind.REGULAR || kind == ColumnMetadata.Kind.STATIC
+            : "Unexpected dropped column kind: " + kind.toString();
+
+        ColumnMetadata column = new ColumnMetadata(keyspace, table, ColumnIdentifier.getInterned(name, true), type, ColumnMetadata.NO_POSITION, kind);
         long droppedTime = TimeUnit.MILLISECONDS.toMicros(row.getLong("dropped_time"));
-        ColumnDefinition.Kind kind = row.has("kind")
-                                     ? ColumnDefinition.Kind.valueOf(row.getString("kind").toUpperCase())
-                                     : ColumnDefinition.Kind.REGULAR;
-        assert kind == ColumnDefinition.Kind.REGULAR || kind == ColumnDefinition.Kind.STATIC
-            : "Unexpected dropped column kind: " + kind;
-        return new CFMetaData.DroppedColumn(name, type, droppedTime, kind);
+        return new DroppedColumn(column, droppedTime);
     }
 

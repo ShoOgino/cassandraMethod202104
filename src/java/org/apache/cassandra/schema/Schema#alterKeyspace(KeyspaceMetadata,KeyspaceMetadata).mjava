@@ -1,0 +1,50 @@
+    private void alterKeyspace(KeyspaceMetadata before, KeyspaceMetadata after)
+    {
+        // calculate the deltas
+        MapDifference<TableId, TableMetadata> tablesDiff = before.tables.diff(after.tables);
+        MapDifference<TableId, ViewMetadata> viewsDiff = before.views.diff(after.views);
+        MapDifference<ByteBuffer, UserType> typesDiff = before.types.diff(after.types);
+        MapDifference<Pair<FunctionName, List<String>>, UDFunction> udfsDiff = before.functions.udfsDiff(after.functions);
+        MapDifference<Pair<FunctionName, List<String>>, UDAggregate> udasDiff = before.functions.udasDiff(after.functions);
+
+        // drop tables and views
+        viewsDiff.entriesOnlyOnLeft().values().forEach(this::dropView);
+        tablesDiff.entriesOnlyOnLeft().values().forEach(this::dropTable);
+
+        load(after);
+
+        // add tables and views
+        tablesDiff.entriesOnlyOnRight().values().forEach(this::createTable);
+        viewsDiff.entriesOnlyOnRight().values().forEach(this::createView);
+
+        // update tables and views
+        tablesDiff.entriesDiffering().values().forEach(diff -> alterTable(diff.rightValue()));
+        viewsDiff.entriesDiffering().values().forEach(diff -> alterView(diff.rightValue()));
+
+        // deal with all removed, added, and altered views
+        Keyspace.open(before.name).viewManager.reload();
+
+        // notify on everything dropped
+        udasDiff.entriesOnlyOnLeft().values().forEach(this::notifyDropAggregate);
+        udfsDiff.entriesOnlyOnLeft().values().forEach(this::notifyDropFunction);
+        viewsDiff.entriesOnlyOnLeft().values().forEach(this::notifyDropView);
+        tablesDiff.entriesOnlyOnLeft().values().forEach(this::notifyDropTable);
+        typesDiff.entriesOnlyOnLeft().values().forEach(this::notifyDropType);
+
+        // notify on everything created
+        typesDiff.entriesOnlyOnRight().values().forEach(this::notifyCreateType);
+        tablesDiff.entriesOnlyOnRight().values().forEach(this::notifyCreateTable);
+        viewsDiff.entriesOnlyOnRight().values().forEach(this::notifyCreateView);
+        udfsDiff.entriesOnlyOnRight().values().forEach(this::notifyCreateFunction);
+        udasDiff.entriesOnlyOnRight().values().forEach(this::notifyCreateAggregate);
+
+        // notify on everything altered
+        if (!before.params.equals(after.params))
+            notifyAlterKeyspace(after);
+        typesDiff.entriesDiffering().values().forEach(diff -> notifyAlterType(diff.rightValue()));
+        tablesDiff.entriesDiffering().values().forEach(diff -> notifyAlterTable(diff.leftValue(), diff.rightValue()));
+        viewsDiff.entriesDiffering().values().forEach(diff -> notifyAlterView(diff.leftValue(), diff.rightValue()));
+        udfsDiff.entriesDiffering().values().forEach(diff -> notifyAlterFunction(diff.rightValue()));
+        udasDiff.entriesDiffering().values().forEach(diff -> notifyAlterAggregate(diff.rightValue()));
+    }
+
