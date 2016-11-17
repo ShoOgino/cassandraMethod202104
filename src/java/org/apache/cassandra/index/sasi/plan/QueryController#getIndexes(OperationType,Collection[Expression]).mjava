@@ -15,24 +15,20 @@
 
         RangeIterator.Builder<Long, Token> builder = op == OperationType.OR
                                                 ? RangeUnionIterator.<Long, Token>builder()
-                                                : RangeIntersectionIterator.<Long, org.apache.cassandra.index.sasi.disk.Token>builder();
+                                                : RangeIntersectionIterator.<Long, Token>builder();
 
         List<RangeIterator<Long, Token>> perIndexUnions = new ArrayList<>();
 
         for (Map.Entry<Expression, Set<SSTableIndex>> e : getView(op, expressions).entrySet())
         {
-            try (RangeIterator<Long, Token> index = TermIterator.build(e.getKey(), e.getValue()))
-            {
-                if (index == null)
-                    continue;
+            @SuppressWarnings("resource") // RangeIterators are closed by releaseIndexes
+            RangeIterator<Long, Token> index = TermIterator.build(e.getKey(), e.getValue());
 
-                builder.add(index);
-                perIndexUnions.add(index);
-            }
-            catch (IOException ex)
-            {
-                logger.error("Failed to release index: ", ex);
-            }
+            if (index == null)
+                continue;
+
+            builder.add(index);
+            perIndexUnions.add(index);
         }
 
         resources.put(expressions, perIndexUnions);
