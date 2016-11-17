@@ -1,0 +1,34 @@
+    public OnDiskIndexBuilder add(ByteBuffer term, DecoratedKey key, long keyPosition)
+    {
+        if (term.remaining() >= MAX_TERM_SIZE)
+        {
+            logger.error("Rejecting value (value size {}, maximum size {}).",
+                         FBUtilities.prettyPrintMemory(term.remaining()),
+                         FBUtilities.prettyPrintMemory(Short.MAX_VALUE));
+            return this;
+        }
+
+        TokenTreeBuilder tokens = terms.get(term);
+        if (tokens == null)
+        {
+            terms.put(term, (tokens = new DynamicTokenTreeBuilder()));
+
+            // on-heap size estimates from jol
+            // 64 bytes for TTB + 48 bytes for TreeMap in TTB + size bytes for the term (map key)
+            estimatedBytes += 64 + 48 + term.remaining();
+        }
+
+        tokens.add((Long) key.getToken().getTokenValue(), keyPosition);
+
+        // calculate key range (based on actual key values) for current index
+        minKey = (minKey == null || keyComparator.compare(minKey, key.getKey()) > 0) ? key.getKey() : minKey;
+        maxKey = (maxKey == null || keyComparator.compare(maxKey, key.getKey()) < 0) ? key.getKey() : maxKey;
+
+        // 60 ((boolean(1)*4) + (long(8)*4) + 24) bytes for the LongOpenHashSet created when the keyPosition was added
+        // + 40 bytes for the TreeMap.Entry + 8 bytes for the token (key).
+        // in the case of hash collision for the token we may overestimate but this is extremely rare
+        estimatedBytes += 60 + 40 + 8;
+
+        return this;
+    }
+

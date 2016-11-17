@@ -14,20 +14,19 @@
         Descriptor descriptor = Descriptor.fromFilename(cfs.getSSTablePath(directory));
         PerSSTableIndexWriter indexWriter = (PerSSTableIndexWriter) sasi.getFlushObserver(descriptor, OperationType.FLUSH);
 
-        SortedMap<RowKey, Row> expectedKeys = new TreeMap<>();
+        SortedMap<DecoratedKey, Row> expectedKeys = new TreeMap<>(DecoratedKey.comparator);
 
         for (int i = 0; i < maxKeys; i++)
         {
             ByteBuffer key = ByteBufferUtil.bytes(String.format(keyFormat, i));
-            Clustering clustering = Clustering.make(ByteBufferUtil.bytes(i * 1L));
-            expectedKeys.put(new RowKey(cfs.metadata.partitioner.decorateKey(key), clustering, CLUSTERING_COMPARATOR),
-                             BTreeRow.singleCellRow(clustering,
+            expectedKeys.put(cfs.metadata.partitioner.decorateKey(key),
+                             BTreeRow.singleCellRow(Clustering.EMPTY,
                                                     BufferCell.live(column, timestamp, Int32Type.instance.decompose(i))));
         }
 
         indexWriter.begin();
 
-        Iterator<Map.Entry<RowKey, Row>> keyIterator = expectedKeys.entrySet().iterator();
+        Iterator<Map.Entry<DecoratedKey, Row>> keyIterator = expectedKeys.entrySet().iterator();
         long position = 0;
 
         Set<String> segments = new HashSet<>();
@@ -39,11 +38,10 @@
                 if (!keyIterator.hasNext())
                     break outer;
 
-                Map.Entry<RowKey, Row> key = keyIterator.next();
+                Map.Entry<DecoratedKey, Row> key = keyIterator.next();
 
-                indexWriter.startPartition(key.getKey().decoratedKey, position);
-                indexWriter.nextUnfilteredCluster(key.getValue(), position);
-                position++;
+                indexWriter.startPartition(key.getKey(), position++);
+                indexWriter.nextUnfilteredCluster(key.getValue());
             }
 
             PerSSTableIndexWriter.Index index = indexWriter.getIndex(column);
@@ -64,12 +62,15 @@
         for (String segment : segments)
             Assert.assertFalse(new File(segment).exists());
 
-        OnDiskIndex index = new OnDiskIndex(new File(indexFile), Int32Type.instance, new FakeKeyFetcher(cfs, keyFormat));
+        OnDiskIndex index = new OnDiskIndex(new File(indexFile), Int32Type.instance, keyPosition -> {
+            ByteBuffer key = ByteBufferUtil.bytes(String.format(keyFormat, keyPosition));
+            return cfs.metadata.partitioner.decorateKey(key);
+        });
 
         Assert.assertEquals(0, UTF8Type.instance.compare(index.minKey(), ByteBufferUtil.bytes(String.format(keyFormat, 0))));
         Assert.assertEquals(0, UTF8Type.instance.compare(index.maxKey(), ByteBufferUtil.bytes(String.format(keyFormat, maxKeys - 1))));
 
-        Set<RowKey> actualKeys = new HashSet<>();
+        Set<DecoratedKey> actualKeys = new HashSet<>();
         int count = 0;
         for (OnDiskIndex.DataTerm term : index)
         {
@@ -77,7 +78,7 @@
 
             while (tokens.hasNext())
             {
-                for (RowKey key : tokens.next())
+                for (DecoratedKey key : tokens.next())
                     actualKeys.add(key);
             }
 
@@ -85,8 +86,8 @@
         }
 
         Assert.assertEquals(expectedKeys.size(), actualKeys.size());
-        for (RowKey key : expectedKeys.keySet())
-            Assert.assertTrue("Key was not present : " + key, actualKeys.contains(key));
+        for (DecoratedKey key : expectedKeys.keySet())
+            Assert.assertTrue(actualKeys.contains(key));
 
         FileUtils.closeQuietly(index);
     }
