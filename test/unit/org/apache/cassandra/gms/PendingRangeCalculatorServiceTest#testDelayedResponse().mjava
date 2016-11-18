@@ -1,0 +1,54 @@
+    @Test
+    @BMRule(name = "Block pending range calculation",
+            targetClass = "TokenMetadata",
+            targetMethod = "calculatePendingRanges",
+            targetLocation = "AT INVOKE org.apache.cassandra.locator.AbstractReplicationStrategy.getAddressRanges",
+            action = "org.apache.cassandra.gms.PendingRangeCalculatorServiceTest.calculationLock.lock()")
+    public void testDelayedResponse() throws UnknownHostException, InterruptedException
+    {
+        InetAddress otherNodeAddr = InetAddress.getByName("127.0.0.2");
+        UUID otherHostId = UUID.randomUUID();
+
+        // introduce node for first major state change
+        Gossiper.instance.applyStateLocally(getStates(otherNodeAddr, otherHostId, 1, false));
+
+        // acquire lock to block pending range calculation via byteman
+        calculationLock.lock();
+        try
+        {
+            // spawn thread that will trigger handling of a bootstrap state change which in turn will trigger
+            // the pending range calculation that will be blocked by our lock
+            Thread t1 = new Thread()
+            {
+                public void run()
+                {
+                    Gossiper.instance.applyStateLocally(getStates(otherNodeAddr, otherHostId, 2, true));
+                }
+            };
+            t1.start();
+
+            // busy-spin until t1 is blocked by lock
+            while (!calculationLock.hasQueuedThreads()) ;
+
+            // trigger further state changes in case we don't want the blocked thread from the
+            // expensive range calculation to block us here as well
+            Thread t2 = new Thread()
+            {
+                public void run()
+                {
+                    Gossiper.instance.applyStateLocally(getStates(otherNodeAddr, otherHostId, 3, false));
+                    Gossiper.instance.applyStateLocally(getStates(otherNodeAddr, otherHostId, 4, false));
+                    Gossiper.instance.applyStateLocally(getStates(otherNodeAddr, otherHostId, 5, false));
+                }
+            };
+            t2.start();
+            t2.join(2000);
+            assertFalse("Thread still blocked by pending range calculation", t2.isAlive());
+            assertEquals(5, Gossiper.instance.getEndpointStateForEndpoint(otherNodeAddr).getHeartBeatState().getHeartBeatVersion());
+        }
+        finally
+        {
+            calculationLock.unlock();
+        }
+    }
+
