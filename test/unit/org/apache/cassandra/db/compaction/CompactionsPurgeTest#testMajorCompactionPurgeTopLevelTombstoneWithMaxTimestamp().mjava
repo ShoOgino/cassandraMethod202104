@@ -1,5 +1,5 @@
     @Test
-    public void testMajorCompactionPurge()
+    public void testMajorCompactionPurgeTopLevelTombstoneWithMaxTimestamp()
     {
         CompactionManager.instance.disableAutoCompaction();
 
@@ -17,15 +17,15 @@
                    .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
                    .build().applyUnsafe();
         }
-
         cfs.forceBlockingFlush();
 
-        // deletes
-        for (int i = 0; i < 10; i++)
-        {
-            RowUpdateBuilder.deleteRow(cfs.metadata, 1, key, String.valueOf(i)).applyUnsafe();
-        }
+        new Mutation(KEYSPACE1, dk(key))
+            .add(PartitionUpdate.fullPartitionDelete(cfs.metadata, dk(key), Long.MAX_VALUE, FBUtilities.nowInSeconds()))
+            .applyUnsafe();
         cfs.forceBlockingFlush();
+
+        // major compact - tombstones should be purged
+        FBUtilities.waitOnFutures(CompactionManager.instance.submitMaximal(cfs, Integer.MAX_VALUE, false));
 
         // resurrect one column
         RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata, 2, key);
@@ -35,8 +35,6 @@
 
         cfs.forceBlockingFlush();
 
-        // major compact and test that all columns but the resurrected one is completely gone
-        FBUtilities.waitOnFutures(CompactionManager.instance.submitMaximal(cfs, Integer.MAX_VALUE, false));
         cfs.invalidateCachedPartition(dk(key));
 
         ImmutableBTreePartition partition = Util.getOnlyPartitionUnfiltered(Util.cmd(cfs, key).build());
