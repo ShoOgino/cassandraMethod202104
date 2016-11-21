@@ -1,0 +1,49 @@
+    /**
+     * Reads the value of the counter represented by this key.
+     *
+     * @param cfs the store for the table this is a key of.
+     * @return the value for the counter represented by this key, or {@code null} if there
+     * is not such counter.
+     */
+    public ByteBuffer readCounterValue(ColumnFamilyStore cfs)
+    {
+        CFMetaData metadata = cfs.metadata;
+        assert metadata.ksAndCFName.equals(ksAndCFName);
+
+        DecoratedKey key = cfs.decorateKey(partitionKey());
+
+        int clusteringSize = metadata.comparator.size();
+        List<ByteBuffer> buffers = CompositeType.splitName(ByteBuffer.wrap(cellName));
+        assert buffers.size() >= clusteringSize + 1; // See makeCellName above
+
+        Clustering clustering = Clustering.make(buffers.subList(0, clusteringSize).toArray(new ByteBuffer[clusteringSize]));
+        ColumnDefinition column = metadata.getColumnDefinition(buffers.get(clusteringSize));
+        // This can theoretically happen if a column is dropped after the cache is saved and we
+        // try to load it. Not point if failing in any case, just skip the value.
+        if (column == null)
+            return null;
+
+        CellPath path = column.isComplex() ? CellPath.create(buffers.get(buffers.size() - 1)) : null;
+
+        int nowInSec = FBUtilities.nowInSeconds();
+        ColumnFilter.Builder builder = ColumnFilter.selectionBuilder();
+        if (path == null)
+            builder.add(column);
+        else
+            builder.select(column, path);
+
+        ClusteringIndexFilter filter = new ClusteringIndexNamesFilter(FBUtilities.singleton(clustering, metadata.comparator), false);
+        SinglePartitionReadCommand cmd = SinglePartitionReadCommand.create(metadata, nowInSec, key, builder.build(), filter);
+        try (ReadExecutionController controller = cmd.executionController();
+             RowIterator iter = UnfilteredRowIterators.filter(cmd.queryMemtableAndDisk(cfs, controller), nowInSec))
+        {
+            ByteBuffer value = null;
+            if (column.isStatic())
+                value = iter.staticRow().getCell(column).value();
+            else if (iter.hasNext())
+                value = iter.next().getCell(column).value();
+
+            return value;
+        }
+    }
+
