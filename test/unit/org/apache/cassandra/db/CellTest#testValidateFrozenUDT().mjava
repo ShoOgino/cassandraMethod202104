@@ -1,0 +1,36 @@
+    @Test
+    public void testValidateFrozenUDT()
+    {
+        FieldIdentifier f1 = field("f1");  // has field position 0
+        FieldIdentifier f2 = field("f2");  // has field position 1
+        UserType udt = new UserType("ks",
+                                    bb("myType"),
+                                    asList(f1, f2),
+                                    asList(Int32Type.instance, UTF8Type.instance),
+                                    false);
+
+        ColumnDefinition c = fakeColumn("c", udt);
+        ByteBuffer val = udt(bb(1), bb("foo"));
+
+        // Valid cells
+        assertValid(BufferCell.live(c, 0, val));
+        assertValid(BufferCell.live(c, 0, val));
+        assertValid(BufferCell.expiring(c, 0, 4, 4, val));
+        assertValid(BufferCell.expiring(c, 0, 4, 4, val));
+        assertValid(BufferCell.tombstone(c, 0, 4));
+        // fewer values than types is accepted
+        assertValid(BufferCell.live(c, 0, udt(bb(1))));
+
+        // Invalid values
+        // invalid types
+        assertInvalid(BufferCell.live(c, 0, udt(bb("foo"), bb(1))));
+        // too many types
+        assertInvalid(BufferCell.live(c, 0, udt(bb(1), bb("foo"), bb("bar"))));
+
+        // Invalid ttl
+        assertInvalid(BufferCell.expiring(c, 0, -4, 4, val));
+        // Invalid local deletion times
+        assertInvalid(BufferCell.expiring(c, 0, 4, -5, val));
+        assertInvalid(BufferCell.expiring(c, 0, 4, Cell.NO_DELETION_TIME, val));
+    }
+
