@@ -1,0 +1,33 @@
+        public Collection<SSTableReader> flushMemtable(Memtable memtable)
+        {
+            if (memtable.isClean() || truncate)
+            {
+                memtable.cfs.replaceFlushed(memtable, Collections.emptyList());
+                reclaim(memtable);
+                return Collections.emptyList();
+            }
+
+            Collection<SSTableReader> readers = Collections.emptyList();
+            try (SSTableTxnWriter writer = memtable.flush())
+            {
+                try
+                {
+                    postFlush.secondaryIndexFlushLatch.await();
+                }
+                catch (InterruptedException e)
+                {
+                    postFlush.flushFailure = merge(postFlush.flushFailure, e);
+                }
+
+                if (postFlush.flushFailure == null && writer.getFilePointer() > 0)
+                    // sstables should contain non-repaired data.
+                    readers = writer.finish(true);
+                else
+                    maybeFail(writer.abort(postFlush.flushFailure));
+            }
+
+            memtable.cfs.replaceFlushed(memtable, readers);
+            reclaim(memtable);
+            return readers;
+        }
+
