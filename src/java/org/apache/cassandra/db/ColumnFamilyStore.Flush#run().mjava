@@ -13,23 +13,35 @@
 
             try
             {
+                boolean flushNonCf2i = true;
                 for (Memtable memtable : memtables)
                 {
                     Collection<SSTableReader> readers = Collections.emptyList();
                     if (!memtable.isClean() && !truncate)
+                    {
+                        // TODO: SecondaryIndex should support setBarrier(), so custom implementations can co-ordinate exactly
+                        // with CL as we do with memtables/CFS-backed SecondaryIndexes.
+                        if (flushNonCf2i)
+                        {
+                            indexManager.flushAllNonCFSBackedIndexesBlocking();
+                            flushNonCf2i = false;
+                        }
                         readers = memtable.flush();
+                    }
                     memtable.cfs.replaceFlushed(memtable, readers);
                     reclaim(memtable);
                 }
             }
-            catch (FSWriteError e)
+            catch (Throwable e)
             {
                 JVMStabilityInspector.inspectThrowable(e);
                 // If we weren't killed, try to continue work but do not allow CommitLog to be discarded.
                 postFlush.flushFailure = e;
             }
-
-            // signal the post-flush we've done our work
-            postFlush.latch.countDown();
+            finally
+            {
+                // signal the post-flush we've done our work
+                postFlush.latch.countDown();
+            }
         }
 
