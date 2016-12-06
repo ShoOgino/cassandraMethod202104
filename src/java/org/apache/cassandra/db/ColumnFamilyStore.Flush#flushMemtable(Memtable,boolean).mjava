@@ -1,4 +1,4 @@
-        public Collection<SSTableReader> flushMemtable(Memtable memtable)
+        public Collection<SSTableReader> flushMemtable(Memtable memtable, boolean flushNonCf2i)
         {
             if (memtable.isClean() || truncate)
             {
@@ -24,6 +24,15 @@
 
                     for (int i = 0; i < flushRunnables.size(); i++)
                         futures.add(perDiskflushExecutors[i].submit(flushRunnables.get(i)));
+
+                    /**
+                     * we can flush 2is as soon as the barrier completes, as they will be consistent with (or ahead of) the
+                     * flushed memtables and CL position, which is as good as we can guarantee.
+                     * TODO: SecondaryIndex should support setBarrier(), so custom implementations can co-ordinate exactly
+                     * with CL as we do with memtables/CFS-backed SecondaryIndexes.
+                     */
+                    if (flushNonCf2i)
+                        indexManager.flushAllNonCFSBackedIndexesBlocking();
 
                     flushResults = Lists.newArrayList(FBUtilities.waitOnFutures(futures));
                 }
