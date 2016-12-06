@@ -8,27 +8,15 @@
              * TODO: SecondaryIndex should support setBarrier(), so custom implementations can co-ordinate exactly
              * with CL as we do with memtables/CFS-backed SecondaryIndexes.
              */
-            try
-            {
-                if (flushSecondaryIndexes)
-                {
-                    indexManager.flushAllNonCFSBackedIndexesBlocking();
-                }
-            }
-            catch (Throwable e)
-            {
-                flushFailure = merge(flushFailure, e);
-            }
-            finally
-            {
-                secondaryIndexFlushLatch.countDown();
-            }
+
+            if (flushSecondaryIndexes)
+                indexManager.flushAllNonCFSBackedIndexesBlocking();
 
             try
             {
                 // we wait on the latch for the commitLogUpperBound to be set, and so that waiters
                 // on this task can rely on all prior flushes being complete
-                memtablesFlushLatch.await();
+                latch.await();
             }
             catch (InterruptedException e)
             {
@@ -47,7 +35,7 @@
             metric.pendingFlushes.dec();
 
             if (flushFailure != null)
-                Throwables.propagate(flushFailure);
+                throw flushFailure;
 
             return commitLogUpperBound;
         }
