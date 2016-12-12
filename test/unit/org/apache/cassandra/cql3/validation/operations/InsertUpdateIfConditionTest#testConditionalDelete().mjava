@@ -39,20 +39,31 @@
         assertRows(execute("DELETE FROM %s WHERE k='k' AND i=0 IF EXISTS"), row(false));
 
         // CASSANDRA-6430
-        assertInvalid("DELETE FROM %s WHERE k = 'k' IF EXISTS");
-        assertInvalid("DELETE FROM %s WHERE k = 'k' IF v = 'foo'");
-        assertInvalid("DELETE FROM %s WHERE i = 0 IF EXISTS");
-        assertInvalid("DELETE FROM %s WHERE k = 0 AND i > 0 IF EXISTS");
-        assertInvalid("DELETE FROM %s WHERE k = 0 AND i > 0 IF v = 'foo'");
+        assertInvalidMessage("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to use IF conditions, but column 'i' is not restricted",
+                             "DELETE FROM %s WHERE k = 'k' IF EXISTS");
+        assertInvalidMessage("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to use IF conditions, but column 'i' is not restricted",
+                             "DELETE FROM %s WHERE k = 'k' IF v = ?", "foo");
+        assertInvalidMessage("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to use IF conditions, but column 'k' is not restricted",
+                             "DELETE FROM %s WHERE i = 0 IF EXISTS");
+        assertInvalidMessage("Invalid INTEGER constant (0) for \"k\" of type text",
+                             "DELETE FROM %s WHERE k = 0 AND i > 0 IF EXISTS");
+
+        assertInvalidMessage("Invalid operator > for PRIMARY KEY part i",
+                             "DELETE FROM %s WHERE k = 'k' AND i > 0 IF EXISTS");
+        assertInvalidMessage("Invalid operator > for PRIMARY KEY part i",
+                             "DELETE FROM %s WHERE k = 'k' AND i > 0 IF v = ?", "foo");
+
+        assertInvalidMessage("Invalid 'unset' value in condition",
+                             "DELETE FROM %s WHERE k = 'k' AND i = 0 IF v = ?", unset());
 
         createTable("CREATE TABLE %s(k int, s int static, i int, v text, PRIMARY KEY(k, i))");
         execute("INSERT INTO %s (k, s, i, v) VALUES ( 1, 1, 2, '1')");
-        assertRows(execute("DELETE v FROM %s WHERE k = 1 AND i = 2 IF s != 1"), row(false, 1));
-        assertRows(execute("DELETE v FROM %s WHERE k = 1 AND i = 2 IF s = 1"), row(true));
+        assertRows(execute("DELETE v FROM %s WHERE k = 1 AND i = 2 IF s != ?", 1), row(false, 1));
+        assertRows(execute("DELETE v FROM %s WHERE k = 1 AND i = 2 IF s = ?", 1), row(true));
         assertRows(execute("SELECT * FROM %s WHERE k = 1 AND i = 2"), row(1, 2, 1, null));
 
-        assertRows(execute("DELETE FROM %s WHERE  k = 1 AND i = 2 IF s != 1"), row(false, 1));
-        assertRows(execute("DELETE FROM %s WHERE k = 1 AND i = 2 IF s = 1"), row(true));
+        assertRows(execute("DELETE FROM %s WHERE  k = 1 AND i = 2 IF s != ?", 1), row(false, 1));
+        assertRows(execute("DELETE FROM %s WHERE k = 1 AND i = 2 IF s = ?", 1), row(true));
         assertEmpty(execute("SELECT * FROM %s WHERE k = 1 AND i = 2"));
         assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, null, 1, null));
     }
