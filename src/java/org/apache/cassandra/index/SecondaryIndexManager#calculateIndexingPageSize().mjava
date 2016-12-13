@@ -1,0 +1,38 @@
+    /**
+     * Return the page size used when indexing an entire partition
+     */
+    public int calculateIndexingPageSize()
+    {
+        if (Boolean.getBoolean("cassandra.force_default_indexing_page_size"))
+            return DEFAULT_PAGE_SIZE;
+
+        double targetPageSizeInBytes = 32 * 1024 * 1024;
+        double meanPartitionSize = baseCfs.getMeanPartitionSize();
+        if (meanPartitionSize <= 0)
+            return DEFAULT_PAGE_SIZE;
+
+        int meanCellsPerPartition = baseCfs.getMeanColumns();
+        if (meanCellsPerPartition <= 0)
+            return DEFAULT_PAGE_SIZE;
+
+        int columnsPerRow = baseCfs.metadata.partitionColumns().regulars.size();
+        if (meanCellsPerPartition <= 0)
+            return DEFAULT_PAGE_SIZE;
+
+        int meanRowsPerPartition = meanCellsPerPartition / columnsPerRow;
+        double meanRowSize = meanPartitionSize / meanRowsPerPartition;
+
+        int pageSize = (int) Math.max(1, Math.min(DEFAULT_PAGE_SIZE, targetPageSizeInBytes / meanRowSize));
+
+        logger.trace("Calculated page size {} for indexing {}.{} ({}/{}/{}/{})",
+                     pageSize,
+                     baseCfs.metadata.ksName,
+                     baseCfs.metadata.cfName,
+                     meanPartitionSize,
+                     meanCellsPerPartition,
+                     meanRowsPerPartition,
+                     meanRowSize);
+
+        return pageSize;
+    }
+
