@@ -1,0 +1,36 @@
+    @Test
+    public void indexBuildingPagesLargePartitions() throws Throwable
+    {
+        createTable("CREATE TABLE %s(k int, c int, v int, PRIMARY KEY(k,c))");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        SecondaryIndexManager indexManager = cfs.indexManager;
+        int totalRows = SimulateConcurrentFlushingIndex.ROWS_IN_PARTITION;
+        // Insert a single wide partition to be indexed
+        for (int i = 0; i < totalRows; i++)
+            execute("INSERT INTO %s (k, c, v) VALUES (0, ?, ?)", i, i);
+        cfs.forceBlockingFlush();
+
+        // Create the index, which won't automatically start building
+        String indexName = "build_single_partition_idx";
+        createIndex(String.format("CREATE CUSTOM INDEX %s ON %%s(v) USING '%s'",
+                                  indexName, SimulateConcurrentFlushingIndex.class.getName()));
+        SimulateConcurrentFlushingIndex index = (SimulateConcurrentFlushingIndex) indexManager.getIndexByName(indexName);
+
+        // Index the partition with an Indexer which artificially simulates additional concurrent
+        // flush activity by periodically issuing barriers on the read & write op groupings
+        DecoratedKey targetKey = getCurrentColumnFamilyStore().decorateKey(ByteBufferUtil.bytes(0));
+        indexManager.indexPartition(targetKey, Collections.singleton(index), totalRows / 10);
+
+        // When indexing is done check that:
+        // * The base table's read ordering at finish was > the one at the start (i.e. that
+        //   we didn't hold a single read OpOrder.Group for the whole operation.
+        // * That multiple write OpOrder.Groups were used to perform the writes to the index
+        // * That all operations are complete, that none of the relevant OpOrder.Groups are
+        //   marked as blocking progress and that all the barriers' ops are considered done.
+        assertTrue(index.readOrderingAtFinish.compareTo(index.readOrderingAtStart) > 0);
+        assertTrue(index.writeGroups.size() > 1);
+        assertFalse(index.readOrderingAtFinish.isBlocking());
+        index.writeGroups.forEach(group -> assertFalse(group.isBlocking()));
+        index.barriers.forEach(OpOrder.Barrier::allPriorOpsAreFinished);
+    }
+
