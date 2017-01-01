@@ -9,36 +9,22 @@
         logger.info("(Re)initializing {} (validity period/update interval/max entries) ({}/{}/{})",
                     name, getValidity(), getUpdateInterval(), getMaxEntries());
 
-        LoadingCache<K, V> newcache = CacheBuilder.newBuilder()
-                           .refreshAfterWrite(getUpdateInterval(), TimeUnit.MILLISECONDS)
-                           .expireAfterWrite(getValidity(), TimeUnit.MILLISECONDS)
-                           .maximumSize(getMaxEntries())
-                           .build(new CacheLoader<K, V>()
-                           {
-                               public V load(K k)
-                               {
-                                   return loadFunction.apply(k);
-                               }
+        if (existing == null) {
+          return Caffeine.newBuilder()
+              .refreshAfterWrite(getUpdateInterval(), TimeUnit.MILLISECONDS)
+              .expireAfterWrite(getValidity(), TimeUnit.MILLISECONDS)
+              .maximumSize(getMaxEntries())
+              .executor(MoreExecutors.directExecutor())
+              .build(loadFunction::apply);
+        }
 
-                               public ListenableFuture<V> reload(final K k, final V oldV)
-                               {
-                                   ListenableFutureTask<V> task = ListenableFutureTask.create(() -> {
-                                       try
-                                       {
-                                           return loadFunction.apply(k);
-                                       }
-                                       catch (Exception e)
-                                       {
-                                           logger.trace("Error performing async refresh of auth data in {}", name, e);
-                                           throw e;
-                                       }
-                                   });
-                                   cacheRefreshExecutor.execute(task);
-                                   return task;
-                               }
-                           });
-        if (existing != null)
-            newcache.putAll(existing.asMap());
-        return newcache;
+        // Always set as manditory
+        cache.policy().refreshAfterWrite().ifPresent(policy ->
+            policy.setExpiresAfter(getUpdateInterval(), TimeUnit.MILLISECONDS));
+        cache.policy().expireAfterWrite().ifPresent(policy ->
+            policy.setExpiresAfter(getValidity(), TimeUnit.MILLISECONDS));
+        cache.policy().eviction().ifPresent(policy ->
+            policy.setMaximum(getMaxEntries()));
+        return cache;
     }
 

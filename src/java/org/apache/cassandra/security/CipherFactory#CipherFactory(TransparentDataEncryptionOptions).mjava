@@ -15,25 +15,18 @@
             throw new RuntimeException("couldn't load cipher factory", e);
         }
 
-        cache = CacheBuilder.newBuilder() // by default cache is unbounded
+        cache = Caffeine.newBuilder() // by default cache is unbounded
                 .maximumSize(64) // a value large enough that we should never even get close (so nothing gets evicted)
-                .concurrencyLevel(Runtime.getRuntime().availableProcessors())
-                .removalListener(new RemovalListener<String, Key>()
+                .executor(MoreExecutors.directExecutor())
+                .removalListener((key, value, cause) ->
                 {
-                    public void onRemoval(RemovalNotification<String, Key> notice)
-                    {
-                        // maybe reload the key? (to avoid the reload being on the user's dime)
-                        logger.info("key {} removed from cipher key cache", notice.getKey());
-                    }
+                    // maybe reload the key? (to avoid the reload being on the user's dime)
+                    logger.info("key {} removed from cipher key cache", key);
                 })
-                .build(new CacheLoader<String, Key>()
-                {
-                    @Override
-                    public Key load(String alias) throws Exception
-                    {
-                        logger.info("loading secret key for alias {}", alias);
-                        return keyProvider.getSecretKey(alias);
-                    }
-                });
+                .build(alias ->
+                       {
+                           logger.info("loading secret key for alias {}", alias);
+                           return keyProvider.getSecretKey(alias);
+                       });
     }
 
