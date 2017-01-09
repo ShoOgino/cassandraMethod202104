@@ -1,11 +1,16 @@
         @Override
         protected <C extends Coalescable> void coalesceInternal(BlockingQueue<C> input, List<C> out,  int maxItems) throws InterruptedException
         {
+            int enough = DatabaseDescriptor.getOtcCoalescingEnoughCoalescedMessages();
+
             if (input.drainTo(out, maxItems) == 0)
             {
                 out.add(input.take());
-                parker.park(coalesceWindow);
-                input.drainTo(out, maxItems - 1);
+                input.drainTo(out, maxItems - out.size());
+                if (out.size() < enough) {
+                    parker.park(coalesceWindow);
+                    input.drainTo(out, maxItems - out.size());
+                }
             }
             debugTimestamps(out);
         }
