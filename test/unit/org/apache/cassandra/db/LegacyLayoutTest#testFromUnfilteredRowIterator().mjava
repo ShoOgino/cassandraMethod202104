@@ -1,0 +1,33 @@
+    @Test
+    public void testFromUnfilteredRowIterator() throws Throwable
+    {
+        CFMetaData table = CFMetaData.Builder.create("ks", "table")
+                                             .addPartitionKey("k", Int32Type.instance)
+                                             .addRegularColumn("a", SetType.getInstance(Int32Type.instance, true))
+                                             .addRegularColumn("b", SetType.getInstance(Int32Type.instance, true))
+                                             .build();
+
+        ColumnDefinition a = table.getColumnDefinition(new ColumnIdentifier("a", false));
+        ColumnDefinition b = table.getColumnDefinition(new ColumnIdentifier("b", false));
+
+        Row.Builder builder = BTreeRow.unsortedBuilder(0);
+        builder.newRow(Clustering.EMPTY);
+        builder.addComplexDeletion(a, new DeletionTime(1L, 1));
+        builder.addComplexDeletion(b, new DeletionTime(1L, 1));
+        Row row = builder.build();
+
+        ByteBuffer key = ByteBufferUtil.bytes(1);
+        PartitionUpdate upd = PartitionUpdate.singleRowUpdate(table, key, row);
+
+        LegacyLayout.LegacyUnfilteredPartition p = LegacyLayout.fromUnfilteredRowIterator(null, upd.unfilteredIterator());
+        assertEquals(DeletionTime.LIVE, p.partitionDeletion);
+        assertEquals(0, p.cells.size());
+
+        LegacyLayout.LegacyRangeTombstoneList l = p.rangeTombstones;
+        assertEquals("a", l.starts[0].collectionName.name.toString());
+        assertEquals("a", l.ends[0].collectionName.name.toString());
+
+        assertEquals("b", l.starts[1].collectionName.name.toString());
+        assertEquals("b", l.ends[1].collectionName.name.toString());
+    }
+
