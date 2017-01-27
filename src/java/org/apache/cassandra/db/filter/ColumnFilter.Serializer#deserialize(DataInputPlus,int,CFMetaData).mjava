@@ -1,7 +1,7 @@
         public ColumnFilter deserialize(DataInputPlus in, int version, CFMetaData metadata) throws IOException
         {
             int header = in.readUnsignedByte();
-            boolean isFetchAll = (header & IS_FETCH_ALL_MASK) != 0;
+            boolean isFetchAll = (header & FETCH_ALL_MASK) != 0;
             boolean hasQueried = (header & HAS_QUERIED_MASK) != 0;
             boolean hasSubSelections = (header & HAS_SUB_SELECTIONS_MASK) != 0;
 
@@ -24,6 +24,15 @@
                     subSelections.put(subSel.column().name, subSel);
                 }
             }
+
+            // Same concern than in serialize/serializedSize: we should be wary of the change in meaning for isFetchAll.
+            // If we get a filter with isFetchAll from 3.0/3.x, it actually expects all static columns to be fetched,
+            // make sure we do that (note that if queried == null, that's already what we do).
+            // Note that here again this will make us do a bit more work that necessary, namely we'll _query_ all
+            // statics even though we only care about _fetching_ them all, but that's a minor inefficiency, so fine
+            // during upgrade.
+            if (version <= MessagingService.VERSION_30 && isFetchAll && queried != null)
+                queried = new PartitionColumns(metadata.partitionColumns().statics, queried.regulars);
 
             return new ColumnFilter(isFetchAll, isFetchAll ? metadata : null, queried, subSelections);
         }
