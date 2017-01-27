@@ -1,0 +1,44 @@
+        public ColumnCondition prepare(String keyspace, ColumnDefinition receiver, CFMetaData cfm)
+        {
+            if (receiver.type instanceof CounterColumnType)
+                throw invalidRequest("Conditions on counters are not supported");
+
+            if (collectionElement != null)
+            {
+                if (!(receiver.type.isCollection()))
+                    throw invalidRequest("Invalid element access syntax for non-collection column %s", receiver.name);
+
+                ColumnSpecification elementSpec, valueSpec;
+                switch ((((CollectionType<?>) receiver.type).kind))
+                {
+                    case LIST:
+                        elementSpec = Lists.indexSpecOf(receiver);
+                        valueSpec = Lists.valueSpecOf(receiver);
+                        break;
+                    case MAP:
+                        elementSpec = Maps.keySpecOf(receiver);
+                        valueSpec = Maps.valueSpecOf(receiver);
+                        break;
+                    case SET:
+                        throw invalidRequest("Invalid element access syntax for set column %s", receiver.name);
+                    default:
+                        throw new AssertionError();
+                }
+
+                return condition(receiver, collectionElement.prepare(keyspace, elementSpec), operator, prepareTerms(keyspace, valueSpec));
+            }
+
+            if (udtField != null)
+            {
+                UserType userType = (UserType) receiver.type;
+                int fieldPosition = userType.fieldPosition(udtField);
+                if (fieldPosition == -1)
+                    throw invalidRequest("Unknown field %s for column %s", udtField, receiver.name);
+
+                ColumnSpecification fieldReceiver = UserTypes.fieldSpecOf(receiver, fieldPosition);
+                return condition(receiver, udtField, operator, prepareTerms(keyspace, fieldReceiver));
+            }
+
+            return condition(receiver, operator, prepareTerms(keyspace, receiver));
+        }
+

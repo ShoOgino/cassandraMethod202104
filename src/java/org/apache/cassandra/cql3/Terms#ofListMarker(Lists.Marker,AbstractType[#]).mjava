@@ -1,0 +1,80 @@
+    /**
+     * Creates a {@code Terms} for the specified list marker.
+     *
+     * @param marker the list  marker
+     * @param type the element type
+     * @return a {@code Terms} for the specified list marker
+     */
+    public static Terms ofListMarker(final Lists.Marker marker, final AbstractType<?> type)
+    {
+        return new Terms()
+        {
+            @Override
+            public void addFunctionsTo(List<Function> functions)
+            {
+            }
+
+            @Override
+            public void collectMarkerSpecification(VariableSpecifications boundNames)
+            {
+                marker.collectMarkerSpecification(boundNames);
+            }
+
+            @Override
+            public List<ByteBuffer> bindAndGet(QueryOptions options)
+            {
+                Terminal terminal = marker.bind(options);
+
+                if (terminal == null)
+                    return null;
+
+                if (terminal == Constants.UNSET_VALUE)
+                    return UNSET_LIST;
+
+                return ((MultiItemTerminal) terminal).getElements();
+            }
+
+            @Override
+            public List<Terminal> bind(QueryOptions options)
+            {
+                Terminal terminal = marker.bind(options);
+
+                if (terminal == null)
+                    return null;
+
+                if (terminal == Constants.UNSET_VALUE)
+                    return UNSET_LIST;
+
+                java.util.function.Function<ByteBuffer, Term.Terminal> deserializer = deserializer(options.getProtocolVersion());
+
+                List<ByteBuffer> boundValues = ((MultiItemTerminal) terminal).getElements();
+                List<Term.Terminal> values = new ArrayList<>(boundValues.size());
+                for (int i = 0, m = boundValues.size(); i < m; i++)
+                {
+                    ByteBuffer buffer = boundValues.get(i);
+                    Term.Terminal value = buffer == null ? null : deserializer.apply(buffer);
+                    values.add(value);
+                }
+                return values;
+            }
+
+            public java.util.function.Function<ByteBuffer, Term.Terminal> deserializer(ProtocolVersion version)
+            {
+                if (type.isCollection())
+                {
+                    switch (((CollectionType<?>) type).kind)
+                    {
+                        case LIST:
+                            return e -> Lists.Value.fromSerialized(e, (ListType<?>) type, version);
+                        case SET:
+                            return e -> Sets.Value.fromSerialized(e, (SetType<?>) type, version);
+                        case MAP:
+                            return e -> Maps.Value.fromSerialized(e, (MapType<?, ?>) type, version);
+                    }
+                    throw new AssertionError();
+                }
+                return e -> new Constants.Value(e);
+            }
+        };
+    }
+

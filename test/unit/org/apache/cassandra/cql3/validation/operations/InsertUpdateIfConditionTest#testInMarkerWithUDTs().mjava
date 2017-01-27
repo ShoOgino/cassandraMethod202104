@@ -1,0 +1,65 @@
+    @Test
+    public void testInMarkerWithUDTs() throws Throwable
+    {
+        String typename = createType("CREATE TYPE %s (a int, b text)");
+        String myType = KEYSPACE + '.' + typename;
+
+        for (boolean frozen : new boolean[] {false, true})
+        {
+            createTable(String.format("CREATE TABLE %%s (k int PRIMARY KEY, v %s)",
+                                      frozen
+                                      ? "frozen<" + myType + ">"
+                                      : myType));
+
+            Object v = userType("a", 0, "b", "abc");
+            execute("INSERT INTO %s (k, v) VALUES (0, ?)", v);
+
+            // Does not apply
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 1, "b", "abc"), userType("a", 0, "b", "ac")),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 1, "b", "abc"), null),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", null, null),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 1, "b", "abc"), unset()),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", unset(), unset()),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN ?", list(userType("a", 1, "b", "abc"), userType("a", 0, "b", "ac"))),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, 2),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, null),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", list(1, 2)),
+                       row(false, v));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, unset()),
+                       row(false, v));
+
+            // Does apply
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 0, "b", "abc"), userType("a", 0, "b", "ac")),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 1, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 0, "b", "bc"), null),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v IN ?", list(userType("a", 1, "b", "bc"), userType("a", 0, "b", "ac"))),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 1, b: 'bc'} WHERE k = 0 IF v IN (?, ?, ?)", userType("a", 1, "b", "bc"), unset(), userType("a", 0, "b", "abc")),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, 0),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?)", 0, null),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", list(0, 1)),
+                       row(true));
+            assertRows(execute("UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?, ?)", 1, unset(), 0),
+                       row(true));
+
+            assertInvalidMessage("Invalid null list in IN condition",
+                                 "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN ?", (List<ByteBuffer>) null);
+            assertInvalidMessage("Invalid 'unset' value in condition",
+                                 "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN ?", unset());
+            assertInvalidMessage("Invalid 'unset' value in condition",
+                                 "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", unset());
+        }
+    }
+
