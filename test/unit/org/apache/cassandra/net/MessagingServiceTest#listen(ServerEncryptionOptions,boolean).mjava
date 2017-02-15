@@ -1,0 +1,71 @@
+    private void listen(ServerEncryptionOptions serverEncryptionOptions, boolean listenOnBroadcastAddr)
+    {
+        InetAddress listenAddress = null;
+        if (listenOnBroadcastAddr)
+        {
+            DatabaseDescriptor.setShouldListenOnBroadcastAddress(true);
+            listenAddress = InetAddresses.increment(FBUtilities.getBroadcastAddress());
+            DatabaseDescriptor.setListenAddress(listenAddress);
+            FBUtilities.reset();
+        }
+
+        try
+        {
+            messagingService.listen(serverEncryptionOptions);
+            Assert.assertTrue(messagingService.isListening());
+            int expectedListeningCount = NettyFactory.determineAcceptGroupSize(serverEncryptionOptions);
+            Assert.assertEquals(expectedListeningCount, messagingService.serverChannels.size());
+
+            if (!serverEncryptionOptions.enabled)
+            {
+                // make sure no channel is using TLS
+                for (ServerChannel serverChannel : messagingService.serverChannels)
+                    Assert.assertEquals(ServerChannel.SecurityLevel.NONE, serverChannel.getSecurityLevel());
+            }
+            else
+            {
+                final int legacySslPort = DatabaseDescriptor.getSSLStoragePort();
+                boolean foundLegacyListenSslAddress = false;
+                for (ServerChannel serverChannel : messagingService.serverChannels)
+                {
+                    if (serverEncryptionOptions.optional)
+                        Assert.assertEquals(ServerChannel.SecurityLevel.OPTIONAL, serverChannel.getSecurityLevel());
+                    else
+                        Assert.assertEquals(ServerChannel.SecurityLevel.REQUIRED, serverChannel.getSecurityLevel());
+
+                    if (serverEncryptionOptions.enable_legacy_ssl_storage_port)
+                    {
+                        if (legacySslPort == serverChannel.getAddress().getPort())
+                        {
+                            foundLegacyListenSslAddress = true;
+                            Assert.assertEquals(ServerChannel.SecurityLevel.REQUIRED, serverChannel.getSecurityLevel());
+                        }
+                    }
+                }
+
+                if (serverEncryptionOptions.enable_legacy_ssl_storage_port && !foundLegacyListenSslAddress)
+                    Assert.fail("failed to find legacy ssl listen address");
+            }
+
+            // check the optional listen address
+            if (listenOnBroadcastAddr)
+            {
+                int expectedCount = (serverEncryptionOptions.enabled && serverEncryptionOptions.enable_legacy_ssl_storage_port) ? 2 : 1;
+                int found = 0;
+                for (ServerChannel serverChannel : messagingService.serverChannels)
+                {
+                    if (serverChannel.getAddress().getAddress().equals(listenAddress))
+                        found++;
+                }
+
+                Assert.assertEquals(expectedCount, found);
+            }
+        }
+        finally
+        {
+            messagingService.shutdown(true);
+            messagingService.clearServerChannels();
+            Assert.assertEquals(0, messagingService.serverChannels.size());
+        }
+    }
+

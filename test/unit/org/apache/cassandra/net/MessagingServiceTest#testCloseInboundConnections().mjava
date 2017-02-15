@@ -1,37 +1,43 @@
     @Test
     public void testCloseInboundConnections() throws UnknownHostException, InterruptedException
     {
-        messagingService.listen();
-        Assert.assertTrue(messagingService.isListening());
-        Assert.assertTrue(messagingService.serverChannels.size() > 0);
-        for (ServerChannel serverChannel : messagingService.serverChannels)
-            Assert.assertEquals(0, serverChannel.size());
+        try
+        {
+            messagingService.listen();
+            Assert.assertTrue(messagingService.isListening());
+            Assert.assertTrue(messagingService.serverChannels.size() > 0);
+            for (ServerChannel serverChannel : messagingService.serverChannels)
+                Assert.assertEquals(0, serverChannel.size());
 
-        // now, create a connection and make sure it's in a channel group
-        InetSocketAddress server = new InetSocketAddress(FBUtilities.getBroadcastAddress(), DatabaseDescriptor.getStoragePort());
-        OutboundConnectionIdentifier id = OutboundConnectionIdentifier.small(new InetSocketAddress(InetAddress.getByName("127.0.0.2"), 0), server);
+            // now, create a connection and make sure it's in a channel group
+            InetSocketAddress server = new InetSocketAddress(FBUtilities.getBroadcastAddress(), DatabaseDescriptor.getStoragePort());
+            OutboundConnectionIdentifier id = OutboundConnectionIdentifier.small(new InetSocketAddress(InetAddress.getByName("127.0.0.2"), 0), server);
 
-        CountDownLatch latch = new CountDownLatch(1);
-        OutboundConnectionParams params = OutboundConnectionParams.builder()
-                                                                  .mode(NettyFactory.Mode.MESSAGING)
-                                                                  .sendBufferSize(1 << 10)
-                                                                  .connectionId(id)
-                                                                  .callback(handshakeResult -> latch.countDown())
-                                                                  .protocolVersion(MessagingService.current_version)
-                                                                  .build();
-        Bootstrap bootstrap = NettyFactory.instance.createOutboundBootstrap(params);
-        Channel channel = bootstrap.connect().awaitUninterruptibly().channel();
-        Assert.assertNotNull(channel);
-        latch.await(1, TimeUnit.SECONDS); // allow the netty pipeline/c* handshake to get set up
+            CountDownLatch latch = new CountDownLatch(1);
+            OutboundConnectionParams params = OutboundConnectionParams.builder()
+                                                                      .mode(NettyFactory.Mode.MESSAGING)
+                                                                      .sendBufferSize(1 << 10)
+                                                                      .connectionId(id)
+                                                                      .callback(handshakeResult -> latch.countDown())
+                                                                      .protocolVersion(MessagingService.current_version)
+                                                                      .build();
+            Bootstrap bootstrap = NettyFactory.instance.createOutboundBootstrap(params);
+            Channel channel = bootstrap.connect().awaitUninterruptibly().channel();
+            Assert.assertNotNull(channel);
+            latch.await(1, TimeUnit.SECONDS); // allow the netty pipeline/c* handshake to get set up
 
-        int connectCount = 0;
-        for (ServerChannel serverChannel : messagingService.serverChannels)
-            connectCount += serverChannel.size();
-        Assert.assertTrue(connectCount > 0);
-
-        // last, shutdown the MS and make sure connections are removed
-        messagingService.shutdown();
-        for (ServerChannel serverChannel : messagingService.serverChannels)
-            Assert.assertEquals(0, serverChannel.size());
+            int connectCount = 0;
+            for (ServerChannel serverChannel : messagingService.serverChannels)
+                connectCount += serverChannel.size();
+            Assert.assertTrue(connectCount > 0);
+        }
+        finally
+        {
+            // last, shutdown the MS and make sure connections are removed
+            messagingService.shutdown(true);
+            for (ServerChannel serverChannel : messagingService.serverChannels)
+                Assert.assertEquals(0, serverChannel.size());
+            messagingService.clearServerChannels();
+        }
     }
 
