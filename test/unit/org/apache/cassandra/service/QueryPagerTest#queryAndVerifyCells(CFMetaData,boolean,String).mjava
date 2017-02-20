@@ -1,0 +1,39 @@
+    private void queryAndVerifyCells(CFMetaData cfm, boolean reversed, String key) throws Exception
+    {
+        ClusteringIndexFilter rowfilter = new ClusteringIndexSliceFilter(Slices.ALL, reversed);
+        ReadCommand command = SinglePartitionReadCommand.create(cfm, nowInSec, Util.dk(key), ColumnFilter.all(cfm), rowfilter);
+        QueryPager pager = command.getPager(null, Server.CURRENT_VERSION);
+
+        ColumnDefinition staticColumn = cfm.partitionColumns().statics.getSimple(0);
+        assertEquals(staticColumn.name.toCQLString(), "st");
+
+        for (int i=0; i<5; i++)
+        {
+            try (ReadOrderGroup orderGroup = pager.startOrderGroup();
+                 PartitionIterator partitions = pager.fetchPageInternal(1, orderGroup))
+            {
+                try (RowIterator partition = partitions.next())
+                {
+                    assertCell(partition.staticRow(), staticColumn, 4);
+
+                    Row row = partition.next();
+                    int cellIndex = !reversed ? i : 4 - i;
+
+                    assertEquals(row.clustering().get(0), ByteBufferUtil.bytes(cellIndex));
+                    assertCell(row, cfm.getColumnDefinition(new ColumnIdentifier("v1", false)), cellIndex);
+                    assertCell(row, cfm.getColumnDefinition(new ColumnIdentifier("v2", false)), cellIndex);
+
+                    // the partition/page should contain just a single regular row
+                    assertFalse(partition.hasNext());
+                }
+            }
+        }
+
+        // After processing the 5 rows there should be no more rows to return
+        try ( ReadOrderGroup orderGroup = pager.startOrderGroup();
+              PartitionIterator partitions = pager.fetchPageInternal(1, orderGroup))
+        {
+            assertFalse(partitions.hasNext());
+        }
+    }
+
