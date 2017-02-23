@@ -1,0 +1,32 @@
+    @Test
+    public void testConditionalOnDurationColumns() throws Throwable
+    {
+        createTable(" CREATE TABLE %s (k int PRIMARY KEY, v int, d duration)");
+
+        assertInvalidMessage("Slice conditions are not supported on durations",
+                             "UPDATE %s SET v = 3 WHERE k = 0 IF d > 1s");
+        assertInvalidMessage("Slice conditions are not supported on durations",
+                             "UPDATE %s SET v = 3 WHERE k = 0 IF d >= 1s");
+        assertInvalidMessage("Slice conditions are not supported on durations",
+                             "UPDATE %s SET v = 3 WHERE k = 0 IF d <= 1s");
+        assertInvalidMessage("Slice conditions are not supported on durations",
+                             "UPDATE %s SET v = 3 WHERE k = 0 IF d < 1s");
+
+        execute("INSERT INTO %s (k, v, d) VALUES (1, 1, 2s)");
+
+        assertRows(execute("UPDATE %s SET v = 4 WHERE k = 1 IF d = 1s"), row(false, Duration.from("2s")));
+        assertRows(execute("UPDATE %s SET v = 3 WHERE k = 1 IF d = 2s"), row(true));
+
+        assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, Duration.from("2s"), 3));
+
+        assertRows(execute("UPDATE %s SET d = 10s WHERE k = 1 IF d != 2s"), row(false, Duration.from("2s")));
+        assertRows(execute("UPDATE %s SET v = 6 WHERE k = 1 IF d != 1s"), row(true));
+
+        assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, Duration.from("2s"), 6));
+
+        assertRows(execute("UPDATE %s SET v = 5 WHERE k = 1 IF d IN (1s, 5s)"), row(false, Duration.from("2s")));
+        assertRows(execute("UPDATE %s SET d = 10s WHERE k = 1 IF d IN (1s, 2s)"), row(true));
+
+        assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, Duration.from("10s"), 6));
+    }
+

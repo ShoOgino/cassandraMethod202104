@@ -1,0 +1,35 @@
+    @Test
+    public void testFilteringOnUdtContainingDurations() throws Throwable
+    {
+        String udt = createType("CREATE TYPE %s (i int, d duration)");
+
+        for (Boolean frozen : new Boolean[]{Boolean.FALSE, Boolean.TRUE})
+        {
+            udt = String.format(frozen ? "frozen<%s>" : "%s", udt);
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, u " + udt + ")");
+            execute("INSERT INTO %s (k, u) VALUES (0, {i: 1, d:2s})");
+            execute("INSERT INTO %s (k, u) VALUES (1, {i: 2, d:3s})");
+            execute("INSERT INTO %s (k, u) VALUES (2, {i: 1, d:3s})");
+
+            if (frozen)
+                assertRows(execute("SELECT * FROM %s WHERE u = {i: 1, d:2s} ALLOW FILTERING"),
+                           row(0, userType("i", 1, "d", Duration.from("2s"))));
+
+            assertInvalidMessage("IN predicates on non-primary-key columns (u) is not yet supported",
+                    "SELECT * FROM %s WHERE u IN ({i: 2, d:3s}, {i: 1, d:3s}) ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on UDTs containing durations",
+                    "SELECT * FROM %s WHERE u > {i: 1, d:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on UDTs containing durations",
+                    "SELECT * FROM %s WHERE u >= {i: 1, d:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on UDTs containing durations",
+                    "SELECT * FROM %s WHERE u <= {i: 1, d:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on UDTs containing durations",
+                    "SELECT * FROM %s WHERE u < {i: 1, d:3s} ALLOW FILTERING");
+        }
+    }
+
