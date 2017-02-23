@@ -1,0 +1,40 @@
+    @Test
+    public void testRangeTombstones() throws Exception
+    {
+        CFMetaData metadata = CFMetaData.Builder.create("ks", "table")
+                                                .withPartitioner(Murmur3Partitioner.instance)
+                                                .addPartitionKey("k", Int32Type.instance)
+                                                .addClusteringColumn("v", Int32Type.instance)
+                                                .build();
+
+        Supplier<LegacyLayout.LegacyAtom> atomSupplier = supplier(rt(0, 10, 42),
+                                                                  rt(5, 15, 42));
+
+        UnfilteredIterator iterator = new UnfilteredIterator(metadata,
+                                                             DeletionTime.LIVE,
+                                                             new SerializationHelper(metadata, MessagingService.current_version, SerializationHelper.Flag.LOCAL),
+                                                             atomSupplier);
+
+        // As the deletion time are the same, we want this to produce a single range tombstone covering from 0 to 15.
+
+        assertTrue(iterator.hasNext());
+
+        Unfiltered first = iterator.next();
+        assertTrue(first.isRangeTombstoneMarker());
+        RangeTombstoneMarker start = (RangeTombstoneMarker)first;
+        assertTrue(start.isOpen(false));
+        assertFalse(start.isClose(false));
+        assertEquals(0, toInt(start.openBound(false)));
+        assertEquals(42, start.openDeletionTime(false).markedForDeleteAt());
+
+        Unfiltered second = iterator.next();
+        assertTrue(second.isRangeTombstoneMarker());
+        RangeTombstoneMarker end = (RangeTombstoneMarker)second;
+        assertTrue(end.isClose(false));
+        assertFalse(end.isOpen(false));
+        assertEquals(15, toInt(end.closeBound(false)));
+        assertEquals(42, end.closeDeletionTime(false).markedForDeleteAt());
+
+         assertFalse(iterator.hasNext());
+    }
+
