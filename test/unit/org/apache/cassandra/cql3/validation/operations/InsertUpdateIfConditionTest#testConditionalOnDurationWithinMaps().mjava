@@ -1,0 +1,61 @@
+    @Test
+    public void testConditionalOnDurationWithinMaps() throws Throwable
+    {
+        for (Boolean frozen : new Boolean[]{Boolean.FALSE, Boolean.TRUE})
+        {
+            String mapType = String.format(frozen ? "frozen<%s>" : "%s", "map<int, duration>");
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, v int, m " + mapType + " )");
+
+            assertInvalidMessage("Slice conditions are not supported on collections containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m > {1: 1s, 2: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on collections containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m >= {1: 1s, 2: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on collections containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m <= {1: 1s, 2: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on collections containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m < {1: 1s, 2: 2s}");
+
+            execute("INSERT INTO %s (k, v, m) VALUES (1, 1, {1: 1s, 2: 2s})");
+
+            assertRows(execute("UPDATE %s SET v = 4 WHERE k = 1 IF m = {2: 2s}"), row(false, map(1, Duration.from("1000ms"), 2, Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET v = 3 WHERE k = 1 IF m = {1: 1s, 2: 2s}"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("1000ms"), 2, Duration.from("2s")), 3));
+
+            assertRows(execute("UPDATE %s SET m = {1 :10s} WHERE k = 1 IF m != {1: 1s, 2: 2s}"), row(false, map(1, Duration.from("1000ms"), 2, Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET v = 6 WHERE k = 1 IF m != {1: 1s}"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("1000ms"), 2, Duration.from("2s")), 6));
+
+            assertRows(execute("UPDATE %s SET v = 5 WHERE k = 1 IF m IN ({1: 1s}, {1: 5s})"), row(false, map(1, Duration.from("1000ms"), 2, Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET m = {1: 5s, 2: 10s} WHERE k = 1 IF m IN ({1: 1s}, {1: 1s, 2: 2s})"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("5s"), 2, Duration.from("10s")), 6));
+
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m[1] > 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m[1] >= 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m[1] <= 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF m[1] < 1s");
+
+            assertRows(execute("UPDATE %s SET v = 4 WHERE k = 1 IF m[1] = 2s"), row(false, map(1, Duration.from("5s"), 2, Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET v = 3 WHERE k = 1 IF m[1] = 5s"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("5s"), 2, Duration.from("10s")), 3));
+
+            assertRows(execute("UPDATE %s SET m = {1: 10s} WHERE k = 1 IF m[2] != 10s"), row(false, map(1, Duration.from("5s"), 2, Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET v = 6 WHERE k = 1 IF m[2] != 1s"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("5s"), 2, Duration.from("10s")), 6));
+
+            assertRows(execute("UPDATE %s SET v = 5 WHERE k = 1 IF m[1] IN (2s, 10s)"), row(false, map(1, Duration.from("5s"), 2, Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET m = {1: 6s, 2: 12s} WHERE k = 1 IF m[1] IN (5s, 10s)"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, map(1, Duration.from("6s"), 2, Duration.from("12s")), 6));
+        }
+    }
+

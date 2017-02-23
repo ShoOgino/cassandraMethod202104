@@ -1,0 +1,37 @@
+    @Test
+    public void testFilteringOnListContainingDurations() throws Throwable
+    {
+        for (Boolean frozen : new Boolean[]{Boolean.FALSE, Boolean.TRUE})
+        {
+            String listType = String.format(frozen ? "frozen<%s>" : "%s", "list<duration>");
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, l " + listType + ")");
+            execute("INSERT INTO %s (k, l) VALUES (0, [1s, 2s])");
+            execute("INSERT INTO %s (k, l) VALUES (1, [2s, 3s])");
+            execute("INSERT INTO %s (k, l) VALUES (2, [1s, 3s])");
+
+            if (frozen)
+                assertRows(execute("SELECT * FROM %s WHERE l = [1s, 2s] ALLOW FILTERING"),
+                           row(0, list(Duration.from("1s"), Duration.from("2s"))));
+
+            assertInvalidMessage("IN predicates on non-primary-key columns (l) is not yet supported",
+                                 "SELECT * FROM %s WHERE l IN ([1s, 2s], [2s, 3s]) ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                                 "SELECT * FROM %s WHERE l > [2s, 3s] ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                                 "SELECT * FROM %s WHERE l >= [2s, 3s] ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                                 "SELECT * FROM %s WHERE l <= [2s, 3s] ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                                 "SELECT * FROM %s WHERE l < [2s, 3s] ALLOW FILTERING");
+
+            assertRows(execute("SELECT * FROM %s WHERE l CONTAINS 1s ALLOW FILTERING"),
+                       row(0, list(Duration.from("1s"), Duration.from("2s"))),
+                       row(2, list(Duration.from("1s"), Duration.from("3s"))));
+        }
+    }
+

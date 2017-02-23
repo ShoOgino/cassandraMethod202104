@@ -1,0 +1,63 @@
+    @Test
+    public void testConditionalOnDurationWithinUdts() throws Throwable
+    {
+        String udt = createType("CREATE TYPE %s (i int, d duration)");
+
+        for (Boolean frozen : new Boolean[]{Boolean.FALSE, Boolean.TRUE})
+        {
+            udt = String.format(frozen ? "frozen<%s>" : "%s", udt);
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, v int, u " + udt + " )");
+
+            assertInvalidMessage("Slice conditions are not supported on UDTs containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u > {i: 1, d: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on UDTs containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u >= {i: 1, d: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on UDTs containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u <= {i: 1, d: 2s}");
+            assertInvalidMessage("Slice conditions are not supported on UDTs containing durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u < {i: 1, d: 2s}");
+
+            execute("INSERT INTO %s (k, v, u) VALUES (1, 1, {i:1, d:2s})");
+
+            assertRows(execute("UPDATE %s SET v = 4 WHERE k = 1 IF u = {i: 2, d: 2s}"), row(false, userType("i", 1, "d", Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET v = 3 WHERE k = 1 IF u = {i: 1, d: 2s}"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 1, "d", Duration.from("2s")), 3));
+
+            assertRows(execute("UPDATE %s SET u = {i: 1, d: 10s} WHERE k = 1 IF u != {i: 1, d: 2s}"), row(false, userType("i", 1, "d", Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET v = 6 WHERE k = 1 IF u != {i: 1, d: 1s}"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 1, "d", Duration.from("2s")), 6));
+
+            assertRows(execute("UPDATE %s SET v = 5 WHERE k = 1 IF u IN ({i: 1, d: 1s}, {i: 1, d: 5s})"), row(false, userType("i", 1, "d", Duration.from("2s"))));
+            assertRows(execute("UPDATE %s SET u = {i: 1, d: 10s} WHERE k = 1 IF u IN ({i: 1, d: 1s}, {i: 1, d: 2s})"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 1, "d", Duration.from("10s")), 6));
+
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u.d > 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u.d >= 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u.d <= 1s");
+            assertInvalidMessage("Slice conditions are not supported on durations",
+                                 "UPDATE %s SET v = 3 WHERE k = 0 IF u.d < 1s");
+
+            assertRows(execute("UPDATE %s SET v = 4 WHERE k = 1 IF u.d = 2s"), row(false, userType("i", 1, "d", Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET v = 3 WHERE k = 1 IF u.d = 10s"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 1, "d", Duration.from("10s")), 3));
+
+            assertRows(execute("UPDATE %s SET u = {i: 1, d: 10s} WHERE k = 1 IF u.d != 10s"), row(false, userType("i", 1, "d", Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET v = 6 WHERE k = 1 IF u.d != 1s"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 1, "d", Duration.from("10s")), 6));
+
+            assertRows(execute("UPDATE %s SET v = 5 WHERE k = 1 IF u.d IN (2s, 5s)"), row(false, userType("i", 1, "d", Duration.from("10s"))));
+            assertRows(execute("UPDATE %s SET u = {i: 6, d: 12s} WHERE k = 1 IF u.d IN (5s, 10s)"), row(true));
+
+            assertRows(execute("SELECT * FROM %s WHERE k = 1"), row(1, userType("i", 6, "d", Duration.from("12s")), 6));
+        }
+    }
+

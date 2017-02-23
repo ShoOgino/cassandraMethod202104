@@ -1,0 +1,37 @@
+    @Test
+    public void testFilteringOnMapContainingDurations() throws Throwable
+    {
+        for (Boolean frozen : new Boolean[]{Boolean.FALSE, Boolean.TRUE})
+        {
+            String mapType = String.format(frozen ? "frozen<%s>" : "%s", "map<int, duration>");
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, m " + mapType + ")");
+            execute("INSERT INTO %s (k, m) VALUES (0, {1:1s, 2:2s})");
+            execute("INSERT INTO %s (k, m) VALUES (1, {2:2s, 3:3s})");
+            execute("INSERT INTO %s (k, m) VALUES (2, {1:1s, 3:3s})");
+
+            if (frozen)
+                assertRows(execute("SELECT * FROM %s WHERE m = {1:1s, 2:2s} ALLOW FILTERING"),
+                           row(0, map(1, Duration.from("1s"), 2, Duration.from("2s"))));
+
+            assertInvalidMessage("IN predicates on non-primary-key columns (m) is not yet supported",
+                    "SELECT * FROM %s WHERE m IN ({1:1s, 2:2s}, {1:1s, 3:3s}) ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                    "SELECT * FROM %s WHERE m > {1:1s, 3:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                    "SELECT * FROM %s WHERE m >= {1:1s, 3:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                    "SELECT * FROM %s WHERE m <= {1:1s, 3:3s} ALLOW FILTERING");
+
+            assertInvalidMessage("Slice restrictions are not supported on collections containing durations",
+                    "SELECT * FROM %s WHERE m < {1:1s, 3:3s} ALLOW FILTERING");
+
+            assertRows(execute("SELECT * FROM %s WHERE m CONTAINS 1s ALLOW FILTERING"),
+                       row(0, map(1, Duration.from("1s"), 2, Duration.from("2s"))),
+                       row(2, map(1, Duration.from("1s"), 3, Duration.from("3s"))));
+        }
+    }
+
