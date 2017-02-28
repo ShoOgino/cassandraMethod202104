@@ -1,0 +1,23 @@
+        private void sendThroughWritePath(ColumnFamilyStore cfs, Collection<SSTableReader> readers) {
+            boolean hasCdc = hasCDC(cfs);
+            for (SSTableReader reader : readers)
+            {
+                Keyspace ks = Keyspace.open(reader.getKeyspaceName());
+                try (ISSTableScanner scanner = reader.getScanner())
+                {
+                    while (scanner.hasNext())
+                    {
+                        try (UnfilteredRowIterator rowIterator = scanner.next())
+                        {
+                            // MV *can* be applied unsafe if there's no CDC on the CFS as we flush
+                            // before transaction is done.
+                            //
+                            // If the CFS has CDC, however, these updates need to be written to the CommitLog
+                            // so they get archived into the cdc_raw folder
+                            ks.apply(createMutation(cfs, rowIterator), hasCdc, true, false);
+                        }
+                    }
+                }
+            }
+        }
+

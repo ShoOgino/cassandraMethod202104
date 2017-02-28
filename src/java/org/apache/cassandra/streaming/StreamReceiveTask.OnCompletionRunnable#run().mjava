@@ -1,8 +1,7 @@
         public void run()
         {
-            boolean hasViews = false;
-            boolean hasCDC = false;
             ColumnFamilyStore cfs = null;
+            boolean requiresWritePath = false;
             try
             {
                 cfs = ColumnFamilyStore.getIfExists(task.tableId);
@@ -14,45 +13,15 @@
                     task.session.taskCompleted(task);
                     return;
                 }
-                hasViews = !Iterables.isEmpty(View.findAll(cfs.metadata.keyspace, cfs.getTableName()));
-                hasCDC = cfs.metadata().params.cdc;
 
+                requiresWritePath = requiresWritePath(cfs);
                 Collection<SSTableReader> readers = task.sstables;
 
                 try (Refs<SSTableReader> refs = Refs.ref(readers))
                 {
-                    /*
-                     * We have a special path for views and for CDC.
-                     *
-                     * For views, since the view requires cleaning up any pre-existing state, we must put all partitions
-                     * through the same write path as normal mutations. This also ensures any 2is are also updated.
-                     *
-                     * For CDC-enabled tables, we want to ensure that the mutations are run through the CommitLog so they
-                     * can be archived by the CDC process on discard.
-                     */
-                    if (hasViews || hasCDC)
+                    if (requiresWritePath)
                     {
-                        for (SSTableReader reader : readers)
-                        {
-                            Keyspace ks = Keyspace.open(reader.getKeyspaceName());
-                            try (ISSTableScanner scanner = reader.getScanner())
-                            {
-                                while (scanner.hasNext())
-                                {
-                                    try (UnfilteredRowIterator rowIterator = scanner.next())
-                                    {
-                                        Mutation m = new Mutation(PartitionUpdate.fromIterator(rowIterator, ColumnFilter.all(cfs.metadata())));
-
-                                        // MV *can* be applied unsafe if there's no CDC on the CFS as we flush below
-                                        // before transaction is done.
-                                        //
-                                        // If the CFS has CDC, however, these updates need to be written to the CommitLog
-                                        // so they get archived into the cdc_raw folder
-                                        ks.apply(m, hasCDC, true, false);
-                                    }
-                                }
-                            }
-                        }
+                        sendThroughWritePath(cfs, readers);
                     }
                     else
                     {
@@ -100,7 +69,7 @@
             {
                 // We don't keep the streamed sstables since we've applied them manually so we abort the txn and delete
                 // the streamed sstables.
-                if (hasViews || hasCDC)
+                if (requiresWritePath)
                 {
                     if (cfs != null)
                         cfs.forceBlockingFlush();
