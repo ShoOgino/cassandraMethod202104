@@ -1,0 +1,59 @@
+    @BeforeClass
+    public static void setUpClass() throws Throwable
+    {
+        SchemaLoader.loadSchema();
+        // Register peers with expected DC for NetworkTopologyStrategy.
+        TokenMetadata metadata = StorageService.instance.getTokenMetadata();
+        metadata.clearUnsafe();
+        metadata.updateHostId(UUID.randomUUID(), InetAddress.getByName("127.1.0.255"));
+        metadata.updateHostId(UUID.randomUUID(), InetAddress.getByName("127.2.0.255"));
+
+        DatabaseDescriptor.setEndpointSnitch(new IEndpointSnitch()
+        {
+            public String getRack(InetAddress endpoint)
+            {
+                return null;
+            }
+
+            public String getDatacenter(InetAddress endpoint)
+            {
+                byte[] address = endpoint.getAddress();
+                if (address[1] == 1)
+                    return "datacenter1";
+                else
+                    return "datacenter2";
+            }
+
+            public List<InetAddress> getSortedListByProximity(InetAddress address, Collection<InetAddress> unsortedAddress)
+            {
+                return null;
+            }
+
+            public void sortByProximity(InetAddress address, List<InetAddress> addresses)
+            {
+
+            }
+
+            public int compareEndpoints(InetAddress target, InetAddress a1, InetAddress a2)
+            {
+                return 0;
+            }
+
+            public void gossiperStarting()
+            {
+
+            }
+
+            public boolean isWorthMergingForRangeQuery(List<InetAddress> merged, List<InetAddress> l1, List<InetAddress> l2)
+            {
+                return false;
+            }
+        });
+        DatabaseDescriptor.setBroadcastAddress(InetAddress.getByName("127.1.0.1"));
+        SchemaLoader.createKeyspace("Foo", KeyspaceParams.nts("datacenter1", 3, "datacenter2", 3), SchemaLoader.standardCFMD("Foo", "Bar"));
+        ks = Keyspace.open("Foo");
+        cfs = ks.getColumnFamilyStore("Bar");
+        targets = ImmutableList.of(InetAddress.getByName("127.1.0.255"), InetAddress.getByName("127.1.0.254"), InetAddress.getByName("127.1.0.253"),
+                                   InetAddress.getByName("127.2.0.255"), InetAddress.getByName("127.2.0.254"), InetAddress.getByName("127.2.0.253"));
+    }
+
