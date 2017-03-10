@@ -1,0 +1,69 @@
+    public ByteBuf transformInbound(ByteBuf inputBuf, EnumSet<Frame.Header.Flag> flags)
+    {
+        int numChunks = readUnsignedShort(inputBuf);
+
+        int currentPosition = 0;
+        int decompressedLength;
+        int lengthsChecksum;
+
+        byte[] buf = null;
+        byte[] retBuf = new byte[inputBuf.readableBytes()];
+        byte[] chunkLengths = new byte[8];
+        for (int i = 0; i < numChunks; i++)
+        {
+            int compressedLength = inputBuf.readInt();
+            // if the input was actually compressed, then the writer should have written a decompressed
+            // length. If not, then we can infer that the compressed length has had its sign bit flipped
+            // and can derive the decompressed length from that
+            decompressedLength = compressedLength >= 0 ? inputBuf.readInt() : Math.abs(compressedLength);
+
+            putInt(compressedLength, chunkLengths, 0);
+            putInt(decompressedLength, chunkLengths, 4);
+            lengthsChecksum = inputBuf.readInt();
+            // calculate checksum on lengths (decompressed and compressed) and make sure it matches
+            int calculatedLengthsChecksum = (int) checksum.of(chunkLengths, 0, chunkLengths.length);
+            if (lengthsChecksum != calculatedLengthsChecksum)
+            {
+                throw new ProtocolException(String.format("Checksum invalid on chunk bytes lengths. Deserialized compressed " +
+                                                          "length: %d decompressed length: %d. %d != %d", compressedLength,
+                                                          decompressedLength, lengthsChecksum, calculatedLengthsChecksum));
+            }
+
+            // do we have enough space in the decompression buffer?
+            if (currentPosition + decompressedLength > retBuf.length)
+            {
+                byte[] resizedBuf = new byte[retBuf.length + decompressedLength * 3 / 2];
+                System.arraycopy(retBuf, 0, resizedBuf, 0, retBuf.length);
+                retBuf = resizedBuf;
+            }
+
+            // now we've validated the lengths checksum, we can abs the compressed length
+            // to figure out the actual number of bytes we're going to read
+            int toRead = Math.abs(compressedLength);
+            if (buf == null || buf.length < toRead)
+                buf = new byte[toRead];
+
+            // get the (possibly) compressed bytes for this chunk
+            inputBuf.readBytes(buf, 0, toRead);
+
+            // decompress using the original compressed length, so it's a no-op if that's < 0
+            byte[] decompressedChunk = maybeDecompress(buf, compressedLength, decompressedLength, flags);
+
+            // add the decompressed bytes into the ret buf
+            System.arraycopy(decompressedChunk, 0, retBuf, currentPosition, decompressedLength);
+            currentPosition += decompressedLength;
+
+            // get the checksum of the original source bytes and compare against what we read
+            int expectedDecompressedChecksum = inputBuf.readInt();
+            int calculatedDecompressedChecksum = (int) checksum.of(decompressedChunk, 0, decompressedLength);
+            if (expectedDecompressedChecksum != calculatedDecompressedChecksum)
+            {
+                throw new ProtocolException("Decompressed checksum for chunk does not match expected checksum");
+            }
+        }
+
+        ByteBuf ret = Unpooled.wrappedBuffer(retBuf, 0, currentPosition);
+        ret.writerIndex(currentPosition);
+        return ret;
+    }
+

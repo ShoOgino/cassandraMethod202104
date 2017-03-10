@@ -9,15 +9,56 @@
         {
             Map<String, String> options = new HashMap<String, String>();
             options.put(StartupMessage.CQL_VERSION, "3.0.0");
+            Compressor compressor = null;
+            ChecksumType checksumType = null;
             while (iter.hasNext())
             {
-               String next = iter.next();
-               if (next.toLowerCase().equals("snappy"))
+               String next = iter.next().toLowerCase();
+               switch (next)
                {
-                   options.put(StartupMessage.COMPRESSION, "snappy");
-                   connection.setCompressor(FrameCompressor.SnappyCompressor.instance);
+                   case "snappy": {
+                       if (options.containsKey(StartupMessage.COMPRESSION))
+                           throw new RuntimeException("Multiple compression types supplied");
+                       options.put(StartupMessage.COMPRESSION, "snappy");
+                       compressor = SnappyCompressor.INSTANCE;
+                       break;
+                   }
+                   case "lz4": {
+                       if (options.containsKey(StartupMessage.COMPRESSION))
+                           throw new RuntimeException("Multiple compression types supplied");
+                       options.put(StartupMessage.COMPRESSION, "lz4");
+                       compressor = LZ4Compressor.INSTANCE;
+                       break;
+                   }
+                   case "crc32": {
+                       if (options.containsKey(StartupMessage.CHECKSUM))
+                           throw new RuntimeException("Multiple checksum types supplied");
+                       options.put(StartupMessage.CHECKSUM, ChecksumType.CRC32.name());
+                       checksumType = ChecksumType.CRC32;
+                       break;
+                   }
+                   case "adler32": {
+                       if (options.containsKey(StartupMessage.CHECKSUM))
+                           throw new RuntimeException("Multiple checksum types supplied");
+                       options.put(StartupMessage.CHECKSUM, ChecksumType.Adler32.name());
+                       checksumType = ChecksumType.Adler32;
+                       break;
+                   }
                }
             }
+
+            if (checksumType == null)
+            {
+               if (compressor != null)
+               {
+                   connection.setTransformer(CompressingTransformer.getTransformer(compressor));
+               }
+            }
+            else
+            {
+                connection.setTransformer(ChecksummingTransformer.getTransformer(checksumType, compressor));
+            }
+
             return new StartupMessage(options);
         }
         else if (msgType.equals("QUERY"))

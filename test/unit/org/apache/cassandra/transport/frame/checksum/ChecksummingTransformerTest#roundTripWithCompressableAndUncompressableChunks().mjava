@@ -1,0 +1,35 @@
+    @Test
+    public void roundTripWithCompressableAndUncompressableChunks() throws IOException
+    {
+        Compressor compressor = LZ4Compressor.INSTANCE;
+        Random random = new Random();
+        int inputLen = 127;
+
+        byte[] uncompressable = new byte[inputLen];
+        for (int i = 0; i < uncompressable.length; i++)
+            uncompressable[i] = (byte) random.nextInt(127);
+
+        byte[] compressed = new byte[compressor.maxCompressedLength(uncompressable.length)];
+        Assert.assertTrue(compressor.compress(uncompressable, 0, uncompressable.length, compressed, 0) > uncompressable.length);
+
+        byte[] compressable = new byte[inputLen];
+        for (int i = 0; i < compressable.length; i++)
+            compressable[i] = (byte)1;
+        Assert.assertTrue(compressor.compress(compressable, 0, compressable.length, compressable, 0) < compressable.length);
+
+        ChecksummingTransformer transformer = new ChecksummingTransformer(ChecksumType.CRC32, uncompressable.length, LZ4Compressor.INSTANCE);
+        byte[] expectedBytes = new byte[inputLen * 3];
+        ByteBuf expectedBuf = Unpooled.wrappedBuffer(expectedBytes);
+        expectedBuf.writerIndex(0);
+        expectedBuf.writeBytes(uncompressable);
+        expectedBuf.writeBytes(uncompressable);
+        expectedBuf.writeBytes(compressable);
+
+        ByteBuf outbound = transformer.transformOutbound(expectedBuf);
+        ByteBuf inbound = transformer.transformInbound(outbound, FLAGS);
+
+        // reset reader index on expectedBuf back to 0 as it will have been entirely consumed by the transformOutbound() call
+        expectedBuf.readerIndex(0);
+        Assert.assertEquals(expectedBuf, inbound);
+    }
+

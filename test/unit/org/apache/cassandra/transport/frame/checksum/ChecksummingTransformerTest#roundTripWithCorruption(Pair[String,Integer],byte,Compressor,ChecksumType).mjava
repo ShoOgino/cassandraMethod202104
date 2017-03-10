@@ -1,0 +1,36 @@
+    private void roundTripWithCorruption(Pair<String, Integer> inputAndCorruptablePosition,
+                                         byte corruptionValue,
+                                         Compressor compressor,
+                                         ChecksumType checksum)
+    {
+        String input = inputAndCorruptablePosition.left;
+        ByteBuf expectedBuf = Unpooled.wrappedBuffer(input.getBytes());
+        int byteToCorrupt = inputAndCorruptablePosition.right;
+        ChecksummingTransformer transformer = new ChecksummingTransformer(checksum, DEFAULT_BLOCK_SIZE, compressor);
+        ByteBuf outbound = transformer.transformOutbound(expectedBuf);
+
+        // make sure we're actually expecting to produce some corruption
+        if (outbound.getByte(byteToCorrupt) == corruptionValue)
+            return;
+
+        if (byteToCorrupt >= outbound.writerIndex())
+            return;
+
+        try
+        {
+            int oldIndex = outbound.writerIndex();
+            outbound.writerIndex(byteToCorrupt);
+            outbound.writeByte(corruptionValue);
+            outbound.writerIndex(oldIndex);
+            ByteBuf inbound = transformer.transformInbound(outbound, FLAGS);
+
+            // verify that the content was actually corrupted
+            expectedBuf.readerIndex(0);
+            Assert.assertEquals(expectedBuf, inbound);
+        } catch(ProtocolException e)
+        {
+            return;
+        }
+
+    }
+
