@@ -1,31 +1,42 @@
                 /**
-                 * Update the tracker given the provided newly open tombstone. This return the Unfiltered corresponding to the opening
-                 * of said tombstone: this can be a simple open mark, a boundary (if there was an open tombstone superseded by this new one)
-                 * or even null (if the new tombstone start is supersedes by the currently open tombstone).
+                 * Update the tracker given the provided newly open tombstone. This potentially update openMarkerToReturn
+                 * to account for th new opening.
                  *
-                 * Note that this method assume the added tombstone is not fully shadowed, i.e. that !isShadowed(tombstone). It also
-                 * assumes no opened tombstone closes before that tombstone (so !hasClosingMarkerBefore(tombstone)).
+                 * Note that this method assumes that:
+                 +  1) the added tombstone is not fully shadowed: !isShadowed(tombstone).
+                 +  2) there is no marker to open that open strictly before this new tombstone: !hasOpeningMarkerBefore(tombstone).
+                 +  3) no opened tombstone closes before that tombstone: !hasClosingMarkerBefore(tombstone).
+                 + One can check that this is only called after the condition above have been checked in UnfilteredIterator.hasNext above.
                  */
-                public Unfiltered openNew(LegacyLayout.LegacyRangeTombstone tombstone)
+                public void openNew(LegacyLayout.LegacyRangeTombstone tombstone)
                 {
                     if (openTombstones.isEmpty())
                     {
+                        // If we have an openMarkerToReturn, the corresponding RT must be in openTombstones (or we wouldn't know when to close it)
+                        assert openMarkerToReturn == null;
                         openTombstones.add(tombstone);
-                        return new RangeTombstoneBoundMarker(tombstone.start.bound, tombstone.deletionTime);
+                        openMarkerToReturn = new RangeTombstoneBoundMarker(tombstone.start.bound, tombstone.deletionTime);
+                        return;
                     }
 
-                    // Add the new tombstone, and then check if it changes the currently open deletion or not.
-                    // Note: we grab the first tombstone (which represents the currently open deletion time) before adding
-                    // because add() can remove that first.
-                    Iterator<LegacyLayout.LegacyRangeTombstone> iter = openTombstones.iterator();
-                    LegacyLayout.LegacyRangeTombstone first = iter.next();
+                    if (openMarkerToReturn != null)
+                    {
+                        // If the new opening supersedes the one we're about to return, we need to update the one to return.
+                        if (tombstone.deletionTime.supersedes(openMarkerToReturn.openDeletionTime(false)))
+                            openMarkerToReturn = openMarkerToReturn.withNewOpeningDeletionTime(false, tombstone.deletionTime);
+                    }
+                    else
+                    {
+                        // We have no openMarkerToReturn set yet so set it now if needs be.
+                        // Since openTombstones isn't empty, it means we have a currently ongoing deletion. And if the new tombstone
+                        // supersedes that ongoing deletion, we need to close the opening  deletion and open with the new one.
+                        DeletionTime currentOpenDeletion = openTombstones.first().deletionTime;
+                        if (tombstone.deletionTime.supersedes(currentOpenDeletion))
+                            openMarkerToReturn = RangeTombstoneBoundaryMarker.makeBoundary(false, tombstone.start.bound.invert(), tombstone.start.bound, currentOpenDeletion, tombstone.deletionTime);
+                    }
 
+                    // In all cases, we know !isShadowed(tombstone) so we need to add the tombstone (note however that we may not have set openMarkerToReturn if the
+                    // new tombstone doesn't supersedes the current deletion _but_ extend past the marker currently open)
                     add(tombstone);
-
-                    // If the newly opened tombstone superseds the currently open one, we have to produce a boundary to change
-                    // the currently open deletion time, otherwise we have nothing to do.
-                    return tombstone.deletionTime.supersedes(first.deletionTime)
-                           ? RangeTombstoneBoundaryMarker.makeBoundary(false, tombstone.start.bound.invert(), tombstone.start.bound, first.deletionTime, tombstone.deletionTime)
-                           : null;
                 }
 
