@@ -14,14 +14,14 @@
 
         InetAddress replaceAddress = DatabaseDescriptor.getReplaceAddress();
         logger.info("Gathering node replacement information for {}", replaceAddress);
-        Gossiper.instance.doShadowRound();
+        Map<InetAddress, EndpointState> epStates = Gossiper.instance.doShadowRound();
         // as we've completed the shadow round of gossip, we should be able to find the node we're replacing
-        if (Gossiper.instance.getEndpointStateForEndpoint(replaceAddress) == null)
+        if (epStates.get(replaceAddress) == null)
             throw new RuntimeException(String.format("Cannot replace_address %s because it doesn't exist in gossip", replaceAddress));
 
         try
         {
-            VersionedValue tokensVersionedValue = Gossiper.instance.getEndpointStateForEndpoint(replaceAddress).getApplicationState(ApplicationState.TOKENS);
+            VersionedValue tokensVersionedValue = epStates.get(replaceAddress).getApplicationState(ApplicationState.TOKENS);
             if (tokensVersionedValue == null)
                 throw new RuntimeException(String.format("Could not find tokens for %s to replace", replaceAddress));
 
@@ -36,11 +36,10 @@
 
         if (isReplacingSameAddress())
         {
-            localHostId = Gossiper.instance.getHostId(replaceAddress);
+            localHostId = Gossiper.instance.getHostId(replaceAddress, epStates);
             SystemKeyspace.setLocalHostId(localHostId); // use the replacee's host Id as our own so we receive hints, etc
         }
 
-        Gossiper.instance.resetEndpointStateMap(); // clean up since we have what we need
         return localHostId;
     }
 

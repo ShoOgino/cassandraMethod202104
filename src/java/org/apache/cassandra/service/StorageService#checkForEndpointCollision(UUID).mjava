@@ -7,12 +7,12 @@
         }
 
         logger.debug("Starting shadow gossip round to check for endpoint collision");
-        Gossiper.instance.doShadowRound();
+        Map<InetAddress, EndpointState> epStates = Gossiper.instance.doShadowRound();
         // If bootstrapping, check whether any previously known status for the endpoint makes it unsafe to do so.
         // If not bootstrapping, compare the host id for this endpoint learned from gossip (if any) with the local
         // one, which was either read from system.local or generated at startup. If a learned id is present &
         // doesn't match the local, then the node needs replacing
-        if (!Gossiper.instance.isSafeForStartup(FBUtilities.getBroadcastAddress(), localHostId, shouldBootstrap()))
+        if (!Gossiper.instance.isSafeForStartup(FBUtilities.getBroadcastAddress(), localHostId, shouldBootstrap(), epStates))
         {
             throw new RuntimeException(String.format("A node with address %s already exists, cancelling join. " +
                                                      "Use cassandra.replace_address if you want to replace this node.",
@@ -21,7 +21,7 @@
 
         if (shouldBootstrap() && useStrictConsistency && !allowSimultaneousMoves())
         {
-            for (Map.Entry<InetAddress, EndpointState> entry : Gossiper.instance.getEndpointStates())
+            for (Map.Entry<InetAddress, EndpointState> entry : epStates.entrySet())
             {
                 // ignore local node or empty status
                 if (entry.getKey().equals(FBUtilities.getBroadcastAddress()) || entry.getValue().getApplicationState(ApplicationState.STATUS) == null)
@@ -33,7 +33,5 @@
                     throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
             }
         }
-        logger.debug("Resetting gossip state after shadow round");
-        Gossiper.instance.resetEndpointStateMap();
     }
 
