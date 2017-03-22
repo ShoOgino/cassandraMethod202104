@@ -1,0 +1,50 @@
+    @Test
+    public void testDelayedResponse()
+    {
+        Gossiper.instance.buildSeedsList();
+        int noOfSeeds = Gossiper.instance.seeds.size();
+
+        final AtomicBoolean ackSend = new AtomicBoolean(false);
+        MockMessagingSpy spySyn = MockMessagingService.when(verb(MessagingService.Verb.GOSSIP_DIGEST_SYN))
+                .respondN((msgOut, to) ->
+                {
+                    // ACK once to finish shadow round, then busy-spin until gossiper has been enabled
+                    // and then reply with remaining ACKs from other seeds
+                    if (!ackSend.compareAndSet(false, true))
+                    {
+                        while (!Gossiper.instance.isEnabled()) ;
+                    }
+
+                    HeartBeatState hb = new HeartBeatState(123, 456);
+                    EndpointState state = new EndpointState(hb);
+                    GossipDigestAck payload = new GossipDigestAck(
+                            Collections.singletonList(new GossipDigest(to, hb.getGeneration(), hb.getHeartBeatVersion())),
+                            Collections.singletonMap(to, state));
+
+                    logger.debug("Simulating digest ACK reply");
+                    return MessageIn.create(to, payload, Collections.emptyMap(), MessagingService.Verb.GOSSIP_DIGEST_ACK, MessagingService.current_version);
+                }, noOfSeeds);
+
+        // GossipDigestAckVerbHandler will send ack2 for each ack received (after the shadow round)
+        MockMessagingSpy spyAck2 = MockMessagingService.when(verb(MessagingService.Verb.GOSSIP_DIGEST_ACK2)).dontReply();
+
+        // Migration request messages should not be emitted during shadow round
+        MockMessagingSpy spyMigrationReq = MockMessagingService.when(verb(MessagingService.Verb.MIGRATION_REQUEST)).dontReply();
+
+        try
+        {
+            StorageService.instance.initServer();
+        }
+        catch (Exception e)
+        {
+            assertEquals("Unable to contact any seeds!", e.getMessage());
+        }
+
+        // we expect one SYN for each seed during shadow round + additional SYNs after gossiper has been enabled
+        assertTrue(spySyn.messagesIntercepted > noOfSeeds);
+
+        // we don't expect to emit any GOSSIP_DIGEST_ACK2 or MIGRATION_REQUEST messages
+        assertEquals(0, spyAck2.messagesIntercepted);
+        assertEquals(0, spyMigrationReq.messagesIntercepted);
+    }
+
