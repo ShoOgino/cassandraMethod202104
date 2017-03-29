@@ -5,21 +5,31 @@
                 {
                     if (atoms.hasNext())
                     {
+                        // If there is a range tombstone to open strictly before the next row/RT, we need to return that open (or boundary) marker first.
+                        if (tombstoneTracker.hasOpeningMarkerBefore(atoms.peek()))
+                        {
+                            next = tombstoneTracker.popOpeningMarker();
+                        }
                         // If a range tombstone closes strictly before the next row/RT, we need to return that close (or boundary) marker first.
-                        if (tombstoneTracker.hasClosingMarkerBefore(atoms.peek()))
+                        else if (tombstoneTracker.hasClosingMarkerBefore(atoms.peek()))
                         {
                             next = tombstoneTracker.popClosingMarker();
                         }
                         else
                         {
                             LegacyLayout.LegacyAtom atom = atoms.next();
-                            if (!tombstoneTracker.isShadowed(atom))
-                                next = isRow(atom) ? readRow(atom) : tombstoneTracker.openNew(atom.asRangeTombstone());
+                            if (tombstoneTracker.isShadowed(atom))
+                                continue;
+
+                            if (isRow(atom))
+                                next = readRow(atom);
+                            else
+                                tombstoneTracker.openNew(atom.asRangeTombstone());
                         }
                     }
                     else if (tombstoneTracker.hasOpenTombstones())
                     {
-                        next = tombstoneTracker.popClosingMarker();
+                        next = tombstoneTracker.popMarker();
                     }
                     else
                     {
