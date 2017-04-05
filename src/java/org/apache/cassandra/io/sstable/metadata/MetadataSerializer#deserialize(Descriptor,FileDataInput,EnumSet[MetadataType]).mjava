@@ -1,23 +1,58 @@
     public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor, FileDataInput in, EnumSet<MetadataType> types) throws IOException
     {
+        int totalSize = (int) in.bytesRemaining();
         Map<MetadataType, MetadataComponent> components = new EnumMap<>(MetadataType.class);
         // read number of components
         int numComponents = in.readInt();
         // read toc
         Map<MetadataType, Integer> toc = new EnumMap<>(MetadataType.class);
         MetadataType[] values = MetadataType.values();
+        Map<MetadataType, Integer> lengths = new EnumMap<>(MetadataType.class);
+        int start = 0;
+        MetadataType lastType = null;
         for (int i = 0; i < numComponents; i++)
         {
-            toc.put(values[in.readInt()], in.readInt());
+            int metadataTypeId = in.readInt();
+            int position = in.readInt();
+
+            toc.put(values[metadataTypeId], position);
+            if (lastType != null)
+                lengths.put(lastType, position - start);
+            start = position;
+            lastType = values[metadataTypeId];
         }
+        lengths.put(lastType, totalSize - start);
         for (MetadataType type : types)
         {
             Integer offset = toc.get(type);
             if (offset != null)
             {
                 in.seek(offset);
-                MetadataComponent component = type.serializer.deserialize(descriptor.version, in);
-                components.put(type, component);
+
+                if (descriptor.version.hasMetadataChecksum())
+                {
+                    int size = lengths.get(type) - 8; // 8 bytes checksum
+                    byte[] bytes = new byte[size];
+                    in.readFully(bytes);
+                    MetadataComponent component;
+                    try (DataInputBuffer dib = new DataInputBuffer(bytes))
+                    {
+                        component = type.serializer.deserialize(descriptor.version, dib);
+                    }
+                    long writtenChecksum = in.readLong();
+                    if (writtenChecksum != hashFunction.hashBytes(bytes).asLong())
+                    {
+                        String filename = descriptor.filenameFor(Component.STATS);
+                        throw new CorruptSSTableException(new IOException("Checksums do not match for " + filename), filename);
+                    }
+                    components.put(type, component);
+                }
+                else
+                {
+                    MetadataComponent component = type.serializer.deserialize(descriptor.version, in);
+                    components.put(type, component);
+                }
+
             }
         }
         return components;

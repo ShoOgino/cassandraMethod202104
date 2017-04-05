@@ -1,5 +1,6 @@
     public void serialize(Map<MetadataType, MetadataComponent> components, DataOutputPlus out, Version version) throws IOException
     {
+        boolean checksum = version.hasMetadataChecksum();
         // sort components by type
         List<MetadataComponent> sortedComponents = Lists.newArrayList(components.values());
         Collections.sort(sortedComponents);
@@ -8,6 +9,7 @@
         out.writeInt(components.size());
         // build and write toc
         int lastPosition = 4 + (8 * sortedComponents.size());
+        Map<MetadataType, Integer> sizes = new EnumMap<>(MetadataType.class);
         for (MetadataComponent component : sortedComponents)
         {
             MetadataType type = component.getType();
@@ -15,12 +17,22 @@
             out.writeInt(type.ordinal());
             // serialize position
             out.writeInt(lastPosition);
-            lastPosition += type.serializer.serializedSize(version, component);
+            int size = type.serializer.serializedSize(version, component);
+            lastPosition += size + (checksum ? 8 : 0); // checksum is long
+            sizes.put(type, size);
         }
         // serialize components
         for (MetadataComponent component : sortedComponents)
         {
-            component.getType().serializer.serialize(version, component, out);
+            byte[] bytes;
+            try (DataOutputBuffer dob = new DataOutputBuffer(sizes.get(component.getType())))
+            {
+                component.getType().serializer.serialize(version, component, dob);
+                bytes = dob.getData();
+            }
+            out.write(bytes);
+            if (checksum)
+                out.writeLong(hashFunction.hashBytes(bytes).asLong());
         }
     }
 
