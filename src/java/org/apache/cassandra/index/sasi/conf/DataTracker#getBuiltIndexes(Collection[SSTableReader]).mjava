@@ -1,6 +1,7 @@
-    private Set<SSTableIndex> getIndexes(Collection<SSTableReader> sstables)
+    private Pair<Set<SSTableIndex>, Set<SSTableReader>> getBuiltIndexes(Collection<SSTableReader> sstables)
     {
         Set<SSTableIndex> indexes = new HashSet<>(sstables.size());
+        Set<SSTableReader> builtSSTables = new HashSet<>(sstables.size());
         for (SSTableReader sstable : sstables)
         {
             if (sstable.isMarkedCompacted())
@@ -9,6 +10,14 @@
             File indexFile = new File(sstable.descriptor.filenameFor(columnIndex.getComponent()));
             if (!indexFile.exists())
                 continue;
+
+            // if the index file is empty, we have to ignore it to avoid re-building, but it doesn't take
+            // a part in query process
+            if (indexFile.length() == 0)
+            {
+                builtSSTables.add(sstable);
+                continue;
+            }
 
             SSTableIndex index = null;
 
@@ -27,7 +36,9 @@
                 // Try to add new index to the set, if set already has such index, we'll simply release and move on.
                 // This covers situation when sstable collection has the same sstable multiple
                 // times because we don't know what kind of collection it actually is.
-                if (!indexes.add(index))
+                if (indexes.add(index))
+                    builtSSTables.add(sstable);
+                else
                     index.release();
             }
             catch (Throwable t)
@@ -38,6 +49,6 @@
             }
         }
 
-        return indexes;
+        return Pair.create(indexes, builtSSTables);
     }
 
