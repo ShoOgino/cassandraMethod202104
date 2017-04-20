@@ -9,7 +9,7 @@
      */
     public void handlePrepareMessage(InetAddress from, PrepareConsistentRequest request)
     {
-        logger.debug("received {} from {}", request, from);
+        logger.trace("received {} from {}", request, from);
         UUID sessionID = request.parentSession;
         InetAddress coordinator = request.coordinator;
         Set<InetAddress> peers = request.participants;
@@ -21,14 +21,14 @@
         }
         catch (Throwable e)
         {
-            logger.debug("Error retrieving ParentRepairSession for session {}, responding with failure", sessionID);
+            logger.trace("Error retrieving ParentRepairSession for session {}, responding with failure", sessionID);
             sendMessage(coordinator, new FailSession(sessionID));
             return;
         }
 
         LocalSession session = createSessionUnsafe(sessionID, parentSession, peers);
         putSessionUnsafe(session);
-        logger.debug("created local session for {}", sessionID);
+        logger.info("Beginning local incremental repair session {}", session);
 
         ExecutorService executor = Executors.newFixedThreadPool(parentSession.getColumnFamilyStores().size());
 
@@ -37,7 +37,7 @@
         {
             public void onSuccess(@Nullable Object result)
             {
-                logger.debug("pending anti-compaction for {} completed", sessionID);
+                logger.debug("Prepare phase for incremental repair session {} completed", sessionID);
                 setStateAndSave(session, PREPARED);
                 sendMessage(coordinator, new PrepareConsistentResponse(sessionID, getBroadcastAddress(), true));
                 executor.shutdown();
@@ -45,7 +45,7 @@
 
             public void onFailure(Throwable t)
             {
-                logger.debug("pending anti-compaction for {} failed", sessionID);
+                logger.error(String.format("Prepare phase for incremental repair session %s failed", sessionID), t);
                 failSession(sessionID);
                 executor.shutdown();
             }
