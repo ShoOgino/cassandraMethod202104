@@ -22,15 +22,28 @@
         for (Row colRow : session.execute(columnsQuery, keyspace, name))
             defs.add(createDefinitionFromRow(colRow, keyspace, name, types));
 
-        return CFMetaData.create(keyspace,
-                                 name,
-                                 id,
-                                 isDense,
-                                 isCompound,
-                                 isSuper,
-                                 isCounter,
-                                 isView,
-                                 defs,
-                                 partitioner);
+        CFMetaData metadata = CFMetaData.create(keyspace,
+                                                name,
+                                                id,
+                                                isDense,
+                                                isCompound,
+                                                isSuper,
+                                                isCounter,
+                                                isView,
+                                                defs,
+                                                partitioner);
+
+        String droppedColumnsQuery = String.format("SELECT * FROM %s.%s WHERE keyspace_name = ? AND table_name = ?",
+                                                   SchemaConstants.SCHEMA_KEYSPACE_NAME,
+                                                   SchemaKeyspace.DROPPED_COLUMNS);
+        Map<ByteBuffer, CFMetaData.DroppedColumn> droppedColumns = new HashMap<>();
+        for (Row colRow : session.execute(droppedColumnsQuery, keyspace, name))
+        {
+            CFMetaData.DroppedColumn droppedColumn = createDroppedColumnFromRow(colRow, keyspace);
+            droppedColumns.put(UTF8Type.instance.decompose(droppedColumn.name), droppedColumn);
+        }
+        metadata.droppedColumns(droppedColumns);
+
+        return metadata;
     }
 
