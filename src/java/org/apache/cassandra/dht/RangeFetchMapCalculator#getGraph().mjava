@@ -1,0 +1,32 @@
+    /**
+     *  Generate a graph with all ranges and endpoints as vertices. It will create edges b/w a range and its filtered source endpoints
+     *  It will try to use sources from local DC if possible
+     * @return  The generated graph
+     */
+    private MutableCapacityGraph<Vertex, Integer> getGraph()
+    {
+        MutableCapacityGraph<Vertex, Integer> capacityGraph = MutableCapacityGraph.create();
+
+        //Connect all ranges with all source endpoints
+        for (Range<Token> range : rangesWithSources.keySet())
+        {
+            final RangeVertex rangeVertex = new RangeVertex(range);
+
+            //Try to only add source endpoints from same DC
+            boolean sourceFound = addEndpoints(capacityGraph, rangeVertex, true);
+
+            if (!sourceFound)
+            {
+                logger.info("Using other DC endpoints for streaming for range: {} and keyspace {}", range, keyspace);
+                sourceFound = addEndpoints(capacityGraph, rangeVertex, false);
+            }
+
+            //We could not find any source for this range which passed the filters. Ignore if localhost is part of the endpoints for this range
+            if (!sourceFound && !rangesWithSources.get(range).contains(FBUtilities.getBroadcastAddress()))
+                throw new IllegalStateException("Unable to find sufficient sources for streaming range " + range + " in keyspace " + keyspace);
+
+        }
+
+        return capacityGraph;
+    }
+

@@ -1,0 +1,38 @@
+    @Test
+    public void testForRemoteDC() throws Exception
+    {
+        Multimap<Range<Token>, InetAddress> rangesWithSources = HashMultimap.create();
+        addRangeAndSources(rangesWithSources, 1, 10, "127.0.0.3", "127.0.0.51");
+        addRangeAndSources(rangesWithSources, 11, 20, "127.0.0.3", "127.0.0.55");
+        addRangeAndSources(rangesWithSources, 21, 30, "127.0.0.2", "127.0.0.59");
+
+        //Reject only 127.0.0.3 and accept everyone else
+        final RangeStreamer.ISourceFilter localHostFilter = new RangeStreamer.ISourceFilter()
+        {
+            public boolean shouldInclude(InetAddress endpoint)
+            {
+                try
+                {
+                    if (endpoint.equals(InetAddress.getByName("127.0.0.3")))
+                        return false;
+                    else
+                        return true;
+                }
+                catch (UnknownHostException e)
+                {
+                    return true;
+                }
+            }
+        };
+
+        RangeFetchMapCalculator calculator = new RangeFetchMapCalculator(rangesWithSources, Arrays.asList(localHostFilter), "Test");
+        Multimap<InetAddress, Range<Token>> map = calculator.getRangeFetchMap();
+        validateRange(rangesWithSources, map);
+        Assert.assertEquals(3, map.asMap().size());
+
+        //Should have streamed from remote DC endpoint
+        assertArrays(Arrays.asList(generateRange(1, 10)), map.asMap().get(InetAddress.getByName("127.0.0.51")));
+        assertArrays(Arrays.asList(generateRange(11, 20)), map.asMap().get(InetAddress.getByName("127.0.0.55")));
+        assertArrays(Arrays.asList(generateRange(21, 30)), map.asMap().get(InetAddress.getByName("127.0.0.2")));
+    }
+
