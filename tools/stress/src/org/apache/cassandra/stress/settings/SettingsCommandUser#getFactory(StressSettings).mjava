@@ -1,29 +1,47 @@
     public OpDistributionFactory getFactory(final StressSettings settings)
     {
         final SeedManager seeds = new SeedManager(settings);
-        final TokenRangeIterator tokenRangeIterator = profile.tokenRangeQueries.isEmpty()
-                                                      ? null
-                                                      : new TokenRangeIterator(settings,
-                                                                               profile.maybeLoadTokenRanges(settings));
+
+        final Map<String, TokenRangeIterator> tokenRangeIterators = new LinkedHashMap<>();
+        profiles.forEach((k,v)->tokenRangeIterators.put(k, (v.tokenRangeQueries.isEmpty()
+                                                            ? null
+                                                            : new TokenRangeIterator(settings,
+                                                                                     v.maybeLoadTokenRanges(settings)))));
 
         return new SampledOpDistributionFactory<String>(ratios, clustering)
         {
-            protected List<? extends Operation> get(Timer timer, PartitionGenerator generator, String key, boolean isWarmup)
+            protected List<? extends Operation> get(Timer timer, String key, boolean isWarmup)
             {
-                if (key.equalsIgnoreCase("insert"))
+                Matcher m = EXTRACT_SPEC_CMD.matcher(key);
+                final String profile_name;
+                final String sub_key;
+                if (m.matches())
+                {
+                    profile_name = m.group(1);
+                    sub_key = m.group(2);
+                }
+                else
+                {
+                    profile_name = default_profile_name;
+                    sub_key = key;
+                }
+
+                if (!profiles.containsKey(profile_name))
+                {
+                    throw new IllegalArgumentException(String.format("Op name %s contains an invalid profile specname: %s", key, profile_name));
+                }
+                StressProfile profile = profiles.get(profile_name);
+                TokenRangeIterator tokenRangeIterator = tokenRangeIterators.get(profile_name);
+                PartitionGenerator generator = profile.newGenerator(settings);
+                if (sub_key.equalsIgnoreCase("insert"))
                     return Collections.singletonList(profile.getInsert(timer, generator, seeds, settings));
-                if (key.equalsIgnoreCase("validate"))
+                if (sub_key.equalsIgnoreCase("validate"))
                     return profile.getValidate(timer, generator, seeds, settings);
 
-                if (profile.tokenRangeQueries.containsKey(key))
-                    return Collections.singletonList(profile.getBulkReadQueries(key, timer, settings, tokenRangeIterator, isWarmup));
+                if (profile.tokenRangeQueries.containsKey(sub_key))
+                    return Collections.singletonList(profile.getBulkReadQueries(sub_key, timer, settings, tokenRangeIterator, isWarmup));
 
-                return Collections.singletonList(profile.getQuery(key, timer, generator, seeds, settings, isWarmup));
-            }
-
-            protected PartitionGenerator newGenerator()
-            {
-                return profile.newGenerator(settings);
+                return Collections.singletonList(profile.getQuery(sub_key, timer, generator, seeds, settings, isWarmup));
             }
         };
     }
