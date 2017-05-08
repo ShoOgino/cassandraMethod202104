@@ -9,14 +9,14 @@
 
         execute("INSERT INTO %s (k, v) VALUES (?, ?)", 1, set(udt1));
         assertInvalidMessage("Cannot create index on keys of column v with non-map type",
-                             "CREATE INDEX idx ON %s (keys(v))");
+                             "CREATE INDEX ON %s (keys(v))");
         assertInvalidMessage("full() indexes can only be created on frozen collections",
-                             "CREATE INDEX idx ON %s (full(v))");
-        execute("CREATE INDEX idx ON %s (values(v))");
+                             "CREATE INDEX ON %s (full(v))");
+        String indexName = createIndex("CREATE INDEX ON %s (values(v))");
 
         execute("INSERT INTO %s (k, v) VALUES (?, ?)", 2, set(udt2));
         execute("UPDATE %s SET v = v + ? WHERE k = ?", set(udt2), 1);
-        assertTrue(waitForIndex(keyspace(), tableName, "idx"));
+        assertTrue(waitForIndex(keyspace(), tableName, indexName));
 
         assertRows(execute("SELECT * FROM %s WHERE v CONTAINS ?", udt1), row(1, set(udt1, udt2)));
         assertRows(execute("SELECT * FROM %s WHERE v CONTAINS ?", udt2), row(1, set(udt1, udt2)), row(2, set(udt2)));
@@ -25,8 +25,9 @@
         assertEmpty(execute("SELECT * FROM %s WHERE v CONTAINS ?", udt1));
         assertRows(execute("SELECT * FROM %s WHERE v CONTAINS ?", udt2), row(2, set(udt2)));
 
-        dropIndex("DROP INDEX %s.idx");
-        assertInvalidMessage("Index 'idx' could not be found", "DROP INDEX " + KEYSPACE + ".idx");
+        dropIndex("DROP INDEX %s." + indexName);
+        assertInvalidMessage(String.format("Index '%s' could not be found", indexName),
+                             String.format("DROP INDEX %s.%s", KEYSPACE, indexName));
         assertInvalidMessage(StatementRestrictions.REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE v CONTAINS ?", udt1);
     }
