@@ -1,0 +1,30 @@
+    static boolean dynamicConditionExists(PreparedStatement statement) throws IllegalArgumentException
+    {
+        if (statement == null)
+            return false;
+
+        if (!statement.getQueryString().toUpperCase().startsWith("UPDATE"))
+            return false;
+
+        ModificationStatement.Parsed modificationStatement;
+        try
+        {
+            modificationStatement = CQLFragmentParser.parseAnyUnhandled(CqlParser::updateStatement,
+                                                                        statement.getQueryString());
+        }
+        catch (RecognitionException e)
+        {
+            throw new IllegalArgumentException("could not parse update query:" + statement.getQueryString(), e);
+        }
+
+        /*
+         * here we differentiate between static vs dynamic conditions:
+         *  - static condition example: if col1 = NULL
+         *  - dynamic condition example: if col1 = ?
+         *  for static condition we don't have to replace value, no extra work involved.
+         *  for dynamic condition we have to read existing db value and then
+         *  use current db values during the update.
+         */
+        return modificationStatement.getConditions().stream().anyMatch(condition -> condition.right.getValue().getText().equals("?"));
+    }
+

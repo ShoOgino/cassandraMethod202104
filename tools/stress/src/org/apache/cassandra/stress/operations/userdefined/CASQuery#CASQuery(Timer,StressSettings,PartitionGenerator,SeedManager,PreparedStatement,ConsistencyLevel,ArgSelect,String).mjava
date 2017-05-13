@@ -1,0 +1,70 @@
+    public CASQuery(Timer timer, StressSettings settings, PartitionGenerator generator, SeedManager seedManager, PreparedStatement statement, ConsistencyLevel cl, ArgSelect argSelect, final String tableName)
+    {
+        super(timer, settings, new DataSpec(generator, seedManager, new DistributionFixed(1), settings.insert.rowPopulationRatio.get(), argSelect == SchemaStatement.ArgSelect.MULTIROW ? statement.getVariables().size() : 1), statement,
+              statement.getVariables().asList().stream().map(ColumnDefinitions.Definition::getName).collect(Collectors.toList()), cl);
+
+        if (argSelect != SchemaStatement.ArgSelect.SAMEROW)
+            throw new IllegalArgumentException("CAS is supported only for type 'samerow'");
+
+        ModificationStatement.Parsed modificationStatement;
+        try
+        {
+            modificationStatement = CQLFragmentParser.parseAnyUnhandled(CqlParser::updateStatement,
+                    statement.getQueryString());
+        }
+        catch (RecognitionException e)
+        {
+            throw new IllegalArgumentException("could not parse update query:" + statement.getQueryString(), e);
+        }
+
+        final List<Pair<ColumnMetadata.Raw, ColumnCondition.Raw>> casConditionList = modificationStatement.getConditions();
+        List<Integer> casConditionIndex = new ArrayList<>();
+
+        boolean first = true;
+        StringBuilder casReadConditionQuery = new StringBuilder();
+        casReadConditionQuery.append("SELECT ");
+        for (final Pair<ColumnMetadata.Raw, ColumnCondition.Raw> condition : casConditionList)
+        {
+            if (!condition.right.getValue().getText().equals("?"))
+            {
+                //condition uses static value, ignore it
+                continue;
+            }
+            if (!first)
+            {
+                casReadConditionQuery.append(", ");
+            }
+            casReadConditionQuery.append(condition.left.rawText());
+            casConditionIndex.add(getDataSpecification().partitionGenerator.indexOf(condition.left.rawText()));
+            first = false;
+        }
+        casReadConditionQuery.append(" FROM ").append(tableName).append(" WHERE ");
+
+        first = true;
+        ImmutableList.Builder<Integer> keysBuilder = ImmutableList.builder();
+        for (final Generator key : getDataSpecification().partitionGenerator.getPartitionKey())
+        {
+            if (!first)
+            {
+                casReadConditionQuery.append(" AND ");
+            }
+            casReadConditionQuery.append(key.name).append(" = ? ");
+            keysBuilder.add(getDataSpecification().partitionGenerator.indexOf(key.name));
+            first = false;
+        }
+        for (final Generator clusteringKey : getDataSpecification().partitionGenerator.getClusteringComponents())
+        {
+            casReadConditionQuery.append(" AND ").append(clusteringKey.name).append(" = ? ");
+            keysBuilder.add(getDataSpecification().partitionGenerator.indexOf(clusteringKey.name));
+        }
+        keysIndex = keysBuilder.build();
+        readQuery = casReadConditionQuery.toString();
+
+        ImmutableMap.Builder<Integer, Integer> builder = ImmutableMap.builderWithExpectedSize(casConditionIndex.size());
+        for (final Integer oneConditionIndex : casConditionIndex)
+        {
+            builder.put(oneConditionIndex, Math.toIntExact(Arrays.stream(argumentIndex).filter((x) -> x == oneConditionIndex).count()));
+        }
+        casConditionArgFreqMap = builder.build();
+    }
+

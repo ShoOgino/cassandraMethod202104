@@ -1,0 +1,42 @@
+    private BoundStatement prepare(final Row row, final Object[] casDbValues)
+    {
+        final Map<Integer, Integer> localMapping = new HashMap<>(casConditionArgFreqMap);
+        int conditionIndexTracker = 0;
+        for (int i = 0; i < argumentIndex.length; i++)
+        {
+            boolean replace = false;
+            Integer count = localMapping.get(argumentIndex[i]);
+            if (count != null)
+            {
+                count--;
+                localMapping.put(argumentIndex[i], count);
+                if (count == 0)
+                {
+                    replace = true;
+                }
+            }
+
+            if (replace)
+            {
+                bindBuffer[i] = casDbValues[conditionIndexTracker++];
+            }
+            else
+            {
+                Object value = row.get(argumentIndex[i]);
+                if (definitions.getType(i).getName() == DataType.date().getName())
+                {
+                    // the java driver only accepts com.datastax.driver.core.LocalDate for CQL type "DATE"
+                    value = LocalDate.fromDaysSinceEpoch((Integer) value);
+                }
+
+                bindBuffer[i] = value;
+            }
+
+            if (bindBuffer[i] == null && !getDataSpecification().partitionGenerator.permitNulls(argumentIndex[i]))
+            {
+                throw new IllegalStateException();
+            }
+        }
+        return statement.bind(bindBuffer);
+    }
+
