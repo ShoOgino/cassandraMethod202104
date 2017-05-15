@@ -62,6 +62,7 @@
             // We blindly assume that a partition is evenly distributed on all sstables for now.
             MerkleTrees tree = createMerkleTrees(sstables, validator.desc.ranges, cfs);
             long start = System.nanoTime();
+            long partitionCount = 0;
             try (AbstractCompactionStrategy.ScannerList scanners = cfs.getCompactionStrategyManager().getScanners(sstables, validator.desc.ranges);
                  ValidationCompactionController controller = new ValidationCompactionController(cfs, gcBefore);
                  CompactionIterator ci = new ValidationCompactionIterator(scanners.scanners, controller, nowInSec, metrics))
@@ -75,6 +76,7 @@
                     try (UnfilteredRowIterator partition = ci.next())
                     {
                         validator.add(partition);
+                        partitionCount++;
                     }
                 }
                 validator.complete();
@@ -87,12 +89,21 @@
                     // is done).
                     cfs.clearSnapshot(snapshotName);
                 }
+                cfs.metric.partitionsValidated.update(partitionCount);
             }
-
+            long estimatedTotalBytes = 0;
+            for (SSTableReader sstable : sstables)
+            {
+                for (Pair<Long, Long> positionsForRanges : sstable.getPositionsForRanges(validator.desc.ranges))
+                    estimatedTotalBytes += positionsForRanges.right - positionsForRanges.left;
+            }
+            cfs.metric.bytesValidated.update(estimatedTotalBytes);
             if (logger.isDebugEnabled())
             {
                 long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-                logger.debug("Validation finished in {} msec, for {}",
+                logger.debug("Validation of {} partitions (~{}) finished in {} msec, for {}",
+                             partitionCount,
+                             FBUtilities.prettyPrintMemory(estimatedTotalBytes),
                              duration,
                              validator.desc);
             }
