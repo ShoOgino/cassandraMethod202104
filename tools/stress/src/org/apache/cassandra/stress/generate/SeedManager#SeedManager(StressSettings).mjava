@@ -1,32 +1,37 @@
     public SeedManager(StressSettings settings)
     {
+        Distribution sample = settings.insert.revisit.get();
+        this.sampleOffset = Math.min(sample.minValue(), sample.maxValue());
+        long sampleSize = 1 + Math.max(sample.minValue(), sample.maxValue()) - sampleOffset;
+        if (sampleOffset < 0 || sampleSize > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("sample range is invalid");
+
+        // need to get a big numerical range even if a small number of discrete values
+        // one plus so we still get variation at the low order numbers as well as high
+        this.sampleMultiplier = 1 + Math.round(Math.pow(10D, 22 - Math.log10(sampleSize)));
+
         Generator writes, reads;
         if (settings.generate.sequence != null)
         {
             long[] seq = settings.generate.sequence;
             if (settings.generate.readlookback != null)
             {
-                LookbackableWriteGenerator series = new LookbackableWriteGenerator(seq[0], seq[1], settings.generate.wrap, settings.generate.readlookback.get());
+                LookbackableWriteGenerator series = new LookbackableWriteGenerator(seq[0], seq[1], settings.generate.wrap, settings.generate.readlookback.get(), sampleMultiplier);
                 writes = series;
                 reads = series.reads;
             }
             else
             {
-                writes = reads = new SeriesGenerator(seq[0], seq[1], settings.generate.wrap);
+                writes = reads = new SeriesGenerator(seq[0], seq[1], settings.generate.wrap, sampleMultiplier);
             }
         }
         else
         {
-            writes = reads = new RandomGenerator(settings.generate.distribution.get());
+            writes = reads = new RandomGenerator(settings.generate.distribution.get(), sampleMultiplier);
         }
         this.visits = settings.insert.visits.get();
         this.writes = writes;
         this.reads = reads;
-        Distribution sample = settings.insert.revisit.get();
-        this.sampleOffset = Math.min(sample.minValue(), sample.maxValue());
-        long sampleSize = 1 + Math.max(sample.minValue(), sample.maxValue()) - sampleOffset;
-        if (sampleOffset < 0 || sampleSize > Integer.MAX_VALUE)
-            throw new IllegalArgumentException("sample range is invalid");
         this.sampleFrom = new LockedDynamicList<>((int) sampleSize);
         this.sample = DistributionInverted.invert(sample);
         this.sampleSize = (int) sampleSize;
