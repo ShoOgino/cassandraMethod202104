@@ -1,0 +1,64 @@
+    @Test
+    public void testCollectionOperationResultSetMetadata() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY," +
+                    "m map<text, text>," +
+                    "fm frozen<map<text, text>>," +
+                    "s set<text>," +
+                    "fs frozen<set<text>>)");
+
+        execute("INSERT INTO %s (k, m, fm, s, fs) VALUES (?, ?, ?, ?, ?)",
+                0,
+                map("1", "one", "2", "two"),
+                map("1", "one", "2", "two"),
+                set("1", "2", "3"),
+                set("1", "2", "3"));
+
+        String cql = "SELECT k, " +
+                     "m, m['2'], m['2'..'3'], m[..'2'], m['3'..], " +
+                     "fm, fm['2'], fm['2'..'3'], fm[..'2'], fm['3'..], " +
+                     "s, s['2'], s['2'..'3'], s[..'2'], s['3'..], " +
+                     "fs, fs['2'], fs['2'..'3'], fs[..'2'], fs['3'..] " +
+                     "FROM " + KEYSPACE + '.' + currentTable() + " WHERE k = 0";
+        UntypedResultSet result = execute(cql);
+        Iterator<ColumnSpecification> meta = result.metadata().iterator();
+        meta.next();
+        for (int i = 0; i < 4; i++)
+        {
+            // take the "full" collection selection
+            ColumnSpecification ref = meta.next();
+            ColumnSpecification selSingle = meta.next();
+            assertEquals(ref.toString(), UTF8Type.instance, selSingle.type);
+            for (int selOrSlice = 0; selOrSlice < 3; selOrSlice++)
+            {
+                ColumnSpecification selSlice = meta.next();
+                assertEquals(ref.toString(), ref.type, selSlice.type);
+            }
+        }
+
+        assertRows(result,
+                   row(0,
+                       map("1", "one", "2", "two"), "two", map("2", "two"), map("1", "one", "2", "two"), map(),
+                       map("1", "one", "2", "two"), "two", map("2", "two"), map("1", "one", "2", "two"), map(),
+                       set("1", "2", "3"), "2", set("2", "3"), set("1", "2"), set("3"),
+                       set("1", "2", "3"), "2", set("2", "3"), set("1", "2"), set("3")));
+
+        Session session = sessionNet();
+        ResultSet rset = session.execute(cql);
+        ColumnDefinitions colDefs = rset.getColumnDefinitions();
+        Iterator<ColumnDefinitions.Definition> colDefIter = colDefs.asList().iterator();
+        colDefIter.next();
+        for (int i = 0; i < 4; i++)
+        {
+            // take the "full" collection selection
+            ColumnDefinitions.Definition ref = colDefIter.next();
+            ColumnDefinitions.Definition selSingle = colDefIter.next();
+            assertEquals(ref.getName(), DataType.NativeType.text(), selSingle.getType());
+            for (int selOrSlice = 0; selOrSlice < 3; selOrSlice++)
+            {
+                ColumnDefinitions.Definition selSlice = colDefIter.next();
+                assertEquals(ref.getName() + ' ' + ref.getType(), ref.getType(), selSlice.getType());
+            }
+        }
+    }
+

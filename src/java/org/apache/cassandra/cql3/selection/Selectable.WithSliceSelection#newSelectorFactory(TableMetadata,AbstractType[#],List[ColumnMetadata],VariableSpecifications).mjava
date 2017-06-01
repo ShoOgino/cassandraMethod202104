@@ -1,0 +1,20 @@
+        public Selector.Factory newSelectorFactory(TableMetadata cfm, AbstractType<?> expectedType, List<ColumnMetadata> defs, VariableSpecifications boundNames)
+        {
+            // Note that a slice gives you the same type as the collection you applied it to, so we can pass expectedType for selected directly
+            Selector.Factory factory = selected.newSelectorFactory(cfm, expectedType, defs, boundNames);
+            ColumnSpecification receiver = factory.getColumnSpecification(cfm);
+
+            if (!(receiver.type instanceof CollectionType))
+                throw new InvalidRequestException(String.format("Invalid slice selection: %s of type %s is not a collection", selected, receiver.type.asCQL3Type()));
+
+            ColumnSpecification boundSpec = specForElementOrSlice(selected, receiver, "Slice");
+
+            // If from or to are null, this means the user didn't provide on in the syntax (we had c[x..] or c[..x]).
+            // The equivalent of doing this when preparing values would be to use UNSET.
+            Term f = from == null ? Constants.UNSET_VALUE : from.prepare(cfm.keyspace, boundSpec);
+            Term t = to == null ? Constants.UNSET_VALUE : to.prepare(cfm.keyspace, boundSpec);
+            f.collectMarkerSpecification(boundNames);
+            t.collectMarkerSpecification(boundNames);
+            return ElementsSelector.newSliceFactory(toString(), factory, (CollectionType)receiver.type, f, t);
+        }
+

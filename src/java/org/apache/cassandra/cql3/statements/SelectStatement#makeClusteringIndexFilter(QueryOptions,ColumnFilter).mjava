@@ -1,0 +1,33 @@
+    private ClusteringIndexFilter makeClusteringIndexFilter(QueryOptions options, ColumnFilter columnFilter)
+    {
+        if (parameters.isDistinct)
+        {
+            // We need to be able to distinguish between partition having live rows and those that don't. But
+            // doing so is not trivial since "having a live row" depends potentially on
+            //   1) when the query is performed, due to TTLs
+            //   2) how thing reconcile together between different nodes
+            // so that it's hard to really optimize properly internally. So to keep it simple, we simply query
+            // for the first row of the partition and hence uses Slices.ALL. We'll limit it to the first live
+            // row however in getLimit().
+            return new ClusteringIndexSliceFilter(Slices.ALL, false);
+        }
+
+        if (restrictions.isColumnRange())
+        {
+            Slices slices = makeSlices(options);
+            if (slices == Slices.NONE && !selection.containsStaticColumns())
+                return null;
+
+            return new ClusteringIndexSliceFilter(slices, isReversed);
+        }
+
+        NavigableSet<Clustering> clusterings = getRequestedRows(options);
+        // We can have no clusterings if either we're only selecting the static columns, or if we have
+        // a 'IN ()' for clusterings. In that case, we still want to query if some static columns are
+        // queried. But we're fine otherwise.
+        if (clusterings.isEmpty() && columnFilter.fetchedColumns().statics.isEmpty())
+            return null;
+
+        return new ClusteringIndexNamesFilter(clusterings, isReversed);
+    }
+

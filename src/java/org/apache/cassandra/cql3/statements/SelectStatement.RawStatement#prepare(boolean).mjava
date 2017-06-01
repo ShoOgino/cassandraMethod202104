@@ -3,11 +3,26 @@
             TableMetadata table = Schema.instance.validateTable(keyspace(), columnFamily());
             VariableSpecifications boundNames = getBoundVariables();
 
-            Selection selection = selectClause.isEmpty()
-                                  ? Selection.wildcard(table)
-                                  : Selection.fromSelectors(table, selectClause, boundNames, !parameters.groups.isEmpty());
+            List<Selectable> selectables = RawSelector.toSelectables(selectClause, table);
+            boolean containsOnlyStaticColumns = selectOnlyStaticColumns(table, selectables);
 
-            StatementRestrictions restrictions = prepareRestrictions(table, boundNames, selection, forView);
+            StatementRestrictions restrictions = prepareRestrictions(table, boundNames, containsOnlyStaticColumns, forView);
+
+            // If we order post-query, the sorted column needs to be in the ResultSet for sorting,
+            // even if we don't ultimately ship them to the client (CASSANDRA-4911).
+            Map<ColumnMetadata, Boolean> orderingColumns = getOrderingColumns(table);
+            Set<ColumnMetadata> resultSetOrderingColumns = restrictions.keyIsInRelation() ? orderingColumns.keySet()
+                                                                                          : Collections.emptySet();
+
+            Selection selection = selectables.isEmpty()
+                    ? Selection.wildcard(table, parameters.isJson)
+                    : Selection.fromSelectors(table,
+                                              selectables,
+                                              boundNames,
+                                              resultSetOrderingColumns,
+                                              restrictions.nonPKRestrictedColumns(false),
+                                              !parameters.groups.isEmpty(),
+                                              parameters.isJson);
 
             if (parameters.isDistinct)
             {
@@ -26,12 +41,12 @@
             Comparator<List<ByteBuffer>> orderingComparator = null;
             boolean isReversed = false;
 
-            if (!parameters.orderings.isEmpty())
+            if (!orderingColumns.isEmpty())
             {
                 assert !forView;
                 verifyOrderingIsAllowed(restrictions);
-                orderingComparator = getOrderingComparator(table, selection, restrictions);
-                isReversed = isReversed(table);
+                orderingComparator = getOrderingComparator(table, selection, restrictions, orderingColumns);
+                isReversed = isReversed(table, orderingColumns);
                 if (isReversed)
                     orderingComparator = Collections.reverseOrder(orderingComparator);
             }

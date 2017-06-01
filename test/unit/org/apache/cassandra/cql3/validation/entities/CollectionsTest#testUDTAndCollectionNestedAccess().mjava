@@ -1,0 +1,49 @@
+    @Test
+    public void testUDTAndCollectionNestedAccess() throws Throwable
+    {
+        String type = createType("CREATE TYPE %s (s set<int>, m map<text, text>)");
+
+        assertInvalidMessage("Non-frozen UDTs are not allowed inside collections",
+                             "CREATE TABLE " + KEYSPACE + "t (k int PRIMARY KEY, v map<text, " + type + ">)");
+
+        String mapType = "map<text, frozen<" + type + ">>";
+        for (boolean frozen : new boolean[]{false, true})
+        {
+            mapType = frozen ? "frozen<" + mapType + ">" : mapType;
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, v " + mapType + ")");
+
+            execute("INSERT INTO %s(k, v) VALUES (0, ?)", map("abc", userType("s", set(2, 4, 6), "m", map("a", "v1", "d", "v2"))));
+
+            beforeAndAfterFlush(() ->
+            {
+                assertRows(execute("SELECT v[?].s FROM %s WHERE k = 0", "abc"), row(set(2, 4, 6)));
+                assertRows(execute("SELECT v[?].m[..?] FROM %s WHERE k = 0", "abc", "b"), row(map("a", "v1")));
+                assertRows(execute("SELECT v[?].m[?] FROM %s WHERE k = 0", "abc", "d"), row("v2"));
+            });
+        }
+
+        assertInvalidMessage("Non-frozen UDTs with nested non-frozen collections are not supported",
+                             "CREATE TABLE " + KEYSPACE + ".t (k int PRIMARY KEY, v " + type + ")");
+
+        type = createType("CREATE TYPE %s (s frozen<set<int>>, m frozen<map<text, text>>)");
+
+        for (boolean frozen : new boolean[]{false, true})
+        {
+            type = frozen ? "frozen<" + type + ">" : type;
+
+            createTable("CREATE TABLE %s (k int PRIMARY KEY, v " + type + ")");
+
+            execute("INSERT INTO %s(k, v) VALUES (0, ?)", userType("s", set(2, 4, 6), "m", map("a", "v1", "d", "v2")));
+
+            beforeAndAfterFlush(() ->
+            {
+                assertRows(execute("SELECT v.s[?] FROM %s WHERE k = 0", 2), row(2));
+                assertRows(execute("SELECT v.s[?..?] FROM %s WHERE k = 0", 2, 5), row(set(2, 4)));
+                assertRows(execute("SELECT v.s[..?] FROM %s WHERE k = 0", 3), row(set(2)));
+                assertRows(execute("SELECT v.m[..?] FROM %s WHERE k = 0", "b"), row(map("a", "v1")));
+                assertRows(execute("SELECT v.m[?] FROM %s WHERE k = 0", "d"), row("v2"));
+            });
+        }
+    }
+

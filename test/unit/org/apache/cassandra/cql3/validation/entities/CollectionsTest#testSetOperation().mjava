@@ -1,0 +1,91 @@
+    @Test
+    public void testSetOperation() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c int, l text, " +
+                    "s set<text>, " +
+                    "fs frozen<set<text>>, " +
+                    "ss set<text> STATIC, " +
+                    "fss frozen<set<text>> STATIC, " +
+                    "o int, PRIMARY KEY (k, c))");
+
+        execute("INSERT INTO %s(k, c, l, s, fs, ss, fss, o) VALUES (0, 0, 'foobar', ?, ?, ?, ?, 42)",
+                set("1", "22", "333"),
+                set("f1", "f22", "f333"),
+                set("s1", "s22", "s333"),
+                set("fs1", "fs22", "fs333"));
+
+        flush();
+
+        execute("UPDATE %s SET s = s + ? WHERE k = 0 AND c = 0", set("22_2"));
+
+        execute("UPDATE %s SET ss = ss + ? WHERE k = 0", set("s22_2"));
+
+        flush();
+
+        execute("INSERT INTO %s(k, c, l, s, o) VALUES (0, 1, 'foobar', ?, 42)",
+                set("22", "333"));
+
+        assertRows(execute("SELECT c, s, fs, ss, fss FROM %s WHERE k = 0"),
+                   row(0, set("1", "22", "22_2", "333"), set("f1", "f22", "f333"), set("s1", "s22", "s22_2", "s333"), set("fs1", "fs22", "fs333")),
+                   row(1, set("22", "333"), null, set("s1", "s22", "s22_2", "s333"), set("fs1", "fs22", "fs333"))
+        );
+
+        assertRows(execute("SELECT c, s['1'], fs['f1'], ss['s1'], fss['fs1'] FROM %s WHERE k = 0"),
+                   row(0, "1", "f1", "s1", "fs1"),
+                   row(1, null, null, "s1", "fs1")
+        );
+
+        assertRows(execute("SELECT s['1'], fs['f1'], ss['s1'], fss['fs1'] FROM %s WHERE k = 0 AND c = 0"),
+                   row("1", "f1", "s1", "fs1")
+        );
+
+        assertRows(execute("SELECT k, c, l, s['1'], fs['f1'], ss['s1'], fss['fs1'], o FROM %s WHERE k = 0"),
+                   row(0, 0, "foobar", "1", "f1", "s1", "fs1", 42),
+                   row(0, 1, "foobar", null, null, "s1", "fs1", 42)
+        );
+
+        assertColumnNames(execute("SELECT k, l, s['1'], o FROM %s WHERE k = 0"),
+                          "k", "l", "s['1']", "o");
+
+        assertRows(execute("SELECT k, l, s['22'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", "22", 42)
+        );
+
+        assertRows(execute("SELECT k, l, s['333'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", "333", 42)
+        );
+
+        assertRows(execute("SELECT k, l, s['foobar'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", null, 42)
+        );
+
+        assertRows(execute("SELECT k, l, s['1'..'22'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", set("1", "22"), 42)
+        );
+        assertColumnNames(execute("SELECT k, l, s[''..'22'], o FROM %s WHERE k = 0"),
+                          "k", "l", "s[''..'22']", "o");
+
+        assertRows(execute("SELECT k, l, s[''..'23'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", set("1", "22", "22_2"), 42)
+        );
+
+        assertRows(execute("SELECT k, l, s['2'..'3'], o FROM %s WHERE k = 0 AND c = 0"),
+                   row(0, "foobar", set("22", "22_2"), 42)
+        );
+
+        assertRows(execute("SELECT k, l, s['22'..], o FROM %s WHERE k = 0"),
+                   row(0, "foobar", set("22", "22_2", "333"), 42),
+                   row(0, "foobar", set("22", "333"), 42)
+        );
+
+        assertRows(execute("SELECT k, l, s[..'22'], o FROM %s WHERE k = 0"),
+                   row(0, "foobar", set("1", "22"), 42),
+                   row(0, "foobar", set("22"), 42)
+        );
+
+        assertRows(execute("SELECT k, l, s, o FROM %s WHERE k = 0"),
+                   row(0, "foobar", set("1", "22", "22_2", "333"), 42),
+                   row(0, "foobar", set("22", "333"), 42)
+        );
+    }
+

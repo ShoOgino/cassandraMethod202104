@@ -1,0 +1,59 @@
+    public ByteBuffer getSliceFromSerialized(ByteBuffer collection, ByteBuffer from, ByteBuffer to, AbstractType<?> comparator)
+    {
+        if (from == ByteBufferUtil.UNSET_BYTE_BUFFER && to == ByteBufferUtil.UNSET_BYTE_BUFFER)
+            return collection;
+
+        try
+        {
+            ByteBuffer input = collection.duplicate();
+            int n = readCollectionSize(input, ProtocolVersion.V3);
+            int startPos = input.position();
+            int count = 0;
+            boolean inSlice = from == ByteBufferUtil.UNSET_BYTE_BUFFER;
+
+            for (int i = 0; i < n; i++)
+            {
+                int pos = input.position();
+                ByteBuffer value = readValue(input, ProtocolVersion.V3);
+
+                // If we haven't passed the start already, check if we have now
+                if (!inSlice)
+                {
+                    int comparison = comparator.compareForCQL(from, value);
+                    if (comparison <= 0)
+                    {
+                        // We're now within the slice
+                        inSlice = true;
+                        startPos = pos;
+                    }
+                    else
+                    {
+                        // We're before the slice so we know we don't care about this value
+                        continue;
+                    }
+                }
+
+                // Now check if we're done
+                int comparison = to == ByteBufferUtil.UNSET_BYTE_BUFFER ? -1 : comparator.compareForCQL(value, to);
+                if (comparison > 0)
+                {
+                    // We're done and shouldn't include the value we just read
+                    input.position(pos);
+                    break;
+                }
+
+                // Otherwise, we'll include that value
+                ++count;
+
+                // But if we know if was the last of the slice, we break early
+                if (comparison == 0)
+                    break;
+            }
+            return copyAsNewCollection(collection, count, startPos, input.position(), ProtocolVersion.V3);
+        }
+        catch (BufferUnderflowException e)
+        {
+            throw new MarshalException("Not enough bytes to read a set");
+        }
+    }
+
