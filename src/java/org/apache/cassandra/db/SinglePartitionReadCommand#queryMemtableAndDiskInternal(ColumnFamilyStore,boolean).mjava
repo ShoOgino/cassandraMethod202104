@@ -47,12 +47,12 @@
              * In other words, iterating in maxTimestamp order allow to do our mostRecentPartitionTombstone elimination
              * in one pass, and minimize the number of sstables for which we read a partition tombstone.
              */
-            int sstablesIterated = 0;
             Collections.sort(view.sstables, SSTableReader.maxTimestampComparator);
             List<SSTableReader> skippedSSTables = null;
             long mostRecentPartitionTombstone = Long.MIN_VALUE;
             long minTimestamp = Long.MAX_VALUE;
             int nonIntersectingSSTables = 0;
+            SSTableReadMetricsCollector metricsCollector = new SSTableReadMetricsCollector();
 
             for (SSTableReader sstable : view.sstables)
             {
@@ -75,15 +75,17 @@
                     continue;
                 }
 
-                sstable.incrementReadCount();
                 @SuppressWarnings("resource") // 'iter' is added to iterators which is closed on exception, or through the closing of the final merged iterator
-                UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift()));
+                UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(),
+                                                                            columnFilter(),
+                                                                            filter.isReversed(),
+                                                                            isForThrift(),
+                                                                            metricsCollector));
                 if (!sstable.isRepaired())
                     oldestUnrepairedTombstone = Math.min(oldestUnrepairedTombstone, sstable.getMinLocalDeletionTime());
 
                 iterators.add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter);
                 mostRecentPartitionTombstone = Math.max(mostRecentPartitionTombstone, iter.partitionLevelDeletion().markedForDeleteAt());
-                sstablesIterated++;
             }
 
             int includedDueToTombstones = 0;
@@ -95,16 +97,19 @@
                     if (sstable.getMaxTimestamp() <= minTimestamp)
                         continue;
 
-                    sstable.incrementReadCount();
                     @SuppressWarnings("resource") // 'iter' is either closed right away, or added to iterators which is close on exception, or through the closing of the final merged iterator
-                    UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift()));
+                    UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(),
+                                                                                columnFilter(),
+                                                                                filter.isReversed(),
+                                                                                isForThrift(),
+                                                                                metricsCollector));
+
                     if (iter.partitionLevelDeletion().markedForDeleteAt() > minTimestamp)
                     {
                         iterators.add(iter);
                         if (!sstable.isRepaired())
                             oldestUnrepairedTombstone = Math.min(oldestUnrepairedTombstone, sstable.getMinLocalDeletionTime());
                         includedDueToTombstones++;
-                        sstablesIterated++;
                     }
                     else
                     {
@@ -116,12 +121,12 @@
                 Tracing.trace("Skipped {}/{} non-slice-intersecting sstables, included {} due to tombstones",
                               nonIntersectingSSTables, view.sstables.size(), includedDueToTombstones);
 
-            cfs.metric.updateSSTableIterated(sstablesIterated);
+            cfs.metric.updateSSTableIterated(metricsCollector.getMergedSSTables());
 
             if (iterators.isEmpty())
                 return EmptyIterators.unfilteredRow(cfs.metadata, partitionKey(), filter.isReversed());
 
-            Tracing.trace("Merging data from memtables and {} sstables", sstablesIterated);
+            Tracing.trace("Merging data from memtables and {} sstables", metricsCollector.getMergedSSTables());
 
             @SuppressWarnings("resource") //  Closed through the closing of the result of that method.
             UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());

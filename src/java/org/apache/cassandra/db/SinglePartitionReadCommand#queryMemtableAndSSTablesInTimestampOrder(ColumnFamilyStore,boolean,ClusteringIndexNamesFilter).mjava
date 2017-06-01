@@ -35,9 +35,9 @@
 
         /* add the SSTables on disk */
         Collections.sort(view.sstables, SSTableReader.maxTimestampComparator);
-        int sstablesIterated = 0;
         boolean onlyUnrepaired = true;
         // read sorted sstables
+        SSTableReadMetricsCollector metricsCollector = new SSTableReadMetricsCollector();
         for (SSTableReader sstable : view.sstables)
         {
             // if we've already seen a partition tombstone with a timestamp greater
@@ -61,10 +61,12 @@
                     continue; // Means no tombstone at all, we can skip that sstable
 
                 // We need to get the partition deletion and include it if it's live. In any case though, we're done with that sstable.
-                sstable.incrementReadCount();
-                try (UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift())))
+                try (UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(),
+                                                                                 columnFilter(),
+                                                                                 filter.isReversed(),
+                                                                                 isForThrift(),
+                                                                                 metricsCollector)))
                 {
-                    sstablesIterated++;
                     if (!iter.partitionLevelDeletion().isLive())
                         result = add(UnfilteredRowIterators.noRowsIterator(iter.metadata(), iter.partitionKey(), Rows.EMPTY_STATIC_ROW, iter.partitionLevelDeletion(), filter.isReversed()), result, filter, sstable.isRepaired());
                     else
@@ -74,20 +76,22 @@
             }
 
             Tracing.trace("Merging data from sstable {}", sstable.descriptor.generation);
-            sstable.incrementReadCount();
-            try (UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift())))
+            try (UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(),
+                                                                             columnFilter(),
+                                                                             filter.isReversed(),
+                                                                             isForThrift(),
+                                                                             metricsCollector)))
             {
                 if (iter.isEmpty())
                     continue;
 
                 if (sstable.isRepaired())
                     onlyUnrepaired = false;
-                sstablesIterated++;
                 result = add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter, result, filter, sstable.isRepaired());
             }
         }
 
-        cfs.metric.updateSSTableIterated(sstablesIterated);
+        cfs.metric.updateSSTableIterated(metricsCollector.getMergedSSTables());
 
         if (result == null || result.isEmpty())
             return EmptyIterators.unfilteredRow(metadata(), partitionKey(), false);
@@ -96,7 +100,7 @@
         cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
 
         // "hoist up" the requested data into a more recent sstable
-        if (sstablesIterated > cfs.getMinimumCompactionThreshold()
+        if (metricsCollector.getMergedSSTables() > cfs.getMinimumCompactionThreshold()
             && onlyUnrepaired
             && !cfs.isAutoCompactionDisabled()
             && cfs.getCompactionStrategyManager().shouldDefragment())
