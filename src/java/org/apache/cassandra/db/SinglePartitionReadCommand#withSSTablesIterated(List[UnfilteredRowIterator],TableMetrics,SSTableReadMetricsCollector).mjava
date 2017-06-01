@@ -4,7 +4,8 @@
      * would cause all iterators to be initialized and hence all sstables to be accessed.
      */
     private UnfilteredRowIterator withSSTablesIterated(List<UnfilteredRowIterator> iterators,
-                                                       TableMetrics metrics)
+                                                       TableMetrics metrics,
+                                                       SSTableReadMetricsCollector metricsCollector)
     {
         @SuppressWarnings("resource") //  Closed through the closing of the result of the caller method.
         UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());
@@ -19,13 +20,9 @@
         {
            public void onPartitionClose()
            {
-               int sstablesIterated = (int)iterators.stream()
-                                                    .filter(it -> it instanceof LazilyInitializedUnfilteredRowIterator)
-                                                    .filter(it -> ((LazilyInitializedUnfilteredRowIterator)it).initialized())
-                                                    .count();
-
-               metrics.updateSSTableIterated(sstablesIterated);
-               Tracing.trace("Merged data from memtables and {} sstables", sstablesIterated);
+               int mergedSSTablesIterated = metricsCollector.getMergedSSTables();
+               metrics.updateSSTableIterated(mergedSSTablesIterated);
+               Tracing.trace("Merged data from memtables and {} sstables", mergedSSTablesIterated);
            }
         };
         return Transformation.apply(merged, new UpdateSstablesIterated());
