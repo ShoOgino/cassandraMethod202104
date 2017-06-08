@@ -1,0 +1,25 @@
+    /*
+    Return false for the first time hasAvailableDiskSpace is called. i.e first SSTable is too big
+    Create 5 SSTables. After compaction, there should be 2 left - 1 as the 9 SStables which were merged,
+    and the other the SSTable that was 'too large' and failed the hasAvailableDiskSpace check
+     */
+    @Test
+    @BMRules(rules = { @BMRule(name = "One SSTable too big for remaining disk space test",
+    targetClass = "Directories",
+    targetMethod = "hasAvailableDiskSpace",
+    condition = "not flagged(\"done\")",
+    action = "flag(\"done\"); return false;") } )
+    public void testSSTableNotEnoughDiskSpaceForCompactionGetsDropped() throws Throwable
+    {
+        createLowGCGraceTable();
+        final ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        for (int i = 0; i < 5; i++)
+        {
+            createPossiblyExpiredSSTable(cfs, false);
+        }
+        assertEquals(5, getCurrentColumnFamilyStore().getLiveSSTables().size());
+        cfs.forceMajorCompaction(false);
+        assertEquals(2, getCurrentColumnFamilyStore().getLiveSSTables().size());
+        dropTable("DROP TABLE %s");
+    }
+

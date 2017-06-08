@@ -1,0 +1,24 @@
+    /*
+    Always return false for hasAvailableDiskSpace. i.e node has no more space
+    Create 2 expired SSTables and 1 long lived one. After compaction, there should only be 1 left,
+    as the 2 expired ones would have been compacted away.
+     */
+    @Test
+    @BMRules(rules = { @BMRule(name = "No disk space with expired SSTables test",
+    targetClass = "Directories",
+    targetMethod = "hasAvailableDiskSpace",
+    action = "return false;") } )
+    public void testExpiredSSTablesStillGetDroppedWithNoDiskSpace() throws Throwable
+    {
+        createLowGCGraceTable();
+        final ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        createPossiblyExpiredSSTable(cfs, true);
+        createPossiblyExpiredSSTable(cfs, true);
+        createPossiblyExpiredSSTable(cfs, false);
+        assertEquals(3, cfs.getLiveSSTables().size());
+        Thread.sleep(TimeUnit.SECONDS.toMillis((long)1.5)); // give some time to expire.
+        cfs.forceMajorCompaction(false);
+        assertEquals(1, cfs.getLiveSSTables().size());
+        dropTable("DROP TABLE %s");
+    }
+

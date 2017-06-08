@@ -19,44 +19,46 @@
         if (DatabaseDescriptor.isSnapshotBeforeCompaction())
             cfs.snapshotWithoutFlush(System.currentTimeMillis() + "-compact-" + cfs.name);
 
-        // note that we need to do a rough estimate early if we can fit the compaction on disk - this is pessimistic, but
-        // since we might remove sstables from the compaction in checkAvailableDiskSpace it needs to be done here
-
-        checkAvailableDiskSpace();
-
-        // sanity check: all sstables must belong to the same cfs
-        assert !Iterables.any(transaction.originals(), new Predicate<SSTableReader>()
-        {
-            @Override
-            public boolean apply(SSTableReader sstable)
-            {
-                return !sstable.descriptor.cfname.equals(cfs.name);
-            }
-        });
-
-        UUID taskId = transaction.opId();
-
-        // new sstables from flush can be added during a compaction, but only the compaction can remove them,
-        // so in our single-threaded compaction world this is a valid way of determining if we're compacting
-        // all the sstables (that existed when we started)
-        StringBuilder ssTableLoggerMsg = new StringBuilder("[");
-        for (SSTableReader sstr : transaction.originals())
-        {
-            ssTableLoggerMsg.append(String.format("%s:level=%d, ", sstr.getFilename(), sstr.getSSTableLevel()));
-        }
-        ssTableLoggerMsg.append("]");
-
-        logger.debug("Compacting ({}) {}", taskId, ssTableLoggerMsg);
-
-        RateLimiter limiter = CompactionManager.instance.getRateLimiter();
-        long start = System.nanoTime();
-        long startTime = System.currentTimeMillis();
-        long totalKeysWritten = 0;
-        long estimatedKeys = 0;
-        long inputSizeBytes;
         try (CompactionController controller = getCompactionController(transaction.originals()))
         {
-            Set<SSTableReader> actuallyCompact = Sets.difference(transaction.originals(), controller.getFullyExpiredSSTables());
+
+            final Set<SSTableReader> fullyExpiredSSTables = controller.getFullyExpiredSSTables();
+
+            // select SSTables to compact based on available disk space.
+            buildCompactionCandidatesForAvailableDiskSpace(fullyExpiredSSTables);
+
+            // sanity check: all sstables must belong to the same cfs
+            assert !Iterables.any(transaction.originals(), new Predicate<SSTableReader>()
+            {
+                @Override
+                public boolean apply(SSTableReader sstable)
+                {
+                    return !sstable.descriptor.cfname.equals(cfs.name);
+                }
+            });
+
+            UUID taskId = transaction.opId();
+
+            // new sstables from flush can be added during a compaction, but only the compaction can remove them,
+            // so in our single-threaded compaction world this is a valid way of determining if we're compacting
+            // all the sstables (that existed when we started)
+            StringBuilder ssTableLoggerMsg = new StringBuilder("[");
+            for (SSTableReader sstr : transaction.originals())
+            {
+                ssTableLoggerMsg.append(String.format("%s:level=%d, ", sstr.getFilename(), sstr.getSSTableLevel()));
+            }
+            ssTableLoggerMsg.append("]");
+
+            logger.debug("Compacting ({}) {}", taskId, ssTableLoggerMsg);
+
+            RateLimiter limiter = CompactionManager.instance.getRateLimiter();
+            long start = System.nanoTime();
+            long startTime = System.currentTimeMillis();
+            long totalKeysWritten = 0;
+            long estimatedKeys = 0;
+            long inputSizeBytes;
+
+            Set<SSTableReader> actuallyCompact = Sets.difference(transaction.originals(), fullyExpiredSSTables);
             Collection<SSTableReader> newSStables;
 
             long[] mergedRowCounts;
