@@ -1,0 +1,36 @@
+    @Test
+    public void initializingIndexNotQueryableAfterPartialRebuild() throws Throwable
+    {
+        TestingIndex.blockCreate();
+        String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String indexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+
+        // the index shouldn't be queryable while the initialization hasn't finished
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        Index index = cfs.indexManager.getIndexByName(indexName);
+        assertFalse(cfs.indexManager.isIndexQueryable(index));
+
+        // a failing partial build doesn't set the index as queryable
+        TestingIndex.shouldFailBuild = true;
+        try
+        {
+            cfs.indexManager.handleNotification(new SSTableAddedNotification(cfs.getLiveSSTables(), null), this);
+            fail("Should have failed!");
+        }
+        catch (Throwable ex)
+        {
+            assertTrue(ex.getMessage().contains("configured to fail"));
+        }
+        assertFalse(cfs.indexManager.isIndexQueryable(index));
+
+        // a successful partial build doesn't set the index as queryable
+        TestingIndex.shouldFailBuild = false;
+        cfs.indexManager.handleNotification(new SSTableAddedNotification(cfs.getLiveSSTables(), null), this);
+        assertFalse(cfs.indexManager.isIndexQueryable(index));
+
+        // the index should be queryable once the initialization has finished
+        TestingIndex.unblockCreate();
+        waitForIndex(KEYSPACE, tableName, indexName);
+        assertTrue(cfs.indexManager.isIndexQueryable(index));
+    }
+

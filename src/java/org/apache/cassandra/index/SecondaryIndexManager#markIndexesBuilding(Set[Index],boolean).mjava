@@ -1,0 +1,53 @@
+    /**
+     * Marks the specified indexes as (re)building if:
+     * 1) There's no in progress rebuild of any of the given indexes.
+     * 2) There's an in progress rebuild but the caller is not a full rebuild.
+     * <p>
+     * Otherwise, this method invocation fails, as it is not possible to run full rebuilds while other concurrent rebuilds
+     * are in progress. Please note this is checked atomically against all given indexes; that is, no index will be marked
+     * if even a single one fails.
+     * <p>
+     * Marking an index as "building" practically means:
+     * 1) The index is removed from the "failed" set if this is a full rebuild.
+     * 2) The index is removed from the system keyspace built indexes.
+     * <p>
+     * Thread safety is guaranteed by having all methods managing index builds synchronized: being synchronized on
+     * the SecondaryIndexManager instance, it means all invocations for all different indexes will go through the same
+     * lock, but this is fine as the work done while holding such lock is trivial.
+     * <p>
+     * {@link #markIndexBuilt(Index, boolean)} or {@link #markIndexFailed(Index)} should be always called after the
+     * rebuilding has finished, so that the index build state can be correctly managed and the index rebuilt.
+     *
+     * @param indexes       the index to be marked as building
+     * @param isFullRebuild {@code true} if this method is invoked as a full index rebuild, {@code false} otherwise
+     */
+    private synchronized void markIndexesBuilding(Set<Index> indexes, boolean isFullRebuild)
+    {
+        String keyspaceName = baseCfs.keyspace.getName();
+
+        // First step is to validate against concurrent rebuilds; it would be more optimized to do everything on a single
+        // step, but we're not really expecting a very high number of indexes, and this isn't on any hot path, so
+        // we're favouring readability over performance
+        indexes.forEach(index ->
+                        {
+                            String indexName = index.getIndexMetadata().name;
+                            AtomicInteger counter = inProgressBuilds.computeIfAbsent(indexName, ignored -> new AtomicInteger(0));
+
+                            if (counter.get() > 0 && isFullRebuild)
+                                throw new IllegalStateException(String.format("Cannot rebuild index %s as another index build for the same index is currently in progress.", indexName));
+                        });
+
+        // Second step is the actual marking:
+        indexes.forEach(index ->
+                        {
+                            String indexName = index.getIndexMetadata().name;
+                            AtomicInteger counter = inProgressBuilds.computeIfAbsent(indexName, ignored -> new AtomicInteger(0));
+
+                            if (isFullRebuild)
+                                needsFullRebuild.remove(indexName);
+
+                            if (counter.getAndIncrement() == 0 && DatabaseDescriptor.isDaemonInitialized())
+                                SystemKeyspace.setIndexRemoved(keyspaceName, indexName);
+                        });
+    }
+

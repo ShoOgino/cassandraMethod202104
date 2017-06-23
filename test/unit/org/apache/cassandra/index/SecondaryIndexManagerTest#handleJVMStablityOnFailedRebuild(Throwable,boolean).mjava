@@ -1,0 +1,29 @@
+    private void handleJVMStablityOnFailedRebuild(Throwable throwable, boolean shouldKillJVM) throws Throwable
+    {
+        String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String indexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        waitForIndex(KEYSPACE, tableName, indexName);
+
+        KillerForTests killerForTests = new KillerForTests();
+        JVMStabilityInspector.Killer originalKiller = JVMStabilityInspector.replaceKiller(killerForTests);
+
+        try
+        {
+            TestingIndex.shouldFailBuild = true;
+            TestingIndex.failedBuildTrowable = throwable;
+
+            getCurrentColumnFamilyStore().indexManager.rebuildIndexesBlocking(Collections.singleton(indexName));
+            fail("Should have failed!");
+        }
+        catch (Throwable t)
+        {
+            assertEquals(shouldKillJVM, killerForTests.wasKilled());
+        }
+        finally
+        {
+            JVMStabilityInspector.replaceKiller(originalKiller);
+            TestingIndex.shouldFailBuild = false;
+            TestingIndex.failedBuildTrowable = null;
+        }
+    }
+

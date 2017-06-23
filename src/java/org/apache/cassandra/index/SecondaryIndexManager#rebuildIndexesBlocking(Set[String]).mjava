@@ -1,0 +1,29 @@
+    /**
+     * Does a blocking full rebuild of the specifed indexes from all the sstables in the base table.
+     * Note also that this method of (re)building indexes:
+     * a) takes a set of index *names* rather than Indexers
+     * b) marks existing indexes removed prior to rebuilding
+     * c) fails if such marking operation conflicts with any ongoing index builds, as full rebuilds cannot be run
+     * concurrently
+     *
+     * @param indexNames the list of indexes to be rebuilt
+     */
+    public void rebuildIndexesBlocking(Set<String> indexNames)
+    {
+        try (ColumnFamilyStore.RefViewFragment viewFragment = baseCfs.selectAndReference(View.selectFunction(SSTableSet.CANONICAL));
+             Refs<SSTableReader> allSSTables = viewFragment.refs)
+        {
+            Set<Index> toRebuild = indexes.values().stream()
+                                          .filter(index -> indexNames.contains(index.getIndexMetadata().name))
+                                          .filter(Index::shouldBuildBlocking)
+                                          .collect(Collectors.toSet());
+            if (toRebuild.isEmpty())
+            {
+                logger.info("No defined indexes with the supplied names: {}", Joiner.on(',').join(indexNames));
+                return;
+            }
+
+            buildIndexesBlocking(allSSTables, toRebuild, true);
+        }
+    }
+

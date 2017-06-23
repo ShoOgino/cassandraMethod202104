@@ -1,0 +1,44 @@
+        public IndexBuildingSupport getBuildTaskSupport()
+        {
+            return new CollatedViewIndexBuildingSupport()
+            {
+                public SecondaryIndexBuilder getIndexBuildTask(ColumnFamilyStore cfs, Set<Index> indexes, Collection<SSTableReader> sstables)
+                {
+                    try
+                    {
+                        if (shouldBlockBuild && buildLatch != null)
+                        {
+                            buildWaitLatch.countDown();
+                            buildLatch.await();
+                        }
+                        final SecondaryIndexBuilder builder = super.getIndexBuildTask(cfs, indexes, sstables);
+                        return new SecondaryIndexBuilder()
+                        {
+
+                            @Override
+                            public void build()
+                            {
+                                if (shouldFailBuild)
+                                {
+                                    throw failedBuildTrowable == null
+                                          ? new IllegalStateException("Index is configured to fail.")
+                                          : new RuntimeException(failedBuildTrowable);
+                                }
+                                builder.build();
+                            }
+
+                            @Override
+                            public CompactionInfo getCompactionInfo()
+                            {
+                                return builder.getCompactionInfo();
+                            }
+                        };
+                    }
+                    catch (InterruptedException ex)
+                    {
+                        throw new RuntimeException(ex);
+                    }
+                }
+            };
+        }
+

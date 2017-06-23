@@ -1,0 +1,54 @@
+    @Test
+    public void addingSSTableWhileRebuildIsInProgress() throws Throwable
+    {
+        final String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        final String indexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        final AtomicBoolean error = new AtomicBoolean();
+
+        // wait for index initialization and verify it's built:
+        waitForIndex(KEYSPACE, tableName, indexName);
+        assertMarkedAsBuilt(indexName);
+
+        // rebuild the index in another thread, but make it block:
+        TestingIndex.blockBuild();
+        Thread asyncBuild = new Thread()
+        {
+
+            @Override
+            public void run()
+            {
+                try
+                {
+                    tryRebuild(indexName, false);
+                }
+                catch (Throwable ex)
+                {
+                    error.set(true);
+                }
+            }
+        };
+        asyncBuild.start();
+
+        // wait for the rebuild to block, so that we can proceed unblocking all further operations:
+        TestingIndex.waitBlockedOnBuild();
+
+        // do not block further builds:
+        TestingIndex.shouldBlockBuild = false;
+
+        // try adding sstables and verify they are built but the index is not marked as built because of the pending build:
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        try (Refs<SSTableReader> sstables = Refs.ref(cfs.getSSTables(SSTableSet.CANONICAL)))
+        {
+            cfs.indexManager.handleNotification(new SSTableAddedNotification(sstables, null), cfs.getTracker());
+            assertNotMarkedAsBuilt();
+        }
+
+        // unblock the pending build:
+        TestingIndex.unblockBuild();
+        asyncBuild.join();
+
+        // verify the index is now built:
+        assertMarkedAsBuilt(indexName);
+        assertFalse(error.get());
+    }
+

@@ -1,0 +1,51 @@
+    @Test
+    public void cannotRebuildWhileAnotherRebuildIsInProgress() throws Throwable
+    {
+        final String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        final String indexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        final AtomicBoolean error = new AtomicBoolean();
+
+        // wait for index initialization and verify it's built:
+        waitForIndex(KEYSPACE, tableName, indexName);
+        assertMarkedAsBuilt(indexName);
+
+        // rebuild the index in another thread, but make it block:
+        TestingIndex.blockBuild();
+        Thread asyncBuild = new Thread()
+        {
+
+            @Override
+            public void run()
+            {
+                try
+                {
+                    tryRebuild(indexName, false);
+                }
+                catch (Throwable ex)
+                {
+                    error.set(true);
+                }
+            }
+        };
+        asyncBuild.start();
+
+        // wait for the rebuild to block, so that we can proceed unblocking all further operations:
+        TestingIndex.waitBlockedOnBuild();
+
+        // do not block further builds:
+        TestingIndex.shouldBlockBuild = false;
+
+        // verify rebuilding the index before the previous index build task has finished fails
+        assertFalse(tryRebuild(indexName, false));
+        assertNotMarkedAsBuilt();
+
+        // check that the index is marked as built when the build finishes
+        TestingIndex.unblockBuild();
+        asyncBuild.join();
+        assertMarkedAsBuilt(indexName);
+
+        // now verify you can rebuild
+        assertTrue(tryRebuild(indexName, false));
+        assertMarkedAsBuilt(indexName);
+    }
+

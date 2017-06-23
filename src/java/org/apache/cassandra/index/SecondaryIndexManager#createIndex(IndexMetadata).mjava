@@ -1,19 +1,54 @@
-    private Future<?> createIndex(IndexMetadata indexDef)
+    @SuppressWarnings("unchecked")
+    private synchronized Future<?> createIndex(IndexMetadata indexDef)
     {
-        Index index = createInstance(indexDef);
+        final Index index = createInstance(indexDef);
+        String indexName = index.getIndexMetadata().name;
         index.register(this);
 
+        // now mark as building prior to initializing
+        markIndexesBuilding(ImmutableSet.of(index), true);
+
+        Callable<?> initialBuildTask = null;
         // if the index didn't register itself, we can probably assume that no initialization needs to happen
-        final Callable<?> initialBuildTask = indexes.containsKey(indexDef.name)
-                                           ? index.getInitializationTask()
-                                           : null;
+        if (indexes.containsKey(indexDef.name))
+        {
+            try
+            {
+                initialBuildTask = index.getInitializationTask();
+            }
+            catch (Throwable t)
+            {
+                logAndMarkIndexesFailed(Collections.singleton(index), t);
+                throw t;
+            }
+        }
+
+        // if there's no initialization, just mark as built and return:
         if (initialBuildTask == null)
         {
-            // We need to make sure that the index is marked as built in the case where the initialBuildTask
-            // does not need to be run (if the index didn't register itself or if the base table was empty).
-            markIndexBuilt(indexDef.name);
+            markIndexBuilt(index, true);
             return Futures.immediateFuture(null);
         }
-        return asyncExecutor.submit(index.getInitializationTask());
+
+        // otherwise run the initialization task asynchronously with a callback to mark it built or failed
+        final SettableFuture initialization = SettableFuture.create();
+        Futures.addCallback(asyncExecutor.submit(initialBuildTask), new FutureCallback()
+        {
+            @Override
+            public void onFailure(Throwable t)
+            {
+                logAndMarkIndexesFailed(Collections.singleton(index), t);
+                initialization.setException(t);
+            }
+
+            @Override
+            public void onSuccess(Object o)
+            {
+                markIndexBuilt(index, true);
+                initialization.set(o);
+            }
+        }, MoreExecutors.directExecutor());
+
+        return initialization;
     }
 
