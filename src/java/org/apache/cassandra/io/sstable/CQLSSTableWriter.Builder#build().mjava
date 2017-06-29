@@ -10,18 +10,40 @@
 
             synchronized (CQLSSTableWriter.class)
             {
-                String keyspace = schemaStatement.keyspace();
+                if (Schema.instance.getKeyspaceMetadata(SchemaConstants.SCHEMA_KEYSPACE_NAME) == null)
+                    Schema.instance.load(SchemaKeyspace.metadata());
+                if (Schema.instance.getKeyspaceMetadata(SchemaConstants.SYSTEM_KEYSPACE_NAME) == null)
+                    Schema.instance.load(SystemKeyspace.metadata());
 
-                if (Schema.instance.getKeyspaceMetadata(keyspace) == null)
-                    Schema.instance.load(KeyspaceMetadata.create(keyspace, KeyspaceParams.simple(1)));
+                String keyspaceName = schemaStatement.keyspace();
 
-                createTypes(keyspace);
-                TableMetadataRef tableMetadata = TableMetadataRef.forOfflineTools(createTable(keyspace));
+                if (Schema.instance.getKeyspaceMetadata(keyspaceName) == null)
+                {
+                    Schema.instance.load(KeyspaceMetadata.create(keyspaceName,
+                                                                 KeyspaceParams.simple(1),
+                                                                 Tables.none(),
+                                                                 Views.none(),
+                                                                 Types.none(),
+                                                                 Functions.none()));
+                }
+
+
+                KeyspaceMetadata ksm = Schema.instance.getKeyspaceMetadata(keyspaceName);
+
+                TableMetadata tableMetadata = ksm.tables.getNullable(schemaStatement.columnFamily());
+                if (tableMetadata == null)
+                {
+                    Types types = createTypes(keyspaceName);
+                    tableMetadata = createTable(types);
+                    Schema.instance.load(ksm.withSwapped(ksm.tables.with(tableMetadata)).withSwapped(types));
+                }
+
                 Pair<UpdateStatement, List<ColumnSpecification>> preparedInsert = prepareInsert();
 
+                TableMetadataRef ref = TableMetadataRef.forOfflineTools(tableMetadata);
                 AbstractSSTableSimpleWriter writer = sorted
-                                                     ? new SSTableSimpleWriter(directory, tableMetadata, preparedInsert.left.updatedColumns())
-                                                     : new SSTableSimpleUnsortedWriter(directory, tableMetadata, preparedInsert.left.updatedColumns(), bufferSizeInMB);
+                                                     ? new SSTableSimpleWriter(directory, ref, preparedInsert.left.updatedColumns())
+                                                     : new SSTableSimpleUnsortedWriter(directory, ref, preparedInsert.left.updatedColumns(), bufferSizeInMB);
 
                 if (formatType != null)
                     writer.setSSTableFormatType(formatType);
