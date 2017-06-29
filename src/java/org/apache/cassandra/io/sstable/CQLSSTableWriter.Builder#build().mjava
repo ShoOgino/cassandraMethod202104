@@ -10,13 +10,35 @@
 
             synchronized (CQLSSTableWriter.class)
             {
+                if (Schema.instance.getKSMetaData(SchemaConstants.SCHEMA_KEYSPACE_NAME) == null)
+                    Schema.instance.load(SchemaKeyspace.metadata());
+                if (Schema.instance.getKSMetaData(SchemaConstants.SYSTEM_KEYSPACE_NAME) == null)
+                    Schema.instance.load(SystemKeyspace.metadata());
+
                 String keyspace = schemaStatement.keyspace();
 
                 if (Schema.instance.getKSMetaData(keyspace) == null)
-                    Schema.instance.load(KeyspaceMetadata.create(keyspace, KeyspaceParams.simple(1)));
+                {
+                    Schema.instance.load(KeyspaceMetadata.create(keyspace,
+                                                                 KeyspaceParams.simple(1),
+                                                                 Tables.none(),
+                                                                 Views.none(),
+                                                                 Types.none(),
+                                                                 Functions.none()));
+                }
 
-                createTypes(keyspace);
-                CFMetaData cfMetaData = createTable(keyspace);
+
+                KeyspaceMetadata ksm = Schema.instance.getKSMetaData(keyspace);
+                CFMetaData cfMetaData = ksm.tables.getNullable(schemaStatement.columnFamily());
+                if (cfMetaData == null)
+                {
+                    Types types = createTypes(keyspace);
+                    cfMetaData = createTable(types);
+
+                    Schema.instance.load(cfMetaData);
+                    Schema.instance.setKeyspaceMetadata(ksm.withSwapped(ksm.tables.with(cfMetaData)).withSwapped(types));
+                }
+
                 Pair<UpdateStatement, List<ColumnSpecification>> preparedInsert = prepareInsert();
 
                 AbstractSSTableSimpleWriter writer = sorted
