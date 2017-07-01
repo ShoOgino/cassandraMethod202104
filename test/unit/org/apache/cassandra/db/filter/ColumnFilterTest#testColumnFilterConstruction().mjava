@@ -1,0 +1,82 @@
+    @Test
+    public void testColumnFilterConstruction()
+    {
+        // all regular column
+        TableMetadata metadata = TableMetadata.builder("ks", "table")
+                                              .partitioner(Murmur3Partitioner.instance)
+                                              .addPartitionKeyColumn("pk", Int32Type.instance)
+                                              .addClusteringColumn("ck", Int32Type.instance)
+                                              .addRegularColumn("v1", Int32Type.instance)
+                                              .addRegularColumn("v2", Int32Type.instance)
+                                              .addRegularColumn("v3", Int32Type.instance)
+                                              .build();
+        ColumnFilter columnFilter = ColumnFilter.all(metadata);
+        assertTrue(columnFilter.fetchAllRegulars);
+        assertEquals(metadata.regularAndStaticColumns(), columnFilter.fetched);
+        assertNull(columnFilter.queried);
+        assertEquals("*", columnFilter.toString());
+
+        RegularAndStaticColumns queried = RegularAndStaticColumns.builder()
+                                                                 .add(metadata.getColumn(ByteBufferUtil.bytes("v1"))).build();
+        columnFilter = ColumnFilter.selection(queried);
+        assertFalse(columnFilter.fetchAllRegulars);
+        assertEquals(queried, columnFilter.fetched);
+        assertEquals(queried, columnFilter.queried);
+        assertEquals("v1", columnFilter.toString());
+
+        // with static column
+        metadata = TableMetadata.builder("ks", "table")
+                                .partitioner(Murmur3Partitioner.instance)
+                                .addPartitionKeyColumn("pk", Int32Type.instance)
+                                .addClusteringColumn("ck", Int32Type.instance)
+                                .addStaticColumn("sc1", Int32Type.instance)
+                                .addStaticColumn("sc2", Int32Type.instance)
+                                .addRegularColumn("v1", Int32Type.instance)
+                                .build();
+
+        columnFilter = ColumnFilter.all(metadata);
+        assertTrue(columnFilter.fetchAllRegulars);
+        assertEquals(metadata.regularAndStaticColumns(), columnFilter.fetched);
+        assertNull(columnFilter.queried);
+        assertEquals("*", columnFilter.toString());
+
+        queried = RegularAndStaticColumns.builder()
+                                         .add(metadata.getColumn(ByteBufferUtil.bytes("v1"))).build();
+        columnFilter = ColumnFilter.selection(metadata, queried);
+        assertEquals("v1", columnFilter.toString());
+
+        // only static
+        metadata = TableMetadata.builder("ks", "table")
+                                .partitioner(Murmur3Partitioner.instance)
+                                .addPartitionKeyColumn("pk", Int32Type.instance)
+                                .addClusteringColumn("ck", Int32Type.instance)
+                                .addStaticColumn("sc", Int32Type.instance)
+                                .build();
+
+        columnFilter = ColumnFilter.all(metadata);
+        assertTrue(columnFilter.fetchAllRegulars);
+        assertEquals(metadata.regularAndStaticColumns(), columnFilter.fetched);
+        assertNull(columnFilter.queried);
+        assertEquals("*", columnFilter.toString());
+
+        // with collection type
+        metadata = TableMetadata.builder("ks", "table")
+                                .partitioner(Murmur3Partitioner.instance)
+                                .addPartitionKeyColumn("pk", Int32Type.instance)
+                                .addClusteringColumn("ck", Int32Type.instance)
+                                .addRegularColumn("v1", Int32Type.instance)
+                                .addRegularColumn("set", SetType.getInstance(Int32Type.instance, true))
+                                .build();
+
+        columnFilter = ColumnFilter.all(metadata);
+        assertTrue(columnFilter.fetchAllRegulars);
+        assertEquals(metadata.regularAndStaticColumns(), columnFilter.fetched);
+        assertNull(columnFilter.queried);
+        assertEquals("*", columnFilter.toString());
+
+        columnFilter = ColumnFilter.selectionBuilder().add(metadata.getColumn(ByteBufferUtil.bytes("v1")))
+                                   .select(metadata.getColumn(ByteBufferUtil.bytes("set")), CellPath.create(ByteBufferUtil.bytes(1)))
+                                   .build();
+        assertEquals("set[1], v1", columnFilter.toString());
+    }
+
