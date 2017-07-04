@@ -1,0 +1,80 @@
+        @VisibleForTesting
+        Frame decodeFrame(ByteBuf buffer)
+        throws Exception
+        {
+            if (discardingTooLongFrame)
+            {
+                bytesToDiscard = discard(buffer, bytesToDiscard);
+                // If we have discarded everything, throw the exception
+                if (bytesToDiscard <= 0)
+                    fail();
+                return null;
+            }
+
+            int readableBytes = buffer.readableBytes();
+            if (readableBytes == 0)
+                return null;
+
+            int idx = buffer.readerIndex();
+
+            // Check the first byte for the protocol version before we wait for a complete header.  Protocol versions
+            // 1 and 2 use a shorter header, so we may never have a complete header's worth of bytes.
+            int firstByte = buffer.getByte(idx++);
+            Message.Direction direction = Message.Direction.extractFromVersion(firstByte);
+            int versionNum = firstByte & PROTOCOL_VERSION_MASK;
+            ProtocolVersion version = ProtocolVersion.decode(versionNum);
+
+            // Wait until we have the complete header
+            if (readableBytes < Header.LENGTH)
+                return null;
+
+            int flags = buffer.getByte(idx++);
+            EnumSet<Header.Flag> decodedFlags = Header.Flag.deserialize(flags);
+
+            if (version.isBeta() && !decodedFlags.contains(Header.Flag.USE_BETA))
+                throw new ProtocolException(String.format("Beta version of the protocol used (%s), but USE_BETA flag is unset", version),
+                                            version);
+
+            int streamId = buffer.getShort(idx);
+            idx += 2;
+
+            // This throws a protocol exceptions if the opcode is unknown
+            Message.Type type;
+            try
+            {
+                type = Message.Type.fromOpcode(buffer.getByte(idx++), direction);
+            }
+            catch (ProtocolException e)
+            {
+                throw ErrorMessage.wrap(e, streamId);
+            }
+
+            long bodyLength = buffer.getUnsignedInt(idx);
+            idx += Header.BODY_LENGTH_SIZE;
+
+            long frameLength = bodyLength + Header.LENGTH;
+            if (frameLength > MAX_FRAME_LENGTH)
+            {
+                // Enter the discard mode and discard everything received so far.
+                discardingTooLongFrame = true;
+                tooLongStreamId = streamId;
+                tooLongFrameLength = frameLength;
+                bytesToDiscard = discard(buffer, frameLength);
+                if (bytesToDiscard <= 0)
+                    fail();
+                return null;
+            }
+
+            if (buffer.readableBytes() < frameLength)
+                return null;
+
+            // extract body
+            ByteBuf body = buffer.slice(idx, (int) bodyLength);
+            body.retain();
+
+            idx += bodyLength;
+            buffer.readerIndex(idx);
+
+            return new Frame(new Header(version, decodedFlags, streamId, type), body);
+        }
+
