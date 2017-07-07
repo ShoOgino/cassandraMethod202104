@@ -1,0 +1,30 @@
+    @Test
+    public void testSelectJsonWithPagingWithFrozenSet() throws Throwable
+    {
+        final UUID uuid = UUID.fromString("2dd2cd62-6af3-4cf6-96fc-91b9ab62eedc");
+        final Object partitionKey = set(tuple(list(1, 2), 1), tuple(list(2, 3), 2));
+
+        createTable("CREATE TABLE %s (k1 frozen<set<tuple<list<int>, int>>>, c1 frozen<tuple<uuid, int>>, value int, PRIMARY KEY (k1, c1))");
+
+        // prepare data
+        for (int i = 1; i < 5; i++)
+            execute("INSERT INTO %s (k1, c1, value) VALUES (?, ?, ?)", partitionKey, tuple(uuid, i), i);
+
+        for (int pageSize = 1; pageSize < 6; pageSize++)
+        {
+            // SELECT JSON
+            assertRowsNet(executeNetWithPaging("SELECT JSON * FROM %s", pageSize),
+                          row("{\"k1\": [[[1, 2], 1], [[2, 3], 2]], \"c1\": [\"" + uuid + "\", 1], \"value\": 1}"),
+                          row("{\"k1\": [[[1, 2], 1], [[2, 3], 2]], \"c1\": [\"" + uuid + "\", 2], \"value\": 2}"),
+                          row("{\"k1\": [[[1, 2], 1], [[2, 3], 2]], \"c1\": [\"" + uuid + "\", 3], \"value\": 3}"),
+                          row("{\"k1\": [[[1, 2], 1], [[2, 3], 2]], \"c1\": [\"" + uuid + "\", 4], \"value\": 4}"));
+
+            // SELECT toJson(column)
+            assertRowsNet(executeNetWithPaging("SELECT toJson(k1), toJson(c1), toJson(value) FROM %s", pageSize),
+                          row("[[[1, 2], 1], [[2, 3], 2]]", "[\"" + uuid + "\", 1]", "1"),
+                          row("[[[1, 2], 1], [[2, 3], 2]]", "[\"" + uuid + "\", 2]", "2"),
+                          row("[[[1, 2], 1], [[2, 3], 2]]", "[\"" + uuid + "\", 3]", "3"),
+                          row("[[[1, 2], 1], [[2, 3], 2]]", "[\"" + uuid + "\", 4]", "4"));
+        }
+    }
+
