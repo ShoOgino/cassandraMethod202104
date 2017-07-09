@@ -1,0 +1,45 @@
+    public Long call()
+    {
+        String ksName = baseCfs.metadata.keyspace;
+
+        if (prevToken == null)
+            logger.debug("Starting new view build for range {}", range);
+        else
+            logger.debug("Resuming view build for range {} from token {} with {} covered keys", range, prevToken, keysBuilt);
+
+        Function<org.apache.cassandra.db.lifecycle.View, Iterable<SSTableReader>> function;
+        function = org.apache.cassandra.db.lifecycle.View.select(SSTableSet.CANONICAL, s -> range.intersects(s.getBounds()));
+
+        try (ColumnFamilyStore.RefViewFragment viewFragment = baseCfs.selectAndReference(function);
+             Refs<SSTableReader> sstables = viewFragment.refs;
+             ReducingKeyIterator keyIter = new ReducingKeyIterator(sstables))
+        {
+            PeekingIterator<DecoratedKey> iter = Iterators.peekingIterator(keyIter);
+            while (!isStopped && iter.hasNext())
+            {
+                DecoratedKey key = iter.next();
+                Token token = key.getToken();
+                //skip tokens already built or not present in range
+                if (range.contains(token) && (prevToken == null || token.compareTo(prevToken) > 0))
+                {
+                    buildKey(key);
+                    ++keysBuilt;
+                    //build other keys sharing the same token
+                    while (iter.hasNext() && iter.peek().getToken().equals(token))
+                    {
+                        key = iter.next();
+                        buildKey(key);
+                        ++keysBuilt;
+                    }
+                    if (keysBuilt % ROWS_BETWEEN_CHECKPOINTS == 1)
+                        SystemKeyspace.updateViewBuildStatus(ksName, view.name, range, token, keysBuilt);
+                    prevToken = token;
+                }
+            }
+        }
+
+        finish();
+
+        return keysBuilt;
+    }
+

@@ -1,0 +1,75 @@
+    private synchronized void build()
+    {
+        if (isStopped)
+        {
+            logger.debug("Stopped build for view({}.{}) after covering {} keys", ksName, view.name, keysBuilt);
+            return;
+        }
+
+        // Get the local ranges for which the view hasn't already been built nor it's building
+        Set<Range<Token>> newRanges = StorageService.instance.getLocalRanges(ksName)
+                                                             .stream()
+                                                             .map(r -> r.subtractAll(builtRanges))
+                                                             .flatMap(Set::stream)
+                                                             .map(r -> r.subtractAll(pendingRanges.keySet()))
+                                                             .flatMap(Set::stream)
+                                                             .collect(Collectors.toSet());
+
+        // If there are no new nor pending ranges we should finish the build
+        if (newRanges.isEmpty() && pendingRanges.isEmpty())
+        {
+            finish();
+            return;
+        }
+
+        // Split the new local ranges and add them to the pending set
+        DatabaseDescriptor.getPartitioner()
+                          .splitter()
+                          .map(s -> s.split(newRanges, NUM_TASKS))
+                          .orElse(newRanges)
+                          .forEach(r -> pendingRanges.put(r, Pair.<Token, Long>create(null, 0L)));
+
+        // Submit a new view build task for each building range.
+        // We keep record of all the submitted tasks to be able of stopping them.
+        List<ListenableFuture<Long>> futures = pendingRanges.entrySet()
+                                                            .stream()
+                                                            .map(e -> new ViewBuilderTask(baseCfs,
+                                                                                          view,
+                                                                                          e.getKey(),
+                                                                                          e.getValue().left,
+                                                                                          e.getValue().right))
+                                                            .peek(tasks::add)
+                                                            .map(CompactionManager.instance::submitViewBuilder)
+                                                            .collect(toList());
+
+        // Add a callback to process any eventual new local range and mark the view as built, doing a delayed retry if
+        // the tasks don't succeed
+        ListenableFuture<List<Long>> future = Futures.allAsList(futures);
+        Futures.addCallback(future, new FutureCallback<List<Long>>()
+        {
+            public void onSuccess(List<Long> result)
+            {
+                keysBuilt += result.stream().mapToLong(x -> x).sum();
+                builtRanges.addAll(pendingRanges.keySet());
+                pendingRanges.clear();
+                build();
+            }
+
+            public void onFailure(Throwable t)
+            {
+                if (t instanceof CompactionInterruptedException)
+                {
+                    internalStop(true);
+                    keysBuilt = tasks.stream().mapToLong(ViewBuilderTask::keysBuilt).sum();
+                    logger.info("Interrupted build for view({}.{}) after covering {} keys", ksName, view.name, keysBuilt);
+                }
+                else
+                {
+                    ScheduledExecutors.nonPeriodicTasks.schedule(() -> loadStatusAndBuild(), 5, TimeUnit.MINUTES);
+                    logger.warn("Materialized View failed to complete, sleeping 5 minutes before restarting", t);
+                }
+            }
+        }, MoreExecutors.directExecutor());
+        this.future = future;
+    }
+
