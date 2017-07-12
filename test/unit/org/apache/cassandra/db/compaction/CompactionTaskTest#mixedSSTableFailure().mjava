@@ -1,0 +1,53 @@
+    /**
+     * If we try to create a compaction task that will mix
+     * repaired/unrepaired/pending repair sstables, it should fail
+     */
+    @Test
+    public void mixedSSTableFailure() throws Exception
+    {
+        cfs.getCompactionStrategyManager().disable();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (1, 1);");
+        cfs.forceBlockingFlush();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (2, 2);");
+        cfs.forceBlockingFlush();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (3, 3);");
+        cfs.forceBlockingFlush();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (4, 4);");
+        cfs.forceBlockingFlush();
+
+        List<SSTableReader> sstables = new ArrayList<>(cfs.getLiveSSTables());
+        Assert.assertEquals(4, sstables.size());
+
+        SSTableReader unrepaired = sstables.get(0);
+        SSTableReader repaired = sstables.get(1);
+        SSTableReader pending1 = sstables.get(2);
+        SSTableReader pending2 = sstables.get(3);
+
+        mutateRepaired(repaired, FBUtilities.nowInSeconds(), ActiveRepairService.NO_PENDING_REPAIR);
+        mutateRepaired(pending1, ActiveRepairService.UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
+        mutateRepaired(pending2, ActiveRepairService.UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
+
+        LifecycleTransaction txn = null;
+        List<SSTableReader> toCompact = new ArrayList<>(sstables);
+        for (int i=0; i<sstables.size(); i++)
+        {
+            try
+            {
+                txn = cfs.getTracker().tryModify(sstables, OperationType.COMPACTION);
+                Assert.assertNotNull(txn);
+                CompactionTask task = new CompactionTask(cfs, txn, 0);
+                Assert.fail("Expected IllegalArgumentException");
+            }
+            catch (IllegalArgumentException e)
+            {
+                // expected
+            }
+            finally
+            {
+                if (txn != null)
+                    txn.abort();
+            }
+            Collections.rotate(toCompact, 1);
+        }
+    }
+

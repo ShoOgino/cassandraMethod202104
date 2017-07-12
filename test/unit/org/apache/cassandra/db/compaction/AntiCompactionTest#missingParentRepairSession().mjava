@@ -1,0 +1,39 @@
+    /**
+     * If the parent repair session is missing, we should still clean up
+     */
+    @Test
+    public void missingParentRepairSession() throws Exception
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF);
+        store.disableAutoCompaction();
+
+        for (int table = 0; table < 10; table++)
+        {
+            generateSStable(store,Integer.toString(table));
+        }
+        Collection<SSTableReader> sstables = getUnrepairedSSTables(store);
+        assertEquals(10, sstables.size());
+
+        Range<Token> range = new Range<Token>(new BytesToken("-1".getBytes()), new BytesToken("-10".getBytes()));
+        List<Range<Token>> ranges = Arrays.asList(range);
+
+        UUID missingRepairSession = UUIDGen.getTimeUUID();
+        try (LifecycleTransaction txn = store.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+             Refs<SSTableReader> refs = Refs.ref(sstables))
+        {
+            Assert.assertFalse(refs.isEmpty());
+            try
+            {
+                CompactionManager.instance.performAnticompaction(store, ranges, refs, txn, 1, missingRepairSession, missingRepairSession);
+                Assert.fail("expected RuntimeException");
+            }
+            catch (RuntimeException e)
+            {
+                // expected
+            }
+            Assert.assertEquals(Transactional.AbstractTransactional.State.ABORTED, txn.state());
+            Assert.assertTrue(refs.isEmpty());
+        }
+    }
+

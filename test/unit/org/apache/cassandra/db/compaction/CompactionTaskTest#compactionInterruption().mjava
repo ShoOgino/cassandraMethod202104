@@ -1,0 +1,31 @@
+    @Test
+    public void compactionInterruption() throws Exception
+    {
+        cfs.getCompactionStrategyManager().disable();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (1, 1);");
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (2, 2);");
+        cfs.forceBlockingFlush();
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (3, 3);");
+        QueryProcessor.executeInternal("INSERT INTO ks.tbl (k, v) VALUES (4, 4);");
+        cfs.forceBlockingFlush();
+        Set<SSTableReader> sstables = cfs.getLiveSSTables();
+
+        Assert.assertEquals(2, sstables.size());
+
+        LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.COMPACTION);
+        Assert.assertNotNull(txn);
+        CompactionTask task = new CompactionTask(cfs, txn, 0);
+        Assert.assertNotNull(task);
+        cfs.getCompactionStrategyManager().pause();
+        try
+        {
+            task.execute(CompactionManager.instance.getMetrics());
+            Assert.fail("Expected CompactionInterruptedException");
+        }
+        catch (CompactionInterruptedException e)
+        {
+            // expected
+        }
+        Assert.assertEquals(Transactional.AbstractTransactional.State.ABORTED, txn.state());
+    }
+
