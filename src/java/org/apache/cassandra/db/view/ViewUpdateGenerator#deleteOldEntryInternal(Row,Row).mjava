@@ -1,0 +1,28 @@
+    private void deleteOldEntryInternal(Row existingBaseRow, Row mergedBaseRow)
+    {
+        startNewUpdate(existingBaseRow);
+        long timestamp = computeTimestampForEntryDeletion(existingBaseRow, mergedBaseRow);
+        long rowDeletion = mergedBaseRow.deletion().time().markedForDeleteAt();
+        assert timestamp >= rowDeletion;
+
+        // If computed deletion timestamp greater than row deletion, it must be coming from
+        //  1. non-pk base column used in view pk, or
+        //  2. unselected base column
+        //  any case, we need to use it as expired livenessInfo
+        // If computed deletion timestamp is from row deletion, we only need row deletion itself
+        if (timestamp > rowDeletion)
+        {
+            /**
+              * TODO: This is a hack and overload of LivenessInfo and we should probably modify
+              * the storage engine to properly support this, but on the meantime this
+              * should be fine because it only happens in some specific scenarios explained above.
+              */
+            LivenessInfo info = LivenessInfo.create(timestamp, Integer.MAX_VALUE, nowInSec);
+            currentViewEntryBuilder.addPrimaryKeyLivenessInfo(info);
+        }
+        currentViewEntryBuilder.addRowDeletion(mergedBaseRow.deletion());
+
+        addDifferentCells(existingBaseRow, mergedBaseRow);
+        submitUpdate();
+    }
+

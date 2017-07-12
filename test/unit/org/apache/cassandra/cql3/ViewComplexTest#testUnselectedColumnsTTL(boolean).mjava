@@ -1,0 +1,50 @@
+    private void testUnselectedColumnsTTL(boolean flush) throws Throwable
+    {
+        // CASSANDRA-13127 not ttled unselected column in base should keep view row alive
+        createTable("create table %s (p int, c int, v int, primary key(p, c))");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW %s AS SELECT p, c FROM %%s WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p);");
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+
+        updateViewWithFlush("INSERT INTO %s (p, c) VALUES (0, 0) USING TTL 3;", flush);
+
+        updateViewWithFlush("UPDATE %s USING TTL 1000 SET v = 0 WHERE p = 0 and c = 0;", flush);
+
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        Thread.sleep(3000);
+
+        UntypedResultSet.Row row = execute("SELECT v, ttl(v) from %s WHERE c = ? AND p = ?", 0, 0).one();
+        assertTrue("row should have value of 0", row.getInt("v") == 0);
+        assertTrue("row should have ttl less than 1000", row.getInt("ttl(v)") < 1000);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        updateViewWithFlush("DELETE FROM %s WHERE p = 0 and c = 0;", flush);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+
+        updateViewWithFlush("INSERT INTO %s (p, c) VALUES (0, 0) ", flush);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        // already have a live row, no need to apply the unselected cell ttl
+        updateViewWithFlush("UPDATE %s USING TTL 3 SET v = 0 WHERE p = 0 and c = 0;", flush);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        updateViewWithFlush("INSERT INTO %s (p, c) VALUES (1, 1) USING TTL 3", flush);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 1, 1), row(1, 1));
+
+        Thread.sleep(4000);
+
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 1, 1));
+
+        // unselected should keep view row alive
+        updateViewWithFlush("UPDATE %s SET v = 0 WHERE p = 1 and c = 1;", flush);
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 1, 1), row(1, 1));
+
+    }
+

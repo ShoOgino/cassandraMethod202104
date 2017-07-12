@@ -1,0 +1,49 @@
+    public void testPartialUpdateWithUnselectedCollections(boolean flush) throws Throwable
+    {
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        createTable("CREATE TABLE %s (k int, c int, a int, b int, l list<int>, s set<int>, m map<int,int>, PRIMARY KEY (k, c))");
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW %s AS SELECT a, b FROM %%s WHERE k IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, k)");
+        Keyspace ks = Keyspace.open(keyspace());
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+
+        updateView("UPDATE %s SET l=l+[1,2,3] WHERE k = 1 AND c = 1");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRows(execute("SELECT * from mv"), row(1, 1, null, null));
+
+        updateView("UPDATE %s SET l=l-[1,2] WHERE k = 1 AND c = 1");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRows(execute("SELECT * from mv"), row(1, 1, null, null));
+
+        updateView("UPDATE %s SET b=3 WHERE k=1 AND c=1");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRows(execute("SELECT * from mv"), row(1, 1, null, 3));
+
+        updateView("UPDATE %s SET b=null, l=l-[3], s=s-{3} WHERE k = 1 AND c = 1");
+        if (flush)
+        {
+            FBUtilities.waitOnFutures(ks.flush());
+            ks.getColumnFamilyStore("mv").forceMajorCompaction();
+        }
+        assertRowsIgnoringOrder(execute("SELECT k,c,a,b from %s"));
+        assertRowsIgnoringOrder(execute("SELECT * from mv"));
+
+        updateView("UPDATE %s SET m=m+{3:3}, l=l-[1], s=s-{2} WHERE k = 1 AND c = 1");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,c,a,b from %s"), row(1, 1, null, null));
+        assertRowsIgnoringOrder(execute("SELECT * from mv"), row(1, 1, null, null));
+
+        assertInvalidMessage("Cannot drop column m on base table with materialized views", "ALTER TABLE %s DROP m");
+        // executeNet(protocolVersion, "ALTER TABLE %s DROP m");
+        // ks.getColumnFamilyStore("mv").forceMajorCompaction();
+        // assertRowsIgnoringOrder(execute("SELECT k,c,a,b from %s WHERE k = 1 AND c = 1"));
+        // assertRowsIgnoringOrder(execute("SELECT * from mv WHERE k = 1 AND c = 1"));
+        // assertRowsIgnoringOrder(execute("SELECT k,c,a,b from %s"));
+        // assertRowsIgnoringOrder(execute("SELECT * from mv"));
+    }
+
