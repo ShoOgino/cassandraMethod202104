@@ -1,0 +1,41 @@
+    @Test
+    public void testIndexOnRegularColumnWithPartitionWithoutRows() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk int, c int, s int static, v int, PRIMARY KEY(pk, c))");
+        createIndex("CREATE INDEX ON %s (v)");
+
+        execute("INSERT INTO %s (pk, c, s, v) VALUES (?, ?, ?, ?)", 1, 1, 9, 1);
+        execute("INSERT INTO %s (pk, c, s, v) VALUES (?, ?, ?, ?)", 1, 2, 9, 2);
+        execute("INSERT INTO %s (pk, c, s, v) VALUES (?, ?, ?, ?)", 3, 1, 9, 1);
+        execute("INSERT INTO %s (pk, c, s, v) VALUES (?, ?, ?, ?)", 4, 1, 9, 1);
+        flush();
+
+        assertRows(execute("SELECT * FROM %s WHERE v = ?", 1),
+                   row(1, 1, 9, 1),
+                   row(3, 1, 9, 1),
+                   row(4, 1, 9, 1));
+
+        execute("DELETE FROM %s WHERE pk = ? and c = ?", 3, 1);
+
+        // Test without paging
+        assertRows(execute("SELECT * FROM %s WHERE v = ? LIMIT 2", 1),
+                   row(1, 1, 9, 1),
+                   row(4, 1, 9, 1));
+
+        assertRows(execute("SELECT * FROM %s WHERE v = ? GROUP BY pk LIMIT 2", 1),
+                   row(1, 1, 9, 1),
+                   row(4, 1, 9, 1));
+
+        // Test with paging
+        for (int pageSize = 1; pageSize < 4; pageSize++)
+        {
+            assertRowsNet(executeNetWithPaging("SELECT * FROM %s WHERE v = 1 LIMIT 2", pageSize),
+                          row(1, 1, 9, 1),
+                          row(4, 1, 9, 1));
+
+            assertRowsNet(executeNetWithPaging("SELECT * FROM %s WHERE v = 1 GROUP BY pk LIMIT 2", pageSize),
+                          row(1, 1, 9, 1),
+                          row(4, 1, 9, 1));
+        }
+    }
+
