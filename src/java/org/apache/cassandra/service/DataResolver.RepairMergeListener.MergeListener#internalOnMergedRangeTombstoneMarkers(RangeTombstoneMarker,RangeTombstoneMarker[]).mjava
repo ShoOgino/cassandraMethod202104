@@ -1,0 +1,98 @@
+            private void internalOnMergedRangeTombstoneMarkers(RangeTombstoneMarker merged, RangeTombstoneMarker[] versions)
+            {
+                // The current deletion as of dealing with this marker.
+                DeletionTime currentDeletion = currentDeletion();
+
+                for (int i = 0; i < versions.length; i++)
+                {
+                    RangeTombstoneMarker marker = versions[i];
+
+                    // Update what the source now thinks is the current deletion
+                    if (marker != null)
+                        sourceDeletionTime[i] = marker.isOpen(isReversed) ? marker.openDeletionTime(isReversed) : null;
+
+                    // If merged == null, some of the source is opening or closing a marker
+                    if (merged == null)
+                    {
+                        // but if it's not this source, move to the next one
+                        if (marker == null)
+                            continue;
+
+                        // We have a close and/or open marker for a source, with nothing corresponding in merged.
+                        // Because merged is a superset, this imply that we have a current deletion (being it due to an
+                        // early opening in merged or a partition level deletion) and that this deletion will still be
+                        // active after that point. Further whatever deletion was open or is open by this marker on the
+                        // source, that deletion cannot supersedes the current one.
+                        //
+                        // But while the marker deletion (before and/or after this point) cannot supersede the current
+                        // deletion, we want to know if it's equal to it (both before and after), because in that case
+                        // the source is up to date and we don't want to include repair.
+                        //
+                        // So in practice we have 2 possible case:
+                        //  1) the source was up-to-date on deletion up to that point: then it won't be from that point
+                        //     on unless it's a boundary and the new opened deletion time is also equal to the current
+                        //     deletion (note that this implies the boundary has the same closing and opening deletion
+                        //     time, which should generally not happen, but can due to legacy reading code not avoiding
+                        //     this for a while, see CASSANDRA-13237).
+                        //  2) the source wasn't up-to-date on deletion up to that point and it may now be (if it isn't
+                        //     we just have nothing to do for that marker).
+                        assert !currentDeletion.isLive() : currentDeletion.toString();
+
+                        // Is the source up to date on deletion? It's up to date if it doesn't have an open RT repair
+                        // nor an "active" partition level deletion (where "active" means that it's greater or equal
+                        // to the current deletion: if the source has a repaired partition deletion lower than the
+                        // current deletion, this means the current deletion is due to a previously open range tombstone,
+                        // and if the source isn't currently repaired for that RT, then it means it's up to date on it).
+                        DeletionTime partitionRepairDeletion = partitionLevelRepairDeletion(i);
+                        if (markerToRepair[i] == null && currentDeletion.supersedes(partitionRepairDeletion))
+                        {
+                            // Since there is an ongoing merged deletion, the only way we don't have an open repair for
+                            // this source is that it had a range open with the same deletion as current and it's
+                            // closing it.
+                            assert marker.isClose(isReversed) && currentDeletion.equals(marker.closeDeletionTime(isReversed))
+                                 : String.format("currentDeletion=%s, marker=%s", currentDeletion, marker.toString(command.metadata()));
+
+                            // and so unless it's a boundary whose opening deletion time is still equal to the current
+                            // deletion (see comment above for why this can actually happen), we have to repair the source
+                            // from that point on.
+                            if (!(marker.isOpen(isReversed) && currentDeletion.equals(marker.openDeletionTime(isReversed))))
+                                markerToRepair[i] = marker.closeBound(isReversed).invert();
+                        }
+                        // In case 2) above, we only have something to do if the source is up-to-date after that point
+                        // (which, since the source isn't up-to-date before that point, means we're opening a new deletion
+                        // that is equal to the current one).
+                        else if (marker.isOpen(isReversed) && currentDeletion.equals(marker.openDeletionTime(isReversed)))
+                        {
+                            closeOpenMarker(i, marker.openBound(isReversed).invert());
+                        }
+                    }
+                    else
+                    {
+                        // We have a change of current deletion in merged (potentially to/from no deletion at all).
+
+                        if (merged.isClose(isReversed))
+                        {
+                            // We're closing the merged range. If we've marked the source as needing to be repaired for
+                            // that range, close and add it to the repair to be sent.
+                            if (markerToRepair[i] != null)
+                                closeOpenMarker(i, merged.closeBound(isReversed));
+
+                        }
+
+                        if (merged.isOpen(isReversed))
+                        {
+                            // If we're opening a new merged range (or just switching deletion), then unless the source
+                            // is up to date on that deletion (note that we've updated what the source deleteion is
+                            // above), we'll have to sent the range to the source.
+                            DeletionTime newDeletion = merged.openDeletionTime(isReversed);
+                            DeletionTime sourceDeletion = sourceDeletionTime[i];
+                            if (!newDeletion.equals(sourceDeletion))
+                                markerToRepair[i] = merged.openBound(isReversed);
+                        }
+                    }
+                }
+
+                if (merged != null)
+                    mergedDeletionTime = merged.isOpen(isReversed) ? merged.openDeletionTime(isReversed) : null;
+            }
+
