@@ -1,0 +1,37 @@
+    private void readHints(int num, int numTable) throws IOException
+    {
+        long baseTimestamp = descriptor.timestamp;
+        int index = 0;
+
+        try (HintsReader reader = HintsReader.open(new File(directory, descriptor.fileName())))
+        {
+            for (HintsReader.Page page : reader)
+            {
+                Iterator<Hint> hints = page.hintsIterator();
+                while (hints.hasNext())
+                {
+                    int i = index / numTable;
+                    Hint hint = hints.next();
+
+                    long timestamp = baseTimestamp + i;
+                    Mutation mutation = hint.mutation;
+
+                    assertEquals(timestamp, hint.creationTime);
+                    assertEquals(dk(bytes(i)), mutation.key());
+
+                    Row row = mutation.getPartitionUpdates().iterator().next().iterator().next();
+                    assertEquals(1, Iterables.size(row.cells()));
+                    assertEquals(bytes(i), row.clustering().get(0));
+                    Cell cell = row.cells().iterator().next();
+                    assertNotNull(cell);
+                    assertEquals(bytes(i), cell.value());
+                    assertEquals(timestamp * 1000, cell.timestamp());
+
+                    index++;
+                }
+            }
+        }
+
+        assertEquals(index, num);
+    }
+
