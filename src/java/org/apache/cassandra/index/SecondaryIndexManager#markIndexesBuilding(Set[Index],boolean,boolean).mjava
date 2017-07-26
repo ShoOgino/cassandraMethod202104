@@ -9,7 +9,9 @@
      * <p>
      * Marking an index as "building" practically means:
      * 1) The index is removed from the "failed" set if this is a full rebuild.
-     * 2) The index is removed from the system keyspace built indexes.
+     * 2) The index is removed from the system keyspace built indexes; this only happens if this method is not invoked
+     * for a new table initialization, as in such case there's no need to remove it (it is either already not present,
+     * or already present because already built).
      * <p>
      * Thread safety is guaranteed by having all methods managing index builds synchronized: being synchronized on
      * the SecondaryIndexManager instance, it means all invocations for all different indexes will go through the same
@@ -18,10 +20,12 @@
      * {@link #markIndexBuilt(Index, boolean)} or {@link #markIndexFailed(Index)} should be always called after the
      * rebuilding has finished, so that the index build state can be correctly managed and the index rebuilt.
      *
-     * @param indexes       the index to be marked as building
+     * @param indexes the index to be marked as building
      * @param isFullRebuild {@code true} if this method is invoked as a full index rebuild, {@code false} otherwise
+     * @param isNewCF {@code true} if this method is invoked when initializing a new table/columnfamily (i.e. loading a CF at startup), 
+     * {@code false} for all other cases (i.e. newly added index)
      */
-    private synchronized void markIndexesBuilding(Set<Index> indexes, boolean isFullRebuild)
+    private synchronized void markIndexesBuilding(Set<Index> indexes, boolean isFullRebuild, boolean isNewCF)
     {
         String keyspaceName = baseCfs.keyspace.getName();
 
@@ -46,7 +50,7 @@
                             if (isFullRebuild)
                                 needsFullRebuild.remove(indexName);
 
-                            if (counter.getAndIncrement() == 0 && DatabaseDescriptor.isDaemonInitialized())
+                            if (counter.getAndIncrement() == 0 && DatabaseDescriptor.isDaemonInitialized() && !isNewCF)
                                 SystemKeyspace.setIndexRemoved(keyspaceName, indexName);
                         });
     }
