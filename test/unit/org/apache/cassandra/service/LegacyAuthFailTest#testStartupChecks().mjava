@@ -1,0 +1,38 @@
+    @Test
+    public void testStartupChecks() throws Throwable
+    {
+        createKeyspace();
+
+        List<String> legacyTables = new ArrayList<>(StartupChecks.LEGACY_AUTH_TABLES);
+
+        // test reporting for individual tables
+        for (String legacyTable : legacyTables)
+        {
+            createLegacyTable(legacyTable);
+
+            Optional<String> errMsg = StartupChecks.checkLegacyAuthTablesMessage();
+            assertEquals(format("Legacy auth tables %s in keyspace %s still exist and have not been properly migrated.",
+                                legacyTable,
+                                AuthKeyspace.NAME), errMsg.get());
+            dropLegacyTable(legacyTable);
+        }
+
+        // test reporting of multiple existing tables
+        for (String legacyTable : legacyTables)
+            createLegacyTable(legacyTable);
+
+        while (!legacyTables.isEmpty())
+        {
+            Optional<String> errMsg = StartupChecks.checkLegacyAuthTablesMessage();
+            assertEquals(format("Legacy auth tables %s in keyspace %s still exist and have not been properly migrated.",
+                                Joiner.on(", ").join(legacyTables),
+                                AuthKeyspace.NAME), errMsg.get());
+
+            dropLegacyTable(legacyTables.remove(0));
+        }
+
+        // no legacy tables found
+        Optional<String> errMsg = StartupChecks.checkLegacyAuthTablesMessage();
+        assertFalse(errMsg.isPresent());
+    }
+
