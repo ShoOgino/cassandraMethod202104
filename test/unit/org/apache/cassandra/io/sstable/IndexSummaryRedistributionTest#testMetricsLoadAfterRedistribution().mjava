@@ -1,0 +1,47 @@
+    @Test
+    public void testMetricsLoadAfterRedistribution() throws IOException
+    {
+        String ksname = KEYSPACE1;
+        String cfname = CF_STANDARD;
+        Keyspace keyspace = Keyspace.open(ksname);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        int numSSTables = 1;
+        int numRows = 1024 * 10;
+        long load = StorageMetrics.load.getCount();
+        StorageMetrics.load.dec(load); // reset the load metric
+        createSSTables(ksname, cfname, numSSTables, numRows);
+
+        List<SSTableReader> sstables = new ArrayList<>(cfs.getSSTables());
+        for (SSTableReader sstable : sstables)
+            sstable.overrideReadMeter(new RestorableMeter(100.0, 100.0));
+
+        long oldSize = 0;
+        for (SSTableReader sstable : sstables)
+        {
+            assertEquals(cfs.metadata.getMinIndexInterval(), sstable.getEffectiveIndexInterval(), 0.001);
+            oldSize += sstable.bytesOnDisk();
+        }
+
+        load = StorageMetrics.load.getCount();
+
+        long others = load - oldSize; // Other SSTables size, e.g. schema and other system SSTables
+
+        int originalMinIndexInterval = cfs.metadata.getMinIndexInterval();
+        // double the min_index_interval
+        cfs.metadata.minIndexInterval(originalMinIndexInterval * 2);
+        IndexSummaryManager.instance.redistributeSummaries();
+
+        long newSize = 0;
+        for (SSTableReader sstable : cfs.getSSTables())
+        {
+            assertEquals(cfs.metadata.getMinIndexInterval(), sstable.getEffectiveIndexInterval(), 0.001);
+            assertEquals(numRows / cfs.metadata.getMinIndexInterval(), sstable.getIndexSummarySize());
+            newSize += sstable.bytesOnDisk();
+        }
+        newSize += others;
+        load = StorageMetrics.load.getCount();
+
+        // new size we calculate should be almost the same as the load in metrics
+        assertEquals(newSize, load, newSize / 10);
+    }
+
