@@ -12,9 +12,28 @@
             sources[i] = msg.from;
         }
 
-        // Even though every responses should honor the limit, we might have more than requested post reconciliation,
-        // so ensure we're respecting the limit.
+        /*
+         * Even though every response, individually, will honor the limit, it is possible that we will, after the merge,
+         * have more rows than the client requested. To make sure that we still conform to the original limit,
+         * we apply a top-level post-reconciliation counter to the merged partition iterator.
+         *
+         * Short read protection logic (ShortReadRowProtection.moreContents()) relies on this counter to be applied
+         * to the current partition to work. For this reason we have to apply the counter transformation before
+         * empty partition discard logic kicks in - for it will eagerly consume the iterator.
+         *
+         * That's why the order here is: 1) merge; 2) filter rows; 3) count; 4) discard empty partitions
+         *
+         * See CASSANDRA-13747 for more details.
+         */
+
         DataLimits.Counter counter = command.limits().newCounter(command.nowInSec(), true, command.selectsFullPartition());
-        return counter.applyTo(mergeWithShortReadProtection(iters, sources, counter));
+
+        UnfilteredPartitionIterator merged = mergeWithShortReadProtection(iters, sources, counter);
+        FilteredPartitions filtered = FilteredPartitions.filter(merged, new Filter(command.nowInSec()));
+        PartitionIterator counted = counter.applyTo(filtered);
+
+        return command.isForThrift()
+             ? counted
+             : Transformation.apply(counted, new EmptyPartitionsDiscarder());
     }
 
