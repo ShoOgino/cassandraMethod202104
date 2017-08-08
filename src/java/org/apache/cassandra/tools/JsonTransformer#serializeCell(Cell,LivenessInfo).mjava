@@ -6,9 +6,10 @@
             objectIndenter.setCompact(true);
             json.writeFieldName("name");
             AbstractType<?> type = cell.column().type;
+            AbstractType<?> cellType = null;
             json.writeString(cell.column().name.toCQLString());
 
-            if (cell.path() != null && cell.path().size() > 0)
+            if (type.isCollection() && type.isMultiCell()) // non-frozen collection
             {
                 CollectionType ct = (CollectionType) type;
                 json.writeFieldName("path");
@@ -20,6 +21,30 @@
                 }
                 json.writeEndArray();
                 arrayIndenter.setCompact(false);
+
+                cellType = cell.column().cellValueType();
+            }
+            else if (type.isUDT() && type.isMultiCell()) // non-frozen udt
+            {
+                UserType ut = (UserType) type;
+                json.writeFieldName("path");
+                arrayIndenter.setCompact(true);
+                json.writeStartArray();
+                for (int i = 0; i < cell.path().size(); i++)
+                {
+                    Short fieldPosition = ut.nameComparator().compose(cell.path().get(i));
+                    json.writeString(ut.fieldNameAsString(fieldPosition));
+                }
+                json.writeEndArray();
+                arrayIndenter.setCompact(false);
+
+                // cellType of udt
+                Short fieldPosition = ((UserType) type).nameComparator().compose(cell.path().get(0));
+                cellType = ((UserType) type).fieldType(fieldPosition);
+            }
+            else
+            {
+                cellType = cell.column().cellValueType();
             }
             if (cell.isTombstone())
             {
@@ -34,7 +59,7 @@
             else
             {
                 json.writeFieldName("value");
-                json.writeString(cell.column().cellValueType().getString(cell.value()));
+                json.writeRawValue(cellType.toJSONString(cell.value(), ProtocolVersion.CURRENT));
             }
             if (liveInfo.isEmpty() || cell.timestamp() != liveInfo.timestamp())
             {
