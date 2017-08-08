@@ -10,14 +10,21 @@
         for (SSTableReader sstable : sstables)
         {
             UUID sessionID = sstable.getSSTableMetadata().pendingRepair;
-            assert sessionID != null;
+            checkPendingID(sessionID);
             sessionSSTables.computeIfAbsent(sessionID, k -> new HashSet<>()).add(sstable);
         }
 
         Set<ISSTableScanner> scanners = new HashSet<>(sessionSSTables.size());
-        for (Map.Entry<UUID, Set<SSTableReader>> entry : sessionSSTables.entrySet())
+        try
         {
-            scanners.addAll(getOrCreate(entry.getKey()).getScanners(entry.getValue(), ranges).scanners);
+            for (Map.Entry<UUID, Set<SSTableReader>> entry : sessionSSTables.entrySet())
+            {
+                scanners.addAll(getOrCreate(entry.getKey()).getScanners(entry.getValue(), ranges).scanners);
+            }
+        }
+        catch (Throwable t)
+        {
+            ISSTableScanner.closeAllAndPropagate(scanners, t);
         }
         return scanners;
     }

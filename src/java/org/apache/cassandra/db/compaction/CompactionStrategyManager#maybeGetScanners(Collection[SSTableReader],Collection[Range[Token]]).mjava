@@ -1,0 +1,67 @@
+    /**
+     * Create ISSTableScanners from the given sstables
+     *
+     * Delegates the call to the compaction strategies to allow LCS to create a scanner
+     * @param sstables
+     * @param ranges
+     * @return
+     */
+    @SuppressWarnings("resource")
+    public AbstractCompactionStrategy.ScannerList maybeGetScanners(Collection<SSTableReader> sstables,  Collection<Range<Token>> ranges)
+    {
+        assert repaired.size() == unrepaired.size();
+        assert repaired.size() == pendingRepairs.size();
+        List<Set<SSTableReader>> pendingSSTables = new ArrayList<>();
+        List<Set<SSTableReader>> repairedSSTables = new ArrayList<>();
+        List<Set<SSTableReader>> unrepairedSSTables = new ArrayList<>();
+
+        for (int i = 0; i < repaired.size(); i++)
+        {
+            pendingSSTables.add(new HashSet<>());
+            repairedSSTables.add(new HashSet<>());
+            unrepairedSSTables.add(new HashSet<>());
+        }
+
+        for (SSTableReader sstable : sstables)
+        {
+            int idx = getCompactionStrategyIndex(cfs, getDirectories(), sstable);
+            if (sstable.isPendingRepair())
+                pendingSSTables.get(idx).add(sstable);
+            else if (sstable.isRepaired())
+                repairedSSTables.get(idx).add(sstable);
+            else
+                unrepairedSSTables.get(idx).add(sstable);
+        }
+
+        List<ISSTableScanner> scanners = new ArrayList<>(sstables.size());
+
+        readLock.lock();
+        try
+        {
+            for (int i = 0; i < pendingSSTables.size(); i++)
+            {
+                if (!pendingSSTables.get(i).isEmpty())
+                    scanners.addAll(pendingRepairs.get(i).getScanners(pendingSSTables.get(i), ranges));
+            }
+            for (int i = 0; i < repairedSSTables.size(); i++)
+            {
+                if (!repairedSSTables.get(i).isEmpty())
+                    scanners.addAll(repaired.get(i).getScanners(repairedSSTables.get(i), ranges).scanners);
+            }
+            for (int i = 0; i < unrepairedSSTables.size(); i++)
+            {
+                if (!unrepairedSSTables.get(i).isEmpty())
+                    scanners.addAll(unrepaired.get(i).getScanners(unrepairedSSTables.get(i), ranges).scanners);
+            }
+        }
+        catch (PendingRepairManager.IllegalSSTableArgumentException e)
+        {
+            ISSTableScanner.closeAllAndPropagate(scanners, new ConcurrentModificationException(e));
+        }
+        finally
+        {
+            readLock.unlock();
+        }
+        return new AbstractCompactionStrategy.ScannerList(scanners);
+    }
+
