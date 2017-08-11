@@ -1,0 +1,93 @@
+    @Test
+    public void throttledPartitionIteratorTest()
+    {
+        // all live rows with partition deletion
+        CloseableIterator<UnfilteredRowIterator> throttledIterator;
+        UnfilteredPartitionIterator origin;
+
+        SortedMap<Integer, List<Row>> partitions = new TreeMap<>();
+        int partitionCount = 13;
+        int baseRowsPerPartition = 1111;
+
+        for (int i = 1; i <= partitionCount; i++)
+        {
+            ArrayList<Row> rows = new ArrayList<>();
+            for (int j = 0; j < (baseRowsPerPartition + i); j++)
+                rows.add(createRow(i, createCell(v1Metadata, j), createCell(v2Metadata, j)));
+            partitions.put(i, rows);
+        }
+
+        // testing different throttle limit
+        for (int throttle = 2; throttle < 1200; throttle += 21)
+        {
+            origin = partitions(metadata.regularAndStaticColumns(),
+                                new DeletionTime(0, 100),
+                                Rows.EMPTY_STATIC_ROW,
+                                partitions);
+            throttledIterator = ThrottledUnfilteredIterator.throttle(origin, throttle);
+
+            int currentPartition = 0;
+            int rowsInPartition = 0;
+            int expectedSplitCount = 0;
+            int currentSplit = 1;
+            while (throttledIterator.hasNext())
+            {
+                UnfilteredRowIterator splitted = throttledIterator.next();
+                if (currentSplit > expectedSplitCount)
+                {
+                    currentPartition++;
+                    rowsInPartition = partitions.get(currentPartition).size();
+                    expectedSplitCount = (int) Math.ceil(rowsInPartition * 1.0 / throttle);
+                    currentSplit = 1;
+                }
+                UnfilteredRowIterator current = rows(metadata.regularAndStaticColumns(),
+                                                     currentPartition,
+                                                     new DeletionTime(0, 100),
+                                                     Rows.EMPTY_STATIC_ROW,
+                                                     partitions.get(currentPartition).toArray(new Row[0]));
+                assertMetadata(current, splitted, currentSplit == 1);
+                // no op
+                splitted.close();
+
+                int start = (currentSplit - 1) * throttle;
+                int end = currentSplit == expectedSplitCount ? rowsInPartition : currentSplit * throttle;
+                assertRows(splitted, partitions.get(currentPartition).subList(start, end).toArray(new Row[0]));
+                currentSplit++;
+            }
+        }
+
+
+        origin = partitions(metadata.regularAndStaticColumns(),
+                            new DeletionTime(0, 100),
+                            Rows.EMPTY_STATIC_ROW,
+                            partitions);
+        try
+        {
+            try (CloseableIterator<UnfilteredRowIterator> throttled = ThrottledUnfilteredIterator.throttle(origin, 10))
+            {
+                int i = 0;
+                while (throttled.hasNext())
+                {
+                    assertEquals(dk(1), throttled.next().partitionKey());
+                    if (i++ == 10)
+                    {
+                        throw new RuntimeException("Dummy exception");
+                    }
+                }
+                fail("Should not reach here");
+            }
+        }
+        catch (RuntimeException rte)
+        {
+            int iteratedPartitions = 2;
+            while (iteratedPartitions <= partitionCount)
+            {
+                // check that original iterator was not closed
+                assertTrue(origin.hasNext());
+                // check it's possible to fetch second partition from original iterator
+                assertEquals(dk(iteratedPartitions++), origin.next().partitionKey());
+            }
+        }
+
+    }
+

@@ -1,0 +1,99 @@
+    private void verifyThrottleIterator(List<Unfiltered> expectedUnfiltereds,
+                                        UnfilteredRowIterator rowIteratorForThrottle,
+                                        ThrottledUnfilteredIterator throttledIterator,
+                                        int throttle)
+    {
+        List<Unfiltered> output = new ArrayList<>();
+
+        boolean isRevered = rowIteratorForThrottle.isReverseOrder();
+        boolean isFirst = true;
+
+        while (throttledIterator.hasNext())
+        {
+            UnfilteredRowIterator splittedIterator = throttledIterator.next();
+            assertMetadata(rowIteratorForThrottle, splittedIterator, isFirst);
+
+            List<Unfiltered> splittedUnfiltereds = new ArrayList<>();
+
+            splittedIterator.forEachRemaining(splittedUnfiltereds::add);
+
+            int remain = expectedUnfiltereds.size() - output.size();
+            int expectedSize = remain >= throttle ? throttle : remain;
+            if (splittedUnfiltereds.size() != expectedSize)
+            {
+                assertEquals(expectedSize + 1, splittedUnfiltereds.size());
+                // the extra unfilter must be close bound marker
+                Unfiltered last = splittedUnfiltereds.get(expectedSize);
+                assertTrue(last.isRangeTombstoneMarker());
+                RangeTombstoneMarker marker = (RangeTombstoneMarker) last;
+                assertFalse(marker.isBoundary());
+                assertTrue(marker.isClose(isRevered));
+            }
+            output.addAll(splittedUnfiltereds);
+            if (isFirst)
+                isFirst = false;
+        }
+        int index = 0;
+        RangeTombstoneMarker openMarker = null;
+        for (int i = 0; i < expectedUnfiltereds.size(); i++)
+        {
+            Unfiltered expected = expectedUnfiltereds.get(i);
+            Unfiltered data = output.get(i);
+
+            // verify that all tombstone are paired
+            if (data.isRangeTombstoneMarker())
+            {
+                RangeTombstoneMarker marker = (RangeTombstoneMarker) data;
+                if (marker.isClose(isRevered))
+                {
+                    assertNotNull(openMarker);
+                    openMarker = null;
+                }
+                if (marker.isOpen(isRevered))
+                {
+                    assertNull(openMarker);
+                    openMarker = marker;
+                }
+            }
+            if (expected.equals(data))
+            {
+                index++;
+            }
+            else // because of created closeMarker and openMarker
+            {
+                assertNotNull(openMarker);
+                DeletionTime openDeletionTime = openMarker.openDeletionTime(isRevered);
+                // only boundary or row will create extra closeMarker and openMarker
+                if (expected.isRangeTombstoneMarker())
+                {
+                    RangeTombstoneMarker marker = (RangeTombstoneMarker) expected;
+                    assertTrue(marker.isBoundary());
+                    RangeTombstoneBoundaryMarker boundary = (RangeTombstoneBoundaryMarker) marker;
+                    assertEquals(boundary.createCorrespondingCloseMarker(isRevered), data);
+                    assertEquals(boundary.createCorrespondingOpenMarker(isRevered), output.get(index + 1));
+                    assertEquals(openDeletionTime, boundary.endDeletionTime());
+
+                    openMarker = boundary.createCorrespondingOpenMarker(isRevered);
+                }
+                else
+                {
+                    ByteBuffer[] byteBuffers = expected.clustering().getRawValues();
+                    RangeTombstoneBoundMarker closeMarker = RangeTombstoneBoundMarker.exclusiveClose(isRevered,
+                                                                                                     byteBuffers,
+                                                                                                     openDeletionTime);
+
+                    RangeTombstoneBoundMarker nextOpenMarker = RangeTombstoneBoundMarker.inclusiveOpen(isRevered,
+                                                                                                       byteBuffers,
+                                                                                                       openDeletionTime);
+                    assertEquals(closeMarker, data);
+                    assertEquals(nextOpenMarker, output.get(index + 1));
+
+                    openMarker = nextOpenMarker;
+                }
+                index += 2;
+            }
+        }
+        assertNull(openMarker);
+        assertEquals(output.size(), index);
+    }
+

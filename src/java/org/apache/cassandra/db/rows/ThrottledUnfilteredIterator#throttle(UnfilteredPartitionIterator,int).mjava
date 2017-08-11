@@ -1,0 +1,38 @@
+    /**
+     * Splits a {@link UnfilteredPartitionIterator} in {@link UnfilteredRowIterator} batches with size no higher
+     * than <b>maxBatchSize</b>
+     */
+    public static CloseableIterator<UnfilteredRowIterator> throttle(UnfilteredPartitionIterator partitionIterator, int maxBatchSize)
+    {
+        return new AbstractIterator<UnfilteredRowIterator>()
+        {
+            ThrottledUnfilteredIterator current = null;
+
+            protected UnfilteredRowIterator computeNext()
+            {
+                if (current != null && !current.hasNext())
+                {
+                    current.close();
+                    current = null;
+                }
+
+                if (current == null && partitionIterator.hasNext())
+                {
+                    current = new ThrottledUnfilteredIterator(partitionIterator.next(), maxBatchSize);
+                    assert current.hasNext() : "UnfilteredPartitionIterator should not contain empty partitions";
+                }
+
+                if (current != null && current.hasNext())
+                    return current.next();
+
+                return endOfData();
+            }
+
+            public void close()
+            {
+                if (current != null)
+                    current.close();
+            }
+        };
+    }
+

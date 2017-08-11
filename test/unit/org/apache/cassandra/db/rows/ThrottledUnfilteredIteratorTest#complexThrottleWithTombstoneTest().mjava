@@ -1,0 +1,69 @@
+    @Test
+    public void complexThrottleWithTombstoneTest() throws Throwable
+    {
+        // create cell tombstone, range tombstone, partition deletion
+        createTable("CREATE TABLE %s (pk int, ck1 int, ck2 int, v1 int, v2 int, PRIMARY KEY (pk, ck1, ck2))");
+
+        for (int ck1 = 1; ck1 <= 150; ck1++)
+            for (int ck2 = 1; ck2 <= 150; ck2++)
+            {
+                int timestamp = ck1, v1 = ck1, v2 = ck2;
+                execute("INSERT INTO %s(pk,ck1,ck2,v1,v2) VALUES(1,?,?,?,?) using timestamp "
+                        + timestamp, ck1, ck2, v1, v2);
+            }
+
+        for (int ck1 = 1; ck1 <= 100; ck1++)
+            for (int ck2 = 1; ck2 <= 100; ck2++)
+            {
+                if (ck1 % 2 == 0 || ck1 % 3 == 0) // range tombstone
+                    execute("DELETE FROM %s USING TIMESTAMP 170 WHERE pk=1 AND ck1=?", ck1);
+                else if (ck1 == ck2) // row tombstone
+                    execute("DELETE FROM %s USING TIMESTAMP 180 WHERE pk=1 AND ck1=? AND ck2=?", ck1, ck2);
+                else if (ck1 == ck2 - 1) // cell tombstone
+                    execute("DELETE v2 FROM %s USING TIMESTAMP 190 WHERE pk=1 AND ck1=? AND ck2=?", ck1, ck2);
+            }
+
+        // range deletion
+        execute("DELETE FROM %s USING TIMESTAMP 150 WHERE pk=1 AND ck1 > 100 AND ck1 < 120");
+        execute("DELETE FROM %s USING TIMESTAMP 150 WHERE pk=1 AND ck1 = 50 AND ck2 < 120");
+        // partition deletion
+        execute("DELETE FROM %s USING TIMESTAMP 160 WHERE pk=1");
+
+        // flush and generate 1 sstable
+        ColumnFamilyStore cfs = Keyspace.open(keyspace()).getColumnFamilyStore(currentTable());
+        cfs.forceBlockingFlush();
+        cfs.disableAutoCompaction();
+        cfs.forceMajorCompaction();
+
+        assertEquals(1, cfs.getLiveSSTables().size());
+        SSTableReader reader = cfs.getLiveSSTables().iterator().next();
+
+        try (ISSTableScanner scanner = reader.getScanner())
+        {
+            try (UnfilteredRowIterator rowIterator = scanner.next())
+            {
+                // only 1 partition data
+                assertFalse(scanner.hasNext());
+                List<Unfiltered> expectedUnfiltereds = new ArrayList<>();
+                rowIterator.forEachRemaining(expectedUnfiltereds::add);
+
+                // test different throttle
+                for (Integer throttle : Arrays.asList(2, 3, 4, 5, 11, 41, 99, 1000, 10001))
+                {
+                    try (ISSTableScanner scannerForThrottle = reader.getScanner())
+                    {
+                        assertTrue(scannerForThrottle.hasNext());
+                        try (UnfilteredRowIterator rowIteratorForThrottle = scannerForThrottle.next())
+                        {
+                            assertFalse(scannerForThrottle.hasNext());
+                            verifyThrottleIterator(expectedUnfiltereds,
+                                                   rowIteratorForThrottle,
+                                                   new ThrottledUnfilteredIterator(rowIteratorForThrottle, throttle),
+                                                   throttle);
+                        }
+                    }
+                }
+            }
+        }
+    }
+

@@ -1,0 +1,41 @@
+    public void simpleThrottleTest(boolean skipOdd)
+    {
+        // all live rows with partition deletion
+        ThrottledUnfilteredIterator throttledIterator;
+        UnfilteredRowIterator origin;
+
+        List<Row> rows = new ArrayList<>();
+        int rowCount = 1111;
+
+        for (int i = 0; i < rowCount; i++)
+            rows.add(createRow(i, createCell(v1Metadata, i), createCell(v2Metadata, i)));
+
+        // testing different throttle limit
+        for (int throttle = 2; throttle < 1200; throttle += 21)
+        {
+            origin = rows(metadata.regularAndStaticColumns(),
+                          1,
+                          new DeletionTime(0, 100),
+                          Rows.EMPTY_STATIC_ROW,
+                          rows.toArray(new Row[0]));
+            throttledIterator = new ThrottledUnfilteredIterator(origin, throttle);
+
+            int splittedCount = (int) Math.ceil(rowCount*1.0/throttle);
+            for (int i = 1; i <= splittedCount; i++)
+            {
+                UnfilteredRowIterator splitted = throttledIterator.next();
+                assertMetadata(origin, splitted, i == 1);
+                // no op
+                splitted.close();
+
+                int start = (i - 1) * throttle;
+                int end = i == splittedCount ? rowCount : i * throttle;
+                if (skipOdd && (i % 2) == 0)
+                {
+                    assertRows(splitted, rows.subList(start, end).toArray(new Row[0]));
+                }
+            }
+            assertTrue(!throttledIterator.hasNext());
+        }
+    }
+
