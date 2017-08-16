@@ -1,0 +1,90 @@
+    /**
+     * Finds expired sstables
+     *
+     * works something like this;
+     * 1. find "global" minTimestamp of overlapping sstables, compacting sstables and memtables containing any non-expired data
+     * 2. build a list of fully expired candidates
+     * 3. check if the candidates to be dropped actually can be dropped {@code (maxTimestamp < global minTimestamp)}
+     *    - if not droppable, remove from candidates
+     * 4. return candidates.
+     *
+     * @param cfStore
+     * @param compacting we take the drop-candidates from this set, it is usually the sstables included in the compaction
+     * @param overlapping the sstables that overlap the ones in compacting.
+     * @param gcBefore
+     * @param ignoreOverlaps don't check if data shadows/overlaps any data in other sstables
+     * @return
+     */
+    public static Set<SSTableReader> getFullyExpiredSSTables(ColumnFamilyStore cfStore,
+                                                             Iterable<SSTableReader> compacting,
+                                                             Iterable<SSTableReader> overlapping,
+                                                             int gcBefore,
+                                                             boolean ignoreOverlaps)
+    {
+        logger.trace("Checking droppable sstables in {}", cfStore);
+
+        if (NEVER_PURGE_TOMBSTONES || compacting == null)
+            return Collections.emptySet();
+
+        if (cfStore.getCompactionStrategyManager().onlyPurgeRepairedTombstones() && !Iterables.all(compacting, SSTableReader::isRepaired))
+            return Collections.emptySet();
+
+        if (ignoreOverlaps)
+        {
+            Set<SSTableReader> fullyExpired = new HashSet<>();
+            for (SSTableReader candidate : compacting)
+            {
+                if (candidate.getSSTableMetadata().maxLocalDeletionTime < gcBefore)
+                {
+                    fullyExpired.add(candidate);
+                    logger.trace("Dropping overlap ignored expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
+                                 candidate, candidate.getSSTableMetadata().maxLocalDeletionTime, gcBefore);
+                }
+            }
+            return fullyExpired;
+        }
+
+        List<SSTableReader> candidates = new ArrayList<>();
+        long minTimestamp = Long.MAX_VALUE;
+
+        for (SSTableReader sstable : overlapping)
+        {
+            // Overlapping might include fully expired sstables. What we care about here is
+            // the min timestamp of the overlapping sstables that actually contain live data.
+            if (sstable.getSSTableMetadata().maxLocalDeletionTime >= gcBefore)
+                minTimestamp = Math.min(minTimestamp, sstable.getMinTimestamp());
+        }
+
+        for (SSTableReader candidate : compacting)
+        {
+            if (candidate.getSSTableMetadata().maxLocalDeletionTime < gcBefore)
+                candidates.add(candidate);
+            else
+                minTimestamp = Math.min(minTimestamp, candidate.getMinTimestamp());
+        }
+
+        for (Memtable memtable : cfStore.getTracker().getView().getAllMemtables())
+            minTimestamp = Math.min(minTimestamp, memtable.getMinTimestamp());
+
+        // At this point, minTimestamp denotes the lowest timestamp of any relevant
+        // SSTable or Memtable that contains a constructive value. candidates contains all the
+        // candidates with no constructive values. The ones out of these that have
+        // (getMaxTimestamp() < minTimestamp) serve no purpose anymore.
+
+        Iterator<SSTableReader> iterator = candidates.iterator();
+        while (iterator.hasNext())
+        {
+            SSTableReader candidate = iterator.next();
+            if (candidate.getMaxTimestamp() >= minTimestamp)
+            {
+                iterator.remove();
+            }
+            else
+            {
+               logger.trace("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
+                        candidate, candidate.getSSTableMetadata().maxLocalDeletionTime, gcBefore);
+            }
+        }
+        return new HashSet<>(candidates);
+    }
+
