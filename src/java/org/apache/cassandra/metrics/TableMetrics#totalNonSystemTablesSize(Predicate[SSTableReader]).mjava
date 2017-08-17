@@ -1,0 +1,31 @@
+    private static Pair<Long, Long> totalNonSystemTablesSize(Predicate<SSTableReader> predicate)
+    {
+        long total = 0;
+        long filtered = 0;
+        for (String keyspace : Schema.instance.getNonSystemKeyspaces())
+        {
+
+            Keyspace k = Schema.instance.getKeyspaceInstance(keyspace);
+            if (SchemaConstants.DISTRIBUTED_KEYSPACE_NAME.equals(k.getName()))
+                continue;
+            if (k.getReplicationStrategy().getReplicationFactor() < 2)
+                continue;
+
+            for (ColumnFamilyStore cf : k.getColumnFamilyStores())
+            {
+                if (!SecondaryIndexManager.isIndexColumnFamily(cf.name))
+                {
+                    for (SSTableReader sstable : cf.getSSTables(SSTableSet.CANONICAL))
+                    {
+                        if (predicate.test(sstable))
+                        {
+                            filtered += sstable.uncompressedLength();
+                        }
+                        total += sstable.uncompressedLength();
+                    }
+                }
+            }
+        }
+        return Pair.create(filtered, total);
+    }
+
