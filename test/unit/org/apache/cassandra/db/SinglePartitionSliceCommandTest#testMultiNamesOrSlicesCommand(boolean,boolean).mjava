@@ -1,0 +1,74 @@
+    private void testMultiNamesOrSlicesCommand(boolean flush, boolean isSlice)
+    {
+        boolean isTombstone = flush || isSlice;
+        int deletionTime = 5;
+        int ck1 = 1;
+        int uniqueCk1 = 2;
+        int uniqueCk2 = 3;
+
+        DecoratedKey key = CFM_SLICES.decorateKey(ByteBufferUtil.bytes("k"));
+        QueryProcessor.executeInternal(String.format("DELETE FROM ks.tbl_slices USING TIMESTAMP %d WHERE k='k' AND c1=%d",
+                                                     deletionTime,
+                                                     ck1));
+
+        if (flush)
+            Keyspace.open(KEYSPACE).getColumnFamilyStore(TABLE_SCLICES).forceBlockingFlush();
+
+        AbstractClusteringIndexFilter clusteringFilter = createClusteringFilter(uniqueCk1, uniqueCk2, isSlice);
+        ReadCommand cmd = SinglePartitionReadCommand.create(CFM_SLICES,
+                                                            FBUtilities.nowInSeconds(),
+                                                            ColumnFilter.all(CFM_SLICES),
+                                                            RowFilter.NONE,
+                                                            DataLimits.NONE,
+                                                            key,
+                                                            clusteringFilter);
+
+        UnfilteredPartitionIterator partitionIterator = cmd.executeLocally(ReadOrderGroup.emptyGroup());
+        assert partitionIterator.hasNext();
+        UnfilteredRowIterator partition = partitionIterator.next();
+
+        int count = 0;
+        boolean open = true;
+        while (partition.hasNext())
+        {
+            Unfiltered unfiltered = partition.next();
+            if (isTombstone)
+            {
+                assertTrue(unfiltered.isRangeTombstoneMarker());
+                RangeTombstoneMarker marker = (RangeTombstoneMarker) unfiltered;
+
+                // check if it's open-close pair
+                assertTrue(marker.isOpen(false) == open);
+                // check deletion time same as Range Deletion
+                if (open)
+                    assertEquals(deletionTime, marker.openDeletionTime(false).markedForDeleteAt());
+                else
+                    assertEquals(deletionTime, marker.closeDeletionTime(false).markedForDeleteAt());
+
+                // check clustering values
+                Clustering clustering = Util.clustering(CFM_SLICES.comparator, ck1, count / 2);
+                for (int i = 0; i < CFM_SLICES.comparator.size(); i++)
+                {
+                    int cmp = CFM_SLICES.comparator.compareComponent(i,
+                                                                     clustering.values[i],
+                                                                     marker.clustering().values[i]);
+                    assertEquals(0, cmp);
+                }
+                open = !open;
+            }
+            else
+            {
+                // deleted row
+                assertTrue(unfiltered.isRow());
+                Row row = (Row) unfiltered;
+                assertEquals(deletionTime, row.deletion().time().markedForDeleteAt());
+                assertEquals(0, row.size()); // no btree
+            }
+            count++;
+        }
+        if (isTombstone)
+            assertEquals(uniqueCk2 * 2, count); // open and close range tombstones
+        else
+            assertEquals(uniqueCk2, count);
+    }
+
