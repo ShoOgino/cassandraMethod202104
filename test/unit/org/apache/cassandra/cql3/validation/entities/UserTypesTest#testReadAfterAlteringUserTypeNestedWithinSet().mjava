@@ -1,0 +1,44 @@
+    @Test
+    public void testReadAfterAlteringUserTypeNestedWithinSet() throws Throwable
+    {
+        String columnType = typeWithKs(createType("CREATE TYPE %s (a int)"));
+
+        try
+        {
+            createTable("CREATE TABLE %s (x int PRIMARY KEY, y set<frozen<" + columnType + ">>)");
+            disableCompaction();
+
+            execute("INSERT INTO %s (x, y) VALUES(1, ?)", set(userType(1), userType(2)));
+            assertRows(execute("SELECT * FROM %s"), row(1, set(userType(1), userType(2))));
+            flush();
+
+            assertRows(execute("SELECT * FROM %s WHERE x = 1"),
+                       row(1, set(userType(1), userType(2))));
+
+            execute("ALTER TYPE " + columnType + " ADD b int");
+            execute("UPDATE %s SET y = y + ? WHERE x = 1",
+                    set(userType(1, 1), userType(1, 2), userType(2, 1)));
+
+            flush();
+            assertRows(execute("SELECT * FROM %s WHERE x = 1"),
+                           row(1, set(userType(1),
+                                      userType(1, 1),
+                                      userType(1, 2),
+                                      userType(2),
+                                      userType(2, 1))));
+
+            compact();
+
+            assertRows(execute("SELECT * FROM %s WHERE x = 1"),
+                       row(1, set(userType(1),
+                                  userType(1, 1),
+                                  userType(1, 2),
+                                  userType(2),
+                                  userType(2, 1))));
+        }
+        finally
+        {
+            enableCompaction();
+        }
+    }
+
