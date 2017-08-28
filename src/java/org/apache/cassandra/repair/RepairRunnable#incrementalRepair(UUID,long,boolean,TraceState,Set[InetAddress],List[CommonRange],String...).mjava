@@ -1,0 +1,30 @@
+    private void incrementalRepair(UUID parentSession,
+                                   long startTime,
+                                   boolean forceRepair,
+                                   TraceState traceState,
+                                   Set<InetAddress> allNeighbors,
+                                   List<CommonRange> commonRanges,
+                                   String... cfnames)
+    {
+        // the local node also needs to be included in the set of participants, since coordinator sessions aren't persisted
+        Predicate<InetAddress> isAlive = FailureDetector.instance::isAlive;
+        Set<InetAddress> allParticipants = ImmutableSet.<InetAddress>builder()
+                                           .addAll(forceRepair ? Iterables.filter(allNeighbors, isAlive) : allNeighbors)
+                                           .add(FBUtilities.getBroadcastAddress())
+                                           .build();
+
+        List<CommonRange> allRanges = filterCommonRanges(commonRanges, allParticipants, forceRepair);
+
+        CoordinatorSession coordinatorSession = ActiveRepairService.instance.consistent.coordinated.registerSession(parentSession, allParticipants);
+        ListeningExecutorService executor = createExecutor();
+        AtomicBoolean hasFailure = new AtomicBoolean(false);
+        ListenableFuture repairResult = coordinatorSession.execute(() -> submitRepairSessions(parentSession, true, executor, allRanges, cfnames),
+                                                                   hasFailure);
+        Collection<Range<Token>> ranges = new HashSet<>();
+        for (Collection<Range<Token>> range : Iterables.transform(allRanges, cr -> cr.ranges))
+        {
+            ranges.addAll(range);
+        }
+        Futures.addCallback(repairResult, new RepairCompleteCallback(parentSession, ranges, startTime, traceState, hasFailure, executor));
+    }
+

@@ -1,20 +1,25 @@
     private ListenableFuture<List<RepairSessionResult>> submitRepairSessions(UUID parentSession,
-                                                                             boolean isConsistent,
+                                                                             boolean isIncremental,
                                                                              ListeningExecutorService executor,
-                                                                             List<Pair<Set<InetAddress>, ? extends Collection<Range<Token>>>> commonRanges,
+                                                                             List<CommonRange> commonRanges,
                                                                              String... cfnames)
     {
         List<ListenableFuture<RepairSessionResult>> futures = new ArrayList<>(options.getRanges().size());
-        for (Pair<Set<InetAddress>, ? extends Collection<Range<Token>>> p : commonRanges)
+
+        // we do endpoint filtering at the start of an incremental repair,
+        // so repair sessions shouldn't also be checking liveness
+        boolean force = options.isForcedRepair() && !isIncremental;
+        for (CommonRange cr : commonRanges)
         {
+            logger.info("Starting RepairSession for {}", cr);
             RepairSession session = ActiveRepairService.instance.submitRepairSession(parentSession,
-                                                                                     p.right,
+                                                                                     cr.ranges,
                                                                                      keyspace,
                                                                                      options.getParallelism(),
-                                                                                     p.left,
-                                                                                     isConsistent,
+                                                                                     cr.endpoints,
+                                                                                     isIncremental,
                                                                                      options.isPullRepair(),
-                                                                                     options.isForcedRepair(),
+                                                                                     force,
                                                                                      options.getPreviewKind(),
                                                                                      executor,
                                                                                      cfnames);
