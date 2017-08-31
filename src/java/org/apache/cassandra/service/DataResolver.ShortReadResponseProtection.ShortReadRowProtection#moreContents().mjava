@@ -1,0 +1,103 @@
+            /*
+             * We have a potential short read if the result from a given node contains the requested number of rows
+             * for that partition (i.e. it has stopped returning results due to the limit), but some of them haven't
+             * made it into the final post-reconciliation result due to other nodes' tombstones.
+             *
+             * If that is the case, then that node may have more rows that we should fetch, as otherwise we could
+             * ultimately return fewer rows than required. Also, those additional rows may contain tombstones which
+             * which we also need to fetch as they may shadow rows from other replicas' results, which we would
+             * otherwise return incorrectly.
+             *
+             * Also note that we only get here once all the rows for this partition have been iterated over, and so
+             * if the node had returned the requested number of rows but we still get here, then some results were
+             * skipped during reconciliation.
+             */
+            public UnfilteredRowIterator moreContents()
+            {
+                // never try to request additional rows from replicas if our reconciled partition is already filled to the limit
+                assert !mergedResultCounter.isDoneForPartition();
+
+                // we do not apply short read protection when we have no limits at all
+                assert !command.limits().isUnlimited();
+
+                // if the returned partition doesn't have enough rows to satisfy even the original limit, don't ask for more
+                if (!singleResultCounter.isDoneForPartition())
+                    return null;
+
+                /*
+                 * If the replica has no live rows in the partition, don't try to fetch more.
+                 *
+                 * Note that the previous branch [if (!singleResultCounter.isDoneForPartition()) return null] doesn't
+                 * always cover this scenario:
+                 * isDoneForPartition() is defined as [isDone() || rowInCurrentPartition >= perPartitionLimit],
+                 * and will return true if isDone() returns true, even if there are 0 rows counted in the current partition.
+                 *
+                 * This can happen with a range read if after 1+ rounds of short read protection requests we managed to fetch
+                 * enough extra rows for other partitions to satisfy the singleResultCounter's total row limit, but only
+                 * have tombstones in the current partition.
+                 *
+                 * One other way we can hit this condition is when the partition only has a live static row and no regular
+                 * rows. In that scenario the counter will remain at 0 until the partition is closed - which happens after
+                 * the moreContents() call.
+                 */
+                if (singleResultCounter.countedInCurrentPartition() == 0)
+                    return null;
+
+                /*
+                 * This is a table with no clustering columns, and has at most one row per partition - with EMPTY clustering.
+                 * We already have the row, so there is no point in asking for more from the partition.
+                 */
+                if (Clustering.EMPTY == lastClustering)
+                    return null;
+
+                lastFetched = singleResultCounter.countedInCurrentPartition() - lastCounted;
+                lastCounted = singleResultCounter.countedInCurrentPartition();
+
+                // getting back fewer rows than we asked for means the partition on the replica has been fully consumed
+                if (lastQueried > 0 && lastFetched < lastQueried)
+                    return null;
+
+                /*
+                 * At this point we know that:
+                 *     1. the replica returned [repeatedly?] as many rows as we asked for and potentially has more
+                 *        rows in the partition
+                 *     2. at least one of those returned rows was shadowed by a tombstone returned from another
+                 *        replica
+                 *     3. we haven't satisfied the client's limits yet, and should attempt to query for more rows to
+                 *        avoid a short read
+                 *
+                 * In the ideal scenario, we would get exactly min(a, b) or fewer rows from the next request, where a and b
+                 * are defined as follows:
+                 *     [a] limits.count() - mergedResultCounter.counted()
+                 *     [b] limits.perPartitionCount() - mergedResultCounter.countedInCurrentPartition()
+                 *
+                 * It would be naive to query for exactly that many rows, as it's possible and not unlikely
+                 * that some of the returned rows would also be shadowed by tombstones from other hosts.
+                 *
+                 * Note: we don't know, nor do we care, how many rows from the replica made it into the reconciled result;
+                 * we can only tell how many in total we queried for, and that [0, mrc.countedInCurrentPartition()) made it.
+                 *
+                 * In general, our goal should be to minimise the number of extra requests - *not* to minimise the number
+                 * of rows fetched: there is a high transactional cost for every individual request, but a relatively low
+                 * marginal cost for each extra row requested.
+                 *
+                 * As such it's better to overfetch than to underfetch extra rows from a host; but at the same
+                 * time we want to respect paging limits and not blow up spectacularly.
+                 *
+                 * Note: it's ok to retrieve more rows that necessary since singleResultCounter is not stopping and only
+                 * counts.
+                 *
+                 * With that in mind, we'll just request the minimum of (count(), perPartitionCount()) limits,
+                 * but no fewer than 8 rows (an arbitrary round lower bound), to ensure that we won't fetch row by row
+                 * for SELECT DISTINCT queries (that set per partition limit to 1).
+                 *
+                 * See CASSANDRA-13794 for more details.
+                 */
+                lastQueried = Math.max(Math.min(command.limits().count(), command.limits().perPartitionCount()), 8);
+
+                ColumnFamilyStore.metricsFor(metadata.cfId).shortReadProtectionRequests.mark();
+                Tracing.trace("Requesting {} extra rows from {} for short read protection", lastQueried, source);
+
+                return executeReadCommand(makeFetchAdditionalRowsReadCommand(lastQueried));
+            }
+
