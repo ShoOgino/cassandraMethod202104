@@ -1,10 +1,13 @@
     @Test
     public void testBeyondThresholdSelect() throws Throwable
     {
-        createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+        String tableName = createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
+        long oldFailures = cfs.metric.tombstoneFailures.getCount();
+        long oldWarnings = cfs.metric.tombstoneWarnings.getCount();
 
         // insert exactly the amount of tombstones that *SHOULD* trigger an exception
-        for (int i = 0; i < THRESHOLD + 1; i++)
+        for (int i = 0; i < FAILURE_THRESHOLD + 1; i++)
             execute("INSERT INTO %s (a, b, c) VALUES ('key', 'column" + i + "', null);");
 
         try
@@ -15,9 +18,11 @@
         catch (Throwable e)
         {
             String error = "Expected exception instanceof TombstoneOverwhelmingException instead got "
-                          + System.lineSeparator()
-                          + Throwables.getStackTraceAsString(e);
+                           + System.lineSeparator()
+                           + Throwables.getStackTraceAsString(e);
             assertTrue(error, e instanceof TombstoneOverwhelmingException);
+            assertEquals(oldWarnings, cfs.metric.tombstoneWarnings.getCount());
+            assertEquals(oldFailures + 1, cfs.metric.tombstoneFailures.getCount());
         }
     }
 

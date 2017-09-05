@@ -1,9 +1,12 @@
     @Test
     public void testLiveShadowedCellsSelect() throws Throwable
     {
-        createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+        String tableName = createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
+        long oldFailures = cfs.metric.tombstoneFailures.getCount();
+        long oldWarnings = cfs.metric.tombstoneWarnings.getCount();
 
-        for (int i = 0; i < THRESHOLD + 1; i++)
+        for (int i = 0; i < FAILURE_THRESHOLD + 1; i++)
             execute("INSERT INTO %s (a, b, c) VALUES ('key', 'column" + i + "', 'column');");
 
         // delete all with a partition level tombstone
@@ -12,6 +15,8 @@
         try
         {
             execute("SELECT * FROM %s WHERE a = 'key';");
+            assertEquals(oldFailures, cfs.metric.tombstoneFailures.getCount());
+            assertEquals(oldWarnings, cfs.metric.tombstoneWarnings.getCount());
         }
         catch (Throwable e)
         {

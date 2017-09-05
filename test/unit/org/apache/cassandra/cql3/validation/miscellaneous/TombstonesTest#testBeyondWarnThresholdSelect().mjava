@@ -1,0 +1,23 @@
+    @Test
+    public void testBeyondWarnThresholdSelect() throws Throwable
+    {
+        String tableName = createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a,b));");
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
+        long oldFailures = cfs.metric.tombstoneFailures.getCount();
+        long oldWarnings = cfs.metric.tombstoneWarnings.getCount();
+
+        // insert the number of tombstones that *SHOULD* trigger an Warning
+        for (int i = 0; i < WARN_THRESHOLD + 1; i++)
+            execute("INSERT INTO %s (a, b, c ) VALUES ('key', 'cc" + i + "',  null);");
+        try
+        {
+            execute("SELECT * FROM %s WHERE a = 'key';");
+            assertEquals(oldWarnings + 1, cfs.metric.tombstoneWarnings.getCount());
+            assertEquals(oldFailures, cfs.metric.tombstoneFailures.getCount());
+        }
+        catch (Throwable e)
+        {
+            fail("SELECT with tombstones below the failure threshold and above warning threashhold should not have failed, but has: " + e);
+        }
+    }
+

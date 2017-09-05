@@ -1,15 +1,21 @@
     @Test
     public void testBelowThresholdSelect() throws Throwable
     {
-        createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+
+        String tableName = createTable("CREATE TABLE %s (a text, b text, c text, PRIMARY KEY (a, b));");
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(tableName);
+        long oldFailures = cfs.metric.tombstoneFailures.getCount();
+        long oldWarnings = cfs.metric.tombstoneWarnings.getCount();
 
         // insert exactly the amount of tombstones that shouldn't trigger an exception
-        for (int i = 0; i < THRESHOLD; i++)
+        for (int i = 0; i < FAILURE_THRESHOLD; i++)
             execute("INSERT INTO %s (a, b, c) VALUES ('key', 'column" + i + "', null);");
 
         try
         {
             execute("SELECT * FROM %s WHERE a = 'key';");
+            assertEquals(oldFailures, cfs.metric.tombstoneFailures.getCount());
+            assertEquals(oldWarnings, cfs.metric.tombstoneWarnings.getCount());
         }
         catch (Throwable e)
         {
