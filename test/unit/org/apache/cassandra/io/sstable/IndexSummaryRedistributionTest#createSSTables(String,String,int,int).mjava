@@ -1,0 +1,36 @@
+    private void createSSTables(String ksname, String cfname, int numSSTables, int numRows)
+    {
+        Keyspace keyspace = Keyspace.open(ksname);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+
+        ArrayList<Future> futures = new ArrayList<>(numSSTables);
+        ByteBuffer value = ByteBuffer.wrap(new byte[100]);
+        for (int sstable = 0; sstable < numSSTables; sstable++)
+        {
+            for (int row = 0; row < numRows; row++)
+            {
+                String key = String.format("%3d", row);
+                new RowUpdateBuilder(cfs.metadata, 0, key)
+                .clustering("column")
+                .add("val", value)
+                .build()
+                .applyUnsafe();
+            }
+            futures.add(cfs.forceFlush());
+        }
+        for (Future future : futures)
+        {
+            try
+            {
+                future.get();
+            }
+            catch (InterruptedException | ExecutionException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+        assertEquals(numSSTables, cfs.getLiveSSTables().size());
+    }
+
