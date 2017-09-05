@@ -1,0 +1,54 @@
+    public void testUpdateWithColumnTimestampBiggerThanPk(boolean flush) throws Throwable
+    {
+        // CASSANDRA-11500 able to shadow old view row with column ts greater tahn pk's ts and re-insert the view row
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, a int, b int);");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE k IS NOT NULL AND a IS NOT NULL PRIMARY KEY (k, a);");
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+        updateView("DELETE FROM %s USING TIMESTAMP 0 WHERE k = 1;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // sstable-1, Set initial values TS=1
+        updateView("INSERT INTO %s(k, a, b) VALUES (1, 1, 1) USING TIMESTAMP 1;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 1, 1));
+        updateView("UPDATE %s USING TIMESTAMP 10 SET b = 2 WHERE k = 1;");
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 1, 2));
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 1, 2));
+        updateView("UPDATE %s USING TIMESTAMP 2 SET a = 2 WHERE k = 1;");
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 2, 2));
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        ks.getColumnFamilyStore("mv").forceMajorCompaction();
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 2, 2));
+        updateView("UPDATE %s USING TIMESTAMP 11 SET a = 1 WHERE k = 1;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 1, 2));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from %s"), row(1, 1, 2));
+
+        // set non-key base column as tombstone, view row is removed with shadowable
+        updateView("UPDATE %s USING TIMESTAMP 12 SET a = null WHERE k = 1;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from %s"), row(1, null, 2));
+
+        // column b should be alive
+        updateView("UPDATE %s USING TIMESTAMP 13 SET a = 1 WHERE k = 1;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv"), row(1, 1, 2));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from %s"), row(1, 1, 2));
+
+        assertInvalidMessage("Cannot drop column a on base table with materialized views", "ALTER TABLE %s DROP a");
+    }
+

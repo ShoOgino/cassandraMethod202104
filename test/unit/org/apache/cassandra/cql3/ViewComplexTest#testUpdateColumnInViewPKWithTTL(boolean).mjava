@@ -1,0 +1,77 @@
+    private void testUpdateColumnInViewPKWithTTL(boolean flush) throws Throwable
+    {
+        // CASSANDRA-13657 if base column used in view pk is ttled, then view row is considered dead
+        createTable("create table %s (k int primary key, a int, b int)");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE k IS NOT NULL AND a IS NOT NULL PRIMARY KEY (a, k)");
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+
+        updateView("UPDATE %s SET a = 1 WHERE k = 1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"), row(1, 1, null));
+        assertRows(execute("SELECT * from mv"), row(1, 1, null));
+
+        updateView("DELETE a FROM %s WHERE k = 1");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"));
+        assertEmpty(execute("SELECT * from mv"));
+
+        updateView("INSERT INTO %s (k) VALUES (1);");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"), row(1, null, null));
+        assertEmpty(execute("SELECT * from mv"));
+
+        updateView("UPDATE %s USING TTL 5 SET a = 10 WHERE k = 1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"), row(1, 10, null));
+        assertRows(execute("SELECT * from mv"), row(10, 1, null));
+
+        updateView("UPDATE %s SET b = 100 WHERE k = 1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"), row(1, 10, 100));
+        assertRows(execute("SELECT * from mv"), row(10, 1, 100));
+
+        Thread.sleep(5000);
+
+        // 'a' is TTL of 5 and removed.
+        assertRows(execute("SELECT * from %s"), row(1, null, 100));
+        assertEmpty(execute("SELECT * from mv"));
+        assertEmpty(execute("SELECT * from mv WHERE k = ? AND a = ?", 1, 10));
+
+        updateView("DELETE b FROM %s WHERE k=1");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT * from %s"), row(1, null, null));
+        assertEmpty(execute("SELECT * from mv"));
+
+        updateView("DELETE FROM %s WHERE k=1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertEmpty(execute("SELECT * from %s"));
+        assertEmpty(execute("SELECT * from mv"));
+    }
+

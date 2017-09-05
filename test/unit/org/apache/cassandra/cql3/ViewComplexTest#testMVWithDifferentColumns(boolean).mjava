@@ -1,0 +1,80 @@
+    private void testMVWithDifferentColumns(boolean flush) throws Throwable
+    {
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, e int, f int, PRIMARY KEY(a, b))");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        List<String> viewNames = new ArrayList<>();
+        List<String> mvStatements = Arrays.asList(
+                                                  // all selected
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a,b)",
+                                                  // unselected e,f
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT c,d FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a,b)",
+                                                  // no selected
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT a,b FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a,b)",
+                                                  // all selected, re-order keys
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (b,a)",
+                                                  // unselected e,f, re-order keys
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT a,b,c,d FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (b,a)",
+                                                  // no selected, re-order keys
+                                                  "CREATE MATERIALIZED VIEW %s AS SELECT a,b FROM %%s WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (b,a)");
+
+        Keyspace ks = Keyspace.open(keyspace());
+
+        for (int i = 0; i < mvStatements.size(); i++)
+        {
+            String name = "mv" + i;
+            viewNames.add(name);
+            createView(name, mvStatements.get(i));
+            ks.getColumnFamilyStore(name).disableAutoCompaction();
+        }
+
+        // insert
+        updateViewWithFlush("INSERT INTO %s (a,b,c,d,e,f) VALUES(1,1,1,1,1,1) using timestamp 1", flush);
+        assertBaseViews(row(1, 1, 1, 1, 1, 1), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 2 SET c=0, d=0 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, 0, 0, 1, 1), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 2 SET e=0, f=0 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, 0, 0, 0, 0), viewNames);
+
+        updateViewWithFlush("DELETE FROM %s using timestamp 2 WHERE a=1 AND b=1", flush);
+        assertBaseViews(null, viewNames);
+
+        // partial update unselected, selected
+        updateViewWithFlush("UPDATE %s using timestamp 3 SET f=1 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, null, null, null, 1), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 4 SET e = 1, f=null WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, null, null, 1, null), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 4 SET e = null WHERE a=1 AND b=1", flush);
+        assertBaseViews(null, viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 5 SET c = 1 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, 1, null, null, null), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 5 SET c = null WHERE a=1 AND b=1", flush);
+        assertBaseViews(null, viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 6 SET d = 1 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, null, 1, null, null), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 7 SET d = null WHERE a=1 AND b=1", flush);
+        assertBaseViews(null, viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 8 SET f = 1 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, null, null, null, 1), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 6 SET c = 1 WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, 1, null, null, 1), viewNames);
+
+        // view row still alive due to c=1@6
+        updateViewWithFlush("UPDATE %s using timestamp 8 SET f = null WHERE a=1 AND b=1", flush);
+        assertBaseViews(row(1, 1, 1, null, null, null), viewNames);
+
+        updateViewWithFlush("UPDATE %s using timestamp 6 SET c = null WHERE a=1 AND b=1", flush);
+        assertBaseViews(null, viewNames);
+    }
+

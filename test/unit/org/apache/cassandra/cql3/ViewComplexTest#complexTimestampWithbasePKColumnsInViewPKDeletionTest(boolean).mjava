@@ -1,0 +1,61 @@
+    private void complexTimestampWithbasePKColumnsInViewPKDeletionTest(boolean flush) throws Throwable
+    {
+        createTable("create table %s (p1 int, p2 int, v1 int, v2 int, primary key(p1, p2))");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv2",
+                   "create materialized view %s as select * from %%s where p1 is not null and p2 is not null primary key (p2, p1);");
+        ks.getColumnFamilyStore("mv2").disableAutoCompaction();
+
+        // Set initial values TS=1
+        updateView("Insert into %s (p1, p2, v1, v2) values (1, 2, 3, 4) using timestamp 1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT v1, v2, WRITETIME(v2) from mv2 WHERE p1 = ? AND p2 = ?", 1, 2),
+                                row(3, 4, 1L));
+        // remove row/mv TS=2
+        updateView("Delete from %s using timestamp 2 where p1 = 1 and p2 = 2;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // view are empty
+        assertRowsIgnoringOrder(execute("SELECT * from mv2"));
+        // insert PK with TS=3
+        updateView("Insert into %s (p1, p2) values (1, 2) using timestamp 3;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // deleted column in MV remained dead
+        assertRowsIgnoringOrder(execute("SELECT * from mv2"), row(2, 1, null, null));
+
+        ks.getColumnFamilyStore("mv2").forceMajorCompaction();
+        assertRowsIgnoringOrder(execute("SELECT * from mv2"), row(2, 1, null, null));
+
+        // reset values
+        updateView("Insert into %s (p1, p2, v1, v2) values (1, 2, 3, 4) using timestamp 10;");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT v1, v2, WRITETIME(v2) from mv2 WHERE p1 = ? AND p2 = ?", 1, 2),
+                                row(3, 4, 10L));
+
+        updateView("UPDATE %s using timestamp 20 SET v2 = 5 WHERE p1 = 1 and p2 = 2");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT v1, v2, WRITETIME(v2) from mv2 WHERE p1 = ? AND p2 = ?", 1, 2),
+                                row(3, 5, 20L));
+
+        updateView("DELETE FROM %s using timestamp 10 WHERE p1 = 1 and p2 = 2");
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT v1, v2, WRITETIME(v2) from mv2 WHERE p1 = ? AND p2 = ?", 1, 2),
+                                row(null, 5, 20L));
+    }
+
