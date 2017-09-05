@@ -1,0 +1,54 @@
+    public void complexTimestampWithbaseNonPKColumnsInViewPKDeletionTest(boolean flush) throws Throwable
+    {
+        createTable("create table %s (p int primary key, v1 int, v2 int)");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv",
+                   "create materialized view %s as select * from %%s where p is not null and v1 is not null primary key (v1, p);");
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+
+        // Set initial values TS=1
+        updateView("Insert into %s (p, v1, v2) values (3, 1, 5) using timestamp 1;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT v2, WRITETIME(v2) from mv WHERE v1 = ? AND p = ?", 1, 3), row(5, 1L));
+        // remove row/mv TS=2
+        updateView("Delete from %s using timestamp 2 where p = 3;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // view are empty
+        assertRowsIgnoringOrder(execute("SELECT * from mv"));
+        // insert PK with TS=3
+        updateView("Insert into %s (p, v1) values (3, 1) using timestamp 3;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // deleted column in MV remained dead
+        assertRowsIgnoringOrder(execute("SELECT * from mv"), row(1, 3, null));
+
+        // insert values TS=2, it should be considered dead due to previous tombstone
+        updateView("Insert into %s (p, v1, v2) values (3, 1, 5) using timestamp 2;");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+        // deleted column in MV remained dead
+        assertRowsIgnoringOrder(execute("SELECT * from mv"), row(1, 3, null));
+
+        // insert values TS=2, it should be considered dead due to previous tombstone
+        executeNet(protocolVersion, "UPDATE %s USING TIMESTAMP 3 SET v2 = ? WHERE p = ?", 4, 3);
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRows(execute("SELECT v1, p, v2, WRITETIME(v2) from mv"), row(1, 3, 4, 3L));
+
+        ks.getColumnFamilyStore("mv").forceMajorCompaction();
+        assertRows(execute("SELECT v1, p, v2, WRITETIME(v2) from mv"), row(1, 3, 4, 3L));
+    }
+

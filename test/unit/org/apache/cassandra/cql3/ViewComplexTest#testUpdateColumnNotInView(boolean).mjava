@@ -1,0 +1,92 @@
+    private void testUpdateColumnNotInView(boolean flush) throws Throwable
+    {
+        // CASSANDRA-13127: if base column not selected in view are alive, then pk of view row should be alive
+        createTable("create table %s (p int, c int, v1 int, v2 int, primary key(p, c))");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW %s AS SELECT p, c FROM %%s WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p);");
+        ks.getColumnFamilyStore("mv").disableAutoCompaction();
+
+        updateView("UPDATE %s USING TIMESTAMP 0 SET v1 = 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0), row(0, 0, 1, null));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        updateView("DELETE v1 FROM %s USING TIMESTAMP 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertEmpty(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0));
+        assertEmpty(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+
+        // shadowed by tombstone
+        updateView("UPDATE %s USING TIMESTAMP 1 SET v1 = 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertEmpty(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0));
+        assertEmpty(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+
+        updateView("UPDATE %s USING TIMESTAMP 2 SET v2 = 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0), row(0, 0, null, 1));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        updateView("DELETE v1 FROM %s USING TIMESTAMP 3 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0), row(0, 0, null, 1));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        updateView("DELETE v2 FROM %s USING TIMESTAMP 4 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertEmpty(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0));
+        assertEmpty(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+
+        updateView("UPDATE %s USING TTL 3 SET v2 = 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0), row(0, 0, null, 1));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(3));
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+
+        updateView("UPDATE %s SET v2 = 1 WHERE p = 0 AND c = 0");
+
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0), row(0, 0, null, 1));
+        assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0), row(0, 0));
+
+        assertInvalidMessage("Cannot drop column v2 on base table with materialized views", "ALTER TABLE %s DROP v2");
+        // // drop unselected base column, unselected metadata should be removed, thus view row is dead
+        // updateView("ALTER TABLE %s DROP v2");
+        // assertRowsIgnoringOrder(execute("SELECT * from %s WHERE c = ? AND p = ?", 0, 0));
+        // assertRowsIgnoringOrder(execute("SELECT * from mv WHERE c = ? AND p = ?", 0, 0));
+        // assertRowsIgnoringOrder(execute("SELECT * from %s"));
+        // assertRowsIgnoringOrder(execute("SELECT * from mv"));
+    }
+

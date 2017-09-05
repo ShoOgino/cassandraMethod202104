@@ -1,0 +1,52 @@
+    private void assertBaseView(UntypedResultSet base, UntypedResultSet view, String mv)
+    {
+        List<ColumnSpecification> baseMeta = base.metadata();
+        List<ColumnSpecification> viewMeta = view.metadata();
+
+        Iterator<UntypedResultSet.Row> iter = base.iterator();
+        Iterator<UntypedResultSet.Row> viewIter = view.iterator();
+
+        List<UntypedResultSet.Row> baseData = com.google.common.collect.Lists.newArrayList(iter);
+        List<UntypedResultSet.Row> viewData = com.google.common.collect.Lists.newArrayList(viewIter);
+
+        if (baseData.size() != viewData.size())
+            fail(String.format("Mismatch number of rows in view %s: <%s>, in base <%s>",
+                               mv,
+                               makeRowStrings(view),
+                               makeRowStrings(base)));
+        if (baseData.size() == 0)
+            return;
+        if (viewData.size() != 1)
+            fail(String.format("Expect only one row in view %s, but got <%s>",
+                               mv,
+                               makeRowStrings(view)));
+
+        UntypedResultSet.Row row = baseData.get(0);
+        UntypedResultSet.Row viewRow = viewData.get(0);
+
+        Map<String, ByteBuffer> baseValues = new HashMap<>();
+        for (int j = 0; j < baseMeta.size(); j++)
+        {
+            ColumnSpecification column = baseMeta.get(j);
+            ByteBuffer actualValue = row.getBytes(column.name.toString());
+            baseValues.put(column.name.toString(), actualValue);
+        }
+        for (int j = 0; j < viewMeta.size(); j++)
+        {
+            ColumnSpecification column = viewMeta.get(j);
+            String name = column.name.toString();
+            ByteBuffer viewValue = viewRow.getBytes(name);
+            if (!baseValues.containsKey(name))
+            {
+                fail(String.format("Extra column: %s with value %s in view", name, column.type.compose(viewValue)));
+            }
+            else if (!Objects.equal(baseValues.get(name), viewValue))
+            {
+                fail(String.format("Non equal column: %s, expected <%s> but got <%s>",
+                                   name,
+                                   column.type.compose(baseValues.get(name)),
+                                   column.type.compose(viewValue)));
+            }
+        }
+    }
+
