@@ -10,21 +10,29 @@
     {
         if (keysWritten == nextSamplePosition)
         {
-            assert entries.length() <= Integer.MAX_VALUE;
-            offsets.writeInt((int) entries.length());
-            entries.write(decoratedKey.getKey());
-            entries.writeLong(indexStart);
-            setNextSamplePosition(keysWritten);
+            if ((entries.length() + getEntrySize(decoratedKey)) <= Integer.MAX_VALUE)
+            {
+                offsets.writeInt((int) entries.length());
+                entries.write(decoratedKey.getKey());
+                entries.writeLong(indexStart);
+                setNextSamplePosition(keysWritten);
+            }
+            else
+            {
+                // we cannot fully sample this sstable due to too much memory in the index summary, so let's tell the user
+                logger.error("Memory capacity of index summary exceeded (2GB), index summary will not cover full sstable, " +
+                             "you should increase min_sampling_level");
+            }
         }
         else if (dataEnd != 0 && keysWritten + 1 == nextSamplePosition)
         {
             // this is the last key in this summary interval, so stash it
-            ReadableBoundary boundary = new ReadableBoundary(decoratedKey, indexEnd, dataEnd, (int)(offsets.length() / 4), entries.length());
+            ReadableBoundary boundary = new ReadableBoundary(decoratedKey, indexEnd, dataEnd, (int) (offsets.length() / 4), entries.length());
             lastReadableByData.put(dataEnd, boundary);
             lastReadableByIndex.put(indexEnd, boundary);
         }
-        keysWritten++;
 
+        keysWritten++;
         return this;
     }
 
