@@ -4,7 +4,34 @@
         PrepareCallback callback = new PrepareCallback(toPrepare.update.partitionKey(), toPrepare.update.metadata(), requiredParticipants, consistencyForPaxos, queryStartNanoTime);
         MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_PREPARE, toPrepare, Commit.serializer);
         for (InetAddress target : endpoints)
-            MessagingService.instance().sendRR(message, target, callback);
+        {
+            if (canDoLocalRequest(target))
+            {
+                StageManager.getStage(MessagingService.verbStages.get(MessagingService.Verb.PAXOS_PREPARE)).execute(new Runnable()
+                {
+                    public void run()
+                    {
+                        try
+                        {
+                            MessageIn<PrepareResponse> message = MessageIn.create(FBUtilities.getBroadcastAddress(),
+                                    PrepareVerbHandler.doPrepare(toPrepare),
+                                    Collections.<String, byte[]>emptyMap(),
+                                    MessagingService.Verb.INTERNAL_RESPONSE,
+                                    MessagingService.current_version);
+                            callback.response(message);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.error("Failed paxos prepare locally : {}", ex);
+                        }
+                    }
+                });
+            }
+            else
+            {
+                MessagingService.instance().sendRR(message, target, callback);
+            }
+        }
         callback.await();
         return callback;
     }
