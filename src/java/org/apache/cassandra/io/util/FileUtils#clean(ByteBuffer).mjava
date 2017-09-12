@@ -1,12 +1,28 @@
     public static void clean(ByteBuffer buffer)
     {
-        if (buffer == null)
+        if (buffer == null || !buffer.isDirect())
             return;
-        if (isCleanerAvailable && buffer.isDirect())
+
+        // TODO Once we can get rid of Java 8, it's simpler to call sun.misc.Unsafe.invokeCleaner(ByteBuffer),
+        // but need to take care of the attachment handling (i.e. whether 'buf' is a duplicate or slice) - that
+        // is different in sun.misc.Unsafe.invokeCleaner and this implementation.
+
+        try
         {
-            DirectBuffer db = (DirectBuffer) buffer;
-            if (db.cleaner() != null)
-                db.cleaner().clean();
+            Object cleaner = mhDirectBufferCleaner.bindTo(buffer).invoke();
+            if (cleaner != null)
+            {
+                // ((DirectBuffer) buf).cleaner().clean();
+                mhCleanerClean.bindTo(cleaner).invoke();
+            }
+        }
+        catch (RuntimeException e)
+        {
+            throw e;
+        }
+        catch (Throwable e)
+        {
+            throw new RuntimeException(e);
         }
     }
 
