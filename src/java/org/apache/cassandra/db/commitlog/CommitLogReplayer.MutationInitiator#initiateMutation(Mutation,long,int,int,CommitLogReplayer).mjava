@@ -20,7 +20,7 @@
                     //    b) have already been flushed,
                     // or c) are part of a cf that was dropped.
                     // Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
-                    Mutation newMutation = null;
+                    Mutation.PartitionUpdateCollector newPUCollector = null;
                     for (PartitionUpdate update : commitLogReplayer.replayFilter.filter(mutation))
                     {
                         if (Schema.instance.getTableMetadata(update.metadata().id) == null)
@@ -30,17 +30,17 @@
                         // if it is the last known segment, if we are after the commit log segment position
                         if (commitLogReplayer.shouldReplay(update.metadata().id, new CommitLogPosition(segmentId, entryLocation)))
                         {
-                            if (newMutation == null)
-                                newMutation = new Mutation(mutation.getKeyspaceName(), mutation.key());
-                            newMutation.add(update);
+                            if (newPUCollector == null)
+                                newPUCollector = new Mutation.PartitionUpdateCollector(mutation.getKeyspaceName(), mutation.key());
+                            newPUCollector.add(update);
                             commitLogReplayer.replayedCount.incrementAndGet();
                         }
                     }
-                    if (newMutation != null)
+                    if (newPUCollector != null)
                     {
-                        assert !newMutation.isEmpty();
+                        assert !newPUCollector.isEmpty();
 
-                        Keyspace.open(newMutation.getKeyspaceName()).apply(newMutation, false, true, false);
+                        Keyspace.open(newPUCollector.getKeyspaceName()).apply(newPUCollector.build(), false, true, false);
                         commitLogReplayer.keyspacesReplayed.add(keyspace);
                     }
                 }

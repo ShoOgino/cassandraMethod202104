@@ -1,0 +1,21 @@
+    private static void convertSchemaToMutations(Map<DecoratedKey, Mutation.PartitionUpdateCollector> mutationMap, String schemaTableName)
+    {
+        ReadCommand cmd = getReadCommandForTableSchema(schemaTableName);
+        try (ReadExecutionController executionController = cmd.executionController();
+             UnfilteredPartitionIterator iter = cmd.executeLocally(executionController))
+        {
+            while (iter.hasNext())
+            {
+                try (UnfilteredRowIterator partition = iter.next())
+                {
+                    if (isSystemKeyspaceSchemaPartition(partition.partitionKey()))
+                        continue;
+
+                    DecoratedKey key = partition.partitionKey();
+                    Mutation.PartitionUpdateCollector puCollector = mutationMap.computeIfAbsent(key, k -> new Mutation.PartitionUpdateCollector(SchemaConstants.SCHEMA_KEYSPACE_NAME, key));
+                    puCollector.add(makeUpdateForSchema(partition, cmd.columnFilter()));
+                }
+            }
+        }
+    }
+
