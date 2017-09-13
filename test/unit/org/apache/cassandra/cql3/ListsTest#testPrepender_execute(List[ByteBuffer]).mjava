@@ -1,0 +1,35 @@
+    private void testPrepender_execute(List<ByteBuffer> terms)
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, l list<text>)");
+        CFMetaData metaData = currentTableMetadata();
+
+        ColumnDefinition columnDefinition = metaData.getColumnDefinition(ByteBufferUtil.bytes("l"));
+        Term term = new Lists.Value(terms);
+        Lists.Prepender prepender = new Lists.Prepender(columnDefinition, term);
+
+        ByteBuffer keyBuf = ByteBufferUtil.bytes("key");
+        DecoratedKey key = Murmur3Partitioner.instance.decorateKey(keyBuf);
+        UpdateParameters parameters = new UpdateParameters(metaData, null, null, System.currentTimeMillis(), 1000, Collections.emptyMap());
+        Clustering clustering = new Clustering(ByteBufferUtil.bytes(1));
+        parameters.newRow(clustering);
+        prepender.execute(key, parameters);
+
+        Row row = parameters.buildRow();
+        Assert.assertEquals(terms.size(), Iterators.size(row.cells().iterator()));
+
+        int idx = 0;
+        UUID last = null;
+        for (Cell cell : row.cells())
+        {
+            UUID uuid = UUIDGen.getUUID(cell.path().get(0));
+
+            if (last != null)
+                Assert.assertTrue(last.compareTo(uuid) < 0);
+            last = uuid;
+
+            Assert.assertEquals(String.format("different values found: expected: '%d', found '%d'", ByteBufferUtil.toInt(terms.get(idx)), ByteBufferUtil.toInt(cell.value())),
+                                terms.get(idx), cell.value());
+            idx++;
+        }
+    }
+
