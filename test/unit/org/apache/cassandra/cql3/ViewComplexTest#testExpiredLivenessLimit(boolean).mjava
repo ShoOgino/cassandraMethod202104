@@ -1,0 +1,45 @@
+    private void testExpiredLivenessLimit(boolean flush) throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, a int, b int);");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+        Keyspace ks = Keyspace.open(keyspace());
+
+        createView("mv1", "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE k IS NOT NULL AND a IS NOT NULL PRIMARY KEY (k, a);");
+        createView("mv2", "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %%s WHERE k IS NOT NULL AND a IS NOT NULL PRIMARY KEY (a, k);");
+        ks.getColumnFamilyStore("mv1").disableAutoCompaction();
+        ks.getColumnFamilyStore("mv2").disableAutoCompaction();
+
+        for (int i = 1; i <= 100; i++)
+            updateView("INSERT INTO %s(k, a, b) VALUES (?, ?, ?);", i, i, i);
+        for (int i = 1; i <= 100; i++)
+        {
+            if (i % 50 == 0)
+                continue;
+            // create expired liveness
+            updateView("DELETE a FROM %s WHERE k = ?;", i);
+        }
+        if (flush)
+        {
+            ks.getColumnFamilyStore("mv1").forceBlockingFlush();
+            ks.getColumnFamilyStore("mv2").forceBlockingFlush();
+        }
+
+        for (String view : Arrays.asList("mv1", "mv2"))
+        {
+            // paging
+            assertEquals(1, executeNetWithPaging(String.format("SELECT k,a,b FROM %s limit 1", view), 1).all().size());
+            assertEquals(2, executeNetWithPaging(String.format("SELECT k,a,b FROM %s limit 2", view), 1).all().size());
+            assertEquals(2, executeNetWithPaging(String.format("SELECT k,a,b FROM %s", view), 1).all().size());
+            assertRowsNet(executeNetWithPaging(String.format("SELECT k,a,b FROM %s ", view), 1),
+                          row(50, 50, 50),
+                          row(100, 100, 100));
+            // limit
+            assertEquals(1, execute(String.format("SELECT k,a,b FROM %s limit 1", view)).size());
+            assertRowsIgnoringOrder(execute(String.format("SELECT k,a,b FROM %s limit 2", view)),
+                                    row(50, 50, 50),
+                                    row(100, 100, 100));
+        }
+    }
+
