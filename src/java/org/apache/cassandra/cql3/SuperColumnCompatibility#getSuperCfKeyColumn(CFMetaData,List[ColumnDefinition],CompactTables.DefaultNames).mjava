@@ -1,0 +1,24 @@
+    /**
+     * Find a SuperColumn key column if it's available (for example, when it was renamed) or create one with a default name.
+     */
+    public static ColumnDefinition getSuperCfKeyColumn(CFMetaData cfm, List<ColumnDefinition> clusteringColumns, CompactTables.DefaultNames defaultNames)
+    {
+        assert cfm.isDense();
+
+        MapType mapType = (MapType) cfm.compactValueColumn().type;
+        // Pre CASSANDRA-12373 3.x-created supercolumn family
+        if (clusteringColumns.size() == 1)
+        {
+            // create a new one with a default name
+            ColumnIdentifier identifier = ColumnIdentifier.getInterned(defaultNames.defaultClusteringName(), true);
+            return new ColumnDefinition(cfm.ksName, cfm.cfName, identifier, mapType.getKeysType(), ColumnDefinition.NO_POSITION, ColumnDefinition.Kind.REGULAR);
+        }
+
+        // Upgrade path: table created in 2.x, handle pre-created columns and/or renames.
+        assert clusteringColumns.size() == 2 : clusteringColumns;
+        ColumnDefinition cd = clusteringColumns.get(1);
+
+        assert cd.type.equals(mapType.getKeysType()) : cd.type + " != " + mapType.getKeysType();
+        return new ColumnDefinition(cfm.ksName, cfm.cfName, cd.name, mapType.getKeysType(), ColumnDefinition.NO_POSITION, ColumnDefinition.Kind.REGULAR);
+    }
+

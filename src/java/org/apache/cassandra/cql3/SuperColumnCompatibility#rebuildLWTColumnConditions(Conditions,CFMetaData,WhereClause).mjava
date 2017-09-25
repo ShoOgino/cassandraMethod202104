@@ -1,0 +1,37 @@
+    /**
+     * Rebuilds LWT conditions on SuperColumn _value_ column.
+     *
+     * Conditions have to be changed to correspond the internal representation of SuperColumn value, since it's not
+     * a separate column, but a value in a hidden compact value column.
+     */
+    public static Conditions rebuildLWTColumnConditions(Conditions conditions, CFMetaData cfm, WhereClause whereClause)
+    {
+        if (conditions.isEmpty() || conditions.isIfExists() || conditions.isIfNotExists())
+            return conditions;
+
+        ColumnConditions.Builder builder = ColumnConditions.newBuilder();
+        Collection<ColumnCondition> columnConditions = ((ColumnConditions) conditions).columnConditions();
+
+        Pair<ColumnDefinition, Relation> superColumnKeyRelation = SuperColumnCompatibility.getSuperColumnKeyRelation(whereClause.relations, cfm);
+
+        checkNotNull(superColumnKeyRelation,
+                     "Lightweight transactions on SuperColumn tables are only supported with supplied SuperColumn key");
+
+        for (ColumnCondition columnCondition : columnConditions)
+        {
+            checkTrue(cfm.isSuperColumnValueColumn(columnCondition.column),
+                      "Lightweight transactions are only supported on the value column of SuperColumn tables");
+
+            Term.Raw value = superColumnKeyRelation.right.getValue();
+            Term collectionElemnt = value instanceof AbstractMarker.Raw ?
+                                    new Constants.Marker(((AbstractMarker.Raw) value).bindIndex(),
+                                                         superColumnKeyRelation.left) :
+                                    value.prepare(cfm.ksName, superColumnKeyRelation.left);
+            builder.add(ColumnCondition.condition(cfm.compactValueColumn(),
+                                                  collectionElemnt,
+                                                  columnCondition.value(), columnCondition.operator));
+        }
+
+        return builder.build();
+    }
+

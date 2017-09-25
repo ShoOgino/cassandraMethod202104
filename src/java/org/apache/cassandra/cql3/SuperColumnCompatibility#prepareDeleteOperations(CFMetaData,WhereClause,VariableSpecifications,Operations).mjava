@@ -1,0 +1,52 @@
+    /**
+     * For _dense_ SuperColumn Families.
+     *
+     * Delete, when the "regular" columns are present, have to be translated into
+     * deletion of value in the internal map by key.
+     *
+     * For example, delete such as:
+     *
+     *     DELETE FROM ... WHERE key = 'pk' AND column1 = 'ck' AND column2 = 'mk'
+     *
+     * Will delete a value under 'mk' from the map, located in the row with clustering key 'ck' in the partition
+     * with key 'pk'.
+     */
+    public static WhereClause prepareDeleteOperations(CFMetaData cfm,
+                                                      WhereClause whereClause,
+                                                      VariableSpecifications boundNames,
+                                                      Operations operations)
+    {
+        assert cfm.isDense();
+        List<Relation> newRelations = new ArrayList<>(whereClause.relations.size());
+
+        for (int i = 0; i < whereClause.relations.size(); i++)
+        {
+            Relation orig = whereClause.relations.get(i);
+
+            checkFalse(orig.isMultiColumn(),
+                       "Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", orig);
+            checkFalse(orig.onToken(),
+                       "Token relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", orig);
+
+            SingleColumnRelation relation = (SingleColumnRelation) orig;
+            ColumnDefinition def = relation.getEntity().prepare(cfm);
+
+            if (cfm.isSuperColumnKeyColumn(def))
+            {
+                Term.Raw value = relation.getValue();
+
+                if (value instanceof AbstractMarker.Raw)
+                    boundNames.add(((AbstractMarker.Raw) value).bindIndex(), def);
+
+                Operation operation = new Maps.DiscarderByKey(cfm.compactValueColumn(), value.prepare(cfm.ksName, def));
+                operations.add(operation);
+            }
+            else
+            {
+                newRelations.add(relation);
+            }
+        }
+
+        return newRelations.size() != whereClause.relations.size() ? whereClause.copy(newRelations) : whereClause;
+    }
+

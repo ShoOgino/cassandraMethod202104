@@ -1,0 +1,88 @@
+    /**
+     * For _dense_ SuperColumn Families.
+     *
+     * During UPDATE operation, the update by clustering (with correponding relation in WHERE clause)
+     * has to be substituted with an update to the map that backs the given SuperColumn.
+     *
+     * For example, an update such as:
+     *
+     *     UPDATE ... SET value = 'value1' WHERE key = 'pk' AND column1 = 'ck' AND column2 = 'mk'
+     *
+     * Will update the value under key 'mk' in the map, backing the SuperColumn, located in the row
+     * with clustering 'ck' in the partition with key 'pk'.
+     */
+    public static WhereClause prepareUpdateOperations(CFMetaData cfm,
+                                                      WhereClause whereClause,
+                                                      List<Pair<ColumnDefinition.Raw, Operation.RawUpdate>> updates,
+                                                      VariableSpecifications boundNames,
+                                                      Operations operations)
+    {
+        assert cfm.isDense();
+        Term.Raw superColumnKey = null;
+        Term.Raw superColumnValue = null;
+
+        List<Relation> newRelations = new ArrayList<>(whereClause.relations.size());
+        for (int i = 0; i < whereClause.relations.size(); i++)
+        {
+            SingleColumnRelation relation = (SingleColumnRelation) whereClause.relations.get(i);
+            ColumnDefinition def = relation.getEntity().prepare(cfm);
+
+            if (cfm.isSuperColumnKeyColumn(def))
+            {
+                superColumnKey = relation.getValue();
+                collectMarkerSpecifications(superColumnKey, boundNames, def);
+            }
+            else
+            {
+                newRelations.add(relation);
+            }
+        }
+
+        checkTrue(superColumnKey != null,
+                  "Column key is mandatory for SuperColumn tables");
+
+        for (Pair<ColumnDefinition.Raw, Operation.RawUpdate> entry : updates)
+        {
+            ColumnDefinition def = entry.left.prepare(cfm);
+
+            if (!cfm.isSuperColumnValueColumn(def))
+                throw invalidRequest("Column `%s` of type `%s` found in SET part", def.name, def.type.asCQL3Type());
+
+            Operation operation;
+
+            if (entry.right instanceof Operation.Addition)
+            {
+                Operation.Addition op = (Operation.Addition) entry.right;
+                superColumnValue = op.value();
+
+                operation = new Operation.ElementAddition(superColumnKey, superColumnValue).prepare(cfm, cfm.compactValueColumn());
+            }
+            else if (entry.right instanceof Operation.Substraction)
+            {
+                Operation.Substraction op = (Operation.Substraction) entry.right;
+                superColumnValue = op.value();
+
+                operation = new Operation.ElementSubtraction(superColumnKey, superColumnValue).prepare(cfm, cfm.compactValueColumn());
+            }
+            else if (entry.right instanceof Operation.SetValue)
+            {
+                Operation.SetValue op = (Operation.SetValue) entry.right;
+                superColumnValue = op.value();
+
+                operation = new Operation.SetElement(superColumnKey, superColumnValue).prepare(cfm, cfm.compactValueColumn());
+            }
+            else
+            {
+                throw invalidRequest("Invalid operation `%s` on column `%s` of type `%s` found in SET part", entry.right, def.name, def.type.asCQL3Type());
+            }
+
+            collectMarkerSpecifications(superColumnValue, boundNames, def);
+            operations.add(operation);
+        }
+
+        checkTrue(superColumnValue != null,
+                  "Column value is mandatory for SuperColumn tables");
+
+        return newRelations.size() != whereClause.relations.size() ? whereClause.copy(newRelations) : whereClause;
+    }
+

@@ -1,0 +1,103 @@
+    /**
+     * For _dense_ SuperColumn Families.
+     *
+     * On read path, instead of writing row per map, we have to write a row per key/value pair in map.
+     *
+     * For example:
+     *
+     *   | partition-key | clustering-key | { key1: value1, key2: value2 } |
+     *
+     * Will be translated to:
+     *
+     *   | partition-key | clustering-key | key1 | value1 |
+     *   | partition-key | clustering-key | key2 | value2 |
+     *
+     */
+    public static void processPartition(CFMetaData cfm, Selection selection, RowIterator partition, Selection.ResultSetBuilder result, ProtocolVersion protocolVersion,
+                                        SuperColumnRestrictions restrictions, QueryOptions queryOptions)
+    {
+        assert cfm.isDense();
+        ByteBuffer[] keyComponents = getComponents(cfm, partition.partitionKey());
+
+        int nowInSeconds = FBUtilities.nowInSeconds();
+        while (partition.hasNext())
+        {
+            Row row = partition.next();
+
+            ComplexColumnData ccd = row.getComplexColumnData(cfm.compactValueColumn());
+
+            if (ccd == null)
+                continue;
+
+            Iterator<Cell> cellIter = ccd.iterator();
+
+            outer:
+            while (cellIter.hasNext())
+            {
+                Cell cell = cellIter.next();
+                ByteBuffer superColumnKey = cell.path().get(0);
+
+                if (restrictions != null)
+                {
+                    // Slice on SuperColumn key
+                    if (restrictions.keySliceRestriction != null)
+                    {
+                        for (Bound bound : Bound.values())
+                        {
+                            if (restrictions.keySliceRestriction.hasBound(bound) &&
+                                !restrictions.keySliceRestriction.isInclusive(bound))
+                            {
+                                ByteBuffer excludedValue = restrictions.keySliceRestriction.bindValue(queryOptions);
+                                if (excludedValue.equals(superColumnKey))
+                                    continue outer;
+                            }
+                        }
+                    }
+
+                    // Multi-column restriction on clustering+SuperColumn key
+                    if (restrictions.multiSliceRestriction != null &&
+                        cfm.comparator.compare(row.clustering(), Clustering.make(restrictions.multiSliceRestriction.firstValue)) == 0)
+                    {
+                        AbstractType t = ((MapType) cfm.compactValueColumn().type).getKeysType();
+                        int cmp = t.compare(superColumnKey, restrictions.multiSliceRestriction.secondValue);
+
+                        if ((cmp == 0 && !restrictions.multiSliceRestriction.trueInclusive) ||     // EQ
+                            (restrictions.multiSliceRestriction.hasBound(Bound.END) && cmp > 0) || // LT
+                            (restrictions.multiSliceRestriction.hasBound(Bound.START) && cmp < 0)) // GT
+                            continue outer;
+                    }
+                }
+
+                Row staticRow = partition.staticRow();
+                result.newRow(partition.partitionKey(), staticRow.clustering());
+
+                for (ColumnDefinition def : selection.getColumns())
+                {
+                    if (cfm.isSuperColumnKeyColumn(def))
+                    {
+                        result.add(superColumnKey);
+                    }
+                    else if (cfm.isSuperColumnValueColumn(def))
+                    {
+                        result.add(cell, nowInSeconds);
+                    }
+                    else
+                    {
+                        switch (def.kind)
+                        {
+                            case PARTITION_KEY:
+                                result.add(keyComponents[def.position()]);
+                                break;
+                            case CLUSTERING:
+                                result.add(row.clustering().get(def.position()));
+                                break;
+                            case REGULAR:
+                            case STATIC:
+                                throw new AssertionError(String.format("Invalid column '%s' found in SuperColumn table", def.name.toString()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+

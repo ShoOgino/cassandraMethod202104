@@ -1,0 +1,34 @@
+    @Test
+    public void testCounterTableThriftUpdates() throws Throwable
+    {
+        populateCounterTable();
+
+        Cassandra.Client client = getClient();
+        Mutation mutation = new Mutation();
+        ColumnOrSuperColumn csoc = new ColumnOrSuperColumn();
+        csoc.setCounter_super_column(new CounterSuperColumn(ByteBufferUtil.bytes("ck1"),
+                                                            Arrays.asList(new CounterColumn(ByteBufferUtil.bytes("counter1"), 1))));
+        mutation.setColumn_or_supercolumn(csoc);
+
+        Mutation mutation2 = new Mutation();
+        ColumnOrSuperColumn csoc2 = new ColumnOrSuperColumn();
+        csoc2.setCounter_super_column(new CounterSuperColumn(ByteBufferUtil.bytes("ck1"),
+                                                             Arrays.asList(new CounterColumn(ByteBufferUtil.bytes("counter1"), 100))));
+        mutation2.setColumn_or_supercolumn(csoc2);
+        client.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes("key1"),
+                                                     Collections.singletonMap(currentCounterTable(), Arrays.asList(mutation))),
+                            ONE);
+        client.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes("key2"),
+                                                     Collections.singletonMap(currentCounterTable(), Arrays.asList(mutation2))),
+                            ONE);
+
+        beforeAndAfterFlush(() -> {
+            UntypedResultSet resultSet = execute(String.format("select * from %s.%s", KEYSPACE, currentCounterTable()));
+            assertRows(resultSet,
+                       row("key1", "ck1", "counter1", 11L),
+                       row("key1", "ck1", "counter2", 5L),
+                       row("key2", "ck1", "counter1", 110L),
+                       row("key2", "ck1", "counter2", 5L));
+        });
+    }
+

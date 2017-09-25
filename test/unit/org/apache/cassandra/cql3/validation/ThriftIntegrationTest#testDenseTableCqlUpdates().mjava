@@ -1,0 +1,38 @@
+    @Test
+    public void testDenseTableCqlUpdates() throws Throwable
+    {
+        assertInvalidMessage("Column key is mandatory for SuperColumn tables",
+                             String.format("UPDATE %s.%s SET column2 = 1, value = 'value1' WHERE key = 'key1' AND column1 = 'val1'", KEYSPACE, currentDenseTable()));
+        assertInvalidMessage("Column `column2` of type `int` found in SET part",
+                             String.format("UPDATE %s.%s SET column2 = 1, value = 'value1' WHERE key = 'key1' AND column1 = 'val1' AND column2 = 1", KEYSPACE, currentDenseTable()));
+        assertInvalidMessage("Some clustering keys are missing: column1",
+                             String.format("UPDATE %s.%s SET value = 'value1' WHERE key = 'key1' AND column2 = 1", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("UPDATE %s.%s SET value = 'value1' WHERE key = 'key1' AND column1 = 'val1' AND column2 = 1", KEYSPACE, currentDenseTable()));
+        execute(String.format("UPDATE %s.%s SET value = 'value2' WHERE key = 'key1' AND column1 = 'val1' AND column2 = 2", KEYSPACE, currentDenseTable()));
+
+        execute(String.format("UPDATE %s.%s SET value = ? WHERE key = ? AND column1 = ? AND column2 = ?", KEYSPACE, currentDenseTable()),
+                "value1", "key2", "val2", 1);
+        execute(String.format("UPDATE %s.%s SET value = 'value2' WHERE key = 'key2' AND column1 = ? AND column2 = ?", KEYSPACE, currentDenseTable()),
+                "val2", 2);
+
+        Cassandra.Client client = getClient();
+        ColumnPath path = new ColumnPath(currentDenseTable());
+        path.setSuper_column(ByteBufferUtil.bytes("val1"));
+
+        ColumnOrSuperColumn cosc = client.get(ByteBufferUtil.bytes("key1"), path, ONE);
+        assertEquals(cosc.getSuper_column().columns.get(0).name, ByteBufferUtil.bytes(1));
+        assertEquals(cosc.getSuper_column().columns.get(0).value, ByteBufferUtil.bytes("value1"));
+        assertEquals(cosc.getSuper_column().columns.get(1).name, ByteBufferUtil.bytes(2));
+        assertEquals(cosc.getSuper_column().columns.get(1).value, ByteBufferUtil.bytes("value2"));
+
+        path = new ColumnPath(currentDenseTable());
+        path.setSuper_column(ByteBufferUtil.bytes("val2"));
+
+        cosc = client.get(ByteBufferUtil.bytes("key2"), path, ONE);
+        assertEquals(cosc.getSuper_column().columns.get(0).name, ByteBufferUtil.bytes(1));
+        assertEquals(cosc.getSuper_column().columns.get(0).value, ByteBufferUtil.bytes("value1"));
+        assertEquals(cosc.getSuper_column().columns.get(1).name, ByteBufferUtil.bytes(2));
+        assertEquals(cosc.getSuper_column().columns.get(1).value, ByteBufferUtil.bytes("value2"));
+    }
+
