@@ -1,0 +1,34 @@
+    /**
+     * Digests the partition represented by the provided iterator.
+     *
+     * @param iterator the iterator to digest.
+     * @param hasher the {@link Hasher} to use for the digest.
+     * @param version the messaging protocol to use when producing the digest.
+     */
+    public static void digest(UnfilteredRowIterator iterator, Hasher hasher, int version)
+    {
+        HashingUtils.updateBytes(hasher, iterator.partitionKey().getKey().duplicate());
+        iterator.partitionLevelDeletion().digest(hasher);
+        iterator.columns().regulars.digest(hasher);
+        // When serializing an iterator, we skip the static columns if the iterator has not static row, even if the
+        // columns() object itself has some (the columns() is a superset of what the iterator actually contains, and
+        // will correspond to the queried columns pre-serialization). So we must avoid taking the satic column names
+        // into account if there is no static row or we'd have a digest mismatch between depending on whether the digest
+        // is computed on an iterator that has been serialized or not (see CASSANDRA-12090)
+        // TODO: in practice we could completely skip digesting the columns since they are more informative of what the
+        // iterator may contain, and digesting the actual content is enough. And in fact, that would be more correct
+        // (since again, the columns could be different without the information represented by the iterator being
+        // different), but removing them entirely is stricly speaking a breaking change (it would create mismatches on
+        // upgrade) so we can only do on the next protocol version bump.
+        if (iterator.staticRow() != Rows.EMPTY_STATIC_ROW)
+            iterator.columns().statics.digest(hasher);
+        HashingUtils.updateWithBoolean(hasher, iterator.isReverseOrder());
+        iterator.staticRow().digest(hasher);
+
+        while (iterator.hasNext())
+        {
+            Unfiltered unfiltered = iterator.next();
+            unfiltered.digest(hasher);
+        }
+    }
+
