@@ -1,0 +1,32 @@
+    @Test
+    public void thriftCompatTableTest() throws Throwable
+    {
+        String KEYSPACE = keyspace();
+        String TABLE = createTable("CREATE TABLE %s (pkey ascii, ckey ascii, PRIMARY KEY (pkey, ckey)) WITH COMPACT STORAGE");
+
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckeyValue1"), ByteBufferUtil.EMPTY_BYTE_BUFFER),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckeyValue2"), ByteBufferUtil.EMPTY_BYTE_BUFFER),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+        assertColumnType(AsciiType.instance, resultSet, "pkey");
+        assertColumnType(AsciiType.instance, resultSet, "ckey");
+        assertColumnType(EmptyType.instance, resultSet, "value");
+
+        // Value is always empty
+        assertRows(resultSet,
+                   row("key1", "ckeyValue1", ByteBufferUtil.EMPTY_BYTE_BUFFER),
+                   row("key1", "ckeyValue2", ByteBufferUtil.EMPTY_BYTE_BUFFER));
+    }
+

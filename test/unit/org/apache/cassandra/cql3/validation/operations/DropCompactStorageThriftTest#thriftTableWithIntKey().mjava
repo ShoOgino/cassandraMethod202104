@@ -1,0 +1,46 @@
+    @Test
+    public void thriftTableWithIntKey() throws Throwable
+    {
+        final String KEYSPACE = "thrift_table_with_int_key_ks";
+        final String TABLE = "test_table_1";
+
+        ByteBuffer columnName = ByteBufferUtil.bytes("columnname");
+        CfDef cfDef = new CfDef().setDefault_validation_class(UTF8Type.instance.toString())
+                                 .setKey_validation_class(BytesType.instance.toString())
+                                 .setComparator_type(BytesType.instance.toString())
+                                 .setColumn_metadata(Arrays.asList(new ColumnDef(columnName,
+                                                                                 Int32Type.instance.toString())
+                                                                   .setIndex_name("col1Index")
+                                                                   .setIndex_type(IndexType.KEYS)))
+                                 .setKeyspace(KEYSPACE)
+                                 .setName(TABLE);
+
+        KsDef ksDef = new KsDef(KEYSPACE,
+                                SimpleStrategy.class.getName(),
+                                Arrays.asList(cfDef));
+        ksDef.setStrategy_options(Collections.singletonMap("replication_factor", "1"));
+
+        Cassandra.Client client = getClient();
+        client.system_add_keyspace(ksDef);
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(columnName, ByteBufferUtil.bytes(100)),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+
+        assertEquals(resultSet.metadata()
+                              .stream()
+                              .filter((cs) -> cs.name.toString().equals(BytesType.instance.getString(columnName)))
+                              .findFirst()
+                              .get().type,
+                     Int32Type.instance);
+
+        assertRows(resultSet,
+                   row(UTF8Type.instance.decompose("key1"), null, 100, null));
+    }
+

@@ -1,0 +1,44 @@
+    @Test
+    public void compactTableWithoutClusteringKeyTest() throws Throwable
+    {
+        String KEYSPACE = keyspace();
+        String TABLE = createTable("CREATE TABLE %s (pkey text PRIMARY KEY, s1 text, s2 text) WITH COMPACT STORAGE");
+
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey1"), ByteBufferUtil.bytes("val1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey2"), ByteBufferUtil.bytes("val2")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("s1"), ByteBufferUtil.bytes("s1Val")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("s2"), ByteBufferUtil.bytes("s2Val")),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+
+        assertColumnType(UTF8Type.instance, resultSet, "pkey");
+        assertColumnType(UTF8Type.instance, resultSet, "s1");
+        assertColumnType(UTF8Type.instance, resultSet, "s2");
+        assertColumnType(UTF8Type.instance, resultSet, "column1");
+        assertColumnType(BytesType.instance, resultSet, "value");
+
+        assertRows(resultSet,
+                   row("key1", "ckey1", "s1Val", "s2Val", ByteBufferUtil.bytes("val1")),
+                   row("key1", "ckey2", "s1Val", "s2Val", ByteBufferUtil.bytes("val2")));
+    }
+
