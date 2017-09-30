@@ -6,26 +6,13 @@
         if (results.size() == 1)
             return results.get(0);
 
-        // So-called "short reads" stems from nodes returning only a subset of the results they have for a partition due to the limit,
-        // but that subset not being enough post-reconciliation. So if we don't have limit, don't bother.
+        /*
+         * So-called short reads stems from nodes returning only a subset of the results they have due to the limit,
+         * but that subset not being enough post-reconciliation. So if we don't have a limit, don't bother.
+         */
         if (!command.limits().isUnlimited())
-        {
             for (int i = 0; i < results.size(); i++)
-            {
-                DataLimits.Counter singleResultCounter =
-                    command.limits().newCounter(command.nowInSec(), false, command.selectsFullPartition(), enforceStrictLiveness).onlyCount();
-
-                ShortReadResponseProtection protection =
-                    new ShortReadResponseProtection(sources[i], singleResultCounter, mergedResultCounter, queryStartNanoTime);
-
-                /*
-                 * The order of transformations is important here. See ShortReadResponseProtection.applyToPartition()
-                 * comments for details. We want singleResultCounter.applyToPartition() to be called after SRRP applies
-                 * its transformations, so that this order is preserved when calling applyToRows() too.
-                 */
-                results.set(i, Transformation.apply(Transformation.apply(results.get(i), protection), singleResultCounter));
-            }
-        }
+                results.set(i, extendWithShortReadProtection(results.get(i), sources[i], mergedResultCounter));
 
         return UnfilteredPartitionIterators.merge(results, command.nowInSec(), new RepairMergeListener(sources));
     }
