@@ -1,16 +1,7 @@
             /*
-             * We have a potential short read if the result from a given node contains the requested number of rows
-             * for that partition (i.e. it has stopped returning results due to the limit), but some of them haven't
-             * made it into the final post-reconciliation result due to other nodes' tombstones.
-             *
-             * If that is the case, then that node may have more rows that we should fetch, as otherwise we could
-             * ultimately return fewer rows than required. Also, those additional rows may contain tombstones which
-             * which we also need to fetch as they may shadow rows from other replicas' results, which we would
-             * otherwise return incorrectly.
-             *
-             * Also note that we only get here once all the rows for this partition have been iterated over, and so
-             * if the node had returned the requested number of rows but we still get here, then some results were
-             * skipped during reconciliation.
+             * We only get here once all the rows in this iterator have been iterated over, and so if the node
+             * had returned the requested number of rows but we still get here, then some results were skipped
+             * during reconciliation.
              */
             public UnfilteredRowIterator moreContents()
             {
@@ -20,8 +11,13 @@
                 // we do not apply short read protection when we have no limits at all
                 assert !command.limits().isUnlimited();
 
-                // if the returned partition doesn't have enough rows to satisfy even the original limit, don't ask for more
-                if (!singleResultCounter.isDoneForPartition())
+                /*
+                 * If the returned partition doesn't have enough rows to satisfy even the original limit, don't ask for more.
+                 *
+                 * Can only take the short cut if there is no per partition limit set. Otherwise it's possible to hit false
+                 * positives due to some rows being uncounted for in certain scenarios (see CASSANDRA-13911).
+                 */
+                if (!singleResultCounter.isDoneForPartition() && command.limits().perPartitionCount() == DataLimits.NO_LIMIT)
                     return null;
 
                 /*
@@ -87,17 +83,16 @@
                  * Note: it's ok to retrieve more rows that necessary since singleResultCounter is not stopping and only
                  * counts.
                  *
-                 * With that in mind, we'll just request the minimum of (count(), perPartitionCount()) limits,
-                 * but no fewer than 8 rows (an arbitrary round lower bound), to ensure that we won't fetch row by row
-                 * for SELECT DISTINCT queries (that set per partition limit to 1).
+                 * With that in mind, we'll just request the minimum of (count(), perPartitionCount()) limits.
                  *
                  * See CASSANDRA-13794 for more details.
                  */
-                lastQueried = Math.max(Math.min(command.limits().count(), command.limits().perPartitionCount()), 8);
+                lastQueried = Math.min(command.limits().count(), command.limits().perPartitionCount());
 
                 ColumnFamilyStore.metricsFor(metadata.id).shortReadProtectionRequests.mark();
                 Tracing.trace("Requesting {} extra rows from {} for short read protection", lastQueried, source);
 
-                return executeReadCommand(makeFetchAdditionalRowsReadCommand(lastQueried));
+                SinglePartitionReadCommand cmd = makeFetchAdditionalRowsReadCommand(lastQueried);
+                return UnfilteredPartitionIterators.getOnlyElement(executeReadCommand(cmd), cmd);
             }
 
