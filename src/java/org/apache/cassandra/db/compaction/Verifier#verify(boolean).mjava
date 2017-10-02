@@ -3,6 +3,20 @@
         long rowStart = 0;
 
         outputHandler.output(String.format("Verifying %s (%s bytes)", sstable, dataFile.length()));
+        outputHandler.output(String.format("Deserializing sstable metadata for %s ", sstable));
+        try
+        {
+            EnumSet<MetadataType> types = EnumSet.of(MetadataType.VALIDATION, MetadataType.STATS, MetadataType.HEADER);
+            Map<MetadataType, MetadataComponent> sstableMetadata = sstable.descriptor.getMetadataSerializer().deserialize(sstable.descriptor, types);
+            if (sstableMetadata.containsKey(MetadataType.VALIDATION) &&
+                !((ValidationMetadata)sstableMetadata.get(MetadataType.VALIDATION)).partitioner.equals(sstable.getPartitioner().getClass().getCanonicalName()))
+                throw new IOException("Partitioner does not match validation metadata");
+        }
+        catch (Throwable t)
+        {
+            outputHandler.debug(t.getMessage());
+            markAndThrow(false);
+        }
         outputHandler.output(String.format("Checking computed hash of %s ", sstable));
 
 
@@ -101,7 +115,7 @@
                     if (key == null || dataSize > dataFile.length())
                         markAndThrow();
 
-                    //mimic the scrub read path
+                    //mimic the scrub read path, intentionally unused
                     try (UnfilteredRowIterator iterator = new SSTableIdentityIterator(sstable, dataFile, key))
                     {
                     }
@@ -118,7 +132,6 @@
                 }
                 catch (Throwable th)
                 {
-                    badRows++;
                     markAndThrow();
                 }
             }
