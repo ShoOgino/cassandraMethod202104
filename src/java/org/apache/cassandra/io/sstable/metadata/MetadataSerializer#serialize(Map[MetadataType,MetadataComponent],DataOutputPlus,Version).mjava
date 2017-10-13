@@ -1,26 +1,34 @@
     public void serialize(Map<MetadataType, MetadataComponent> components, DataOutputPlus out, Version version) throws IOException
     {
         boolean checksum = version.hasMetadataChecksum();
+        CRC32 crc = new CRC32();
         // sort components by type
         List<MetadataComponent> sortedComponents = Lists.newArrayList(components.values());
         Collections.sort(sortedComponents);
 
         // write number of component
         out.writeInt(components.size());
+        updateChecksumInt(crc, components.size());
+        maybeWriteChecksum(crc, out, version);
+
         // build and write toc
-        int lastPosition = 4 + (8 * sortedComponents.size());
+        int lastPosition = 4 + (8 * sortedComponents.size()) + (checksum ? 2 * CHECKSUM_LENGTH : 0);
         Map<MetadataType, Integer> sizes = new EnumMap<>(MetadataType.class);
         for (MetadataComponent component : sortedComponents)
         {
             MetadataType type = component.getType();
             // serialize type
             out.writeInt(type.ordinal());
+            updateChecksumInt(crc, type.ordinal());
             // serialize position
             out.writeInt(lastPosition);
+            updateChecksumInt(crc, lastPosition);
             int size = type.serializer.serializedSize(version, component);
-            lastPosition += size + (checksum ? 8 : 0); // checksum is long
+            lastPosition += size + (checksum ? CHECKSUM_LENGTH : 0);
             sizes.put(type, size);
         }
+        maybeWriteChecksum(crc, out, version);
+
         // serialize components
         for (MetadataComponent component : sortedComponents)
         {
@@ -31,8 +39,9 @@
                 bytes = dob.getData();
             }
             out.write(bytes);
-            if (checksum)
-                out.writeLong(hashFunction.hashBytes(bytes).asLong());
+
+            crc.reset(); crc.update(bytes);
+            maybeWriteChecksum(crc, out, version);
         }
     }
 

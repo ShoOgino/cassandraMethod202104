@@ -1,60 +1,66 @@
-    public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor, FileDataInput in, EnumSet<MetadataType> types) throws IOException
+    public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor,
+                                                            FileDataInput in,
+                                                            EnumSet<MetadataType> selectedTypes)
+    throws IOException
     {
-        int totalSize = (int) in.bytesRemaining();
+        boolean isChecksummed = descriptor.version.hasMetadataChecksum();
+        CRC32 crc = new CRC32();
+
+        /*
+         * Read TOC
+         */
+
+        int length = (int) in.bytesRemaining();
+
+        int count = in.readInt();
+        updateChecksumInt(crc, count);
+        maybeValidateChecksum(crc, in, descriptor);
+
+        int[] ordinals = new int[count];
+        int[]  offsets = new int[count];
+        int[]  lengths = new int[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            ordinals[i] = in.readInt();
+            updateChecksumInt(crc, ordinals[i]);
+
+            offsets[i] = in.readInt();
+            updateChecksumInt(crc, offsets[i]);
+        }
+        maybeValidateChecksum(crc, in, descriptor);
+
+        lengths[count - 1] = length - offsets[count - 1];
+        for (int i = 0; i < count - 1; i++)
+            lengths[i] = offsets[i + 1] - offsets[i];
+
+        /*
+         * Read components
+         */
+
+        MetadataType[] allMetadataTypes = MetadataType.values();
+
         Map<MetadataType, MetadataComponent> components = new EnumMap<>(MetadataType.class);
-        // read number of components
-        int numComponents = in.readInt();
-        // read toc
-        Map<MetadataType, Integer> toc = new EnumMap<>(MetadataType.class);
-        MetadataType[] values = MetadataType.values();
-        Map<MetadataType, Integer> lengths = new EnumMap<>(MetadataType.class);
-        int start = 0;
-        MetadataType lastType = null;
-        for (int i = 0; i < numComponents; i++)
-        {
-            int metadataTypeId = in.readInt();
-            int position = in.readInt();
 
-            toc.put(values[metadataTypeId], position);
-            if (lastType != null)
-                lengths.put(lastType, position - start);
-            start = position;
-            lastType = values[metadataTypeId];
-        }
-        lengths.put(lastType, totalSize - start);
-        for (MetadataType type : types)
+        for (int i = 0; i < count; i++)
         {
-            Integer offset = toc.get(type);
-            if (offset != null)
+            MetadataType type = allMetadataTypes[ordinals[i]];
+
+            if (!selectedTypes.contains(type))
             {
-                in.seek(offset);
-
-                if (descriptor.version.hasMetadataChecksum())
-                {
-                    int size = lengths.get(type) - 8; // 8 bytes checksum
-                    byte[] bytes = new byte[size];
-                    in.readFully(bytes);
-                    MetadataComponent component;
-                    try (DataInputBuffer dib = new DataInputBuffer(bytes))
-                    {
-                        component = type.serializer.deserialize(descriptor.version, dib);
-                    }
-                    long writtenChecksum = in.readLong();
-                    if (writtenChecksum != hashFunction.hashBytes(bytes).asLong())
-                    {
-                        String filename = descriptor.filenameFor(Component.STATS);
-                        throw new CorruptSSTableException(new IOException("Checksums do not match for " + filename), filename);
-                    }
-                    components.put(type, component);
-                }
-                else
-                {
-                    MetadataComponent component = type.serializer.deserialize(descriptor.version, in);
-                    components.put(type, component);
-                }
-
+                in.skipBytes(lengths[i]);
+                continue;
             }
+
+            byte[] buffer = new byte[isChecksummed ? lengths[i] - CHECKSUM_LENGTH : lengths[i]];
+            in.readFully(buffer);
+
+            crc.reset(); crc.update(buffer);
+            maybeValidateChecksum(crc, in, descriptor);
+
+            components.put(type, type.serializer.deserialize(descriptor.version, new DataInputBuffer(buffer)));
         }
+
         return components;
     }
 
