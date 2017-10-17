@@ -1,19 +1,20 @@
     private void preventSystemKSSchemaModification(String keyspace, DataResource resource, Permission perm) throws UnauthorizedException
     {
-        // we only care about schema modification.
-        if (!((perm == Permission.ALTER) || (perm == Permission.DROP) || (perm == Permission.CREATE)))
+        // we only care about DDL statements
+        if (perm != Permission.ALTER && perm != Permission.DROP && perm != Permission.CREATE)
             return;
 
-        // prevent system keyspace modification
-        if (SchemaConstants.isSystemKeyspace(keyspace))
+        // prevent ALL local system keyspace modification
+        if (SchemaConstants.isLocalSystemKeyspace(keyspace))
             throw new UnauthorizedException(keyspace + " keyspace is not user-modifiable.");
 
-        // allow users with sufficient privileges to alter KS level options on AUTH_KS and
-        // TRACING_KS, but not to drop any tables
-        if (ALTERABLE_SYSTEM_KEYSPACES.contains(resource.getKeyspace().toLowerCase())
-           && ((perm == Permission.ALTER && !resource.isKeyspaceLevel())
-               || perm == Permission.DROP))
+        if (SchemaConstants.isReplicatedSystemKeyspace(keyspace))
         {
+            // allow users with sufficient privileges to alter replication params of replicated system keyspaces
+            if (perm == Permission.ALTER && resource.isKeyspaceLevel())
+                return;
+
+            // prevent all other modifications of replicated system keyspaces
             throw new UnauthorizedException(String.format("Cannot %s %s", perm, resource));
         }
     }
