@@ -1,0 +1,39 @@
+    @Test
+    @BMRule(name = "force all calls to sync() to not flush to disk",
+    targetClass = "CommitLogSegment",
+    targetMethod = "sync(boolean)",
+    action = "$flush = false")
+    public void replayCommitLogWithoutFlushing() throws IOException
+    {
+        DatabaseDescriptor.setCommitLogSegmentSize(5);
+        DatabaseDescriptor.setCommitLogSync(Config.CommitLogSync.periodic);
+        DatabaseDescriptor.setCommitLogSyncPeriod(10000 * 1000);
+        DatabaseDescriptor.setCommitLogMarkerPeriod(1);
+        SchemaLoader.prepareServer();
+        SchemaLoader.createKeyspace(KEYSPACE1,
+                                    KeyspaceParams.simple(1),
+                                    SchemaLoader.standardCFMD(KEYSPACE1, STANDARD1, 0, AsciiType.instance, BytesType.instance));
+
+        CompactionManager.instance.disableAutoCompaction();
+
+        ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
+
+        byte[] entropy = new byte[1024];
+        new Random().nextBytes(entropy);
+        final Mutation m = new RowUpdateBuilder(cfs1.metadata, 0, "k")
+                           .clustering("bytes")
+                           .add("val", ByteBuffer.wrap(entropy))
+                           .build();
+
+        int samples = 10000;
+        for (int i = 0; i < samples; i++)
+            CommitLog.instance.add(m);
+
+        CommitLog.instance.sync(false, true);
+
+        Replayer replayer = new Replayer(cfs1.metadata);
+        File commitLogDir = new File(DatabaseDescriptor.getCommitLogLocation());
+        replayer.recover(commitLogDir.listFiles());
+        Assert.assertEquals(samples, replayer.count);
+    }
+
