@@ -17,33 +17,6 @@
         // fetch the new state of schema from schema tables (not applied to Schema.instance yet)
         Keyspaces after = fetchKeyspacesOnly(affectedKeyspaces);
 
-        // deal with the diff
-        MapDifference<String, KeyspaceMetadata> keyspacesDiff = before.diff(after);
-
-        // dropped keyspaces
-        for (KeyspaceMetadata keyspace : keyspacesDiff.entriesOnlyOnLeft().values())
-        {
-            keyspace.functions.udas().forEach(Schema.instance::dropAggregate);
-            keyspace.functions.udfs().forEach(Schema.instance::dropFunction);
-            keyspace.views.forEach(v -> Schema.instance.dropView(v.ksName, v.viewName));
-            keyspace.tables.forEach(t -> Schema.instance.dropTable(t.ksName, t.cfName));
-            keyspace.types.forEach(Schema.instance::dropType);
-            Schema.instance.dropKeyspace(keyspace.name);
-        }
-
-        // new keyspaces
-        for (KeyspaceMetadata keyspace : keyspacesDiff.entriesOnlyOnRight().values())
-        {
-            Schema.instance.addKeyspace(KeyspaceMetadata.create(keyspace.name, keyspace.params));
-            keyspace.types.forEach(Schema.instance::addType);
-            keyspace.tables.forEach(Schema.instance::addTable);
-            keyspace.views.forEach(Schema.instance::addView);
-            keyspace.functions.udfs().forEach(Schema.instance::addFunction);
-            keyspace.functions.udas().forEach(Schema.instance::addAggregate);
-        }
-
-        // updated keyspaces
-        for (Map.Entry<String, MapDifference.ValueDifference<KeyspaceMetadata>> diff : keyspacesDiff.entriesDiffering().entrySet())
-            updateKeyspace(diff.getKey(), diff.getValue().leftValue(), diff.getValue().rightValue());
+        mergeSchema(before, after);
     }
 
