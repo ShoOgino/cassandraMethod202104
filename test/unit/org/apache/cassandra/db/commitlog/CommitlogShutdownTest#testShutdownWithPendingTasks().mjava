@@ -1,10 +1,23 @@
     @Test
     @BMRule(name = "Make removing commitlog segments slow",
-            targetClass = "CommitLogSegment",
-            targetMethod = "discard",
-            action = "Thread.sleep(50)")
-    public void testShutdownWithPendingTasks() throws Throwable {
-        CommitLog.instance.resetUnsafe(true);
+    targetClass = "CommitLogSegment",
+    targetMethod = "discard",
+    action = "Thread.sleep(50)")
+    public void testShutdownWithPendingTasks() throws Exception
+    {
+        new Random().nextBytes(entropy);
+        DatabaseDescriptor.daemonInitialization();
+        DatabaseDescriptor.setCommitLogCompression(new ParameterizedClass("LZ4Compressor", ImmutableMap.of()));
+        DatabaseDescriptor.setCommitLogSegmentSize(1);
+        DatabaseDescriptor.setCommitLogSync(Config.CommitLogSync.periodic);
+        DatabaseDescriptor.setCommitLogSyncPeriod(10 * 1000);
+        SchemaLoader.prepareServer();
+        SchemaLoader.createKeyspace(KEYSPACE1,
+                                    KeyspaceParams.simple(1),
+                                    SchemaLoader.standardCFMD(KEYSPACE1, STANDARD1, 0, AsciiType.instance, BytesType.instance));
+
+                                    CompactionManager.instance.disableAutoCompaction();
+
         ColumnFamilyStore cfs1 = Keyspace.open(KEYSPACE1).getColumnFamilyStore(STANDARD1);
 
         final Mutation m = new RowUpdateBuilder(cfs1.metadata.get(), 0, "k")
@@ -13,7 +26,8 @@
                            .build();
 
         // force creating several commitlog files
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 10; i++)
+        {
             CommitLog.instance.add(m);
         }
 
