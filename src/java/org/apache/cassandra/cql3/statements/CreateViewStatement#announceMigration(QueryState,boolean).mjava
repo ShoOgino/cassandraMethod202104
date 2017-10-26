@@ -1,5 +1,10 @@
     public Event.SchemaChange announceMigration(QueryState queryState, boolean isLocalOnly) throws RequestValidationException
     {
+        if (!DatabaseDescriptor.enableMaterializedViews())
+        {
+            throw new InvalidRequestException("Materialized views are disabled. Enable in cassandra.yaml to use.");
+        }
+
         // We need to make sure that:
         //  - primary key includes all columns in base table's primary key
         //  - make sure that the select statement does not have anything other than columns
@@ -199,8 +204,13 @@
                                                        whereClauseText,
                                                        viewCfm);
 
+        logger.warn("Creating materialized view {} for {}.{}. " +
+                    "Materialized views are experimental and are not recommended for production use.",
+                    definition.viewName, cfm.ksName, cfm.cfName);
+
         try
         {
+            ClientWarn.instance.warn("Materialized views are experimental and are not recommended for production use.");
             MigrationManager.announceNewView(definition, isLocalOnly);
             return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
         }
