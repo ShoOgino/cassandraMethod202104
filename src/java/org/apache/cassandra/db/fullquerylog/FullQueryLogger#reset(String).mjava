@@ -1,0 +1,63 @@
+    /**
+     * Need the path as a parameter as well because if the process is restarted the config file might be the only
+     * location for retrieving the path to the full query log files, but JMX also allows you to specify a path
+     * that isn't persisted anywhere so we have to clean that one a well.
+     */
+    public synchronized void reset(String fullQueryLogPath)
+    {
+        try
+        {
+            Set<File> pathsToClean = Sets.newHashSet();
+
+            //First decide whether to clean the path configured in the YAML
+            if (fullQueryLogPath != null)
+            {
+                File fullQueryLogPathFile = new File(fullQueryLogPath);
+                if (fullQueryLogPathFile.exists())
+                {
+                    pathsToClean.add(fullQueryLogPathFile);
+                }
+            }
+
+            //Then decide whether to clean the last used path, possibly configured by JMX
+            if (path != null)
+            {
+                File pathFile = path.toFile();
+                if (pathFile.exists())
+                {
+                    pathsToClean.add(pathFile);
+                }
+            }
+
+            logger.info("Reset (and deactivation) of full query log requested.");
+            if (binLog != null)
+            {
+                logger.info("Stopping full query log. Cleaning {}.", pathsToClean);
+                binLog.stop();
+                binLog = null;
+            }
+            else
+            {
+                logger.info("Full query log already deactivated. Cleaning {}.", pathsToClean);
+            }
+
+            Throwable accumulate = null;
+            for (File f : pathsToClean)
+            {
+                accumulate = cleanDirectory(f, accumulate);
+            }
+            if (accumulate != null)
+            {
+                throw new RuntimeException(accumulate);
+            }
+        }
+        catch (Exception e)
+        {
+            if (e instanceof RuntimeException)
+            {
+                throw (RuntimeException)e;
+            }
+            throw new RuntimeException(e);
+        }
+    }
+

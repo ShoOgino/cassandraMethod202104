@@ -1,0 +1,80 @@
+    /**
+     * Test that put blocks and unblocks and creates records
+     */
+    @Test
+    public void testPut() throws Exception
+    {
+        binLog.put(record(testString));
+        binLog.put(record(testString2));
+
+        Util.spinAssertEquals(2, () -> readBinLogRecords(path).size(), 60);
+        List<String> records = readBinLogRecords(path);
+        assertEquals(testString, records.get(0));
+        assertEquals(testString2, records.get(1));
+
+
+        //Prevent the bin log thread from making progress
+        Semaphore blockBinLog = new Semaphore(0);
+        //Get notified when the bin log thread has blocked and definitely won't batch drain tasks
+        Semaphore binLogBlocked = new Semaphore(0);
+        try
+        {
+            binLog.put(new BinLog.ReleaseableWriteMarshallable()
+            {
+                protected void release()
+                {
+                }
+
+                public void writeMarshallable(WireOut wire)
+                {
+                    //Notify the bing log thread is about to block
+                    binLogBlocked.release();
+                    try
+                    {
+                        //Block the bin log thread so it doesn't process more tasks
+                        blockBinLog.acquire();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        throw new RuntimeException(e);
+                    }
+                }
+            });
+
+            //Wait for the bin log thread to block so it doesn't batch drain
+            Util.spinAssertEquals(true, binLogBlocked::tryAcquire, 60);
+
+            //Now fill the queue up to capacity and it shouldn't block
+            for (int ii = 0; ii < 10; ii++)
+            {
+                binLog.put(record(testString));
+            }
+
+            //Thread to block on the full queue
+            Thread t = new Thread(() ->
+                                  {
+                                      try
+                                      {
+                                          binLog.put(record(testString));
+                                          //Should be able to do it again after unblocking
+                                          binLog.put(record(testString));
+                                      }
+                                      catch (InterruptedException e)
+                                      {
+                                          throw new AssertionError(e);
+                                      }
+                                  });
+            t.start();
+            Thread.sleep(500);
+            //If the thread is not terminated then it is probably blocked on the queue
+            assertTrue(t.getState() != Thread.State.TERMINATED);
+        }
+        finally
+        {
+            blockBinLog.release();
+        }
+
+        //Expect all the records to eventually be there including one from the blocked thread
+        Util.spinAssertEquals(15, () -> readBinLogRecords(path).size(), 60);
+    }
+

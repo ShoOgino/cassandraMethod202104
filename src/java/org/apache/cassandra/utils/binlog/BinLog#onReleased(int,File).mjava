@@ -1,0 +1,29 @@
+    /**
+     * Track store files as they are added and their storage impact. Delete them if over storage limit.
+     * @param cycle
+     * @param file
+     */
+    public synchronized void onReleased(int cycle, File file)
+    {
+        chronicleStoreFiles.offer(file);
+        //This isn't accurate because the files are sparse, but it's at least pessimistic
+        bytesInStoreFiles += file.length();
+        logger.debug("Chronicle store file {} rolled file size {}", file.getPath(), file.length());
+        while (bytesInStoreFiles > maxLogSize & !chronicleStoreFiles.isEmpty())
+        {
+            File toDelete = chronicleStoreFiles.poll();
+            long toDeleteLength = toDelete.length();
+            if (!toDelete.delete())
+            {
+                logger.error("Failed to delete chronicle store file: {} store file size: {} bytes in store files: {}. " +
+                             "You will need to clean this up manually or reset full query logging.",
+                             toDelete.getPath(), toDeleteLength, bytesInStoreFiles);
+            }
+            else
+            {
+                bytesInStoreFiles -= toDeleteLength;
+                logger.info("Deleted chronicle store file: {} store file size: {} bytes in store files: {} max log size: {}.", file.getPath(), toDeleteLength, bytesInStoreFiles, maxLogSize);
+            }
+        }
+    }
+

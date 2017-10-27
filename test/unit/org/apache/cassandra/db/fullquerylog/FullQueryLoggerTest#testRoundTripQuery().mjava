@@ -1,0 +1,21 @@
+    @Test
+    public void testRoundTripQuery() throws Exception
+    {
+        configureFQL();
+        logQuery("foo");
+        Util.spinAssertEquals(true, () -> checkForQueries(Arrays.asList("foo")), 60);
+        try (ChronicleQueue queue = ChronicleQueueBuilder.single(tempDir.toFile()).rollCycle(RollCycles.TEST_SECONDLY).build())
+        {
+            ExcerptTailer tailer = queue.createTailer();
+            assertTrue(tailer.readDocument(wire -> {
+                assertEquals("single", wire.read("type").text());
+                ProtocolVersion protocolVersion = ProtocolVersion.decode(wire.read("protocol-version").int32());
+                assertEquals(ProtocolVersion.CURRENT, protocolVersion);
+                QueryOptions queryOptions = QueryOptions.codec.decode(Unpooled.wrappedBuffer(wire.read("query-options").bytes()), protocolVersion);
+                compareQueryOptions(QueryOptions.DEFAULT, queryOptions);
+                assertEquals(1L, wire.read("query-time").int64());
+                assertEquals("foo", wire.read("query").text());
+            }));
+        }
+    }
+

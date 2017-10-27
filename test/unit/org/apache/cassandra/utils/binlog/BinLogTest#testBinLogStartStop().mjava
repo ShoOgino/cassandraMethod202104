@@ -1,0 +1,61 @@
+    /**
+     * Check that we can start and stop the bin log and that it releases resources held by any subsequent appended
+     * records
+     */
+    @Test
+    public void testBinLogStartStop() throws Exception
+    {
+        Semaphore blockBinLog = new Semaphore(1);
+        AtomicInteger releaseCount = new AtomicInteger();
+        binLog.put(new BinLog.ReleaseableWriteMarshallable()
+        {
+            protected void release()
+            {
+                releaseCount.incrementAndGet();
+            }
+
+            public void writeMarshallable(WireOut wire)
+            {
+                try
+                {
+                    blockBinLog.acquire();
+                }
+                catch (InterruptedException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+        binLog.put(new BinLog.ReleaseableWriteMarshallable()
+        {
+
+            public void writeMarshallable(WireOut wire)
+            {
+
+            }
+
+            protected void release()
+            {
+                releaseCount.incrementAndGet();
+            }
+        });
+        Thread.sleep(1000);
+        assertEquals(2, releaseCount.get());
+        Thread t = new Thread(() -> {
+            try
+            {
+                binLog.stop();
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+        });
+        t.start();
+        t.join(60 * 1000);
+        assertEquals(t.getState(), Thread.State.TERMINATED);
+
+        Util.spinAssertEquals(2, releaseCount::get, 60);
+        Util.spinAssertEquals(Thread.State.TERMINATED, binLog.binLogThread::getState, 60);
+     }
+

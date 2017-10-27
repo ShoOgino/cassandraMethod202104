@@ -1,0 +1,64 @@
+    /**
+     * Test that a thread will block if the FQL is over weight, and unblock once the backup is cleared
+     */
+    @Test
+    public void testBlocking() throws Exception
+    {
+        configureFQL();
+        //Prevent the bin log thread from making progress, causing the task queue to block
+        Semaphore blockBinLog = new Semaphore(0);
+        try
+        {
+            //Find out when the bin log thread has been blocked, necessary to not run into batch task drain behavior
+            Semaphore binLogBlocked = new Semaphore(0);
+            FullQueryLogger.instance.binLog.put(new WeighableMarshallableQuery("foo1", QueryOptions.DEFAULT, 1)
+            {
+
+                public void writeMarshallable(WireOut wire)
+                {
+                    //Notify that the bin log is blocking now
+                    binLogBlocked.release();
+                    try
+                    {
+                        //Block the bin log thread so the task queue can be filled
+                        blockBinLog.acquire();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        e.printStackTrace();
+                    }
+                    super.writeMarshallable(wire);
+                }
+
+                public void release()
+                {
+                    super.release();
+                }
+            });
+
+            //Wait for the bin log thread to block so it can't batch drain tasks
+            Util.spinAssertEquals(true, binLogBlocked::tryAcquire, 60);
+
+            //Now fill the task queue
+            logQuery("foo2");
+
+            //Start a thread to block waiting on the bin log queue
+            Thread t = new Thread(() ->
+                                  {
+                                      logQuery("foo3");
+                                      //Should be able to log another query without an issue
+                                      logQuery("foo4");
+                                  });
+            t.start();
+            Thread.sleep(500);
+            //If thread state is terminated then the thread started, finished, and didn't block on the full task queue
+            assertTrue(t.getState() != Thread.State.TERMINATED);
+        }
+        finally
+        {
+            //Unblock the binlog thread
+            blockBinLog.release();
+        }
+        Util.spinAssertEquals(true, () -> checkForQueries(Arrays.asList("foo1", "foo2", "foo3", "foo4")), 60);
+    }
+

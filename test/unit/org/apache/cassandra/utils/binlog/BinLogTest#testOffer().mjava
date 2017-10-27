@@ -1,0 +1,60 @@
+    @Test
+    public void testOffer() throws Exception
+    {
+        assertTrue(binLog.offer(record(testString)));
+        assertTrue(binLog.offer(record(testString2)));
+
+        Util.spinAssertEquals(2, () -> readBinLogRecords(path).size(), 60);
+        List<String> records = readBinLogRecords(path);
+        assertEquals(testString, records.get(0));
+        assertEquals(testString2, records.get(1));
+
+        //Prevent the bin log thread from making progress
+        Semaphore blockBinLog = new Semaphore(0);
+        //Get notified when the bin log thread has blocked and definitely won't batch drain tasks
+        Semaphore binLogBlocked = new Semaphore(0);
+        try
+        {
+            assertTrue(binLog.offer(new BinLog.ReleaseableWriteMarshallable()
+            {
+                protected void release()
+                {
+                }
+
+                public void writeMarshallable(WireOut wire)
+                {
+                    //Notify the bing log thread is about to block
+                    binLogBlocked.release();
+                    try
+                    {
+                        //Block the bin log thread so it doesn't process more tasks
+                        blockBinLog.acquire();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }));
+
+            //Wait for the bin log thread to block so it doesn't batch drain
+            Util.spinAssertEquals(true, binLogBlocked::tryAcquire, 60);
+
+            //Now fill the queue up to capacity and it should always accept
+            for (int ii = 0; ii < 10; ii++)
+            {
+                assertTrue(binLog.offer(record(testString)));
+            }
+
+            //it shoudl reject this record since it is full
+            assertFalse(binLog.offer(record(testString)));
+        }
+        finally
+        {
+            blockBinLog.release();
+        }
+        Util.spinAssertEquals(13, () -> readBinLogRecords(path).size(), 60);
+        assertTrue(binLog.offer(record(testString)));
+        Util.spinAssertEquals(14, () -> readBinLogRecords(path).size(), 60);
+    }
+

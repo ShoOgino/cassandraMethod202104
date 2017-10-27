@@ -1,0 +1,33 @@
+    /**
+     * Check that the finalizer releases any stragglers in the queue
+     */
+    @Test
+    public void testBinLogFinalizer() throws Exception
+    {
+        binLog.stop();
+        Semaphore released = new Semaphore(0);
+        binLog.sampleQueue.put(new BinLog.ReleaseableWriteMarshallable()
+        {
+            protected void release()
+            {
+                released.release();
+            }
+
+            public void writeMarshallable(WireOut wire)
+            {
+
+            }
+        });
+        binLog = null;
+
+        for (int ii = 0; ii < 30; ii++)
+        {
+            System.gc();
+            System.runFinalization();
+            Thread.sleep(100);
+            if (released.tryAcquire())
+                return;
+        }
+        fail("Finalizer never released resources");
+    }
+

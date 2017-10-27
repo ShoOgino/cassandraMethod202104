@@ -1,0 +1,34 @@
+        private AbstractWeighableMarshallable(QueryOptions queryOptions, long timeMillis)
+        {
+            this.timeMillis = timeMillis;
+            ProtocolVersion version = queryOptions.getProtocolVersion();
+            this.protocolVersion = version.asInt();
+            int optionsSize = QueryOptions.codec.encodedSize(queryOptions, version);
+            queryOptionsBuffer = CBUtil.allocator.buffer(optionsSize, optionsSize);
+            /*
+             * Struggled with what tradeoff to make in terms of query options which is potentially large and complicated
+             * There is tension between low garbage production (or allocator overhead), small working set size, and CPU overhead reserializing the
+             * query options into binary format.
+             *
+             * I went with the lowest risk most predictable option which is allocator overhead and CPU overhead
+             * rather then keep the original query message around so I could just serialize that as a memcpy. It's more
+             * instructions when turned on, but it doesn't change memory footprint quite as much and it's more pay for what you use
+             * in terms of query volume. The CPU overhead is spread out across producers so we should at least get
+             * some scaling.
+             *
+             */
+            boolean success = false;
+            try
+            {
+                QueryOptions.codec.encode(queryOptions, queryOptionsBuffer, version);
+                success = true;
+            }
+            finally
+            {
+                if (!success)
+                {
+                    queryOptionsBuffer.release();
+                }
+            }
+        }
+
