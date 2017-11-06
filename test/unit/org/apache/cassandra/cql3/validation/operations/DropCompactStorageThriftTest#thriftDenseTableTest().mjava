@@ -1,0 +1,31 @@
+    @Test
+    public void thriftDenseTableTest() throws Throwable
+    {
+        String KEYSPACE = keyspace();
+        String TABLE = createTable("CREATE TABLE %s (pkey text, ckey text, v text, PRIMARY KEY (pkey, ckey)) WITH COMPACT STORAGE");
+
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey1"), ByteBufferUtil.bytes("cvalue1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey2"), ByteBufferUtil.bytes("cvalue2")),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+        assertColumnType(UTF8Type.instance, resultSet, "pkey");
+        assertColumnType(UTF8Type.instance, resultSet, "ckey");
+        assertColumnType(UTF8Type.instance, resultSet, "v");
+
+        assertRows(resultSet,
+                   row("key1", "ckey1", "cvalue1"),
+                   row("key1", "ckey2", "cvalue2"));
+    }
+

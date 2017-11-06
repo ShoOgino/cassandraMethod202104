@@ -1,0 +1,47 @@
+    @Test
+    public void thriftCreatedTableWithCompositeColumnsTest() throws Throwable
+    {
+        final String KEYSPACE = "thrift_created_table_with_composites_test_ks";
+        final String TABLE = "test_table_1";
+
+        CompositeType type = CompositeType.getInstance(AsciiType.instance, AsciiType.instance, AsciiType.instance);
+        CfDef cfDef = new CfDef().setDefault_validation_class(AsciiType.instance.toString())
+                                 .setComparator_type(type.toString())
+                                 .setKey_validation_class(AsciiType.instance.toString())
+                                 .setKeyspace(KEYSPACE)
+                                 .setName(TABLE);
+
+        KsDef ksDef = new KsDef(KEYSPACE,
+                                SimpleStrategy.class.getName(),
+                                Arrays.asList(cfDef));
+        ksDef.setStrategy_options(Collections.singletonMap("replication_factor", "1"));
+
+        Cassandra.Client client = getClient();
+        client.system_add_keyspace(ksDef);
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(type.decompose("a", "b", "c"), ByteBufferUtil.bytes("val1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(type.decompose("d", "e", "f"), ByteBufferUtil.bytes("val2")),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+
+        assertColumnType(AsciiType.instance, resultSet, "key");
+        assertColumnType(AsciiType.instance, resultSet, "column1");
+        assertColumnType(AsciiType.instance, resultSet, "column2");
+        assertColumnType(AsciiType.instance, resultSet, "column3");
+        assertColumnType(AsciiType.instance, resultSet, "value");
+
+        assertRows(resultSet,
+                   row("key1", "a", "b", "c", "val1"),
+                   row("key1", "d", "e", "f", "val2"));
+    }
+

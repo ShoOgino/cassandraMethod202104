@@ -1,0 +1,43 @@
+    @Test
+    public void denseTableTestTest() throws Throwable
+    {
+        String KEYSPACE = keyspace();
+        String TABLE = createTable("CREATE TABLE %s (pkey text PRIMARY KEY, s text) WITH COMPACT STORAGE");
+
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey1"), ByteBufferUtil.bytes("val1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("ckey2"), ByteBufferUtil.bytes("val2")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("s"), ByteBufferUtil.bytes("sval1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("s"), ByteBufferUtil.bytes("sval2")),
+                      ONE);
+
+        // `s` becomes static, `column1` becomes a clustering key, `value` becomes visible
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+        assertColumnType(UTF8Type.instance, resultSet, "pkey");
+        assertColumnType(UTF8Type.instance, resultSet, "s");
+        assertColumnType(UTF8Type.instance, resultSet, "column1");
+        assertColumnType(BytesType.instance, resultSet, "value");
+
+        assertRows(resultSet,
+                   row("key1", "ckey1", "sval2", ByteBufferUtil.bytes("val1")),
+                   row("key1", "ckey2", "sval2", ByteBufferUtil.bytes("val2")));
+    }
+

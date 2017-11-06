@@ -1,0 +1,38 @@
+    @Test
+    public void thriftStaticCompatTableTest() throws Throwable
+    {
+        String KEYSPACE = keyspace();
+        String TABLE = createTable("CREATE TABLE %s (key ascii PRIMARY KEY, val ascii) WITH COMPACT STORAGE");
+
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("val"), ByteBufferUtil.bytes("val1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("dynamicKey1"), ByteBufferUtil.bytes("dynamicValue1")),
+                      ONE);
+
+        client.insert(UTF8Type.instance.decompose("key1"),
+                      new ColumnParent(TABLE),
+                      getColumnForInsert(ByteBufferUtil.bytes("dynamicKey2"), ByteBufferUtil.bytes("dynamicValue2")),
+                      ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+        assertColumnType(AsciiType.instance, resultSet, "key");
+        assertColumnType(UTF8Type.instance, resultSet, "column1");
+        assertColumnType(AsciiType.instance, resultSet, "val");
+        assertColumnType(BytesType.instance, resultSet, "value");
+
+        // Values are interpreted as bytes by default:
+        assertRows(resultSet,
+                   row("key1", "dynamicKey1", "val1", ByteBufferUtil.bytes("dynamicValue1")),
+                   row("key1", "dynamicKey2", "val1", ByteBufferUtil.bytes("dynamicValue2")));
+    }
+

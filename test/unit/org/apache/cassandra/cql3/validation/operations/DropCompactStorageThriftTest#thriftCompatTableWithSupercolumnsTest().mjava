@@ -1,0 +1,72 @@
+    @Test
+    public void thriftCompatTableWithSupercolumnsTest() throws Throwable
+    {
+        final String KEYSPACE = "thrift_compact_table_with_supercolumns_test";
+        final String TABLE = "test_table_1";
+
+        CfDef cfDef = new CfDef().setColumn_type("Super")
+                                 .setSubcomparator_type(Int32Type.instance.toString())
+                                 .setComparator_type(AsciiType.instance.toString())
+                                 .setDefault_validation_class(AsciiType.instance.toString())
+                                 .setKey_validation_class(AsciiType.instance.toString())
+                                 .setKeyspace(KEYSPACE)
+                                 .setName(TABLE);
+
+        KsDef ksDef = new KsDef(KEYSPACE,
+                                SimpleStrategy.class.getName(),
+                                Arrays.asList(cfDef));
+        ksDef.setStrategy_options(Collections.singletonMap("replication_factor", "1"));
+
+        Cassandra.Client client = getClient();
+        client.system_add_keyspace(ksDef);
+
+        client.set_keyspace(KEYSPACE);
+
+        Mutation mutation = new Mutation();
+        ColumnOrSuperColumn csoc = new ColumnOrSuperColumn();
+        csoc.setSuper_column(getSuperColumnForInsert(ByteBufferUtil.bytes("val1"),
+                                                     Arrays.asList(getColumnForInsert(ByteBufferUtil.bytes(1), ByteBufferUtil.bytes("value1")),
+                                                                   getColumnForInsert(ByteBufferUtil.bytes(2), ByteBufferUtil.bytes("value2")),
+                                                                   getColumnForInsert(ByteBufferUtil.bytes(3), ByteBufferUtil.bytes("value3")))));
+        mutation.setColumn_or_supercolumn(csoc);
+
+        Mutation mutation2 = new Mutation();
+        ColumnOrSuperColumn csoc2 = new ColumnOrSuperColumn();
+        csoc2.setSuper_column(getSuperColumnForInsert(ByteBufferUtil.bytes("val2"),
+                                                     Arrays.asList(getColumnForInsert(ByteBufferUtil.bytes(4), ByteBufferUtil.bytes("value7")),
+                                                                   getColumnForInsert(ByteBufferUtil.bytes(5), ByteBufferUtil.bytes("value8")),
+                                                                   getColumnForInsert(ByteBufferUtil.bytes(6), ByteBufferUtil.bytes("value9")))));
+        mutation2.setColumn_or_supercolumn(csoc2);
+
+        client.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes("key1"),
+                                                     Collections.singletonMap(TABLE, Arrays.asList(mutation, mutation2))),
+                            ONE);
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE;", KEYSPACE, TABLE));
+        UntypedResultSet resultSet = execute(String.format("select * from %s.%s",
+                                                           KEYSPACE, TABLE));
+        assertColumnType(AsciiType.instance, resultSet, "key");
+        assertColumnType(AsciiType.instance, resultSet, "column1");
+        assertColumnType(MapType.getInstance(Int32Type.instance, AsciiType.instance, true), resultSet, "");
+
+        assertRows(resultSet,
+                   row("key1", "val1", map(1, "value1", 2, "value2", 3, "value3")),
+                   row("key1", "val2", map(4, "value7", 5, "value8", 6, "value9")));
+
+        assertRows(execute(String.format("SELECT \"\" FROM %s.%s;", KEYSPACE, TABLE)),
+                   row(map(1, "value1", 2, "value2", 3, "value3")),
+                   row(map(4, "value7", 5, "value8", 6, "value9")));
+
+        assertInvalidMessage("Range deletions are not supported for specific columns",
+                             String.format("DELETE \"\" FROM %s.%s WHERE key=?;", KEYSPACE, TABLE),
+                             "key1");
+
+        execute(String.format("TRUNCATE %s.%s;", KEYSPACE, TABLE));
+
+        execute(String.format("INSERT INTO %s.%s (key, column1, \"\") VALUES (?, ?, ?);", KEYSPACE, TABLE),
+                "key3", "val1", map(7, "value7", 8, "value8"));
+
+        assertRows(execute(String.format("SELECT \"\" FROM %s.%s;", KEYSPACE, TABLE)),
+                   row(map(7, "value7", 8, "value8")));
+    }
+
