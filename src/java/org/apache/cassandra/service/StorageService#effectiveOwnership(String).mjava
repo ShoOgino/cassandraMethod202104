@@ -1,78 +1,8 @@
-    /**
-     * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
-     * calculated per dc, i.e. each DC will have total ring ownership divided amongst its nodes. Without replication
-     * total ownership will be a multiple of the number of DC's and this value will then go up within each DC depending
-     * on the number of replicas within itself. For DC unaware replication strategies, ownership without replication
-     * will be 100%.
-     *
-     * @throws IllegalStateException when node is not configured properly.
-     */
     public LinkedHashMap<InetAddress, Float> effectiveOwnership(String keyspace) throws IllegalStateException
     {
-        AbstractReplicationStrategy strategy;
-        if (keyspace != null)
-        {
-            Keyspace keyspaceInstance = Schema.instance.getKeyspaceInstance(keyspace);
-            if (keyspaceInstance == null)
-                throw new IllegalArgumentException("The keyspace " + keyspace + ", does not exist");
-
-            if (keyspaceInstance.getReplicationStrategy() instanceof LocalStrategy)
-                throw new IllegalStateException("Ownership values for keyspaces with LocalStrategy are meaningless");
-            strategy = keyspaceInstance.getReplicationStrategy();
-        }
-        else
-        {
-            List<String> userKeyspaces = Schema.instance.getUserKeyspaces();
-
-            if (userKeyspaces.size() > 0)
-            {
-                keyspace = userKeyspaces.get(0);
-                AbstractReplicationStrategy replicationStrategy = Schema.instance.getKeyspaceInstance(keyspace).getReplicationStrategy();
-                for (String keyspaceName : userKeyspaces)
-                {
-                    if (!Schema.instance.getKeyspaceInstance(keyspaceName).getReplicationStrategy().hasSameSettings(replicationStrategy))
-                        throw new IllegalStateException("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
-                }
-            }
-            else
-            {
-                keyspace = "system_traces";
-            }
-
-            Keyspace keyspaceInstance = Schema.instance.getKeyspaceInstance(keyspace);
-            if (keyspaceInstance == null)
-                throw new IllegalArgumentException("The node does not have " + keyspace + " yet, probably still bootstrapping");
-            strategy = keyspaceInstance.getReplicationStrategy();
-        }
-
-        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
-
-        Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<>();
-        // mapping of dc's to nodes, use sorted map so that we get dcs sorted
-        SortedMap<String, Collection<InetAddress>> sortedDcsToEndpoints = new TreeMap<>();
-        sortedDcsToEndpoints.putAll(metadata.getTopology().getDatacenterEndpoints().asMap());
-        for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
-            endpointsGroupedByDc.add(endpoints);
-
-        Map<Token, Float> tokenOwnership = tokenMetadata.partitioner.describeOwnership(tokenMetadata.sortedTokens());
-        LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
-
-        Multimap<InetAddress, Range<Token>> endpointToRanges = strategy.getAddressRanges();
-        // calculate ownership per dc
-        for (Collection<InetAddress> endpoints : endpointsGroupedByDc)
-        {
-            // calculate the ownership with replication and add the endpoint to the final ownership map
-            for (InetAddress endpoint : endpoints)
-            {
-                float ownership = 0.0f;
-                for (Range<Token> range : endpointToRanges.get(endpoint))
-                {
-                    if (tokenOwnership.containsKey(range.right))
-                        ownership += tokenOwnership.get(range.right);
-                }
-                finalOwnership.put(endpoint, ownership);
-            }
-        }
-        return finalOwnership;
+        LinkedHashMap<InetAddressAndPort, Float> result = getEffectiveOwnership(keyspace);
+        LinkedHashMap<InetAddress, Float> asInets = new LinkedHashMap<>();
+        result.entrySet().stream().forEachOrdered(entry -> asInets.put(entry.getKey().address, entry.getValue()));
+        return asInets;
     }
 

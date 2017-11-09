@@ -1,0 +1,86 @@
+    static StrategyAdapter getStrategy(final TokenMetadata tokenMetadata, final NetworkTopologyStrategy rs, final IEndpointSnitch snitch, final InetAddressAndPort endpoint)
+    {
+        final String dc = snitch.getDatacenter(endpoint);
+        final int replicas = rs.getReplicationFactor(dc);
+
+        if (replicas == 0 || replicas == 1)
+        {
+            // No replication, each node is treated as separate.
+            return new StrategyAdapter()
+            {
+                @Override
+                public int replicas()
+                {
+                    return 1;
+                }
+
+                @Override
+                public Object getGroup(InetAddressAndPort unit)
+                {
+                    return unit;
+                }
+
+                @Override
+                public boolean inAllocationRing(InetAddressAndPort other)
+                {
+                    return dc.equals(snitch.getDatacenter(other));
+                }
+            };
+        }
+
+        Topology topology = tokenMetadata.getTopology();
+        int racks = topology.getDatacenterRacks().get(dc).asMap().size();
+
+        if (racks >= replicas)
+        {
+            return new StrategyAdapter()
+            {
+                @Override
+                public int replicas()
+                {
+                    return replicas;
+                }
+
+                @Override
+                public Object getGroup(InetAddressAndPort unit)
+                {
+                    return snitch.getRack(unit);
+                }
+
+                @Override
+                public boolean inAllocationRing(InetAddressAndPort other)
+                {
+                    return dc.equals(snitch.getDatacenter(other));
+                }
+            };
+        }
+        else if (racks == 1)
+        {
+            // One rack, each node treated as separate.
+            return new StrategyAdapter()
+            {
+                @Override
+                public int replicas()
+                {
+                    return replicas;
+                }
+
+                @Override
+                public Object getGroup(InetAddressAndPort unit)
+                {
+                    return unit;
+                }
+
+                @Override
+                public boolean inAllocationRing(InetAddressAndPort other)
+                {
+                    return dc.equals(snitch.getDatacenter(other));
+                }
+            };
+        }
+        else
+            throw new ConfigurationException(
+                    String.format("Token allocation failed: the number of racks %d in datacenter %s is lower than its replication factor %d.",
+                                  racks, dc, replicas));
+    }
+

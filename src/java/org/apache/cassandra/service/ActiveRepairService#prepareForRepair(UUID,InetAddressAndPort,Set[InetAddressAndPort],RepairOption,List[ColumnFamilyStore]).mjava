@@ -1,0 +1,73 @@
+    public UUID prepareForRepair(UUID parentRepairSession, InetAddressAndPort coordinator, Set<InetAddressAndPort> endpoints, RepairOption options, List<ColumnFamilyStore> columnFamilyStores)
+    {
+        long repairedAt = getRepairedAt(options);
+        registerParentRepairSession(parentRepairSession, coordinator, columnFamilyStores, options.getRanges(), options.isIncremental(), repairedAt, options.isGlobal(), options.getPreviewKind());
+        final CountDownLatch prepareLatch = new CountDownLatch(endpoints.size());
+        final AtomicBoolean status = new AtomicBoolean(true);
+        final Set<String> failedNodes = Collections.synchronizedSet(new HashSet<String>());
+        IAsyncCallbackWithFailure callback = new IAsyncCallbackWithFailure()
+        {
+            public void response(MessageIn msg)
+            {
+                prepareLatch.countDown();
+            }
+
+            public boolean isLatencyForSnitch()
+            {
+                return false;
+            }
+
+            public void onFailure(InetAddressAndPort from, RequestFailureReason failureReason)
+            {
+                status.set(false);
+                failedNodes.add(from.toString());
+                prepareLatch.countDown();
+            }
+        };
+
+        List<TableId> tableIds = new ArrayList<>(columnFamilyStores.size());
+        for (ColumnFamilyStore cfs : columnFamilyStores)
+            tableIds.add(cfs.metadata.id);
+
+        for (InetAddressAndPort neighbour : endpoints)
+        {
+            if (FailureDetector.instance.isAlive(neighbour))
+            {
+                PrepareMessage message = new PrepareMessage(parentRepairSession, tableIds, options.getRanges(), options.isIncremental(), repairedAt, options.isGlobal(), options.getPreviewKind());
+                MessageOut<RepairMessage> msg = message.createMessage();
+                MessagingService.instance().sendRR(msg, neighbour, callback, DatabaseDescriptor.getRpcTimeout(), true);
+            }
+            else
+            {
+                if (options.isForcedRepair())
+                {
+                    prepareLatch.countDown();
+                }
+                else
+                {
+                    // bailout early to avoid potentially waiting for a long time.
+                    failRepair(parentRepairSession, "Endpoint not alive: " + neighbour);
+                }
+
+            }
+        }
+        try
+        {
+            // Failed repair is expensive so we wait for longer time.
+            if (!prepareLatch.await(1, TimeUnit.HOURS)) {
+                failRepair(parentRepairSession, "Did not get replies from all endpoints.");
+            }
+        }
+        catch (InterruptedException e)
+        {
+            failRepair(parentRepairSession, "Interrupted while waiting for prepare repair response.");
+        }
+
+        if (!status.get())
+        {
+            failRepair(parentRepairSession, "Got negative replies from endpoints " + failedNodes);
+        }
+
+        return parentRepairSession;
+    }
+

@@ -1,0 +1,38 @@
+    static void migrateTransferredRanges()
+    {
+        ColumnFamilyStore newTransferredRanges = Keyspace.open(SchemaConstants.SYSTEM_KEYSPACE_NAME).getColumnFamilyStore(SystemKeyspace.TRANSFERRED_RANGES_V2);
+
+        if (!newTransferredRanges.isEmpty())
+            return;
+
+        logger.info("{} table was empty, migrating legacy {} to {}", transferredRangesName, legacyTransferredRangesName, transferredRangesName);
+
+        String query = String.format("SELECT * FROM %s",
+                                     legacyTransferredRangesName);
+
+        String insert = String.format("INSERT INTO %s ("
+                                      + "operation, "
+                                      + "peer, "
+                                      + "peer_port, "
+                                      + "keyspace_name, "
+                                      + "ranges) "
+                                      + " values ( ?, ?, ? , ?, ?)",
+                                      transferredRangesName);
+
+        UntypedResultSet rows = QueryProcessor.executeInternalWithPaging(query, 1000);
+        int transferred = 0;
+        for (UntypedResultSet.Row row : rows)
+        {
+            logger.debug("Transferring row {}", transferred);
+            QueryProcessor.executeInternal(insert,
+                                           row.has("operation") ? row.getString("operation") : null,
+                                           row.has("peer") ? row.getInetAddress("peer") : null,
+                                           DatabaseDescriptor.getStoragePort(),
+                                           row.has("keyspace_name") ? row.getString("keyspace_name") : null,
+                                           row.has("ranges") ? row.getSet("ranges", BytesType.instance) : null);
+            transferred++;
+        }
+
+        logger.info("Migrated {} rows from legacy {} to {}", transferred, legacyTransferredRangesName, transferredRangesName);
+    }
+

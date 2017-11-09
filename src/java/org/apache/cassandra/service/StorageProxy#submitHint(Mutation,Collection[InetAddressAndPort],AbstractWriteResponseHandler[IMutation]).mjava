@@ -1,0 +1,33 @@
+    public static Future<Void> submitHint(Mutation mutation,
+                                          Collection<InetAddressAndPort> targets,
+                                          AbstractWriteResponseHandler<IMutation> responseHandler)
+    {
+        HintRunnable runnable = new HintRunnable(targets)
+        {
+            public void runMayThrow()
+            {
+                Set<InetAddressAndPort> validTargets = new HashSet<>(targets.size());
+                Set<UUID> hostIds = new HashSet<>(targets.size());
+                for (InetAddressAndPort target : targets)
+                {
+                    UUID hostId = StorageService.instance.getHostIdForEndpoint(target);
+                    if (hostId != null)
+                    {
+                        hostIds.add(hostId);
+                        validTargets.add(target);
+                    }
+                    else
+                        logger.debug("Discarding hint for endpoint not part of ring: {}", target);
+                }
+                logger.trace("Adding hints for {}", validTargets);
+                HintsService.instance.write(hostIds, Hint.create(mutation, System.currentTimeMillis()));
+                validTargets.forEach(HintsService.instance.metrics::incrCreatedHints);
+                // Notify the handler only for CL == ANY
+                if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
+                    responseHandler.response(null);
+            }
+        };
+
+        return submitHint(runnable);
+    }
+

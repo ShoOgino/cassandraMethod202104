@@ -1,0 +1,45 @@
+    public void interpret(InetAddressAndPort ep)
+    {
+        ArrivalWindow hbWnd = arrivalSamples.get(ep);
+        if (hbWnd == null)
+        {
+            return;
+        }
+        long now = Clock.instance.nanoTime();
+        long diff = now - lastInterpret;
+        lastInterpret = now;
+        if (diff > MAX_LOCAL_PAUSE_IN_NANOS)
+        {
+            logger.warn("Not marking nodes down due to local pause of {}ns > {}ns", diff, MAX_LOCAL_PAUSE_IN_NANOS);
+            lastPause = now;
+            return;
+        }
+        if (Clock.instance.nanoTime() - lastPause < MAX_LOCAL_PAUSE_IN_NANOS)
+        {
+            logger.debug("Still not marking nodes down due to local pause");
+            return;
+        }
+        double phi = hbWnd.phi(now);
+        if (logger.isTraceEnabled())
+            logger.trace("PHI for {} : {}", ep, phi);
+
+        if (PHI_FACTOR * phi > getPhiConvictThreshold())
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("Node {} phi {} > {}; intervals: {} mean: {}ns", new Object[]{ep, PHI_FACTOR * phi, getPhiConvictThreshold(), hbWnd, hbWnd.mean()});
+            for (IFailureDetectionEventListener listener : fdEvntListeners)
+            {
+                listener.convict(ep, phi);
+            }
+        }
+        else if (logger.isDebugEnabled() && (PHI_FACTOR * phi * DEBUG_PERCENTAGE / 100.0 > getPhiConvictThreshold()))
+        {
+            logger.debug("PHI for {} : {}", ep, phi);
+        }
+        else if (logger.isTraceEnabled())
+        {
+            logger.trace("PHI for {} : {}", ep, phi);
+            logger.trace("mean for {} : {}ns", ep, hbWnd.mean());
+        }
+    }
+

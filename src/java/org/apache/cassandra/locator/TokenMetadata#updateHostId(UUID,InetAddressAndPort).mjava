@@ -1,0 +1,37 @@
+    /**
+     * Store an end-point to host ID mapping.  Each ID must be unique, and
+     * cannot be changed after the fact.
+     */
+    public void updateHostId(UUID hostId, InetAddressAndPort endpoint)
+    {
+        assert hostId != null;
+        assert endpoint != null;
+
+        lock.writeLock().lock();
+        try
+        {
+            InetAddressAndPort storedEp = endpointToHostIdMap.inverse().get(hostId);
+            if (storedEp != null)
+            {
+                if (!storedEp.equals(endpoint) && (FailureDetector.instance.isAlive(storedEp)))
+                {
+                    throw new RuntimeException(String.format("Host ID collision between active endpoint %s and %s (id=%s)",
+                                                             storedEp,
+                                                             endpoint,
+                                                             hostId));
+                }
+            }
+
+            UUID storedId = endpointToHostIdMap.get(endpoint);
+            if ((storedId != null) && (!storedId.equals(hostId)))
+                logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, hostId);
+
+            endpointToHostIdMap.forcePut(endpoint, hostId);
+        }
+        finally
+        {
+            lock.writeLock().unlock();
+        }
+
+    }
+

@@ -1,0 +1,133 @@
+    /*
+     * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
+     * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
+     * from somewhere else.
+     *
+     * onChange only ever sees one ApplicationState piece change at a time (even if many ApplicationState updates were
+     * received at the same time), so we perform a kind of state machine here. We are concerned with two events: knowing
+     * the token associated with an endpoint, and knowing its operation mode. Nodes can start in either bootstrap or
+     * normal mode, and from bootstrap mode can change mode to normal. A node in bootstrap mode needs to have
+     * pendingranges set in TokenMetadata; a node in normal mode should instead be part of the token ring.
+     *
+     * Normal progression of ApplicationState.STATUS values for a node should be like this:
+     * STATUS_BOOTSTRAPPING,token
+     *   if bootstrapping. stays this way until all files are received.
+     * STATUS_NORMAL,token
+     *   ready to serve reads and writes.
+     * STATUS_LEAVING,token
+     *   get ready to leave the cluster as part of a decommission
+     * STATUS_LEFT,token
+     *   set after decommission is completed.
+     *
+     * Other STATUS values that may be seen (possibly anywhere in the normal progression):
+     * STATUS_MOVING,newtoken
+     *   set if node is currently moving to a new token in the ring
+     * REMOVING_TOKEN,deadtoken
+     *   set if the node is dead and is being removed by its REMOVAL_COORDINATOR
+     * REMOVED_TOKEN,deadtoken
+     *   set if the node is dead and has been removed by its REMOVAL_COORDINATOR
+     *
+     * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
+     * you should never bootstrap a new node during a removenode, decommission or move.
+     */
+    public void onChange(InetAddressAndPort endpoint, ApplicationState state, VersionedValue value)
+    {
+        if (state == ApplicationState.STATUS | state == ApplicationState.STATUS_WITH_PORT)
+        {
+            String[] pieces = splitValue(value);
+            assert (pieces.length > 0);
+
+            String moveName = pieces[0];
+
+            switch (moveName)
+            {
+                case VersionedValue.STATUS_BOOTSTRAPPING_REPLACE:
+                    handleStateBootreplacing(endpoint, pieces);
+                    break;
+                case VersionedValue.STATUS_BOOTSTRAPPING:
+                    handleStateBootstrap(endpoint);
+                    break;
+                case VersionedValue.STATUS_NORMAL:
+                    handleStateNormal(endpoint, VersionedValue.STATUS_NORMAL);
+                    break;
+                case VersionedValue.SHUTDOWN:
+                    handleStateNormal(endpoint, VersionedValue.SHUTDOWN);
+                    break;
+                case VersionedValue.REMOVING_TOKEN:
+                case VersionedValue.REMOVED_TOKEN:
+                    handleStateRemoving(endpoint, pieces);
+                    break;
+                case VersionedValue.STATUS_LEAVING:
+                    handleStateLeaving(endpoint);
+                    break;
+                case VersionedValue.STATUS_LEFT:
+                    handleStateLeft(endpoint, pieces);
+                    break;
+                case VersionedValue.STATUS_MOVING:
+                    handleStateMoving(endpoint, pieces);
+                    break;
+            }
+        }
+        else
+        {
+            EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
+            if (epState == null || Gossiper.instance.isDeadState(epState))
+            {
+                logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+                return;
+            }
+
+            if (getTokenMetadata().isMember(endpoint))
+            {
+                switch (state)
+                {
+                    case RELEASE_VERSION:
+                        SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
+                        break;
+                    case DC:
+                        updateTopology(endpoint);
+                        SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
+                        break;
+                    case RACK:
+                        updateTopology(endpoint);
+                        SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
+                        break;
+                    case RPC_ADDRESS:
+                        try
+                        {
+                            SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
+                        }
+                        catch (UnknownHostException e)
+                        {
+                            throw new RuntimeException(e);
+                        }
+                        break;
+                    case NATIVE_ADDRESS_AND_PORT:
+                        try
+                        {
+                            InetAddressAndPort address = InetAddressAndPort.getByName(value.value);
+                            SystemKeyspace.updatePeerNativeAddress(endpoint, address);
+                        }
+                        catch (UnknownHostException e)
+                        {
+                            throw new RuntimeException(e);
+                        }
+                        break;
+                    case SCHEMA:
+                        SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
+                        MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+                        break;
+                    case HOST_ID:
+                        SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
+                        break;
+                    case RPC_READY:
+                        notifyRpcChange(endpoint, epState.isRpcReady());
+                        break;
+                    case NET_VERSION:
+                        updateNetVersion(endpoint, value);
+                        break;
+                }
+            }
+        }
+    }
+

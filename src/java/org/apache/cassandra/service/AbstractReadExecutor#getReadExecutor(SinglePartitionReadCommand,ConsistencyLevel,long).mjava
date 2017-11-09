@@ -4,12 +4,12 @@
     public static AbstractReadExecutor getReadExecutor(SinglePartitionReadCommand command, ConsistencyLevel consistencyLevel, long queryStartNanoTime) throws UnavailableException
     {
         Keyspace keyspace = Keyspace.open(command.metadata().keyspace);
-        List<InetAddress> allReplicas = StorageProxy.getLiveSortedEndpoints(keyspace, command.partitionKey());
+        List<InetAddressAndPort> allReplicas = StorageProxy.getLiveSortedEndpoints(keyspace, command.partitionKey());
         // 11980: Excluding EACH_QUORUM reads from potential RR, so that we do not miscount DC responses
         ReadRepairDecision repairDecision = consistencyLevel == ConsistencyLevel.EACH_QUORUM
                                             ? ReadRepairDecision.NONE
                                             : newReadRepairDecision(command.metadata());
-        List<InetAddress> targetReplicas = consistencyLevel.filterForQuery(keyspace, allReplicas, repairDecision);
+        List<InetAddressAndPort> targetReplicas = consistencyLevel.filterForQuery(keyspace, allReplicas, repairDecision);
 
         // Throw UAE early if we don't have enough replicas.
         consistencyLevel.assureSufficientLiveNodes(keyspace, targetReplicas);
@@ -43,12 +43,12 @@
         }
 
         // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
-        InetAddress extraReplica = allReplicas.get(targetReplicas.size());
+        InetAddressAndPort extraReplica = allReplicas.get(targetReplicas.size());
         // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
         // we might have to find a replacement that's not already in targetReplicas.
         if (repairDecision == ReadRepairDecision.DC_LOCAL && targetReplicas.contains(extraReplica))
         {
-            for (InetAddress address : allReplicas)
+            for (InetAddressAndPort address : allReplicas)
             {
                 if (!targetReplicas.contains(address))
                 {

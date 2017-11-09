@@ -1,0 +1,31 @@
+    private List<InetAddressAndPort> filterForEachQuorum(Keyspace keyspace, List<InetAddressAndPort> liveEndpoints, ReadRepairDecision readRepair)
+    {
+        NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
+
+        // quickly drop out if read repair is GLOBAL, since we just use all of the live endpoints
+        if (readRepair == ReadRepairDecision.GLOBAL)
+            return liveEndpoints;
+
+        Map<String, List<InetAddressAndPort>> dcsEndpoints = new HashMap<>();
+        for (String dc: strategy.getDatacenters())
+            dcsEndpoints.put(dc, new ArrayList<>());
+
+        for (InetAddressAndPort add : liveEndpoints)
+        {
+            String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(add);
+            dcsEndpoints.get(dc).add(add);
+        }
+
+        List<InetAddressAndPort> waitSet = new ArrayList<>();
+        for (Map.Entry<String, List<InetAddressAndPort>> dcEndpoints : dcsEndpoints.entrySet())
+        {
+            List<InetAddressAndPort> dcEndpoint = dcEndpoints.getValue();
+            if (readRepair == ReadRepairDecision.DC_LOCAL && dcEndpoints.getKey().equals(DatabaseDescriptor.getLocalDataCenter()))
+                waitSet.addAll(dcEndpoint);
+            else
+                waitSet.addAll(dcEndpoint.subList(0, Math.min(localQuorumFor(keyspace, dcEndpoints.getKey()), dcEndpoint.size())));
+        }
+
+        return waitSet;
+    }
+

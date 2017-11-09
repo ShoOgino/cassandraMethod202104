@@ -1,0 +1,63 @@
+    @Test
+    public void testMigratePeers() throws Throwable
+    {
+        String insert = String.format("INSERT INTO %s ("
+                                      + "peer, "
+                                      + "data_center, "
+                                      + "host_id, "
+                                      + "preferred_ip, "
+                                      + "rack, "
+                                      + "release_version, "
+                                      + "rpc_address, "
+                                      + "schema_version, "
+                                      + "tokens) "
+                                      + " values ( ?, ?, ? , ? , ?, ?, ?, ?, ?)",
+                                      SystemKeyspaceMigrator40.legacyPeersName);
+        UUID hostId = UUIDGen.getTimeUUID();
+        UUID schemaVersion = UUIDGen.getTimeUUID();
+        execute(insert,
+                InetAddress.getByName("127.0.0.1"),
+                "dcFoo",
+                hostId,
+                InetAddress.getByName("127.0.0.2"),
+                "rackFoo", "4.0",
+                InetAddress.getByName("127.0.0.3"),
+                schemaVersion,
+                ImmutableSet.of("foobar"));
+        SystemKeyspaceMigrator40.migrate();
+
+        int rowCount = 0;
+        for (UntypedResultSet.Row row : execute(String.format("SELECT * FROM %s", SystemKeyspaceMigrator40.peersName)))
+        {
+            rowCount++;
+            assertEquals(InetAddress.getByName("127.0.0.1"), row.getInetAddress("peer"));
+            assertEquals(DatabaseDescriptor.getStoragePort(), row.getInt("peer_port"));
+            assertEquals("dcFoo", row.getString("data_center"));
+            assertEquals(hostId, row.getUUID("host_id"));
+            assertEquals(InetAddress.getByName("127.0.0.2"), row.getInetAddress("preferred_ip"));
+            assertEquals(DatabaseDescriptor.getStoragePort(), row.getInt("preferred_port"));
+            assertEquals("rackFoo", row.getString("rack"));
+            assertEquals("4.0", row.getString("release_version"));
+            assertEquals(InetAddress.getByName("127.0.0.3"), row.getInetAddress("native_address"));
+            assertEquals(DatabaseDescriptor.getNativeTransportPort(), row.getInt("native_port"));
+            assertEquals(schemaVersion, row.getUUID("schema_version"));
+            assertEquals(ImmutableSet.of("foobar"), row.getSet("tokens", UTF8Type.instance));
+        }
+        assertEquals(1, rowCount);
+
+        //Test nulls/missing don't prevent the row from propagating
+        execute(String.format("TRUNCATE %s", SystemKeyspaceMigrator40.legacyPeersName));
+        execute(String.format("TRUNCATE %s", SystemKeyspaceMigrator40.peersName));
+
+        execute(String.format("INSERT INTO %s (peer) VALUES (?)", SystemKeyspaceMigrator40.legacyPeersName),
+                              InetAddress.getByName("127.0.0.1"));
+        SystemKeyspaceMigrator40.migrate();
+
+        rowCount = 0;
+        for (UntypedResultSet.Row row : execute(String.format("SELECT * FROM %s", SystemKeyspaceMigrator40.peersName)))
+        {
+            rowCount++;
+        }
+        assertEquals(1, rowCount);
+    }
+

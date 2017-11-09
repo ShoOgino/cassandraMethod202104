@@ -8,6 +8,31 @@
         config.native_transport_port += offset;
         config.storage_port += offset;
 
+        //Rewrite the seed ports string
+        String[] hosts = config.seed_provider.parameters.get("seeds").split(",", -1);
+        String rewrittenSeeds = Joiner.on(", ").join(Arrays.stream(hosts).map(host -> {
+            StringBuilder sb = new StringBuilder();
+            try
+            {
+                InetAddressAndPort address = InetAddressAndPort.getByName(host.trim());
+                if (address.address instanceof Inet6Address)
+                {
+                     sb.append('[').append(address.address.getHostAddress()).append(']');
+                }
+                else
+                {
+                    sb.append(address.address.getHostAddress());
+                }
+                sb.append(':').append(address.port + offset);
+                return sb.toString();
+            }
+            catch (UnknownHostException e)
+            {
+                throw new ConfigurationException("Error in OffsetAwareConfigurationLoader reworking seed list", e);
+            }
+        }).collect(Collectors.toList()));
+        config.seed_provider.parameters.put("seeds", rewrittenSeeds);
+
         config.commitlog_directory += sep + offset;
         config.saved_caches_directory += sep + offset;
         config.hints_directory += sep + offset;

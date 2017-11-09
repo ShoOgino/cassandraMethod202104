@@ -1,0 +1,40 @@
+    @Test
+    public void testMigratePeerEvents() throws Throwable
+    {
+        String insert = String.format("INSERT INTO %s ("
+                                      + "peer, "
+                                      + "hints_dropped) "
+                                      + " values ( ?, ? )",
+                                      SystemKeyspaceMigrator40.legacyPeerEventsName);
+        UUID uuid = UUIDGen.getTimeUUID();
+        execute(insert,
+                InetAddress.getByName("127.0.0.1"),
+                ImmutableMap.of(uuid, 42));
+        SystemKeyspaceMigrator40.migrate();
+
+        int rowCount = 0;
+        for (UntypedResultSet.Row row : execute(String.format("SELECT * FROM %s", SystemKeyspaceMigrator40.peerEventsName)))
+        {
+            rowCount++;
+            assertEquals(InetAddress.getByName("127.0.0.1"), row.getInetAddress("peer"));
+            assertEquals(DatabaseDescriptor.getStoragePort(), row.getInt("peer_port"));
+            assertEquals(ImmutableMap.of(uuid, 42), row.getMap("hints_dropped", UUIDType.instance, Int32Type.instance));
+        }
+        assertEquals(1, rowCount);
+
+        //Test nulls/missing don't prevent the row from propagating
+        execute(String.format("TRUNCATE %s", SystemKeyspaceMigrator40.legacyPeerEventsName));
+        execute(String.format("TRUNCATE %s", SystemKeyspaceMigrator40.peerEventsName));
+
+        execute(String.format("INSERT INTO %s (peer) VALUES (?)", SystemKeyspaceMigrator40.legacyPeerEventsName),
+                InetAddress.getByName("127.0.0.1"));
+        SystemKeyspaceMigrator40.migrate();
+
+        rowCount = 0;
+        for (UntypedResultSet.Row row : execute(String.format("SELECT * FROM %s", SystemKeyspaceMigrator40.peerEventsName)))
+        {
+            rowCount++;
+        }
+        assertEquals(1, rowCount);
+    }
+

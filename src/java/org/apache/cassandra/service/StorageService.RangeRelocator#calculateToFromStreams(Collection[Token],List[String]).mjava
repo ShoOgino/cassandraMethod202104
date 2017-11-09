@@ -1,6 +1,6 @@
         private void calculateToFromStreams(Collection<Token> newTokens, List<String> keyspaceNames)
         {
-            InetAddress localAddress = FBUtilities.getBroadcastAddress();
+            InetAddressAndPort localAddress = FBUtilities.getBroadcastAddressAndPort();
             IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
             TokenMetadata tokenMetaCloneAllSettled = tokenMetadata.cloneAfterAllSettled();
             // clone to avoid concurrent modification in calculateNaturalEndpoints
@@ -10,7 +10,7 @@
             {
                 // replication strategy of the current keyspace
                 AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
-                Multimap<InetAddress, Range<Token>> endpointToRanges = strategy.getAddressRanges();
+                Multimap<InetAddressAndPort, Range<Token>> endpointToRanges = strategy.getAddressRanges();
 
                 logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
                 for (Token newToken : newTokens)
@@ -22,7 +22,7 @@
 
                     // ring ranges and endpoints associated with them
                     // this used to determine what nodes should we ping about range data
-                    Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
+                    Multimap<Range<Token>, InetAddressAndPort> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
 
                     // calculated parts of the ranges to request/stream from/to nodes in the ring
                     Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
@@ -31,19 +31,19 @@
                      * In this loop we are going through all ranges "to fetch" and determining
                      * nodes in the ring responsible for data we are interested in
                      */
-                    Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
+                    Multimap<Range<Token>, InetAddressAndPort> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
                     for (Range<Token> toFetch : rangesPerKeyspace.right)
                     {
                         for (Range<Token> range : rangeAddresses.keySet())
                         {
                             if (range.contains(toFetch))
                             {
-                                List<InetAddress> endpoints = null;
+                                List<InetAddressAndPort> endpoints = null;
 
                                 if (useStrictConsistency)
                                 {
-                                    Set<InetAddress> oldEndpoints = Sets.newHashSet(rangeAddresses.get(range));
-                                    Set<InetAddress> newEndpoints = Sets.newHashSet(strategy.calculateNaturalEndpoints(toFetch.right, tokenMetaCloneAllSettled));
+                                    Set<InetAddressAndPort> oldEndpoints = Sets.newHashSet(rangeAddresses.get(range));
+                                    Set<InetAddressAndPort> newEndpoints = Sets.newHashSet(strategy.calculateNaturalEndpoints(toFetch.right, tokenMetaCloneAllSettled));
 
                                     //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                                     //So we need to be careful to only be strict when endpoints == RF
@@ -70,7 +70,7 @@
                             }
                         }
 
-                        Collection<InetAddress> addressList = rangesToFetchWithPreferredEndpoints.get(toFetch);
+                        Collection<InetAddressAndPort> addressList = rangesToFetchWithPreferredEndpoints.get(toFetch);
                         if (addressList == null || addressList.isEmpty())
                             continue;
 
@@ -79,7 +79,7 @@
                             if (addressList.size() > 1)
                                 throw new IllegalStateException("Multiple strict sources found for " + toFetch);
 
-                            InetAddress sourceIp = addressList.iterator().next();
+                            InetAddressAndPort sourceIp = addressList.iterator().next();
                             if (Gossiper.instance.isEnabled() && !Gossiper.instance.getEndpointStateForEndpoint(sourceIp).isAlive())
                                 throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
                         }
@@ -87,13 +87,13 @@
 
                     // calculating endpoints to stream current ranges to if needed
                     // in some situations node will handle current ranges as part of the new ranges
-                    Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
+                    Multimap<InetAddressAndPort, Range<Token>> endpointRanges = HashMultimap.create();
                     for (Range<Token> toStream : rangesPerKeyspace.left)
                     {
-                        Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
-                        Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
+                        Set<InetAddressAndPort> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
+                        Set<InetAddressAndPort> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
                         logger.debug("Range: {} Current endpoints: {} New endpoints: {}", toStream, currentEndpoints, newEndpoints);
-                        for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
+                        for (InetAddressAndPort address : Sets.difference(newEndpoints, currentEndpoints))
                         {
                             logger.debug("Range {} has new owner {}", toStream, address);
                             endpointRanges.put(address, toStream);
@@ -101,19 +101,19 @@
                     }
 
                     // stream ranges
-                    for (InetAddress address : endpointRanges.keySet())
+                    for (InetAddressAndPort address : endpointRanges.keySet())
                     {
                         logger.debug("Will stream range {} of keyspace {} to endpoint {}", endpointRanges.get(address), keyspace, address);
-                        InetAddress preferred = SystemKeyspace.getPreferredIP(address);
+                        InetAddressAndPort preferred = SystemKeyspace.getPreferredIP(address);
                         streamPlan.transferRanges(address, preferred, keyspace, endpointRanges.get(address));
                     }
 
                     // stream requests
-                    Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints, keyspace, FailureDetector.instance, useStrictConsistency);
-                    for (InetAddress address : workMap.keySet())
+                    Multimap<InetAddressAndPort, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints, keyspace, FailureDetector.instance, useStrictConsistency);
+                    for (InetAddressAndPort address : workMap.keySet())
                     {
                         logger.debug("Will request range {} of keyspace {} from endpoint {}", workMap.get(address), keyspace, address);
-                        InetAddress preferred = SystemKeyspace.getPreferredIP(address);
+                        InetAddressAndPort preferred = SystemKeyspace.getPreferredIP(address);
                         streamPlan.requestRanges(address, preferred, keyspace, workMap.get(address));
                     }
 

@@ -9,14 +9,14 @@
         Keyspace ks = Keyspace.open(desc.keyspace);
         ColumnFamilyStore cfs = ks.getColumnFamilyStore(desc.columnFamily);
         cfs.metric.repairsStarted.inc();
-        List<InetAddress> allEndpoints = new ArrayList<>(session.endpoints);
-        allEndpoints.add(FBUtilities.getBroadcastAddress());
+        List<InetAddressAndPort> allEndpoints = new ArrayList<>(session.endpoints);
+        allEndpoints.add(FBUtilities.getBroadcastAddressAndPort());
 
         ListenableFuture<List<TreeResponse>> validations;
         // Create a snapshot at all nodes unless we're using pure parallel repairs
         if (parallelismDegree != RepairParallelism.PARALLEL)
         {
-            ListenableFuture<List<InetAddress>> allSnapshotTasks;
+            ListenableFuture<List<InetAddressAndPort>> allSnapshotTasks;
             if (isIncremental)
             {
                 // consistent repair does it's own "snapshotting"
@@ -25,8 +25,8 @@
             else
             {
                 // Request snapshot to all replica
-                List<ListenableFuture<InetAddress>> snapshotTasks = new ArrayList<>(allEndpoints.size());
-                for (InetAddress endpoint : allEndpoints)
+                List<ListenableFuture<InetAddressAndPort>> snapshotTasks = new ArrayList<>(allEndpoints.size());
+                for (InetAddressAndPort endpoint : allEndpoints)
                 {
                     SnapshotTask snapshotTask = new SnapshotTask(desc, endpoint);
                     snapshotTasks.add(snapshotTask);
@@ -36,9 +36,9 @@
             }
 
             // When all snapshot complete, send validation requests
-            validations = Futures.transformAsync(allSnapshotTasks, new AsyncFunction<List<InetAddress>, List<TreeResponse>>()
+            validations = Futures.transformAsync(allSnapshotTasks, new AsyncFunction<List<InetAddressAndPort>, List<TreeResponse>>()
             {
-                public ListenableFuture<List<TreeResponse>> apply(List<InetAddress> endpoints)
+                public ListenableFuture<List<TreeResponse>> apply(List<InetAddressAndPort> endpoints)
                 {
                     if (parallelismDegree == RepairParallelism.SEQUENTIAL)
                         return sendSequentialValidationRequest(endpoints);

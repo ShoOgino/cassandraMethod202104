@@ -1,0 +1,69 @@
+    private void printDc(NodeProbe probe, String format,
+                         String dc,
+                         LinkedHashMultimap<String, String> endpointsToTokens,
+                         SetHostStatWithPort hoststats,boolean showEffectiveOwnership)
+    {
+        Collection<String> liveNodes = probe.getLiveNodes(true);
+        Collection<String> deadNodes = probe.getUnreachableNodes(true);
+        Collection<String> joiningNodes = probe.getJoiningNodes(true);
+        Collection<String> leavingNodes = probe.getLeavingNodes(true);
+        Collection<String> movingNodes = probe.getMovingNodes(true);
+        Map<String, String> loadMap = probe.getLoadMap(true);
+
+        System.out.println("Datacenter: " + dc);
+        System.out.println("==========");
+
+        // get the total amount of replicas for this dc and the last token in this dc's ring
+        List<String> tokens = new ArrayList<>();
+        String lastToken = "";
+
+        for (HostStatWithPort stat : hoststats)
+        {
+            tokens.addAll(endpointsToTokens.get(stat.endpoint.toString()));
+            lastToken = tokens.get(tokens.size() - 1);
+        }
+
+        System.out.printf(format, "Address", "Rack", "Status", "State", "Load", "Owns", "Token");
+
+        if (hoststats.size() > 1)
+            System.out.printf(format, "", "", "", "", "", "", lastToken);
+        else
+            System.out.println();
+
+        for (HostStatWithPort stat : hoststats)
+        {
+            String endpoint = stat.endpoint.toString();
+            String rack;
+            try
+            {
+                rack = probe.getEndpointSnitchInfoProxy().getRack(endpoint);
+            }
+            catch (UnknownHostException e)
+            {
+                rack = "Unknown";
+            }
+
+            String status = liveNodes.contains(endpoint)
+                            ? "Up"
+                            : deadNodes.contains(endpoint)
+                              ? "Down"
+                              : "?";
+
+            String state = "Normal";
+
+            if (joiningNodes.contains(endpoint))
+                state = "Joining";
+            else if (leavingNodes.contains(endpoint))
+                state = "Leaving";
+            else if (movingNodes.contains(endpoint))
+                state = "Moving";
+
+            String load = loadMap.containsKey(endpoint)
+                          ? loadMap.get(endpoint)
+                          : "?";
+            String owns = stat.owns != null && showEffectiveOwnership? new DecimalFormat("##0.00%").format(stat.owns) : "?";
+            System.out.printf(format, stat.ipOrDns(), rack, status, state, load, owns, stat.token);
+        }
+        System.out.println();
+    }
+

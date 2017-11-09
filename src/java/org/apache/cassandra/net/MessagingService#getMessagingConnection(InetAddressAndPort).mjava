@@ -1,0 +1,26 @@
+    private OutboundMessagingPool getMessagingConnection(InetAddressAndPort to)
+    {
+        OutboundMessagingPool pool = channelManagers.get(to);
+        if (pool == null)
+        {
+            final boolean secure = isEncryptedConnection(to);
+            final int port = portFor(to, secure);
+            if (!DatabaseDescriptor.getInternodeAuthenticator().authenticate(to.address, port))
+                return null;
+
+            InetAddressAndPort preferredRemote = SystemKeyspace.getPreferredIP(to);
+            InetAddressAndPort local = FBUtilities.getLocalAddressAndPort();
+            ServerEncryptionOptions encryptionOptions = secure ? DatabaseDescriptor.getServerEncryptionOptions() : null;
+            IInternodeAuthenticator authenticator = DatabaseDescriptor.getInternodeAuthenticator();
+
+            pool = new OutboundMessagingPool(preferredRemote, local, encryptionOptions, backPressure.newState(to), authenticator);
+            OutboundMessagingPool existing = channelManagers.putIfAbsent(to, pool);
+            if (existing != null)
+            {
+                pool.close(false);
+                pool = existing;
+            }
+        }
+        return pool;
+    }
+

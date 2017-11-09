@@ -1,0 +1,23 @@
+    private static Runnable counterWriteTask(final IMutation mutation,
+                                             final Iterable<InetAddressAndPort> targets,
+                                             final AbstractWriteResponseHandler<IMutation> responseHandler,
+                                             final String localDataCenter)
+    {
+        return new DroppableRunnable(MessagingService.Verb.COUNTER_MUTATION)
+        {
+            @Override
+            public void runMayThrow() throws OverloadedException, WriteTimeoutException
+            {
+                assert mutation instanceof CounterMutation;
+
+                Mutation result = ((CounterMutation) mutation).applyCounterMutation();
+                responseHandler.response(null);
+
+                Set<InetAddressAndPort> remotes = Sets.difference(ImmutableSet.copyOf(targets),
+                                                                  ImmutableSet.of(FBUtilities.getBroadcastAddressAndPort()));
+                if (!remotes.isEmpty())
+                    sendToHintedEndpoints(result, remotes, responseHandler, localDataCenter, Stage.COUNTER_MUTATION);
+            }
+        };
+    }
+

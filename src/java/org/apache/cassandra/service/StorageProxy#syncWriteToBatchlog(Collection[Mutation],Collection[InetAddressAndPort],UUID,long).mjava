@@ -1,0 +1,25 @@
+    private static void syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddressAndPort> endpoints, UUID uuid, long queryStartNanoTime)
+    throws WriteTimeoutException, WriteFailureException
+    {
+        WriteResponseHandler<?> handler = new WriteResponseHandler<>(endpoints,
+                                                                     Collections.emptyList(),
+                                                                     endpoints.size() == 1 ? ConsistencyLevel.ONE : ConsistencyLevel.TWO,
+                                                                     Keyspace.open(SchemaConstants.SYSTEM_KEYSPACE_NAME),
+                                                                     null,
+                                                                     WriteType.BATCH_LOG,
+                                                                     queryStartNanoTime);
+
+        Batch batch = Batch.createLocal(uuid, FBUtilities.timestampMicros(), mutations);
+        MessageOut<Batch> message = new MessageOut<>(MessagingService.Verb.BATCH_STORE, batch, Batch.serializer);
+        for (InetAddressAndPort target : endpoints)
+        {
+            logger.trace("Sending batchlog store request {} to {} for {} mutations", batch.id, target, batch.size());
+
+            if (canDoLocalRequest(target))
+                performLocally(Stage.MUTATION, Optional.empty(), () -> BatchlogManager.store(batch), handler);
+            else
+                MessagingService.instance().sendRR(message, target, handler);
+        }
+        handler.get();
+    }
+

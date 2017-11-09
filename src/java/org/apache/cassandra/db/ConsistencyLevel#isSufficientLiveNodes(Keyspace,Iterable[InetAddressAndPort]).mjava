@@ -1,0 +1,27 @@
+    public boolean isSufficientLiveNodes(Keyspace keyspace, Iterable<InetAddressAndPort> liveEndpoints)
+    {
+        switch (this)
+        {
+            case ANY:
+                // local hint is acceptable, and local node is always live
+                return true;
+            case LOCAL_ONE:
+                return countLocalEndpoints(liveEndpoints) >= 1;
+            case LOCAL_QUORUM:
+                return countLocalEndpoints(liveEndpoints) >= blockFor(keyspace);
+            case EACH_QUORUM:
+                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+                {
+                    for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
+                    {
+                        if (entry.getValue() < localQuorumFor(keyspace, entry.getKey()))
+                            return false;
+                    }
+                    return true;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            default:
+                return Iterables.size(liveEndpoints) >= blockFor(keyspace);
+        }
+    }
+

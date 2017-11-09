@@ -5,30 +5,30 @@
      *
      * @throws java.lang.IllegalStateException when there is no source to get data streamed, or more than 1 source found.
      */
-    private Multimap<Range<Token>, InetAddress> getAllRangesWithStrictSourcesFor(String keyspace, Collection<Range<Token>> desiredRanges)
+    private Multimap<Range<Token>, InetAddressAndPort> getAllRangesWithStrictSourcesFor(String keyspace, Collection<Range<Token>> desiredRanges)
     {
         assert tokens != null;
         AbstractReplicationStrategy strat = Keyspace.open(keyspace).getReplicationStrategy();
 
         // Active ranges
         TokenMetadata metadataClone = metadata.cloneOnlyTokenMap();
-        Multimap<Range<Token>, InetAddress> addressRanges = strat.getRangeAddresses(metadataClone);
+        Multimap<Range<Token>, InetAddressAndPort> addressRanges = strat.getRangeAddresses(metadataClone);
 
         // Pending ranges
         metadataClone.updateNormalTokens(tokens, address);
-        Multimap<Range<Token>, InetAddress> pendingRangeAddresses = strat.getRangeAddresses(metadataClone);
+        Multimap<Range<Token>, InetAddressAndPort> pendingRangeAddresses = strat.getRangeAddresses(metadataClone);
 
         // Collects the source that will have its range moved to the new node
-        Multimap<Range<Token>, InetAddress> rangeSources = ArrayListMultimap.create();
+        Multimap<Range<Token>, InetAddressAndPort> rangeSources = ArrayListMultimap.create();
 
         for (Range<Token> desiredRange : desiredRanges)
         {
-            for (Map.Entry<Range<Token>, Collection<InetAddress>> preEntry : addressRanges.asMap().entrySet())
+            for (Map.Entry<Range<Token>, Collection<InetAddressAndPort>> preEntry : addressRanges.asMap().entrySet())
             {
                 if (preEntry.getKey().contains(desiredRange))
                 {
-                    Set<InetAddress> oldEndpoints = Sets.newHashSet(preEntry.getValue());
-                    Set<InetAddress> newEndpoints = Sets.newHashSet(pendingRangeAddresses.get(desiredRange));
+                    Set<InetAddressAndPort> oldEndpoints = Sets.newHashSet(preEntry.getValue());
+                    Set<InetAddressAndPort> newEndpoints = Sets.newHashSet(pendingRangeAddresses.get(desiredRange));
 
                     // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                     // So we need to be careful to only be strict when endpoints == RF
@@ -43,14 +43,14 @@
             }
 
             // Validate
-            Collection<InetAddress> addressList = rangeSources.get(desiredRange);
+            Collection<InetAddressAndPort> addressList = rangeSources.get(desiredRange);
             if (addressList == null || addressList.isEmpty())
                 throw new IllegalStateException("No sources found for " + desiredRange);
 
             if (addressList.size() > 1)
                 throw new IllegalStateException("Multiple endpoints found for " + desiredRange);
 
-            InetAddress sourceIp = addressList.iterator().next();
+            InetAddressAndPort sourceIp = addressList.iterator().next();
             EndpointState sourceState = Gossiper.instance.getEndpointStateForEndpoint(sourceIp);
             if (Gossiper.instance.isEnabled() && (sourceState == null || !sourceState.isAlive()))
                 throw new RuntimeException("A node required to move the data consistently is down (" + sourceIp + "). " +

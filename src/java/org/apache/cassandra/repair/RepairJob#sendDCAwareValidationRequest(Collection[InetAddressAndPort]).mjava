@@ -1,0 +1,58 @@
+    /**
+     * Creates {@link ValidationTask} and submit them to task executor so that tasks run sequentially within each dc.
+     */
+    private ListenableFuture<List<TreeResponse>> sendDCAwareValidationRequest(Collection<InetAddressAndPort> endpoints)
+    {
+        String message = String.format("Requesting merkle trees for %s (to %s)", desc.columnFamily, endpoints);
+        logger.info("{} {}", previewKind.logPrefix(desc.sessionId), message);
+        Tracing.traceRepair(message);
+        int nowInSec = FBUtilities.nowInSeconds();
+        List<ListenableFuture<TreeResponse>> tasks = new ArrayList<>(endpoints.size());
+
+        Map<String, Queue<InetAddressAndPort>> requestsByDatacenter = new HashMap<>();
+        for (InetAddressAndPort endpoint : endpoints)
+        {
+            String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint);
+            Queue<InetAddressAndPort> queue = requestsByDatacenter.get(dc);
+            if (queue == null)
+            {
+                queue = new LinkedList<>();
+                requestsByDatacenter.put(dc, queue);
+            }
+            queue.add(endpoint);
+        }
+
+        for (Map.Entry<String, Queue<InetAddressAndPort>> entry : requestsByDatacenter.entrySet())
+        {
+            Queue<InetAddressAndPort> requests = entry.getValue();
+            InetAddressAndPort address = requests.poll();
+            ValidationTask firstTask = new ValidationTask(desc, address, nowInSec, previewKind);
+            logger.info("Validating {}", address);
+            session.waitForValidation(Pair.create(desc, address), firstTask);
+            tasks.add(firstTask);
+            ValidationTask currentTask = firstTask;
+            while (requests.size() > 0)
+            {
+                final InetAddressAndPort nextAddress = requests.poll();
+                final ValidationTask nextTask = new ValidationTask(desc, nextAddress, nowInSec, previewKind);
+                tasks.add(nextTask);
+                Futures.addCallback(currentTask, new FutureCallback<TreeResponse>()
+                {
+                    public void onSuccess(TreeResponse result)
+                    {
+                        logger.info("Validating {}", nextAddress);
+                        session.waitForValidation(Pair.create(desc, nextAddress), nextTask);
+                        taskExecutor.execute(nextTask);
+                    }
+
+                    // failure is handled at root of job chain
+                    public void onFailure(Throwable t) {}
+                });
+                currentTask = nextTask;
+            }
+            // start running tasks
+            taskExecutor.execute(firstTask);
+        }
+        return Futures.allAsList(tasks);
+    }
+

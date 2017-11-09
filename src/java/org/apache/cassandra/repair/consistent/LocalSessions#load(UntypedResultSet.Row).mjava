@@ -3,12 +3,27 @@
         LocalSession.Builder builder = LocalSession.builder();
         builder.withState(ConsistentSession.State.valueOf(row.getInt("state")));
         builder.withSessionID(row.getUUID("parent_id"));
-        builder.withCoordinator(row.getInetAddress("coordinator"));
+        InetAddressAndPort coordinator = InetAddressAndPort.getByAddressOverrideDefaults(
+            row.getInetAddress("coordinator"),
+            row.getInt("coordinator_port"));
+        builder.withCoordinator(coordinator);
         builder.withTableIds(uuidToTableId(row.getSet("cfids", UUIDType.instance)));
         builder.withRepairedAt(row.getTimestamp("repaired_at").getTime());
         builder.withRanges(deserializeRanges(row.getSet("ranges", BytesType.instance)));
-        builder.withParticipants(row.getSet("participants", InetAddressType.instance));
-
+        //There is no cross version streaming and thus no cross version repair so assume that
+        //any valid repair sessions has the participants_wp column and any that doesn't is malformed
+        Set<String> participants = row.getSet("participants_wp", UTF8Type.instance);
+        builder.withParticipants(participants.stream().map(participant ->
+                                                             {
+                                                                 try
+                                                                 {
+                                                                     return InetAddressAndPort.getByName(participant);
+                                                                 }
+                                                                 catch (UnknownHostException e)
+                                                                 {
+                                                                     throw new RuntimeException(e);
+                                                                 }
+                                                             }).collect(Collectors.toSet()));
         builder.withStartedAt(dateToSeconds(row.getTimestamp("started_at")));
         builder.withLastUpdate(dateToSeconds(row.getTimestamp("last_update")));
 

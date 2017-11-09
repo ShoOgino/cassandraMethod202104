@@ -1,0 +1,38 @@
+    private static PrepareCallback preparePaxos(Commit toPrepare, List<InetAddressAndPort> endpoints, int requiredParticipants, ConsistencyLevel consistencyForPaxos, long queryStartNanoTime)
+    throws WriteTimeoutException
+    {
+        PrepareCallback callback = new PrepareCallback(toPrepare.update.partitionKey(), toPrepare.update.metadata(), requiredParticipants, consistencyForPaxos, queryStartNanoTime);
+        MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_PREPARE, toPrepare, Commit.serializer);
+        for (InetAddressAndPort target : endpoints)
+        {
+            if (canDoLocalRequest(target))
+            {
+                StageManager.getStage(MessagingService.verbStages.get(MessagingService.Verb.PAXOS_PREPARE)).execute(new Runnable()
+                {
+                    public void run()
+                    {
+                        try
+                        {
+                            MessageIn<PrepareResponse> message = MessageIn.create(FBUtilities.getBroadcastAddressAndPort(),
+                                    PrepareVerbHandler.doPrepare(toPrepare),
+                                    Collections.emptyMap(),
+                                    MessagingService.Verb.INTERNAL_RESPONSE,
+                                    MessagingService.current_version);
+                            callback.response(message);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.error("Failed paxos prepare locally", ex);
+                        }
+                    }
+                });
+            }
+            else
+            {
+                MessagingService.instance().sendRR(message, target, callback);
+            }
+        }
+        callback.await();
+        return callback;
+    }
+

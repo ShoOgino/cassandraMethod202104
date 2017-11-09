@@ -1,0 +1,64 @@
+    /**
+     * If versions differ this node sends request with local migration list to the endpoint
+     * and expecting to receive a list of migrations to apply locally.
+     */
+    private static void maybeScheduleSchemaPull(final UUID theirVersion, final InetAddressAndPort endpoint)
+    {
+        if (Schema.instance.getVersion() == null)
+        {
+            logger.debug("Not pulling schema from {}, because local schama version is not known yet",
+                         endpoint);
+            return;
+        }
+        if (Schema.instance.isSameVersion(theirVersion))
+        {
+            logger.debug("Not pulling schema from {}, because schema versions match ({})",
+                         endpoint,
+                         Schema.schemaVersionToString(theirVersion));
+            return;
+        }
+        if (!shouldPullSchemaFrom(endpoint))
+        {
+            logger.debug("Not pulling schema from {}, because versions match ({}/{}), or shouldPullSchemaFrom returned false",
+                         endpoint, Schema.instance.getVersion(), theirVersion);
+            return;
+        }
+
+        if (Schema.instance.isEmpty() || runtimeMXBean.getUptime() < MIGRATION_DELAY_IN_MS)
+        {
+            // If we think we may be bootstrapping or have recently started, submit MigrationTask immediately
+            logger.debug("Immediately submitting migration task for {}, " +
+                         "schema versions: local={}, remote={}",
+                         endpoint,
+                         Schema.schemaVersionToString(Schema.instance.getVersion()),
+                         Schema.schemaVersionToString(theirVersion));
+            submitMigrationTask(endpoint);
+        }
+        else
+        {
+            // Include a delay to make sure we have a chance to apply any changes being
+            // pushed out simultaneously. See CASSANDRA-5025
+            Runnable runnable = () ->
+            {
+                // grab the latest version of the schema since it may have changed again since the initial scheduling
+                UUID epSchemaVersion = Gossiper.instance.getSchemaVersion(endpoint);
+                if (epSchemaVersion == null)
+                {
+                    logger.debug("epState vanished for {}, not submitting migration task", endpoint);
+                    return;
+                }
+                if (Schema.instance.isSameVersion(epSchemaVersion))
+                {
+                    logger.debug("Not submitting migration task for {} because our versions match ({})", endpoint, epSchemaVersion);
+                    return;
+                }
+                logger.debug("Submitting migration task for {}, schema version mismatch: local={}, remote={}",
+                             endpoint,
+                             Schema.schemaVersionToString(Schema.instance.getVersion()),
+                             Schema.schemaVersionToString(epSchemaVersion));
+                submitMigrationTask(endpoint);
+            };
+            ScheduledExecutors.nonPeriodicTasks.schedule(runnable, MIGRATION_DELAY_IN_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+

@@ -1,0 +1,32 @@
+    /**
+     * Handle node preparing to leave the ring
+     *
+     * @param endpoint node
+     */
+    private void handleStateLeaving(InetAddressAndPort endpoint)
+    {
+        Collection<Token> tokens = getTokensFor(endpoint);
+
+        if (logger.isDebugEnabled())
+            logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+
+        // If the node is previously unknown or tokens do not match, update tokenmetadata to
+        // have this node as 'normal' (it must have been using this token before the
+        // leave). This way we'll get pending ranges right.
+        if (!tokenMetadata.isMember(endpoint))
+        {
+            logger.info("Node {} state jump to leaving", endpoint);
+            tokenMetadata.updateNormalTokens(tokens, endpoint);
+        }
+        else if (!tokenMetadata.getTokens(endpoint).containsAll(tokens))
+        {
+            logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            tokenMetadata.updateNormalTokens(tokens, endpoint);
+        }
+
+        // at this point the endpoint is certainly a member with this token, so let's proceed
+        // normally
+        tokenMetadata.addLeavingEndpoint(endpoint);
+        PendingRangeCalculatorService.instance.update();
+    }
+

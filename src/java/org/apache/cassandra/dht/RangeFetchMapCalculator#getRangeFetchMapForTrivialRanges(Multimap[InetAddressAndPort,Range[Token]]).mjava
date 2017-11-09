@@ -1,0 +1,32 @@
+    @VisibleForTesting
+    Multimap<InetAddressAndPort, Range<Token>> getRangeFetchMapForTrivialRanges(Multimap<InetAddressAndPort, Range<Token>> optimisedMap)
+    {
+        Multimap<InetAddressAndPort, Range<Token>> fetchMap = HashMultimap.create();
+        for (Range<Token> trivialRange : trivialRanges)
+        {
+            boolean added = false;
+            boolean localDCCheck = true;
+            while (!added)
+            {
+                List<InetAddressAndPort> srcs = new ArrayList<>(rangesWithSources.get(trivialRange));
+                // sort with the endpoint having the least number of streams first:
+                srcs.sort(Comparator.comparingInt(o -> optimisedMap.get(o).size()));
+                for (InetAddressAndPort src : srcs)
+                {
+                    if (passFilters(src, localDCCheck))
+                    {
+                        fetchMap.put(src, trivialRange);
+                        added = true;
+                        break;
+                    }
+                }
+                if (!added && !localDCCheck)
+                    throw new IllegalStateException("Unable to find sufficient sources for streaming range " + trivialRange + " in keyspace " + keyspace);
+                if (!added)
+                    logger.info("Using other DC endpoints for streaming for range: {} and keyspace {}", trivialRange, keyspace);
+                localDCCheck = false;
+            }
+        }
+        return fetchMap;
+    }
+

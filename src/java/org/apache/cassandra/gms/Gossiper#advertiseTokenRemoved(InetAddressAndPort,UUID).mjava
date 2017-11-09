@@ -1,0 +1,22 @@
+    /**
+     * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
+     * This should only be called after advertiseRemoving
+     *
+     * @param endpoint
+     * @param hostId
+     */
+    public void advertiseTokenRemoved(InetAddressAndPort endpoint, UUID hostId)
+    {
+        EndpointState epState = endpointStateMap.get(endpoint);
+        epState.updateTimestamp(); // make sure we don't evict it too soon
+        epState.getHeartBeatState().forceNewerGenerationUnsafe();
+        long expireTime = computeExpireTime();
+        epState.addApplicationState(ApplicationState.STATUS_WITH_PORT, StorageService.instance.valueFactory.removedNonlocal(hostId, expireTime));
+        epState.addApplicationState(ApplicationState.STATUS, StorageService.instance.valueFactory.removedNonlocal(hostId, expireTime));
+        logger.info("Completing removal of {}", endpoint);
+        addExpireTimeForEndpoint(endpoint, expireTime);
+        endpointStateMap.put(endpoint, epState);
+        // ensure at least one gossip round occurs before returning
+        Uninterruptibles.sleepUninterruptibly(intervalInMillis * 2, TimeUnit.MILLISECONDS);
+    }
+
