@@ -1,0 +1,57 @@
+    @Test
+    public void testResolveMultipleDeleted()
+    {
+        DataResolver resolver = new DataResolver(ks, command, ConsistencyLevel.ALL, 4, System.nanoTime(), readRepair);
+        // deletes and columns with interleaved timestamp, with out of order return sequence
+        InetAddressAndPort peer1 = peer();
+        resolver.preprocess(readResponseMessage(peer1, fullPartitionDelete(cfm, dk, 0, nowInSec)));
+        // these columns created after the previous deletion
+        InetAddressAndPort peer2 = peer();
+        resolver.preprocess(readResponseMessage(peer2, iter(new RowUpdateBuilder(cfm, nowInSec, 1L, dk).clustering("1")
+                                                                                                       .add("one", "A")
+                                                                                                       .add("two", "A")
+                                                                                                       .buildUpdate())));
+        //this column created after the next delete
+        InetAddressAndPort peer3 = peer();
+        resolver.preprocess(readResponseMessage(peer3, iter(new RowUpdateBuilder(cfm, nowInSec, 3L, dk).clustering("1")
+                                                                                                       .add("two", "B")
+                                                                                                       .buildUpdate())));
+        InetAddressAndPort peer4 = peer();
+        resolver.preprocess(readResponseMessage(peer4, fullPartitionDelete(cfm, dk, 2, nowInSec)));
+
+        try(PartitionIterator data = resolver.resolve())
+        {
+            try (RowIterator rows = Iterators.getOnlyElement(data))
+            {
+                Row row = Iterators.getOnlyElement(rows);
+                assertColumns(row, "two");
+                assertColumn(cfm, row, "two", "B", 3);
+            }
+        }
+
+        // peer 1 needs to get the partition delete from peer 4 and the row from peer 3
+        assertEquals(4, readRepair.sent.size());
+        Mutation mutation = readRepair.getForEndpoint(peer1);
+        assertRepairMetadata(mutation);
+        assertRepairContainsDeletions(mutation, new DeletionTime(2, nowInSec));
+        assertRepairContainsColumn(mutation, "1", "two", "B", 3);
+
+        // peer 2 needs the deletion from peer 4 and the row from peer 3
+        mutation = readRepair.getForEndpoint(peer2);
+        assertRepairMetadata(mutation);
+        assertRepairContainsDeletions(mutation, new DeletionTime(2, nowInSec));
+        assertRepairContainsColumn(mutation, "1", "two", "B", 3);
+
+        // peer 3 needs just the deletion from peer 4
+        mutation = readRepair.getForEndpoint(peer3);
+        assertRepairMetadata(mutation);
+        assertRepairContainsDeletions(mutation, new DeletionTime(2, nowInSec));
+        assertRepairContainsNoColumns(mutation);
+
+        // peer 4 needs just the row from peer 3
+        mutation = readRepair.getForEndpoint(peer4);
+        assertRepairMetadata(mutation);
+        assertRepairContainsNoDeletions(mutation);
+        assertRepairContainsColumn(mutation, "1", "two", "B", 3);
+    }
+

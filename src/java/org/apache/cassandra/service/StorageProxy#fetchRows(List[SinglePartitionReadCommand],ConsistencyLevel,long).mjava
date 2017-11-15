@@ -14,27 +14,41 @@
     {
         int cmdCount = commands.size();
 
-        SinglePartitionReadLifecycle[] reads = new SinglePartitionReadLifecycle[cmdCount];
-        for (int i = 0; i < cmdCount; i++)
-            reads[i] = new SinglePartitionReadLifecycle(commands.get(i), consistencyLevel, queryStartNanoTime);
+        AbstractReadExecutor[] reads = new AbstractReadExecutor[cmdCount];
 
-        for (int i = 0; i < cmdCount; i++)
-            reads[i].doInitialQueries();
+        for (int i=0; i<cmdCount; i++)
+        {
+            reads[i] = AbstractReadExecutor.getReadExecutor(commands.get(i), consistencyLevel, queryStartNanoTime);
+        }
 
-        for (int i = 0; i < cmdCount; i++)
+        for (int i=0; i<cmdCount; i++)
+        {
+            reads[i].executeAsync();
+        }
+
+        for (int i=0; i<cmdCount; i++)
+        {
             reads[i].maybeTryAdditionalReplicas();
+        }
 
-        for (int i = 0; i < cmdCount; i++)
-            reads[i].awaitResultsAndRetryOnDigestMismatch();
+        for (int i=0; i<cmdCount; i++)
+        {
+            reads[i].awaitResponses();
+        }
 
-        for (int i = 0; i < cmdCount; i++)
-            if (!reads[i].isDone())
-                reads[i].maybeAwaitFullDataRead();
+        for (int i=0; i<cmdCount; i++)
+        {
+            reads[i].maybeRepairAdditionalReplicas();
+        }
+
+        for (int i=0; i<cmdCount; i++)
+        {
+            reads[i].awaitReadRepair();
+        }
 
         List<PartitionIterator> results = new ArrayList<>(cmdCount);
-        for (int i = 0; i < cmdCount; i++)
+        for (int i=0; i<cmdCount; i++)
         {
-            assert reads[i].isDone();
             results.add(reads[i].getResult());
         }
 

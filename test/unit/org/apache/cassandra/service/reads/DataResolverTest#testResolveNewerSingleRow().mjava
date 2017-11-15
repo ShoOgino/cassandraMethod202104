@@ -1,0 +1,31 @@
+    @Test
+    public void testResolveNewerSingleRow() throws UnknownHostException
+    {
+        DataResolver resolver = new DataResolver(ks, command, ConsistencyLevel.ALL, 2, System.nanoTime(), readRepair);
+        InetAddressAndPort peer1 = peer();
+        resolver.preprocess(readResponseMessage(peer1, iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("1")
+                                                                                                       .add("c1", "v1")
+                                                                                                       .buildUpdate())));
+        InetAddressAndPort peer2 = peer();
+        resolver.preprocess(readResponseMessage(peer2, iter(new RowUpdateBuilder(cfm, nowInSec, 1L, dk).clustering("1")
+                                                                                                       .add("c1", "v2")
+                                                                                                       .buildUpdate())));
+
+        try(PartitionIterator data = resolver.resolve())
+        {
+            try (RowIterator rows = Iterators.getOnlyElement(data))
+            {
+                Row row = Iterators.getOnlyElement(rows);
+                assertColumns(row, "c1");
+                assertColumn(cfm, row, "c1", "v2", 1);
+            }
+        }
+
+        assertEquals(1, readRepair.sent.size());
+        // peer 1 just needs to repair with the row from peer 2
+        Mutation mutation = readRepair.getForEndpoint(peer1);
+        assertRepairMetadata(mutation);
+        assertRepairContainsNoDeletions(mutation);
+        assertRepairContainsColumn(mutation, "1", "c1", "v2", 1);
+    }
+

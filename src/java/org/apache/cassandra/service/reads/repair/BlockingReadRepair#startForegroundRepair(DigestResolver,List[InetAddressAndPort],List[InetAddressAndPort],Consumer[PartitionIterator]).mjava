@@ -1,0 +1,19 @@
+    public void startForegroundRepair(DigestResolver digestResolver, List<InetAddressAndPort> allEndpoints, List<InetAddressAndPort> contactedEndpoints, Consumer<PartitionIterator> resultConsumer)
+    {
+        ReadRepairMetrics.repairedBlocking.mark();
+
+        // Do a full data read to resolve the correct response (and repair node that need be)
+        Keyspace keyspace = Keyspace.open(command.metadata().keyspace);
+        DataResolver resolver = new DataResolver(keyspace, command, ConsistencyLevel.ALL, allEndpoints.size(), queryStartNanoTime, this);
+        ReadCallback readCallback = new ReadCallback(resolver, ConsistencyLevel.ALL, contactedEndpoints.size(), command,
+                                                     keyspace, allEndpoints, queryStartNanoTime, this);
+
+        digestRepair = new DigestRepair(resolver, readCallback, resultConsumer);
+
+        for (InetAddressAndPort endpoint : contactedEndpoints)
+        {
+            Tracing.trace("Enqueuing full data read to {}", endpoint);
+            MessagingService.instance().sendRRWithFailure(command.createMessage(), endpoint, readCallback);
+        }
+    }
+

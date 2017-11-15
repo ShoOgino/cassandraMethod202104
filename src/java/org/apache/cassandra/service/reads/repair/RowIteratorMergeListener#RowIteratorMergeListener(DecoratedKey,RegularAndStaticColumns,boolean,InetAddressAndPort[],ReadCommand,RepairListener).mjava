@@ -1,0 +1,54 @@
+    public RowIteratorMergeListener(DecoratedKey partitionKey, RegularAndStaticColumns columns, boolean isReversed, InetAddressAndPort[] sources, ReadCommand command, RepairListener repairListener)
+    {
+        this.partitionKey = partitionKey;
+        this.columns = columns;
+        this.isReversed = isReversed;
+        this.sources = sources;
+        repairs = new PartitionUpdate.Builder[sources.length];
+        currentRows = new Row.Builder[sources.length];
+        sourceDeletionTime = new DeletionTime[sources.length];
+        markerToRepair = new ClusteringBound[sources.length];
+        this.command = command;
+        this.repairListener = repairListener;
+
+        this.diffListener = new RowDiffListener()
+        {
+            public void onPrimaryKeyLivenessInfo(int i, Clustering clustering, LivenessInfo merged, LivenessInfo original)
+            {
+                if (merged != null && !merged.equals(original))
+                    currentRow(i, clustering).addPrimaryKeyLivenessInfo(merged);
+            }
+
+            public void onDeletion(int i, Clustering clustering, Row.Deletion merged, Row.Deletion original)
+            {
+                if (merged != null && !merged.equals(original))
+                    currentRow(i, clustering).addRowDeletion(merged);
+            }
+
+            public void onComplexDeletion(int i, Clustering clustering, ColumnMetadata column, DeletionTime merged, DeletionTime original)
+            {
+                if (merged != null && !merged.equals(original))
+                    currentRow(i, clustering).addComplexDeletion(column, merged);
+            }
+
+            public void onCell(int i, Clustering clustering, Cell merged, Cell original)
+            {
+                if (merged != null && !merged.equals(original) && isQueried(merged))
+                    currentRow(i, clustering).addCell(merged);
+            }
+
+            private boolean isQueried(Cell cell)
+            {
+                // When we read, we may have some cell that have been fetched but are not selected by the user. Those cells may
+                // have empty values as optimization (see CASSANDRA-10655) and hence they should not be included in the read-repair.
+                // This is fine since those columns are not actually requested by the user and are only present for the sake of CQL
+                // semantic (making sure we can always distinguish between a row that doesn't exist from one that do exist but has
+                /// no value for the column requested by the user) and so it won't be unexpected by the user that those columns are
+                // not repaired.
+                ColumnMetadata column = cell.column();
+                ColumnFilter filter = RowIteratorMergeListener.this.command.columnFilter();
+                return column.isComplex() ? filter.fetchedCellIsQueried(column, cell.path()) : filter.fetchedColumnIsQueried(column);
+            }
+        };
+    }
+

@@ -1,0 +1,25 @@
+    @Test
+    public void testResolveDeleted()
+    {
+        DataResolver resolver = new DataResolver(ks, command, ConsistencyLevel.ALL, 2, System.nanoTime(), readRepair);
+        // one response with columns timestamped before a delete in another response
+        InetAddressAndPort peer1 = peer();
+        resolver.preprocess(readResponseMessage(peer1, iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("1")
+                                                                                                       .add("one", "A")
+                                                                                                       .buildUpdate())));
+        InetAddressAndPort peer2 = peer();
+        resolver.preprocess(readResponseMessage(peer2, fullPartitionDelete(cfm, dk, 1, nowInSec)));
+
+        try (PartitionIterator data = resolver.resolve())
+        {
+            assertFalse(data.hasNext());
+        }
+
+        // peer1 should get the deletion from peer2
+        assertEquals(1, readRepair.sent.size());
+        Mutation mutation = readRepair.getForEndpoint(peer1);
+        assertRepairMetadata(mutation);
+        assertRepairContainsDeletions(mutation, new DeletionTime(1, nowInSec));
+        assertRepairContainsNoColumns(mutation);
+    }
+
