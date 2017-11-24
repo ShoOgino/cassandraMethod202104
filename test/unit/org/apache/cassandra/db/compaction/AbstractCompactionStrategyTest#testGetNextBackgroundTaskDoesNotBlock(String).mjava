@@ -1,0 +1,24 @@
+    public void testGetNextBackgroundTaskDoesNotBlock(String table)
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE1).getColumnFamilyStore(table);
+        AbstractCompactionStrategy strategy = cfs.getCompactionStrategyManager().getStrategies().get(1).get(0);
+
+        // Add 4 sstables
+        for (int i = 1; i <= 4; i++)
+        {
+            insertKeyAndFlush(table, i);
+        }
+
+        // Check they are returned on the next background task
+        try (LifecycleTransaction txn = strategy.getNextBackgroundTask(FBUtilities.nowInSeconds()).transaction)
+        {
+            Assert.assertEquals(cfs.getLiveSSTables(), txn.originals());
+        }
+
+        // now remove sstables on the tracker, to simulate a concurrent transaction
+        cfs.getTracker().removeUnsafe(cfs.getLiveSSTables());
+
+        // verify the compaction strategy will return null
+        Assert.assertNull(strategy.getNextBackgroundTask(FBUtilities.nowInSeconds()));
+    }
+
