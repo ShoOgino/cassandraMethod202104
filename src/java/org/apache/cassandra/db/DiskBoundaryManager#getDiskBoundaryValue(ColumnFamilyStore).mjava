@@ -1,0 +1,44 @@
+    private static DiskBoundaries getDiskBoundaryValue(ColumnFamilyStore cfs)
+    {
+        Collection<Range<Token>> localRanges;
+
+        long ringVersion;
+        TokenMetadata tmd;
+        do
+        {
+            tmd = StorageService.instance.getTokenMetadata();
+            ringVersion = tmd.getRingVersion();
+            if (StorageService.instance.isBootstrapMode())
+            {
+                localRanges = tmd.getPendingRanges(cfs.keyspace.getName(), FBUtilities.getBroadcastAddress());
+            }
+            else
+            {
+                // Reason we use use the future settled TMD is that if we decommission a node, we want to stream
+                // from that node to the correct location on disk, if we didn't, we would put new files in the wrong places.
+                // We do this to minimize the amount of data we need to move in rebalancedisks once everything settled
+                localRanges = cfs.keyspace.getReplicationStrategy().getAddressRanges(tmd.cloneAfterAllSettled()).get(FBUtilities.getBroadcastAddress());
+            }
+            logger.debug("Got local ranges {} (ringVersion = {})", localRanges, ringVersion);
+        }
+        while (ringVersion != tmd.getRingVersion()); // if ringVersion is different here it means that
+                                                     // it might have changed before we calculated localRanges - recalculate
+
+        int directoriesVersion;
+        Directories.DataDirectory[] dirs;
+        do
+        {
+            directoriesVersion = BlacklistedDirectories.getDirectoriesVersion();
+            dirs = cfs.getDirectories().getWriteableLocations();
+        }
+        while (directoriesVersion != BlacklistedDirectories.getDirectoriesVersion()); // if directoriesVersion has changed we need to recalculate
+
+        if (localRanges == null || localRanges.isEmpty())
+            return new DiskBoundaries(dirs, null, ringVersion, directoriesVersion);
+
+        List<Range<Token>> sortedLocalRanges = Range.sort(localRanges);
+
+        List<PartitionPosition> positions = getDiskBoundaries(sortedLocalRanges, cfs.getPartitioner(), dirs);
+        return new DiskBoundaries(dirs, positions, ringVersion, directoriesVersion);
+    }
+
