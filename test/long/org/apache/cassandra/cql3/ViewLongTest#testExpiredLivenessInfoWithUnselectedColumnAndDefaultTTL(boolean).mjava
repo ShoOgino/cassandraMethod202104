@@ -1,0 +1,79 @@
+    private void testExpiredLivenessInfoWithUnselectedColumnAndDefaultTTL(boolean flush) throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int,c int,a int, b int, PRIMARY KEY ((k), c)) WITH default_time_to_live = 1000;");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+
+        createView("mv",
+                   "CREATE MATERIALIZED VIEW mv AS SELECT k,c,a FROM %%s WHERE k IS NOT NULL AND c IS NOT NULL "
+                           + "PRIMARY KEY (c, k)");
+
+        // table default ttl
+        updateViewWithFlush("UPDATE %s SET b = 111 WHERE k = 1 AND c = 2", flush);
+        assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 111));
+        assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+        updateViewWithFlush("UPDATE %s SET b = null WHERE k = 1 AND c = 2", flush);
+        assertRows(execute("select k,c,a,b from %s"));
+        assertRows(execute("select k,c,a from mv"));
+
+        updateViewWithFlush("UPDATE %s SET b = 222 WHERE k = 1 AND c = 2", flush);
+        assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 222));
+        assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+        updateViewWithFlush("DELETE b FROM %s WHERE k = 1 AND c = 2", flush);
+        assertRows(execute("select k,c,a,b from %s"));
+        assertRows(execute("select k,c,a from mv"));
+
+        if (flush)
+        {
+            Keyspace.open(keyspace()).getColumnFamilyStore("mv").forceMajorCompaction();
+            assertRows(execute("select k,c,a,b from %s"));
+            assertRows(execute("select k,c,a from mv"));
+        }
+
+        // test user-provided ttl for table with/without default-ttl
+        for (boolean withDefaultTTL : Arrays.asList(true, false))
+        {
+            execute("TRUNCATE %s");
+            if (withDefaultTTL)
+                execute("ALTER TABLE %s with default_time_to_live=" + (withDefaultTTL ? 10 : 0));
+
+            updateViewWithFlush("UPDATE %s USING TTL 100 SET b = 666 WHERE k = 1 AND c = 2", flush);
+            assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 666));
+            assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+            updateViewWithFlush("UPDATE %s USING TTL 90  SET b = null WHERE k = 1 AND c = 2", flush);
+            if (flush)
+                FBUtilities.waitOnFutures(Keyspace.open(keyspace()).flush());
+            assertRows(execute("select k,c,a,b from %s"));
+            assertRows(execute("select k,c,a from mv"));
+
+            updateViewWithFlush("UPDATE %s USING TTL 80  SET b = 777 WHERE k = 1 AND c = 2", flush);
+            assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 777));
+            assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+            updateViewWithFlush("DELETE b FROM %s WHERE k = 1 AND c = 2", flush);
+            assertRows(execute("select k,c,a,b from %s"));
+            assertRows(execute("select k,c,a from mv"));
+
+            updateViewWithFlush("UPDATE %s USING TTL 110  SET b = 888 WHERE k = 1 AND c = 2", flush);
+            assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 888));
+            assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+            updateViewWithFlush("UPDATE %s USING TTL 5  SET b = 999 WHERE k = 1 AND c = 2", flush);
+            assertRows(execute("select k,c,a,b from %s"), row(1, 2, null, 999));
+            assertRows(execute("select k,c,a from mv"), row(1, 2, null));
+
+            Thread.sleep(5000); // wait for ttl expired
+
+            if (flush)
+            {
+                Keyspace.open(keyspace()).getColumnFamilyStore("mv").forceMajorCompaction();
+                assertRows(execute("select k,c,a,b from %s"));
+                assertRows(execute("select k,c,a from mv"));
+            }
+        }
+    }
+
