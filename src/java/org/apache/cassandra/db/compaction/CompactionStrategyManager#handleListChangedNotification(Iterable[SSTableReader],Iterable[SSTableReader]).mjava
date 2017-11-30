@@ -1,43 +1,46 @@
     private void handleListChangedNotification(Iterable<SSTableReader> added, Iterable<SSTableReader> removed)
     {
-        // a bit of gymnastics to be able to replace sstables in compaction strategies
-        // we use this to know that a compaction finished and where to start the next compaction in LCS
-        Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations();
-        int locationSize = cfs.getPartitioner().splitter().isPresent() ? locations.length : 1;
+        // If reloaded, SSTables will be placed in their correct locations
+        // so there is no need to process notification
+        if (maybeReloadDiskBoundaries())
+            return;
 
-        List<Set<SSTableReader>> repairedRemoved = new ArrayList<>(locationSize);
-        List<Set<SSTableReader>> repairedAdded = new ArrayList<>(locationSize);
-        List<Set<SSTableReader>> unrepairedRemoved = new ArrayList<>(locationSize);
-        List<Set<SSTableReader>> unrepairedAdded = new ArrayList<>(locationSize);
-
-        for (int i = 0; i < locationSize; i++)
-        {
-            repairedRemoved.add(new HashSet<>());
-            repairedAdded.add(new HashSet<>());
-            unrepairedRemoved.add(new HashSet<>());
-            unrepairedAdded.add(new HashSet<>());
-        }
-
-        for (SSTableReader sstable : removed)
-        {
-            int i = getCompactionStrategyIndex(cfs, sstable);
-            if (sstable.isRepaired())
-                repairedRemoved.get(i).add(sstable);
-            else
-                unrepairedRemoved.get(i).add(sstable);
-        }
-        for (SSTableReader sstable : added)
-        {
-            int i = getCompactionStrategyIndex(cfs, sstable);
-            if (sstable.isRepaired())
-                repairedAdded.get(i).add(sstable);
-            else
-                unrepairedAdded.get(i).add(sstable);
-        }
-        // we need write lock here since we might be moving sstables between strategies
-        writeLock.lock();
+        readLock.lock();
         try
         {
+            // a bit of gymnastics to be able to replace sstables in compaction strategies
+            // we use this to know that a compaction finished and where to start the next compaction in LCS
+            int locationSize = partitionSSTablesByTokenRange? currentBoundaries.directories.size() : 1;
+
+            List<Set<SSTableReader>> repairedRemoved = new ArrayList<>(locationSize);
+            List<Set<SSTableReader>> repairedAdded = new ArrayList<>(locationSize);
+            List<Set<SSTableReader>> unrepairedRemoved = new ArrayList<>(locationSize);
+            List<Set<SSTableReader>> unrepairedAdded = new ArrayList<>(locationSize);
+
+            for (int i = 0; i < locationSize; i++)
+            {
+                repairedRemoved.add(new HashSet<>());
+                repairedAdded.add(new HashSet<>());
+                unrepairedRemoved.add(new HashSet<>());
+                unrepairedAdded.add(new HashSet<>());
+            }
+
+            for (SSTableReader sstable : removed)
+            {
+                int i = compactionStrategyIndexFor(sstable);
+                if (sstable.isRepaired())
+                    repairedRemoved.get(i).add(sstable);
+                else
+                    unrepairedRemoved.get(i).add(sstable);
+            }
+            for (SSTableReader sstable : added)
+            {
+                int i = compactionStrategyIndexFor(sstable);
+                if (sstable.isRepaired())
+                    repairedAdded.get(i).add(sstable);
+                else
+                    unrepairedAdded.get(i).add(sstable);
+            }
             for (int i = 0; i < locationSize; i++)
             {
                 if (!repairedRemoved.get(i).isEmpty())
@@ -53,7 +56,7 @@
         }
         finally
         {
-            writeLock.unlock();
+            readLock.unlock();
         }
     }
 
