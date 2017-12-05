@@ -1,0 +1,28 @@
+    /**
+     * CommitLogService provides a fsync service for Allocations, fulfilling either the
+     * Batch or Periodic contract.
+     *
+     * Subclasses may be notified when a sync finishes by using the syncComplete WaitQueue.
+     */
+    AbstractCommitLogService(final CommitLog commitLog, final String name, final long syncIntervalMillis, long markerIntervalMillis)
+    {
+        this.commitLog = commitLog;
+        this.name = name;
+        this.syncIntervalNanos = TimeUnit.NANOSECONDS.convert(syncIntervalMillis, TimeUnit.MILLISECONDS);
+
+        // if we are not using periodic mode, or we using compression/encryption, we shouldn't update the chained markers
+        // faster than the sync interval
+        if (DatabaseDescriptor.getCommitLogSync() != Config.CommitLogSync.periodic || commitLog.configuration.useCompression() || commitLog.configuration.useEncryption())
+            markerIntervalMillis = syncIntervalMillis;
+
+        // apply basic bounds checking on the marker interval
+        if (markerIntervalMillis <= 0 || markerIntervalMillis > syncIntervalMillis)
+        {
+            logger.debug("commit log marker interval {} is less than zero or above the sync interval {}; setting value to sync interval",
+                        markerIntervalMillis, syncIntervalMillis);
+            markerIntervalMillis = syncIntervalMillis;
+        }
+
+        this.markerIntervalNanos = TimeUnit.NANOSECONDS.convert(markerIntervalMillis, TimeUnit.MILLISECONDS);
+    }
+
