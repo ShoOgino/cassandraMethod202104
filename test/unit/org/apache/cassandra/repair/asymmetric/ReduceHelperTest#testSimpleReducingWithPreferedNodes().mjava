@@ -1,0 +1,77 @@
+    @Test
+    public void testSimpleReducingWithPreferedNodes()
+    {
+        /*
+        A == B and D == E =>
+        A streams from C, {D, E} since D==E
+        B streams from C, {D, E} since D==E
+        C streams from {A, B}, {D, E} since A==B and D==E
+        D streams from {A, B}, C since A==B
+        E streams from {A, B}, C since A==B
+
+          A   B   C   D   E
+        A     =   x   x   x
+        B         x   x   x
+        C             x   x
+        D                 =
+         */
+        Map<InetAddress, HostDifferences> differences = new HashMap<>();
+        for (int i = 0; i < 4; i++)
+        {
+            HostDifferences hostDifferences = new HostDifferences();
+            for (int j = i + 1; j < 5; j++)
+            {
+                // no diffs between A, B and D, E:
+                if (addresses[i] == A && addresses[j] == B || addresses[i] == D && addresses[j] == E)
+                    continue;
+                List<Range<Token>> diff = list(new Range<>(new Murmur3Partitioner.LongToken(0), new Murmur3Partitioner.LongToken(10)));
+                hostDifferences.add(addresses[j], diff);
+            }
+            differences.put(addresses[i], hostDifferences);
+        }
+
+        DifferenceHolder differenceHolder = new DifferenceHolder(differences);
+        Map<InetAddress, IncomingRepairStreamTracker> tracker = ReduceHelper.createIncomingRepairStreamTrackers(differenceHolder);
+        assertEquals(set(set(C), set(E, D)), streams(tracker.get(A)));
+        assertEquals(set(set(C), set(E, D)), streams(tracker.get(B)));
+        assertEquals(set(set(A, B), set(E, D)), streams(tracker.get(C)));
+        assertEquals(set(set(A, B), set(C)), streams(tracker.get(D)));
+        assertEquals(set(set(A, B), set(C)), streams(tracker.get(E)));
+
+        // if there is an option, never stream from node 1:
+        ImmutableMap<InetAddress, HostDifferences> reduced = ReduceHelper.reduce(differenceHolder, (x,y) -> Sets.difference(y, set(B)));
+
+        HostDifferences n0 = reduced.get(A);
+        assertEquals(0, n0.get(A).size());
+        assertEquals(0, n0.get(B).size());
+        assertTrue(n0.get(C).size() > 0);
+        assertStreamFromEither(n0.get(D), n0.get(E));
+
+        HostDifferences n1 = reduced.get(B);
+        assertEquals(0, n1.get(A).size());
+        assertEquals(0, n1.get(B).size());
+        assertTrue(n1.get(C).size() > 0);
+        assertStreamFromEither(n1.get(D), n1.get(E));
+
+
+        HostDifferences n2 = reduced.get(C);
+        assertTrue(n2.get(A).size() > 0);
+        assertEquals(0, n2.get(B).size());
+        assertEquals(0, n2.get(C).size());
+        assertStreamFromEither(n2.get(D), n2.get(E));
+
+        HostDifferences n3 = reduced.get(D);
+        assertTrue(n3.get(A).size() > 0);
+        assertEquals(0, n3.get(B).size());
+        assertTrue(n3.get(C).size() > 0);
+        assertEquals(0, n3.get(D).size());
+        assertEquals(0, n3.get(E).size());
+
+        HostDifferences n4 = reduced.get(E);
+        assertTrue(n4.get(A).size() > 0);
+        assertEquals(0, n4.get(B).size());
+        assertTrue(n4.get(C).size() > 0);
+        assertEquals(0, n4.get(D).size());
+        assertEquals(0, n4.get(E).size());
+    }
+

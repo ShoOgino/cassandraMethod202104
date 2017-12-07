@@ -1,0 +1,37 @@
+    /**
+     * "Denormalizes" (kind of the opposite of what Range.normalize does) the ranges in the keys of {{incoming}}
+     *
+     * It makes sure that if there is an intersection between {{range}} and some of the ranges in {{incoming.keySet()}}
+     * we know that all intersections are keys in the updated {{incoming}}
+     */
+    public static Set<Range<Token>> denormalize(Range<Token> range, Map<Range<Token>, StreamFromOptions> incoming)
+    {
+        logger.trace("Denormalizing range={} incoming={}", range, incoming);
+        Set<Range<Token>> existingRanges = new HashSet<>(incoming.keySet());
+        Map<Range<Token>, StreamFromOptions> existingOverlappingRanges = new HashMap<>();
+        // remove all overlapping ranges from the incoming map
+        for (Range<Token> existingRange : existingRanges)
+        {
+            if (range.intersects(existingRange))
+                existingOverlappingRanges.put(existingRange, incoming.remove(existingRange));
+        }
+
+        Set<Range<Token>> intersections = intersection(existingRanges, range);
+        Set<Range<Token>> newExisting = Sets.union(subtractFromAllRanges(existingOverlappingRanges.keySet(), range), intersections);
+        Set<Range<Token>> newInput = Sets.union(range.subtractAll(existingOverlappingRanges.keySet()), intersections);
+        assertNonOverLapping(newExisting);
+        assertNonOverLapping(newInput);
+        for (Range<Token> r : newExisting)
+        {
+            for (Map.Entry<Range<Token>, StreamFromOptions> entry : existingOverlappingRanges.entrySet())
+            {
+                if (r.intersects(entry.getKey()))
+                    incoming.put(r, entry.getValue().copy(r));
+            }
+        }
+        logger.trace("denormalized {} to {}", range, newInput);
+        logger.trace("denormalized incoming to {}", incoming);
+        assertNonOverLapping(incoming.keySet());
+        return newInput;
+    }
+

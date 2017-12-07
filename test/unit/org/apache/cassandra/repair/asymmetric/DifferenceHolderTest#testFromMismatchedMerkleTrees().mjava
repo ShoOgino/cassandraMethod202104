@@ -1,0 +1,46 @@
+    @Test
+    public void testFromMismatchedMerkleTrees() throws UnknownHostException
+    {
+        IPartitioner partitioner = Murmur3Partitioner.instance;
+        Range<Token> fullRange = new Range<>(partitioner.getMinimumToken(), partitioner.getMinimumToken());
+        int maxsize = 16;
+        InetAddress a1 = InetAddress.getByName("127.0.0.1");
+        InetAddress a2 = InetAddress.getByName("127.0.0.2");
+        // merkle tree building stolen from MerkleTreesTest:
+        MerkleTrees mt1 = new MerkleTrees(partitioner);
+        MerkleTrees mt2 = new MerkleTrees(partitioner);
+        mt1.addMerkleTree(32, fullRange);
+        mt2.addMerkleTree(32, fullRange);
+        mt1.init();
+        mt2.init();
+        // add dummy hashes to both trees
+        for (MerkleTree.TreeRange range : mt1.invalids())
+            range.addAll(new MerkleTreesTest.HIterator(range.right));
+        for (MerkleTree.TreeRange range : mt2.invalids())
+            range.addAll(new MerkleTreesTest.HIterator(range.right));
+
+        MerkleTree.TreeRange leftmost = null;
+        MerkleTree.TreeRange middle = null;
+
+        mt1.maxsize(fullRange, maxsize + 2); // give some room for splitting
+
+        // split the leftmost
+        Iterator<MerkleTree.TreeRange> ranges = mt1.invalids();
+        leftmost = ranges.next();
+        mt1.split(leftmost.right);
+
+        // set the hashes for the leaf of the created split
+        middle = mt1.get(leftmost.right);
+        middle.hash("arbitrary!".getBytes());
+        mt1.get(partitioner.midpoint(leftmost.left, leftmost.right)).hash("even more arbitrary!".getBytes());
+
+        TreeResponse tr1 = new TreeResponse(a1, mt1);
+        TreeResponse tr2 = new TreeResponse(a2, mt2);
+
+        DifferenceHolder dh = new DifferenceHolder(Lists.newArrayList(tr1, tr2));
+        assertTrue(dh.get(a1).get(a2).size() == 1);
+        assertTrue(dh.hasDifferenceBetween(a1, a2, fullRange));
+        // only a1 is added as a key - see comment in dh.keyHosts()
+        assertEquals(Sets.newHashSet(a1), dh.keyHosts());
+    }
+
