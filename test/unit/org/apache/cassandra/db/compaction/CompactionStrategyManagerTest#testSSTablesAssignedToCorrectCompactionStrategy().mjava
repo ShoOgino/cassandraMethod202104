@@ -1,0 +1,39 @@
+    @Test
+    public void testSSTablesAssignedToCorrectCompactionStrategy() throws IOException
+    {
+        // Creates 100 SSTables with keys 0-99
+        int numSSTables = 100;
+        SchemaLoader.createKeyspace(KS_PREFIX,
+                                    KeyspaceParams.simple(1),
+                                    SchemaLoader.standardCFMD(KS_PREFIX, TABLE_PREFIX)
+                                                .compaction(CompactionParams.scts(Collections.emptyMap())));
+        ColumnFamilyStore cfs = Keyspace.open(KS_PREFIX).getColumnFamilyStore(TABLE_PREFIX);
+        cfs.disableAutoCompaction();
+        Set<SSTableReader> previousSSTables = cfs.getLiveSSTables();
+        for (int i = 0; i < numSSTables; i++)
+        {
+            createSSTableWithKey(KS_PREFIX, TABLE_PREFIX, i);
+            Set<SSTableReader> currentSSTables = cfs.getLiveSSTables();
+            Set<SSTableReader> newSSTables = Sets.difference(currentSSTables, previousSSTables);
+            assertEquals(1, newSSTables.size());
+            if (i % 3 == 0)
+            {
+                //make 1 third of sstables repaired
+                cfs.getCompactionStrategyManager().mutateRepaired(newSSTables, System.currentTimeMillis(), null);
+            }
+            else if (i % 3 == 1)
+            {
+                //make 1 third of sstables pending repair
+                cfs.getCompactionStrategyManager().mutateRepaired(newSSTables, 0, UUIDGen.getTimeUUID());
+            }
+            previousSSTables = currentSSTables;
+        }
+
+        // Creates a CompactionStrategymanager with different numbers of disks and check
+        // if the SSTables are assigned to the correct compaction strategies
+        for (int numDisks = 2; numDisks < 10; numDisks++)
+        {
+            testSSTablesAssignedToCorrectCompactionStrategy(numSSTables, numDisks);
+        }
+    }
+
