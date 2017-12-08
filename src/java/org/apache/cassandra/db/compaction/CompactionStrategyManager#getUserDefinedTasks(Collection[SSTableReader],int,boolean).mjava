@@ -1,0 +1,33 @@
+    public List<AbstractCompactionTask> getUserDefinedTasks(Collection<SSTableReader> sstables, int gcBefore, boolean validateForCompaction)
+    {
+        maybeReloadDiskBoundaries();
+        List<AbstractCompactionTask> ret = new ArrayList<>();
+        readLock.lock();
+        try
+        {
+            if (validateForCompaction)
+                validateForCompaction(sstables);
+
+            Map<Integer, List<SSTableReader>> repairedSSTables = sstables.stream()
+                                                                         .filter(s -> !s.isMarkedSuspect() && s.isRepaired())
+                                                                         .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+
+            Map<Integer, List<SSTableReader>> unrepairedSSTables = sstables.stream()
+                                                                           .filter(s -> !s.isMarkedSuspect() && !s.isRepaired())
+                                                                           .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
+
+
+            for (Map.Entry<Integer, List<SSTableReader>> group : repairedSSTables.entrySet())
+                ret.add(repaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
+
+            for (Map.Entry<Integer, List<SSTableReader>> group : unrepairedSSTables.entrySet())
+                ret.add(unrepaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
+
+            return ret;
+        }
+        finally
+        {
+            readLock.unlock();
+        }
+    }
+
