@@ -1,0 +1,52 @@
+    @Test
+    public void denseCompositeWithIndexesTest() throws Throwable
+    {
+        final String KEYSPACE = "thrift_dense_composite_table_test_ks";
+        final String TABLE = "dense_composite_table";
+
+        ByteBuffer aCol = createDynamicCompositeKey(ByteBufferUtil.bytes("a"));
+        ByteBuffer bCol = createDynamicCompositeKey(ByteBufferUtil.bytes("b"));
+        ByteBuffer cCol = createDynamicCompositeKey(ByteBufferUtil.bytes("c"));
+
+        String compositeType = "DynamicCompositeType(a => BytesType, b => TimeUUIDType, c => UTF8Type)";
+
+        CfDef cfDef = new CfDef();
+        cfDef.setName(TABLE);
+        cfDef.setComparator_type(compositeType);
+        cfDef.setKeyspace(KEYSPACE);
+
+        cfDef.setColumn_metadata(
+        Arrays.asList(new ColumnDef(aCol, "BytesType").setIndex_type(IndexType.KEYS).setIndex_name(KEYSPACE + "_a"),
+                      new ColumnDef(bCol, "BytesType").setIndex_type(IndexType.KEYS).setIndex_name(KEYSPACE + "_b"),
+                      new ColumnDef(cCol, "BytesType").setIndex_type(IndexType.KEYS).setIndex_name(KEYSPACE + "_c")));
+
+
+        KsDef ksDef = new KsDef(KEYSPACE,
+                                SimpleStrategy.class.getName(),
+                                Collections.singletonList(cfDef));
+        ksDef.setStrategy_options(Collections.singletonMap("replication_factor", "1"));
+
+        Cassandra.Client client = getClient();
+        client.system_add_keyspace(ksDef);
+        client.set_keyspace(KEYSPACE);
+
+        CFMetaData cfm = Keyspace.open(KEYSPACE).getColumnFamilyStore(TABLE).metadata;
+        assertFalse(cfm.isCQLTable());
+
+        List<Pair<ColumnDefinition, IndexTarget.Type>> compactTableTargets = new ArrayList<>();
+        compactTableTargets.add(CassandraIndex.parseTarget(cfm, "a"));
+        compactTableTargets.add(CassandraIndex.parseTarget(cfm, "b"));
+        compactTableTargets.add(CassandraIndex.parseTarget(cfm, "c"));
+
+        execute(String.format("ALTER TABLE %s.%s DROP COMPACT STORAGE", KEYSPACE, TABLE));
+        cfm = Keyspace.open(KEYSPACE).getColumnFamilyStore(TABLE).metadata;
+        assertTrue(cfm.isCQLTable());
+
+        List<Pair<ColumnDefinition, IndexTarget.Type>> cqlTableTargets = new ArrayList<>();
+        cqlTableTargets.add(CassandraIndex.parseTarget(cfm, "a"));
+        cqlTableTargets.add(CassandraIndex.parseTarget(cfm, "b"));
+        cqlTableTargets.add(CassandraIndex.parseTarget(cfm, "c"));
+
+        assertEquals(compactTableTargets, cqlTableTargets);
+    }
+
