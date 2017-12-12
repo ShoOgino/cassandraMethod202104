@@ -1,0 +1,21 @@
+    @Test
+    @BMRule(name = "Delay background compaction task future check",
+            targetClass = "CompactionManager",
+            targetMethod = "submitBackground",
+            targetLocation = "AT INVOKE java.util.concurrent.Future.isCancelled",
+            condition = "!$cfs.keyspace.getName().contains(\"system\")",
+            action = "Thread.sleep(1000)")
+    public void testCompactingCFCounting() throws Throwable
+    {
+        String table = createTable("CREATE TABLE %s (k INT, c INT, v INT, PRIMARY KEY (k, c))");
+        ColumnFamilyStore cfs = Keyspace.open(CQLTester.KEYSPACE).getColumnFamilyStore(table);
+        cfs.enableAutoCompaction();
+
+        execute("INSERT INTO %s (k, c, v) VALUES (?, ?, ?)", 0, 1, 1);
+        assertEquals(0, CompactionManager.instance.compactingCF.count(cfs));
+        cfs.forceBlockingFlush();
+
+        FBUtilities.waitOnFutures(CompactionManager.instance.submitBackground(cfs));
+        assertEquals(0, CompactionManager.instance.compactingCF.count(cfs));
+    }
+
