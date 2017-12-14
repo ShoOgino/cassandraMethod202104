@@ -1,0 +1,37 @@
+    /**
+     * CommitLogService provides a fsync service for Allocations, fulfilling either the
+     * Batch or Periodic contract.
+     *
+     * Subclasses may be notified when a sync finishes by using the syncComplete WaitQueue.
+     *
+     * @param markHeadersFaster true if the chained markers should be updated more frequently than on the disk sync bounds.
+     */
+    AbstractCommitLogService(final CommitLog commitLog, final String name, long syncIntervalMillis, boolean markHeadersFaster)
+    {
+        this.commitLog = commitLog;
+        this.name = name;
+
+        final long markerIntervalMillis;
+        if (markHeadersFaster && syncIntervalMillis > DEFAULT_MARKER_INTERVAL_MILLIS)
+        {
+            markerIntervalMillis = DEFAULT_MARKER_INTERVAL_MILLIS;
+            long modulo = syncIntervalMillis % markerIntervalMillis;
+            if (modulo != 0)
+            {
+                // quantize syncIntervalMillis to a multiple of markerIntervalMillis
+                syncIntervalMillis -= modulo;
+
+                if (modulo >= markerIntervalMillis / 2)
+                    syncIntervalMillis += markerIntervalMillis;
+            }
+            logger.debug("Will update the commitlog markers every {}ms and flush every {}ms", markerIntervalMillis, syncIntervalMillis);
+        }
+        else
+        {
+            markerIntervalMillis = syncIntervalMillis;
+        }
+        assert syncIntervalMillis % markerIntervalMillis == 0;
+        this.markerIntervalNanos = TimeUnit.NANOSECONDS.convert(markerIntervalMillis, TimeUnit.MILLISECONDS);
+        this.syncIntervalNanos = TimeUnit.NANOSECONDS.convert(syncIntervalMillis, TimeUnit.MILLISECONDS);
+    }
+
