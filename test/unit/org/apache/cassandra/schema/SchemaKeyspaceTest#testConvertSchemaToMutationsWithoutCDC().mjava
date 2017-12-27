@@ -1,0 +1,34 @@
+    @Test
+    public void testConvertSchemaToMutationsWithoutCDC() throws IOException
+    {
+        boolean oldCDCOption = DatabaseDescriptor.isCDCEnabled();
+        try
+        {
+            DatabaseDescriptor.setCDCEnabled(false);
+            Collection<Mutation> mutations = SchemaKeyspace.convertSchemaToMutations();
+            boolean foundTables = false;
+            for (Mutation m : mutations)
+            {
+                if (hasSchemaTables(m))
+                {
+                    foundTables = true;
+                    assertFalse(hasCDC(m));
+                    try (DataOutputBuffer output = new DataOutputBuffer())
+                    {
+                        Mutation.serializer.serialize(m, output, MessagingService.current_version);
+                        try (DataInputBuffer input = new DataInputBuffer(output.getData()))
+                        {
+                            Mutation out = Mutation.serializer.deserialize(input, MessagingService.current_version);
+                            assertFalse(hasCDC(out));
+                        }
+                    }
+                }
+            }
+            assertTrue(foundTables);
+        }
+        finally
+        {
+            DatabaseDescriptor.setCDCEnabled(oldCDCOption);
+        }
+    }
+
