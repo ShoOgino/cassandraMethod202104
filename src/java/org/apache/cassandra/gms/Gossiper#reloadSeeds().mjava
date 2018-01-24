@@ -1,0 +1,48 @@
+    /**
+     * JMX interface for triggering an update of the seed node list.
+     */
+    public List<String> reloadSeeds()
+    {
+        logger.trace("Triggering reload of seed node list");
+
+        // Get the new set in the same that buildSeedsList does
+        Set<InetAddressAndPort> tmp = new HashSet<>();
+        try
+        {
+            for (InetAddressAndPort seed : DatabaseDescriptor.getSeeds())
+            {
+                if (seed.equals(FBUtilities.getBroadcastAddressAndPort()))
+                    continue;
+                tmp.add(seed);
+            }
+        }
+        // If using the SimpleSeedProvider invalid yaml added to the config since startup could
+        // cause this to throw. Additionally, third party seed providers may throw exceptions.
+        // Handle the error and return a null to indicate that there was a problem.
+        catch (Throwable e)
+        {
+            JVMStabilityInspector.inspectThrowable(e);
+            logger.warn("Error while getting seed node list: {}", e.getLocalizedMessage());
+            return null;
+        }
+
+        if (tmp.size() == 0)
+        {
+            logger.trace("New seed node list is empty. Not updating seed list.");
+            return getSeeds();
+        }
+
+        if (tmp.equals(seeds))
+        {
+            logger.trace("New seed node list matches the existing list.");
+            return getSeeds();
+        }
+
+        // Add the new entries
+        seeds.addAll(tmp);
+        // Remove the old entries
+        seeds.retainAll(tmp);
+        logger.trace("New seed node list after reload {}", seeds);
+        return getSeeds();
+    }
+
