@@ -1,5 +1,6 @@
     /**
-     * Loads ifile, dfile and indexSummary, and optionally recreates the bloom filter.
+     * Loads ifile, dfile and indexSummary, and optionally recreates and persists the bloom filter.
+     * @param recreateBloomFilter Recreate the bloomfilter.
      * @param saveSummaryIfCreated for bulk loading purposes, if the summary was absent and needed to be built, you can
      *                             avoid persisting it to disk by setting this to false
      */
@@ -9,20 +10,22 @@
             SegmentedFile.Builder dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode(), compression))
         {
             boolean summaryLoaded = loadSummary(ibuilder, dbuilder);
-            boolean builtSummary = false;
-            if (recreateBloomFilter || !summaryLoaded)
-            {
+            boolean buildSummary = !summaryLoaded || recreateBloomFilter;
+            if (buildSummary)
                 buildSummary(recreateBloomFilter, ibuilder, dbuilder, summaryLoaded, Downsampling.BASE_SAMPLING_LEVEL);
-                builtSummary = true;
-            }
 
             if (components.contains(Component.PRIMARY_INDEX))
                 ifile = ibuilder.buildIndex(descriptor, indexSummary);
 
             dfile = dbuilder.buildData(descriptor, sstableMetadata);
 
-            if (saveSummaryIfCreated && builtSummary)
-                saveSummary(ibuilder, dbuilder);
+            if (buildSummary)
+            {
+                if (saveSummaryIfCreated)
+                    saveSummary(ibuilder, dbuilder);
+                if (recreateBloomFilter)
+                    saveBloomFilter();
+            }
         }
         catch (Throwable t)
         { // Because the tidier has not been set-up yet in SSTableReader.open(), we must release the files in case of error
