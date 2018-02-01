@@ -1,0 +1,46 @@
+    public void testRecoverOverflowedExpirationWithScrub(boolean simple, boolean clustering, boolean runScrub, boolean reinsertOverflowedTTL) throws Throwable
+    {
+        if (reinsertOverflowedTTL)
+        {
+            assert runScrub;
+        }
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(getTableName(simple, clustering));
+
+        assertEquals(0, cfs.getLiveSSTableCount());
+
+        copySSTablesToTableDir(simple, clustering);
+
+        cfs.loadNewSSTables();
+
+        if (runScrub)
+        {
+            cfs.scrub(true, false, false, reinsertOverflowedTTL, 1);
+        }
+
+        if (reinsertOverflowedTTL)
+        {
+            if (simple)
+            {
+                UntypedResultSet execute = execute(String.format("SELECT * from %s.%s", KEYSPACE, getTableName(simple, clustering)));
+                assertRows(execute, row(1, 1, 1), row(2, 2, 2));
+
+            }
+            else
+                assertRows(execute(String.format("SELECT * from %s.%s", KEYSPACE, getTableName(simple, clustering))), row(1, 1, set("v11", "v12", "v13", "v14")), row(2, 2, set("v21", "v22", "v23", "v24")));
+
+            cfs.forceMajorCompaction();
+
+            if (simple)
+                assertRows(execute(String.format("SELECT * from %s.%s", KEYSPACE, getTableName(simple, clustering))), row(1, 1, 1), row(2, 2, 2));
+            else
+                assertRows(execute(String.format("SELECT * from %s.%s", KEYSPACE, getTableName(simple, clustering))), row(1, 1, set("v11", "v12", "v13", "v14")), row(2, 2, set("v21", "v22", "v23", "v24")));
+        }
+        else
+        {
+            assertEmpty(execute(String.format("SELECT * from %s.%s", KEYSPACE, getTableName(simple, clustering))));
+        }
+        cfs.truncateBlocking(); //cleanup for next tests
+    }
+
