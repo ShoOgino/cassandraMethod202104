@@ -1,10 +1,10 @@
-    @Test(expected = CorruptSSTableException.class)
+    @Test
     public void testVerifyBrokenSSTableMetadata() throws IOException, WriteTimeoutException
     {
         CompactionManager.instance.disableAutoCompaction();
         Keyspace keyspace = Keyspace.open(KEYSPACE);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CORRUPT_CF2);
-
+        cfs.truncateBlocking();
         fillCF(cfs, 2);
 
         Util.getAll(Util.cmd(cfs).build());
@@ -16,10 +16,20 @@
         file.seek(0);
         file.writeBytes(StringUtils.repeat('z', 2));
         file.close();
-
-        try (Verifier verifier = new Verifier(cfs, sstable, false))
+        try (Verifier verifier = new Verifier(cfs, sstable, false, Verifier.options().invokeDiskFailurePolicy(true).build()))
         {
-            verifier.verify(false);
+            verifier.verify();
+            fail("Expected a CorruptSSTableException to be thrown");
         }
+        catch (CorruptSSTableException err)
+        {}
+        try (Verifier verifier = new Verifier(cfs, sstable, false, Verifier.options().invokeDiskFailurePolicy(false).build()))
+        {
+            verifier.verify();
+            fail("Expected a RuntimeException to be thrown");
+        }
+        catch (CorruptSSTableException err) { fail("wrong exception thrown"); }
+        catch (RuntimeException err)
+        {}
     }
 

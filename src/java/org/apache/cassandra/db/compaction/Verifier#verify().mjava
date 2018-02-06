@@ -1,8 +1,17 @@
-    public void verify(boolean extended)
+    public void verify()
     {
+        boolean extended = options.extendedVerification;
         long rowStart = 0;
 
         outputHandler.output(String.format("Verifying %s (%s)", sstable, FBUtilities.prettyPrintMemory(dataFile.length())));
+        if (options.checkVersion && !sstable.descriptor.version.isLatestVersion())
+        {
+            String msg = String.format("%s is not the latest version, run upgradesstables", sstable);
+            outputHandler.output(msg);
+            // don't use markAndThrow here because we don't want a CorruptSSTableException for this.
+            throw new RuntimeException(msg);
+        }
+
         outputHandler.output(String.format("Deserializing sstable metadata for %s ", sstable));
         try
         {
@@ -19,6 +28,41 @@
         }
         outputHandler.output(String.format("Checking computed hash of %s ", sstable));
 
+        try
+        {
+            deserializeIndex(sstable);
+        }
+        catch (Throwable t)
+        {
+            outputHandler.debug(t.getMessage());
+            markAndThrow();
+        }
+
+        try
+        {
+            deserializeIndexSummary(sstable);
+
+        }
+        catch (Throwable t)
+        {
+            outputHandler.output("Index summary is corrupt - if it is removed it will get rebuilt on startup "+sstable.descriptor.filenameFor(Component.SUMMARY));
+            outputHandler.debug(t.getMessage());
+            markAndThrow(false);
+        }
+
+        try
+        {
+            deserializeBloomFilter(sstable);
+
+        }
+        catch (Throwable t)
+        {
+            outputHandler.debug(t.getMessage());
+            markAndThrow();
+        }
+
+        if (options.quick)
+            return;
 
         // Verify will use the Digest files, which works for both compressed and uncompressed sstables
         try
@@ -61,6 +105,8 @@
                     markAndThrow();
             }
 
+            List<Range<Token>> ownedRanges = isOffline ? Collections.emptyList() : Range.normalize(StorageService.instance.getLocalAndPendingRanges(cfs.metadata().keyspace));
+            int rangeIndex = -1;
             DecoratedKey prevKey = null;
 
             while (!dataFile.isEOF())
@@ -81,6 +127,16 @@
                 {
                     throwIfFatal(th);
                     // check for null key below
+                }
+
+                if (options.checkOwnsTokens && ownedRanges.size() > 0)
+                {
+                    while (rangeIndex == -1 || !ownedRanges.get(rangeIndex).contains(key.getToken()))
+                    {
+                        rangeIndex++;
+                        if (rangeIndex > ownedRanges.size() - 1)
+                            throw new RuntimeException(String.format("Key %s in sstable %s not owned by local ranges %s", key, sstable, ownedRanges));
+                    }
                 }
 
                 ByteBuffer currentIndexKey = nextIndexKey;

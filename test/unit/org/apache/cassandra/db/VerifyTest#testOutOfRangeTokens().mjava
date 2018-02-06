@@ -1,0 +1,25 @@
+    @Test(expected = RuntimeException.class)
+    public void testOutOfRangeTokens() throws IOException
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF);
+        fillCF(cfs, 100);
+        TokenMetadata tmd = StorageService.instance.getTokenMetadata();
+        byte[] tk1 = new byte[1], tk2 = new byte[1];
+        tk1[0] = 2;
+        tk2[0] = 1;
+        tmd.updateNormalToken(new ByteOrderedPartitioner.BytesToken(tk1), InetAddressAndPort.getByName("127.0.0.1"));
+        tmd.updateNormalToken(new ByteOrderedPartitioner.BytesToken(tk2), InetAddressAndPort.getByName("127.0.0.2"));
+
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+        try (Verifier verifier = new Verifier(cfs, sstable, false, Verifier.options().checkOwnsTokens(true).extendedVerification(true).build()))
+        {
+            verifier.verify();
+        }
+        finally
+        {
+            StorageService.instance.getTokenMetadata().clearUnsafe();
+        }
+
+    }
+
