@@ -1,0 +1,33 @@
+    @Test
+    public void testMutateRepair() throws IOException, ExecutionException, InterruptedException
+    {
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CORRUPT_CF2);
+
+        fillCF(cfs, 2);
+
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+        sstable.descriptor.getMetadataSerializer().mutateRepairedAt(sstable.descriptor, 1);
+        sstable.reloadSSTableMetadata();
+        cfs.getTracker().notifySSTableRepairedStatusChanged(Collections.singleton(sstable));
+        assertTrue(sstable.isRepaired());
+        cfs.forceMajorCompaction();
+
+        sstable = cfs.getLiveSSTables().iterator().next();
+        Long correctChecksum;
+        try (RandomAccessFile file = new RandomAccessFile(sstable.descriptor.filenameFor(sstable.descriptor.digestComponent), "rw"))
+        {
+            correctChecksum = Long.parseLong(file.readLine());
+        }
+        writeChecksum(++correctChecksum, sstable.descriptor.filenameFor(sstable.descriptor.digestComponent));
+        try (Verifier verifier = new Verifier(cfs, sstable, false))
+        {
+            verifier.verify(false);
+            fail("should be corrupt");
+        }
+        catch (CorruptSSTableException e)
+        {}
+        assertFalse(sstable.isRepaired());
+    }
+
