@@ -1,0 +1,41 @@
+    /**
+     * Determines whether to hot reload certificates and schedules a periodic task for it.
+     *
+     * @param serverEncryptionOptions
+     * @param clientEncryptionOptions
+     */
+    public static synchronized void initHotReloading(EncryptionOptions.ServerEncryptionOptions serverEncryptionOptions,
+                                                     EncryptionOptions clientEncryptionOptions,
+                                                     boolean force)
+    {
+        if (isHotReloadingInitialized && !force)
+            return;
+
+        logger.debug("Initializing hot reloading SSLContext");
+
+        List<HotReloadableFile> fileList = new ArrayList<>();
+
+        if (serverEncryptionOptions.enabled)
+        {
+            fileList.add(new HotReloadableFile(serverEncryptionOptions.keystore, HotReloadableFile.Type.SERVER));
+            fileList.add(new HotReloadableFile(serverEncryptionOptions.truststore, HotReloadableFile.Type.SERVER));
+        }
+
+        if (clientEncryptionOptions.enabled)
+        {
+            fileList.add(new HotReloadableFile(clientEncryptionOptions.keystore, HotReloadableFile.Type.CLIENT));
+            fileList.add(new HotReloadableFile(clientEncryptionOptions.truststore, HotReloadableFile.Type.CLIENT));
+        }
+
+        hotReloadableFiles = ImmutableList.copyOf(fileList);
+
+        if (!isHotReloadingInitialized)
+        {
+            ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(SSLFactory::checkCertFilesForHotReloading,
+                                                                     DEFAULT_HOT_RELOAD_INITIAL_DELAY_SEC,
+                                                                     DEFAULT_HOT_RELOAD_PERIOD_SEC, TimeUnit.SECONDS);
+        }
+
+        isHotReloadingInitialized = true;
+    }
+
