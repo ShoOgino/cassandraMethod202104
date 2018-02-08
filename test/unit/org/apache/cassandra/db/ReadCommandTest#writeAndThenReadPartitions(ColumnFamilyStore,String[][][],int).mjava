@@ -1,0 +1,73 @@
+    /**
+     * Writes rows to the column family store using the groups as input and then reads them. Returns the iterators from
+     * the read.
+     */
+    private List<UnfilteredPartitionIterator> writeAndThenReadPartitions(ColumnFamilyStore cfs, String[][][] groups,
+            int nowInSeconds) throws IOException
+    {
+        List<ByteBuffer> buffers = new ArrayList<>(groups.length);
+        ColumnFilter columnFilter = ColumnFilter.allColumnsBuilder(cfs.metadata).build();
+        RowFilter rowFilter = RowFilter.create();
+        Slice slice = Slice.make(ClusteringBound.BOTTOM, ClusteringBound.TOP);
+        ClusteringIndexSliceFilter sliceFilter = new ClusteringIndexSliceFilter(
+                Slices.with(cfs.metadata.comparator, slice), false);
+
+        for (String[][] group : groups)
+        {
+            cfs.truncateBlocking();
+
+            List<SinglePartitionReadCommand> commands = new ArrayList<>(group.length);
+
+            for (String[] data : group)
+            {
+                if (data[0].equals("1"))
+                {
+                    new RowUpdateBuilder(cfs.metadata, 0, ByteBufferUtil.bytes(data[1]))
+                            .clustering(data[2])
+                            .add(data[3], ByteBufferUtil.bytes("blah"))
+                            .build()
+                            .apply();
+                }
+                else
+                {
+                    RowUpdateBuilder.deleteRow(cfs.metadata, FBUtilities.timestampMicros(),
+                            ByteBufferUtil.bytes(data[1]), data[2]).apply();
+                }
+                commands.add(SinglePartitionReadCommand.create(cfs.metadata, nowInSeconds, columnFilter, rowFilter,
+                        DataLimits.NONE, Util.dk(data[1]), sliceFilter));
+            }
+
+            cfs.forceBlockingFlush();
+
+            ReadQuery query = new SinglePartitionReadCommand.Group(commands, DataLimits.NONE);
+
+            try (ReadExecutionController executionController = query.executionController();
+                    UnfilteredPartitionIterator iter = query.executeLocally(executionController);
+                    DataOutputBuffer buffer = new DataOutputBuffer())
+            {
+                UnfilteredPartitionIterators.serializerForIntraNode().serialize(iter,
+                        columnFilter,
+                        buffer,
+                        MessagingService.current_version);
+                buffers.add(buffer.buffer());
+            }
+        }
+
+        // deserialize, merge and check the results are all there
+        List<UnfilteredPartitionIterator> iterators = new ArrayList<>();
+
+        for (ByteBuffer buffer : buffers)
+        {
+            try (DataInputBuffer in = new DataInputBuffer(buffer, true))
+            {
+                iterators.add(UnfilteredPartitionIterators.serializerForIntraNode().deserialize(in,
+                        MessagingService.current_version,
+                        cfs.metadata,
+                        columnFilter,
+                        SerializationHelper.Flag.LOCAL));
+            }
+        }
+
+        return iterators;
+    }
+
