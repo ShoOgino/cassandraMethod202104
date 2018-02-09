@@ -1,0 +1,65 @@
+    @Test
+    public void testRangeTombstones()
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore("Standard2");
+        cfs.clearUnsafe();
+
+        // disable compaction while flushing
+        cfs.disableAutoCompaction();
+
+        final CFMetaData table = cfs.metadata;
+        Directories dir = cfs.getDirectories();
+
+        ArrayList<DecoratedKey> keys = new ArrayList<DecoratedKey>();
+
+        for (int i=0; i < 4; i++)
+        {
+            keys.add(Util.dk(Integer.toString(i)));
+        }
+
+        int[] dks = {0, 1, 3};
+        writeSSTableWithRangeTombstoneMaskingOneColumn(cfs, table, dks);
+
+        int[] dkays = {0, 1, 2, 3};
+        writeSSTableWithRangeTombstoneMaskingOneColumn(cfs, table, dkays);
+
+        Collection<SSTableReader> toCompact = cfs.getLiveSSTables();
+        assert toCompact.size() == 2;
+
+        Util.compact(cfs, toCompact);
+        assertEquals(1, cfs.getLiveSSTables().size());
+
+        // Now assert we do have the 4 keys
+        assertEquals(4, Util.getAll(Util.cmd(cfs).build()).size());
+
+        ArrayList<DecoratedKey> k = new ArrayList<>();
+
+        for (FilteredPartition p : Util.getAll(Util.cmd(cfs).build()))
+        {
+            k.add(p.partitionKey());
+            final SinglePartitionReadCommand command = SinglePartitionReadCommand.create(cfs.metadata, FBUtilities.nowInSeconds(), ColumnFilter.all(cfs.metadata), RowFilter.NONE, DataLimits.NONE, p.partitionKey(), new ClusteringIndexSliceFilter(Slices.ALL, false));
+            try (ReadOrderGroup orderGroup = command.startOrderGroup();
+                 PartitionIterator iterator = command.executeInternal(orderGroup))
+            {
+                try (RowIterator rowIterator = iterator.next())
+                {
+                    Row row = rowIterator.next();
+                    Cell cell = row.getCell(cfs.metadata.getColumnDefinition(new ColumnIdentifier("val", false)));
+                    assertEquals(ByteBufferUtil.bytes("a"), cell.value());
+                    assertEquals(3, cell.timestamp());
+                    assertNotSame(ByteBufferUtil.bytes("01"), row.clustering().getRawValues()[0]);
+                    assertEquals(ByteBufferUtil.bytes("02"), row.clustering().getRawValues()[0]);
+                }
+            }
+        }
+        for (SSTableReader sstable : cfs.getLiveSSTables())
+        {
+            StatsMetadata stats = sstable.getSSTableMetadata();
+            assertEquals(ByteBufferUtil.bytes("0"), stats.minClusteringValues.get(0));
+            assertEquals(ByteBufferUtil.bytes("b"), stats.maxClusteringValues.get(0));
+        }
+
+        assertEquals(keys, k);
+    }
+
