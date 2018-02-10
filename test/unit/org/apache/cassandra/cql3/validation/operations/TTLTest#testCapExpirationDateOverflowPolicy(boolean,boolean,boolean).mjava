@@ -1,0 +1,42 @@
+    public void testCapExpirationDateOverflowPolicy(boolean simple, boolean clustering, boolean flush) throws Throwable
+    {
+        // Create Table
+        createTable(simple, clustering);
+
+        // Insert data with INSERT and UPDATE
+        if (simple)
+        {
+            execute("INSERT INTO %s (k, a) VALUES (?, ?) USING TTL " + MAX_TTL, 2, 2);
+            if (clustering)
+                execute("UPDATE %s USING TTL " + MAX_TTL + " SET b = 1 WHERE k = 1 AND a = 1;");
+            else
+                execute("UPDATE %s USING TTL " + MAX_TTL + " SET a = 1, b = 1 WHERE k = 1;");
+        }
+        else
+        {
+            execute("INSERT INTO %s (k, a, b) VALUES (?, ?, ?) USING TTL " + MAX_TTL, 2, 2, set("v21", "v22", "v23", "v24"));
+            if (clustering)
+                execute("UPDATE  %s USING TTL " + MAX_TTL + " SET b = ? WHERE k = 1 AND a = 1;", set("v11", "v12", "v13", "v14"));
+            else
+                execute("UPDATE  %s USING TTL " + MAX_TTL + " SET a = 1, b = ? WHERE k = 1;", set("v11", "v12", "v13", "v14"));
+        }
+
+        // Maybe Flush
+        Keyspace ks = Keyspace.open(keyspace());
+        if (flush)
+            FBUtilities.waitOnFutures(ks.flush());
+
+        // Verify data
+        verifyData(simple);
+
+        // Maybe major compact
+        if (flush)
+        {
+            // Major compact and check data is still present
+            ks.getColumnFamilyStore(currentTable()).forceMajorCompaction();
+
+            // Verify data again
+            verifyData(simple);
+        }
+    }
+
