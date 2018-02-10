@@ -3,13 +3,15 @@
                     LifecycleTransaction transaction,
                     boolean skipCorrupted,
                     OutputHandler outputHandler,
-                    boolean checkData)
+                    boolean checkData,
+                    boolean reinsertOverflowedTTLRows) throws IOException
     {
         this.cfs = cfs;
         this.transaction = transaction;
         this.sstable = transaction.onlyOne();
         this.outputHandler = outputHandler;
         this.skipCorrupted = skipCorrupted;
+        this.reinsertOverflowedTTLRows = reinsertOverflowedTTLRows;
         this.rowIndexEntrySerializer = sstable.descriptor.version.getSSTableFormat().getIndexSerializer(sstable.metadata,
                                                                                                         sstable.descriptor.version,
                                                                                                         sstable.header);
@@ -29,8 +31,8 @@
         }
         this.checkData = checkData && !this.isIndex; //LocalByPartitionerType does not support validation
         this.expectedBloomFilterSize = Math.max(
-            cfs.metadata.params.minIndexInterval,
-            hasIndexFile ? SSTableReader.getApproximateKeyCount(toScrub) : 0);
+        cfs.metadata.params.minIndexInterval,
+        hasIndexFile ? SSTableReader.getApproximateKeyCount(toScrub) : 0);
 
         // loop through each row, deserializing to check for damage.
         // we'll also loop through the index at the same time, using the position from the index to recover if the
@@ -41,12 +43,15 @@
                         : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
 
         this.indexFile = hasIndexFile
-                ? RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)))
-                : null;
+                         ? RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)))
+                         : null;
 
         this.scrubInfo = new ScrubInfo(dataFile, sstable);
 
         this.currentRowPositionFromIndex = 0;
         this.nextRowPositionFromIndex = 0;
+
+        if (reinsertOverflowedTTLRows)
+            outputHandler.output("Starting scrub with reinsert overflowed TTL option");
     }
 
