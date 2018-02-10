@@ -1,0 +1,29 @@
+    public static void maybeApplyExpirationDateOverflowPolicy(CFMetaData metadata, int ttl, boolean isDefaultTTL) throws InvalidRequestException
+    {
+        if (ttl == 0)
+            return;
+
+        // Check for localExpirationTime overflow (CASSANDRA-14092)
+        int nowInSecs = (int)(System.currentTimeMillis() / 1000);
+        if (ttl + nowInSecs < 0)
+        {
+            switch (policy)
+            {
+                case CAP:
+                    /**
+                     * Capping at this stage is basically not rejecting the request. The actual capping is done
+                     * by {@link org.apache.cassandra.db.BufferExpiringCell#computeLocalExpirationTime(int)},
+                     * which converts the negative TTL to {@link org.apache.cassandra.db.BufferExpiringCell#MAX_DELETION_TIME}
+                     */
+                    NoSpamLogger.log(logger, NoSpamLogger.Level.WARN, EXPIRATION_OVERFLOW_WARNING_INTERVAL_MINUTES,
+                                     TimeUnit.MINUTES, MAXIMUM_EXPIRATION_DATE_EXCEEDED_WARNING,
+                                     metadata.ksName, metadata.cfName, isDefaultTTL? "default " : "", ttl);
+                    return;
+
+                default: //REJECT
+                    throw new InvalidRequestException(String.format(MAXIMUM_EXPIRATION_DATE_EXCEEDED_REJECT_MESSAGE, metadata.ksName, metadata.cfName,
+                                                                    isDefaultTTL? "default " : "", ttl));
+            }
+        }
+    }
+
