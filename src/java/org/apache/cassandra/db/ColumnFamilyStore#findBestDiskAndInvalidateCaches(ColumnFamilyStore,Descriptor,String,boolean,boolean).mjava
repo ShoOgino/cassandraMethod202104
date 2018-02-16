@@ -1,0 +1,68 @@
+    /**
+     * Iterates over all keys in the sstable index and invalidates the row cache
+     *
+     * also counts the number of tokens that should be on each disk in JBOD-config to minimize the amount of data compaction
+     * needs to move around
+     */
+    @VisibleForTesting
+    static File findBestDiskAndInvalidateCaches(ColumnFamilyStore cfs, Descriptor desc, String srcPath, boolean clearCaches, boolean jbodCheck) throws IOException
+    {
+        int boundaryIndex = 0;
+        DiskBoundaries boundaries = cfs.getDiskBoundaries();
+        boolean shouldCountKeys = boundaries.positions != null && jbodCheck;
+        if (!cfs.isRowCacheEnabled() || !clearCaches)
+        {
+            if (srcPath == null) // user has dropped the sstables in the data directory, use it directly
+                return desc.directory;
+            if (boundaries.directories != null && boundaries.directories.size() == 1) // only a single data directory, use it without counting keys
+                return cfs.directories.getLocationForDisk(boundaries.directories.get(0));
+            if (!shouldCountKeys) // for non-random partitioners positions can be null, get the directory with the most space available
+                return cfs.directories.getWriteableLocationToLoadFile(new File(desc.baseFilename()));
+        }
+
+        long count = 0;
+        int maxIndex = 0;
+        long maxCount = 0;
+        try (RandomAccessReader primaryIndex = RandomAccessReader.open(new File(desc.filenameFor(Component.PRIMARY_INDEX))))
+        {
+            long indexSize = primaryIndex.length();
+            while (primaryIndex.getFilePointer() != indexSize)
+            {
+                ByteBuffer key = ByteBufferUtil.readWithShortLength(primaryIndex);
+                RowIndexEntry.Serializer.skip(primaryIndex, desc.version);
+                DecoratedKey decoratedKey = cfs.metadata().partitioner.decorateKey(key);
+                if (clearCaches)
+                    cfs.invalidateCachedPartition(decoratedKey);
+                if (shouldCountKeys)
+                {
+                    while (boundaries.positions.get(boundaryIndex).compareTo(decoratedKey) < 0)
+                    {
+                        logger.debug("{} has {} keys in {}", desc, count, boundaries.positions.get(boundaryIndex));
+                        if (count > maxCount)
+                        {
+                            maxIndex = boundaryIndex;
+                            maxCount = count;
+                        }
+                        boundaryIndex++;
+                        count = 0;
+                    }
+                    count++;
+                }
+            }
+            if (shouldCountKeys)
+            {
+                if (count > maxCount)
+                    maxIndex = boundaryIndex;
+                logger.debug("{} has {} keys in {}", desc, count, boundaries.positions.get(boundaryIndex));
+            }
+        }
+        File dir;
+        if (srcPath == null)
+            dir = desc.directory;
+        else if (shouldCountKeys)
+            dir = cfs.directories.getLocationForDisk(boundaries.directories.get(maxIndex));
+        else
+            dir = cfs.directories.getWriteableLocationToLoadFile(new File(desc.baseFilename()));
+        return dir;
+    }
+

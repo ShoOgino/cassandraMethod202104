@@ -1,0 +1,31 @@
+    @Test
+    public void importResetLevelTest() throws Throwable
+    {
+        createTable("create table %s (id int primary key, d int)");
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        Set<SSTableReader> sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        getCurrentColumnFamilyStore().clearUnsafe();
+        for (SSTableReader sstable : sstables)
+            sstable.descriptor.getMetadataSerializer().mutateLevel(sstable.descriptor, 123);
+        File backupdir = moveToBackupDir(sstables);
+        assertEquals(0, execute("select * from %s").size());
+
+        getCurrentColumnFamilyStore().loadNewSSTables(backupdir.toString(), false, false, false, false, false, false);
+
+        assertEquals(10, execute("select * from %s").size());
+        sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        assertEquals(1, sstables.size());
+        for (SSTableReader sstable : sstables)
+            assertEquals(123, sstable.getSSTableLevel());
+
+        getCurrentColumnFamilyStore().clearUnsafe();
+        backupdir = moveToBackupDir(sstables);
+        getCurrentColumnFamilyStore().loadNewSSTables(backupdir.toString(), true, false, false, false, false, false);
+        sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        assertEquals(1, sstables.size());
+        for (SSTableReader sstable : getCurrentColumnFamilyStore().getLiveSSTables())
+            assertEquals(0, sstable.getSSTableLevel());
+    }
+
