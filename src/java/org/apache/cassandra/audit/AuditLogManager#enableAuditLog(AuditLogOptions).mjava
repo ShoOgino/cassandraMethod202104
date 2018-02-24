@@ -1,0 +1,30 @@
+    /**
+     * Enables AuditLog, designed to be invoked only via JMX/ Nodetool, not from anywhere else in the codepath.
+     * @param auditLogOptions AuditLogOptions to be used for enabling AuditLog
+     * @throws ConfigurationException It can throw configuration exception when provided logger class does not exist in the classpath
+     */
+    public synchronized void enableAuditLog(AuditLogOptions auditLogOptions) throws ConfigurationException
+    {
+        if (isFQLEnabled() && fullQueryLogger.path().toString().equals(auditLogOptions.audit_logs_dir))
+            throw new IllegalArgumentException(String.format("audit log path (%s) cannot be the same as the " +
+                                                             "running full query logger (%s)",
+                                                             auditLogOptions.audit_logs_dir,
+                                                             fullQueryLogger.path()));
+
+        // always reload the filters
+        filter = AuditLogFilter.create(auditLogOptions);
+
+        // next, check to see if we're changing the logging implementation; if not, keep the same instance and bail.
+        // note: auditLogger should never be null
+        IAuditLogger oldLogger = auditLogger;
+        if (oldLogger.getClass().getSimpleName().equals(auditLogOptions.logger))
+            return;
+
+        auditLogger = getAuditLogger(auditLogOptions.logger);
+        isAuditLogEnabled = true;
+
+        // ensure oldLogger's stop() is called after we swap it with new logger,
+        // otherwise, we might be calling log() on the stopped logger.
+        oldLogger.stop();
+    }
+

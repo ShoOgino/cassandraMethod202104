@@ -1,0 +1,53 @@
+    @Test
+    public void testCqlBatchAuditing() throws Throwable
+    {
+        createTable("CREATE TABLE %s (id int primary key, v1 text, v2 text)");
+
+        Session session = sessionNet();
+
+        BatchStatement batchStatement = new BatchStatement();
+
+        String cqlInsert = "INSERT INTO " + KEYSPACE + "." + currentTable() + " (id, v1, v2) VALUES (?, ?, ?)";
+        PreparedStatement prep = session.prepare(cqlInsert);
+        AuditLogEntry logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlInsert, AuditLogEntryType.PREPARE_STATEMENT, logEntry, false);
+
+        batchStatement.add(prep.bind(1, "Apapche", "Cassandra"));
+        batchStatement.add(prep.bind(2, "Apapche1", "Cassandra1"));
+
+        String cqlUpdate = "UPDATE " + KEYSPACE + "." + currentTable() + " SET v1 = ? WHERE id = ?";
+        prep = session.prepare(cqlUpdate);
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlUpdate, AuditLogEntryType.PREPARE_STATEMENT, logEntry, false);
+
+        batchStatement.add(prep.bind("Apache Cassandra", 1));
+
+        String cqlDelete = "DELETE FROM " + KEYSPACE + "." + currentTable() + " WHERE id = ?";
+        prep = session.prepare(cqlDelete);
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlDelete, AuditLogEntryType.PREPARE_STATEMENT, logEntry, false);
+
+        batchStatement.add(prep.bind(1));
+
+        ResultSet rs = session.execute(batchStatement);
+
+        assertEquals(5, ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.size());
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlInsert, AuditLogEntryType.UPDATE, logEntry, false);
+
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlInsert, AuditLogEntryType.UPDATE, logEntry, false);
+
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlUpdate, AuditLogEntryType.UPDATE, logEntry, false);
+
+        logEntry = ((InMemoryAuditLogger) AuditLogManager.getInstance().getLogger()).inMemQueue.poll();
+        assertLogEntry(cqlDelete, AuditLogEntryType.DELETE, logEntry, false);
+
+        int size = rs.all().size();
+
+        assertEquals(0, size);
+    }
+

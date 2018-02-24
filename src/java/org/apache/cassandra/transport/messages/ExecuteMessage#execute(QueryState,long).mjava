@@ -54,16 +54,21 @@
             // Some custom QueryHandlers are interested by the bound names. We provide them this information
             // by wrapping the QueryOptions.
             QueryOptions queryOptions = QueryOptions.addColumnSpecifications(options, prepared.boundNames);
-            boolean fqlEnabled = FullQueryLogger.instance.enabled();
-            long fqlTime = 0;
-            if (fqlEnabled)
-            {
-                fqlTime = System.currentTimeMillis();
-            }
+
+            long fqlTime = isLoggingEnabled ? System.currentTimeMillis() : 0;
             Message.Response response = handler.processPrepared(statement, state, queryOptions, getCustomPayload(), queryStartNanoTime);
-            if (fqlEnabled)
+
+            if (isLoggingEnabled)
             {
-                FullQueryLogger.instance.logQuery(prepared.rawCQLStatement, options, fqlTime);
+                AuditLogEntry auditEntry = new AuditLogEntry.Builder(state.getClientState())
+                                           .setType(statement.getAuditLogContext().auditLogEntryType)
+                                           .setOperation(prepared.rawCQLStatement)
+                                           .setTimestamp(fqlTime)
+                                           .setScope(statement)
+                                           .setKeyspace(state, statement)
+                                           .setOptions(options)
+                                           .build();
+                AuditLogManager.getInstance().log(auditEntry);
             }
 
             if (response instanceof ResultMessage.Rows)
@@ -103,6 +108,33 @@
         }
         catch (Exception e)
         {
+            if (auditLogEnabled)
+            {
+                if (e instanceof PreparedQueryNotFoundException)
+                {
+                    AuditLogEntry auditLogEntry = new AuditLogEntry.Builder(state.getClientState())
+                                                  .setOperation(toString())
+                                                  .setOptions(options)
+                                                  .build();
+                    auditLogManager.log(auditLogEntry, e);
+                }
+                else
+                {
+                    ParsedStatement.Prepared prepared = ClientState.getCQLQueryHandler().getPrepared(statementId);
+                    if (prepared != null)
+                    {
+                        AuditLogEntry auditLogEntry = new AuditLogEntry.Builder(state.getClientState())
+                                                      .setOperation(toString())
+                                                      .setType(prepared.statement.getAuditLogContext().auditLogEntryType)
+                                                      .setScope(prepared.statement)
+                                                      .setKeyspace(state, prepared.statement)
+                                                      .setOptions(options)
+                                                      .build();
+                        auditLogManager.log(auditLogEntry, e);
+                    }
+                }
+            }
+
             JVMStabilityInspector.inspectThrowable(e);
             return ErrorMessage.fromException(e);
         }
