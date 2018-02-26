@@ -1,0 +1,30 @@
+    public void execute(Set<InetAddressAndPort> peers)
+    {
+        if (peers == null || targetPercent == 0)
+            return;
+
+        // remove current node from the set
+        peers = peers.stream()
+                     .filter(peer -> !peer.equals(FBUtilities.getBroadcastAddressAndPort()))
+                     .collect(Collectors.toSet());
+
+        // don't block if there's no other nodes in the cluster (or we don't know about them)
+        if (peers.size() <= 0)
+            return;
+
+        logger.info("choosing to block until {}% of peers are marked alive and connections are established; max time to wait = {} seconds",
+                    targetPercent, timeoutSecs);
+
+        // first, send out a ping message to open up the non-gossip connections
+        final AtomicInteger connectedCount = sendPingMessages(peers);
+
+        final long startNanos = System.nanoTime();
+        final long expirationNanos = startNanos + TimeUnit.SECONDS.toNanos(timeoutSecs);
+        int completedRounds = 0;
+        while (checkStatus(peers, connectedCount, startNanos, expirationNanos < System.nanoTime(), completedRounds) == State.CONTINUE)
+        {
+            completedRounds++;
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MICROSECONDS);
+        }
+    }
+
