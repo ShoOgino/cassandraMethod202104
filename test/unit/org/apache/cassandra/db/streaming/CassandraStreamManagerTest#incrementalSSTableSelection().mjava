@@ -1,0 +1,25 @@
+    @Test
+    public void incrementalSSTableSelection() throws Exception
+    {
+        // make 3 tables, 1 unrepaired, 2 pending repair with different repair ids, and 1 repaired
+        SSTableReader sstable1 = createSSTable(() -> QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (1, 1)", keyspace, table)));
+        SSTableReader sstable2 = createSSTable(() -> QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (2, 2)", keyspace, table)));
+        SSTableReader sstable3 = createSSTable(() -> QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (3, 3)", keyspace, table)));
+        SSTableReader sstable4 = createSSTable(() -> QueryProcessor.executeInternal(String.format("INSERT INTO %s.%s (k, v) VALUES (4, 4)", keyspace, table)));
+
+
+        UUID pendingRepair = UUIDGen.getTimeUUID();
+        long repairedAt = System.currentTimeMillis();
+        mutateRepaired(sstable2, ActiveRepairService.UNREPAIRED_SSTABLE, pendingRepair);
+        mutateRepaired(sstable3, ActiveRepairService.UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
+        mutateRepaired(sstable4, repairedAt, NO_PENDING_REPAIR);
+
+
+
+        // no pending repair should return all sstables
+        Assert.assertEquals(Sets.newHashSet(sstable1, sstable2, sstable3, sstable4), selectReaders(NO_PENDING_REPAIR));
+
+        // a pending repair arg should only return sstables with the same pending repair id
+        Assert.assertEquals(Sets.newHashSet(sstable2), selectReaders(pendingRepair));
+    }
+

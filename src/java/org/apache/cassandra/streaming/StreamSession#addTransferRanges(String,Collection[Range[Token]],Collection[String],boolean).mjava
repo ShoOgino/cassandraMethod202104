@@ -1,8 +1,6 @@
     /**
      * Set up transfer for specific keyspace/ranges/CFs
      *
-     * Used in repair - a streamed sstable in repair will be marked with the given repairedAt time
-     *
      * @param keyspace Transfer keyspace
      * @param ranges Transfer ranges
      * @param columnFamilies Transfer ColumnFamilies
@@ -16,22 +14,14 @@
             flushSSTables(stores);
 
         List<Range<Token>> normalizedRanges = Range.normalize(ranges);
-        List<SSTableStreamingSections> sections = getSSTableSectionsForRanges(normalizedRanges, stores, pendingRepair, previewKind);
-        try
+        List<OutgoingStream> streams = getOutgoingStreamsForRanges(normalizedRanges, stores, pendingRepair, previewKind);
+        addTransferStreams(streams);
+        Set<Range<Token>> toBeUpdated = transferredRangesPerKeyspace.get(keyspace);
+        if (toBeUpdated == null)
         {
-            addTransferFiles(sections);
-            Set<Range<Token>> toBeUpdated = transferredRangesPerKeyspace.get(keyspace);
-            if (toBeUpdated == null)
-            {
-                toBeUpdated = new HashSet<>();
-            }
-            toBeUpdated.addAll(ranges);
-            transferredRangesPerKeyspace.put(keyspace, toBeUpdated);
+            toBeUpdated = new HashSet<>();
         }
-        finally
-        {
-            for (SSTableStreamingSections release : sections)
-                release.ref.release();
-        }
+        toBeUpdated.addAll(ranges);
+        transferredRangesPerKeyspace.put(keyspace, toBeUpdated);
     }
 

@@ -1,0 +1,30 @@
+    /**
+     * Process received stream.
+     *
+     * @param stream Stream received.
+     */
+    public synchronized void received(IncomingStream stream)
+    {
+        Preconditions.checkState(!session.isPreview(), "we should never receive sstables when previewing");
+
+        if (done)
+        {
+            logger.warn("[{}] Received stream {} on already finished stream received task. Aborting stream.", session.planId(),
+                        stream.getName());
+            receiver.discardStream(stream);
+            return;
+        }
+
+        remoteStreamsReceived++;
+        Preconditions.checkArgument(tableId.equals(stream.getTableId()));
+        logger.debug("recevied {} of {} total files", remoteStreamsReceived, totalStreams);
+
+        receiver.received(stream);
+
+        if (remoteStreamsReceived == totalStreams)
+        {
+            done = true;
+            executor.submit(new OnCompletionRunnable(this));
+        }
+    }
+

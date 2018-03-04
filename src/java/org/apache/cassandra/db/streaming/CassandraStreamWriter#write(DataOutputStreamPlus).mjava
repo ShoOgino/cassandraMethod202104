@@ -1,0 +1,59 @@
+    /**
+     * Stream file of specified sections to given channel.
+     *
+     * CassandraStreamWriter uses LZF compression on wire to decrease size to transfer.
+     *
+     * @param output where this writes data to
+     * @throws IOException on any I/O error
+     */
+    public void write(DataOutputStreamPlus output) throws IOException
+    {
+        long totalSize = totalSize();
+        logger.debug("[Stream #{}] Start streaming file {} to {}, repairedAt = {}, totalSize = {}", session.planId(),
+                     sstable.getFilename(), session.peer, sstable.getSSTableMetadata().repairedAt, totalSize);
+
+        try(ChannelProxy proxy = sstable.getDataChannel().sharedCopy();
+            ChecksumValidator validator = new File(sstable.descriptor.filenameFor(Component.CRC)).exists()
+                                          ? DataIntegrityMetadata.checksumValidator(sstable.descriptor)
+                                          : null)
+        {
+            int bufferSize = validator == null ? DEFAULT_CHUNK_SIZE: validator.chunkSize;
+
+            // setting up data compression stream
+            long progress = 0L;
+
+            try (DataOutputStreamPlus compressedOutput = new ByteBufCompressionDataOutputStreamPlus(output, limiter))
+            {
+                // stream each of the required sections of the file
+                for (Pair<Long, Long> section : sections)
+                {
+                    long start = validator == null ? section.left : validator.chunkStart(section.left);
+                    // if the transfer does not start on the valididator's chunk boundary, this is the number of bytes to offset by
+                    int transferOffset = (int) (section.left - start);
+                    if (validator != null)
+                        validator.seek(start);
+
+                    // length of the section to read
+                    long length = section.right - start;
+                    // tracks write progress
+                    long bytesRead = 0;
+                    while (bytesRead < length)
+                    {
+                        int toTransfer = (int) Math.min(bufferSize, length - bytesRead);
+                        long lastBytesRead = write(proxy, validator, compressedOutput, start, transferOffset, toTransfer, bufferSize);
+                        start += lastBytesRead;
+                        bytesRead += lastBytesRead;
+                        progress += (lastBytesRead - transferOffset);
+                        session.progress(sstable.descriptor.filenameFor(Component.DATA), ProgressInfo.Direction.OUT, progress, totalSize);
+                        transferOffset = 0;
+                    }
+
+                    // make sure that current section is sent
+                    output.flush();
+                }
+                logger.debug("[Stream #{}] Finished streaming file {} to {}, bytesTransferred = {}, totalSize = {}",
+                             session.planId(), sstable.getFilename(), session.peer, FBUtilities.prettyPrintMemory(progress), FBUtilities.prettyPrintMemory(totalSize));
+            }
+        }
+    }
+
