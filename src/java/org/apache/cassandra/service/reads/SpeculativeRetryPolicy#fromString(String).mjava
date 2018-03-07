@@ -1,0 +1,76 @@
+    public static SpeculativeRetryPolicy fromString(String schemaStrValue) throws ConfigurationException
+    {
+        Matcher matcher = RETRY_PATTERN.matcher(schemaStrValue);
+        if (matcher.find())
+        {
+            String functionStr = matcher.group("function");
+            String val1 = matcher.group("val1");
+            String op1 = matcher.group("op1");
+            String val2 = matcher.group("val2");
+            String op2 = matcher.group("op2");
+
+            String normalizedFunction = (functionStr != null) ? functionStr.toUpperCase(Locale.ENGLISH) : null;
+            if (normalizedFunction != null && val1 != null && val2 != null)
+            {
+                Function hybridFunction;
+                try
+                {
+                    hybridFunction = Function.valueOf(normalizedFunction);
+                }
+                catch (IllegalArgumentException e)
+                {
+                    throw new ConfigurationException(String.format("Specified comparator [%s] is not supported", normalizedFunction));
+                }
+
+                SpeculativeRetryPolicy leftPolicy = nonHybridPolicyFromString(op1, val1);
+                SpeculativeRetryPolicy rightPolicy = nonHybridPolicyFromString(op2, val2);
+
+                if (leftPolicy.kind() == rightPolicy.kind())
+                {
+                    throw new ConfigurationException(String.format("Speculative Retry Parameters must be " +
+                                                                   "unique types. Both were found to be %s",
+                                                                   leftPolicy.kind().toString()));
+                }
+
+                return (leftPolicy.kind() == Kind.PERCENTILE)
+                       ? new HybridSpeculativeRetryPolicy((PercentileSpeculativeRetryPolicy) leftPolicy,
+                                                          (FixedSpeculativeRetryPolicy) rightPolicy, hybridFunction)
+                       : new HybridSpeculativeRetryPolicy((PercentileSpeculativeRetryPolicy) rightPolicy,
+                                                          (FixedSpeculativeRetryPolicy) leftPolicy, hybridFunction);
+            }
+            else if (normalizedFunction != null && val1 == null && op1 == null)
+            {
+                try
+                {
+                    Kind kind = Kind.valueOf(normalizedFunction);
+                    switch (kind)
+                    {
+                        case NONE:
+                        case NEVER: return NeverSpeculativeRetryPolicy.INSTANCE;
+                        case ALWAYS: return AlwaysSpeculativeRetryPolicy.INSTANCE;
+                        default: throw new ConfigurationException(String.format("Specified comparator [%s] is not supported", normalizedFunction));
+                    }
+                }
+                catch (IllegalArgumentException e)
+                {
+                    throw new ConfigurationException(String.format("Specified comparator [%s] is not supported", normalizedFunction));
+                }
+            }
+            else
+            {
+                if (op1 == null || val1 == null)
+                {
+                    throw new ConfigurationException(String.format("Specified Speculative Retry Policy [%s] is not supported", schemaStrValue));
+                }
+                else
+                {
+                    return nonHybridPolicyFromString(op1, val1);
+                }
+            }
+        }
+        else
+        {
+            throw new ConfigurationException(String.format("Specified Speculative Retry Policy [%s] is not supported", schemaStrValue));
+        }
+    }
+
