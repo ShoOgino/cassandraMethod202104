@@ -1,0 +1,59 @@
+    /**
+     * Performs a readonly "compaction" of all sstables in order to validate complete rows,
+     * but without writing the merge result
+     */
+    @SuppressWarnings("resource")
+    private void doValidation(ColumnFamilyStore cfs, Validator validator) throws IOException
+    {
+        // this isn't meant to be race-proof, because it's not -- it won't cause bugs for a CFS to be dropped
+        // mid-validation, or to attempt to validate a droped CFS.  this is just a best effort to avoid useless work,
+        // particularly in the scenario where a validation is submitted before the drop, and there are compactions
+        // started prior to the drop keeping some sstables alive.  Since validationCompaction can run
+        // concurrently with other compactions, it would otherwise go ahead and scan those again.
+        if (!cfs.isValid())
+            return;
+
+        // Create Merkle trees suitable to hold estimated partitions for the given ranges.
+        // We blindly assume that a partition is evenly distributed on all sstables for now.
+        long start = System.nanoTime();
+        long partitionCount = 0;
+        long estimatedTotalBytes = 0;
+        try (ValidationPartitionIterator vi = getValidationIterator(cfs.getRepairManager(), validator))
+        {
+            MerkleTrees tree = createMerkleTrees(vi, validator.desc.ranges, cfs);
+            try
+            {
+                // validate the CF as we iterate over it
+                validator.prepare(cfs, tree);
+                while (vi.hasNext())
+                {
+                    try (UnfilteredRowIterator partition = vi.next())
+                    {
+                        validator.add(partition);
+                        partitionCount++;
+                    }
+                }
+                validator.complete();
+            }
+            finally
+            {
+                estimatedTotalBytes = vi.getEstimatedBytes();
+                partitionCount = vi.estimatedPartitions();
+            }
+        }
+        finally
+        {
+            cfs.metric.bytesValidated.update(estimatedTotalBytes);
+            cfs.metric.partitionsValidated.update(partitionCount);
+        }
+        if (logger.isDebugEnabled())
+        {
+            long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            logger.debug("Validation of {} partitions (~{}) finished in {} msec, for {}",
+                         partitionCount,
+                         FBUtilities.prettyPrintMemory(estimatedTotalBytes),
+                         duration,
+                         validator.desc);
+        }
+    }
+

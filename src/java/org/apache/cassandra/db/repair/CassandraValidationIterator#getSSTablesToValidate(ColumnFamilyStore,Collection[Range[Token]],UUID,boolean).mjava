@@ -1,22 +1,26 @@
     @VisibleForTesting
-    synchronized Refs<SSTableReader> getSSTablesToValidate(ColumnFamilyStore cfs, Validator validator)
+    static synchronized Refs<SSTableReader> getSSTablesToValidate(ColumnFamilyStore cfs, Collection<Range<Token>> ranges, UUID parentId, boolean isIncremental)
     {
         Refs<SSTableReader> sstables;
 
-        ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(validator.desc.parentSessionId);
+        ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(parentId);
         if (prs == null)
-            return null;
+        {
+            // this means the parent repair session was removed - the repair session failed on another node and we removed it
+            return new Refs<>();
+        }
+
         Set<SSTableReader> sstablesToValidate = new HashSet<>();
 
         com.google.common.base.Predicate<SSTableReader> predicate;
         if (prs.isPreview())
         {
-            predicate = prs.getPreviewPredicate();
+            predicate = getPreviewPredicate(prs.previewKind);
 
         }
-        else if (validator.isIncremental)
+        else if (isIncremental)
         {
-            predicate = s -> validator.desc.parentSessionId.equals(s.getSSTableMetadata().pendingRepair);
+            predicate = s -> parentId.equals(s.getSSTableMetadata().pendingRepair);
         }
         else
         {
@@ -29,7 +33,7 @@
         {
             for (SSTableReader sstable : sstableCandidates.sstables)
             {
-                if (new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(validator.desc.ranges))
+                if (new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(ranges))
                 {
                     sstablesToValidate.add(sstable);
                 }

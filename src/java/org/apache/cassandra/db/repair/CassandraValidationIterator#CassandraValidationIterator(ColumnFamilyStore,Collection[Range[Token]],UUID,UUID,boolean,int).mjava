@@ -1,0 +1,54 @@
+    public CassandraValidationIterator(ColumnFamilyStore cfs, Collection<Range<Token>> ranges, UUID parentId, UUID sessionID, boolean isIncremental, int nowInSec) throws IOException
+    {
+        this.cfs = cfs;
+
+        isGlobalSnapshotValidation = cfs.snapshotExists(parentId.toString());
+        if (isGlobalSnapshotValidation)
+            snapshotName = parentId.toString();
+        else
+            snapshotName = sessionID.toString();
+        isSnapshotValidation = cfs.snapshotExists(snapshotName);
+
+        if (isSnapshotValidation)
+        {
+            // If there is a snapshot created for the session then read from there.
+            // note that we populate the parent repair session when creating the snapshot, meaning the sstables in the snapshot are the ones we
+            // are supposed to validate.
+            sstables = cfs.getSnapshotSSTableReaders(snapshotName);
+        }
+        else
+        {
+            if (!isIncremental)
+            {
+                // flush first so everyone is validating data that is as similar as possible
+                StorageService.instance.forceKeyspaceFlush(cfs.keyspace.getName(), cfs.name);
+            }
+            sstables = getSSTablesToValidate(cfs, ranges, parentId, isIncremental);
+        }
+
+        Preconditions.checkArgument(sstables != null);
+        controller = new ValidationCompactionController(cfs, getDefaultGcBefore(cfs, nowInSec));
+        scanners = cfs.getCompactionStrategyManager().getScanners(sstables, ranges);
+        ci = new ValidationCompactionIterator(scanners.scanners, controller, nowInSec, CompactionManager.instance.getMetrics());
+
+        long allPartitions = 0;
+        rangePartitionCounts = Maps.newHashMapWithExpectedSize(ranges.size());
+        for (Range<Token> range : ranges)
+        {
+            long numPartitions = 0;
+            for (SSTableReader sstable : sstables)
+                numPartitions += sstable.estimatedKeysForRanges(Collections.singleton(range));
+            rangePartitionCounts.put(range, numPartitions);
+            allPartitions += numPartitions;
+        }
+        estimatedPartitions = allPartitions;
+
+        long estimatedTotalBytes = 0;
+        for (SSTableReader sstable : sstables)
+        {
+            for (Pair<Long, Long> positionsForRanges : sstable.getPositionsForRanges(ranges))
+                estimatedTotalBytes += positionsForRanges.right - positionsForRanges.left;
+        }
+        estimatedBytes = estimatedTotalBytes;
+    }
+
