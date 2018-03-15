@@ -1,0 +1,33 @@
+    @Test
+    public void testAutomaticUpgradeConcurrency() throws Exception
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KS_PREFIX).getColumnFamilyStore(TABLE_PREFIX);
+        DatabaseDescriptor.setAutomaticSSTableUpgradeEnabled(true);
+        DatabaseDescriptor.setMaxConcurrentAutoUpgradeTasks(1);
+
+        // latch to block CompactionManager.BackgroundCompactionCandidate#maybeRunUpgradeTask
+        // inside the currentlyBackgroundUpgrading check - with max_concurrent_auto_upgrade_tasks = 1 this will make
+        // sure that BackgroundCompactionCandidate#maybeRunUpgradeTask returns false until the latch has been counted down
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicInteger upgradeTaskCount = new AtomicInteger(0);
+        MockCFSForCSM mock = new MockCFSForCSM(cfs, latch, upgradeTaskCount);
+
+        CompactionManager.BackgroundCompactionCandidate r = CompactionManager.instance.getBackgroundCompactionCandidate(mock);
+        CompactionStrategyManager mgr = mock.getCompactionStrategyManager();
+        // basic idea is that we start a thread which will be able to get in to the currentlyBackgroundUpgrading-guarded
+        // code in CompactionManager, then we try to run a bunch more of the upgrade tasks which should return false
+        // due to the currentlyBackgroundUpgrading count being >= max_concurrent_auto_upgrade_tasks
+        Thread t = new Thread(() -> r.maybeRunUpgradeTask(mgr));
+        t.start();
+        Thread.sleep(100); // let the thread start and grab the task
+        assertEquals(1, CompactionManager.instance.currentlyBackgroundUpgrading.get());
+        assertFalse(r.maybeRunUpgradeTask(mgr));
+        assertFalse(r.maybeRunUpgradeTask(mgr));
+        latch.countDown();
+        t.join();
+        assertEquals(1, upgradeTaskCount.get()); // we should only call findUpgradeSSTableTask once when concurrency = 1
+        assertEquals(0, CompactionManager.instance.currentlyBackgroundUpgrading.get());
+
+        DatabaseDescriptor.setAutomaticSSTableUpgradeEnabled(false);
+    }
+

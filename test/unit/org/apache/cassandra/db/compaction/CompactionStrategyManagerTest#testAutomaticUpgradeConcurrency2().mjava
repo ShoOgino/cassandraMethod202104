@@ -1,0 +1,39 @@
+    @Test
+    public void testAutomaticUpgradeConcurrency2() throws Exception
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KS_PREFIX).getColumnFamilyStore(TABLE_PREFIX);
+        DatabaseDescriptor.setAutomaticSSTableUpgradeEnabled(true);
+        DatabaseDescriptor.setMaxConcurrentAutoUpgradeTasks(2);
+        // latch to block CompactionManager.BackgroundCompactionCandidate#maybeRunUpgradeTask
+        // inside the currentlyBackgroundUpgrading check - with max_concurrent_auto_upgrade_tasks = 1 this will make
+        // sure that BackgroundCompactionCandidate#maybeRunUpgradeTask returns false until the latch has been counted down
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicInteger upgradeTaskCount = new AtomicInteger();
+        MockCFSForCSM mock = new MockCFSForCSM(cfs, latch, upgradeTaskCount);
+
+        CompactionManager.BackgroundCompactionCandidate r = CompactionManager.instance.getBackgroundCompactionCandidate(mock);
+        CompactionStrategyManager mgr = mock.getCompactionStrategyManager();
+
+        // basic idea is that we start 2 threads who will be able to get in to the currentlyBackgroundUpgrading-guarded
+        // code in CompactionManager, then we try to run a bunch more of the upgrade task which should return false
+        // due to the currentlyBackgroundUpgrading count being >= max_concurrent_auto_upgrade_tasks
+        Thread t = new Thread(() -> r.maybeRunUpgradeTask(mgr));
+        t.start();
+        Thread t2 = new Thread(() -> r.maybeRunUpgradeTask(mgr));
+        t2.start();
+        Thread.sleep(100); // let the threads start and grab the task
+        assertEquals(2, CompactionManager.instance.currentlyBackgroundUpgrading.get());
+        assertFalse(r.maybeRunUpgradeTask(mgr));
+        assertFalse(r.maybeRunUpgradeTask(mgr));
+        assertFalse(r.maybeRunUpgradeTask(mgr));
+        assertEquals(2, CompactionManager.instance.currentlyBackgroundUpgrading.get());
+        latch.countDown();
+        t.join();
+        t2.join();
+        assertEquals(2, upgradeTaskCount.get());
+        assertEquals(0, CompactionManager.instance.currentlyBackgroundUpgrading.get());
+
+        DatabaseDescriptor.setMaxConcurrentAutoUpgradeTasks(1);
+        DatabaseDescriptor.setAutomaticSSTableUpgradeEnabled(false);
+    }
+

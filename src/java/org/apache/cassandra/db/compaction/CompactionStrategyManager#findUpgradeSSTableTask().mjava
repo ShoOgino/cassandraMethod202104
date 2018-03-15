@@ -1,0 +1,30 @@
+    /**
+     * finds the oldest (by modification date) non-latest-version sstable on disk and creates an upgrade task for it
+     * @return
+     */
+    @VisibleForTesting
+    AbstractCompactionTask findUpgradeSSTableTask()
+    {
+        if (!isEnabled() || !DatabaseDescriptor.automaticSSTableUpgrade())
+            return null;
+        Set<SSTableReader> compacting = cfs.getTracker().getCompacting();
+        List<SSTableReader> potentialUpgrade = cfs.getLiveSSTables()
+                                                  .stream()
+                                                  .filter(s -> !compacting.contains(s) && !s.descriptor.version.isLatestVersion())
+                                                  .sorted((o1, o2) -> {
+                                                      File f1 = new File(o1.descriptor.filenameFor(Component.DATA));
+                                                      File f2 = new File(o2.descriptor.filenameFor(Component.DATA));
+                                                      return Longs.compare(f1.lastModified(), f2.lastModified());
+                                                  }).collect(Collectors.toList());
+        for (SSTableReader sstable : potentialUpgrade)
+        {
+            LifecycleTransaction txn = cfs.getTracker().tryModify(sstable, OperationType.UPGRADE_SSTABLES);
+            if (txn != null)
+            {
+                logger.debug("Running automatic sstable upgrade for {}", sstable);
+                return getCompactionStrategyFor(sstable).getCompactionTask(txn, Integer.MIN_VALUE, Long.MAX_VALUE);
+            }
+        }
+        return null;
+    }
+
