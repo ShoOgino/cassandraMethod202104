@@ -1,18 +1,9 @@
     /**
-     * Get a netty {@link SslContext} instance.
+     * Create a Netty {@link SslContext}
      */
-    @VisibleForTesting
-    static SslContext getSslContext(EncryptionOptions options, boolean buildTruststore, boolean forServer, boolean useOpenSsl) throws IOException
+    static SslContext createNettySslContext(EncryptionOptions options, boolean buildTruststore, ConnectionType connectionType,
+                                            SocketType socketType, boolean useOpenSsl) throws IOException
     {
-
-        SslContext sslContext;
-
-        if (forServer && (sslContext = serverSslContext.get()) != null)
-            return sslContext;
-
-        if (!forServer && (sslContext = clientSslContext.get()) != null)
-            return sslContext;
-
         /*
             There is a case where the netty/openssl combo might not support using KeyManagerFactory. specifically,
             I've seen this with the netty-tcnative dynamic openssl implementation. using the netty-tcnative static-boringssl
@@ -21,12 +12,9 @@
             {@link SslContextBuilder#forServer(File, File, String)}). However, we are not supporting that now to keep
             the config/yaml API simple.
          */
-        KeyManagerFactory kmf = null;
-        if (forServer || options.require_client_auth)
-            kmf = buildKeyManagerFactory(options);
-
+        KeyManagerFactory kmf = buildKeyManagerFactory(options);
         SslContextBuilder builder;
-        if (forServer)
+        if (socketType == SocketType.SERVER)
         {
             builder = SslContextBuilder.forServer(kmf);
             builder.clientAuth(options.require_client_auth ? ClientAuth.REQUIRE : ClientAuth.NONE);
@@ -46,11 +34,6 @@
         if (buildTruststore)
             builder.trustManager(buildTrustManagerFactory(options));
 
-        SslContext ctx = builder.build();
-        AtomicReference<SslContext> ref = forServer ? serverSslContext : clientSslContext;
-        if (ref.compareAndSet(null, ctx))
-            return ctx;
-
-        return ref.get();
+        return builder.build();
     }
 
