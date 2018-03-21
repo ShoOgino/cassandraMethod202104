@@ -1,0 +1,53 @@
+        public Indexer indexerFor(final DecoratedKey key,
+                                  RegularAndStaticColumns columns,
+                                  int nowInSec,
+                                  WriteContext ctx,
+                                  IndexTransaction.Type transactionType)
+        {
+            CassandraWriteContext cassandraWriteContext = (CassandraWriteContext) ctx;
+            if (readOrderingAtStart == null)
+                readOrderingAtStart = baseCfs.readOrdering.getCurrent();
+
+            writeGroups.add(cassandraWriteContext.getGroup());
+
+            return new Indexer()
+            {
+                public void begin()
+                {
+                    // to simulate other activity on base table during indexing, issue
+                    // barriers on the read and write orderings. This is analogous to
+                    // what happens when other flushes are being processed during the
+                    // indexing of a partition
+                    OpOrder.Barrier readBarrier = baseCfs.readOrdering.newBarrier();
+                    readBarrier.issue();
+                    barriers.add(readBarrier);
+                    OpOrder.Barrier writeBarrier = Keyspace.writeOrder.newBarrier();
+                    writeBarrier.issue();
+                    barriers.add(writeBarrier);
+                }
+
+                public void insertRow(Row row)
+                {
+                    indexedRowCount.incrementAndGet();
+                }
+
+                public void finish()
+                {
+                    // we've indexed all rows in the target partition,
+                    // grab the read OpOrder.Group for the base CFS so
+                    // we can compare it with the starting group
+                    if (indexedRowCount.get() < ROWS_IN_PARTITION)
+                        readOrderingAtFinish = baseCfs.readOrdering.getCurrent();
+                }
+
+                public void partitionDelete(DeletionTime deletionTime) { }
+
+                public void rangeTombstone(RangeTombstone tombstone) { }
+
+                public void updateRow(Row oldRowData, Row newRowData) { }
+
+                public void removeRow(Row row) { }
+
+            };
+        }
+
