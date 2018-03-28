@@ -1,0 +1,44 @@
+        private AsyncOneResponse sendRepairMutation(Mutation mutation, InetAddressAndPort destination)
+        {
+            DecoratedKey key = mutation.key();
+            Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+            int messagingVersion = MessagingService.instance().getVersion(destination);
+
+            int    mutationSize = (int) Mutation.serializer.serializedSize(mutation, messagingVersion);
+            int maxMutationSize = DatabaseDescriptor.getMaxMutationSize();
+
+            AsyncOneResponse callback = null;
+
+            if (mutationSize <= maxMutationSize)
+            {
+                Tracing.trace("Sending read-repair-mutation to {}", destination);
+                // use a separate verb here to avoid writing hints on timeouts
+                MessageOut<Mutation> message = mutation.createMessage(MessagingService.Verb.READ_REPAIR);
+                callback = MessagingService.instance().sendRR(message, destination);
+                ColumnFamilyStore.metricsFor(command.metadata().id).readRepairRequests.mark();
+            }
+            else if (DROP_OVERSIZED_READ_REPAIR_MUTATIONS)
+            {
+                logger.debug("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                             mutationSize,
+                             maxMutationSize,
+                             command.metadata(),
+                             command.metadata().partitionKeyType.getString(key.getKey()),
+                             destination);
+            }
+            else
+            {
+                logger.warn("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                            mutationSize,
+                            maxMutationSize,
+                            command.metadata(),
+                            command.metadata().partitionKeyType.getString(key.getKey()),
+                            destination);
+
+                int blockFor = consistency.blockFor(keyspace);
+                Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
+                throw new ReadTimeoutException(consistency, blockFor - 1, blockFor, true);
+            }
+            return callback;
+        }
+
