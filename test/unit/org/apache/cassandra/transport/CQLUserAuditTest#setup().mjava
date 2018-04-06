@@ -1,0 +1,26 @@
+    @BeforeClass
+    public static void setup() throws Exception
+    {
+        OverrideConfigurationLoader.override((config) -> {
+            config.authenticator = "PasswordAuthenticator";
+            config.role_manager = "CassandraRoleManager";
+            config.diagnostic_events_enabled = true;
+            config.audit_logging_options.enabled = true;
+            config.audit_logging_options.logger = "DiagnosticEventAuditLogger";
+        });
+        CQLTester.prepareServer();
+
+        System.setProperty("cassandra.superuser_setup_delay_ms", "0");
+        embedded = new EmbeddedCassandraService();
+        embedded.start();
+
+        executeAs(Arrays.asList("CREATE ROLE testuser WITH LOGIN = true AND SUPERUSER = false AND PASSWORD = 'foo'",
+                                "CREATE ROLE testuser_nologin WITH LOGIN = false AND SUPERUSER = false AND PASSWORD = 'foo'",
+                                "CREATE KEYSPACE testks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}",
+                                "CREATE TABLE testks.table1 (a text, b int, c int, PRIMARY KEY (a, b))",
+                                "CREATE TABLE testks.table2 (a text, b int, c int, PRIMARY KEY (a, b))"),
+                  "cassandra", "cassandra", null);
+
+        DiagnosticEventService.instance().subscribe(AuditEvent.class, auditEvents::add);
+    }
+

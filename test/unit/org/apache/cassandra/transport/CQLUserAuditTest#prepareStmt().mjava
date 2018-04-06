@@ -1,0 +1,35 @@
+    @Test
+    public void prepareStmt()
+    {
+        Cluster cluster = Cluster.builder().addContactPoints(InetAddress.getLoopbackAddress())
+                                 .withoutJMXReporting()
+                                 .withCredentials("testuser", "foo")
+                                 .withPort(DatabaseDescriptor.getNativeTransportPort()).build();
+        String spStmt = "INSERT INTO testks.table1 (a, b, c) VALUES (?, ?, ?)";
+        try (Session session = cluster.connect())
+        {
+            PreparedStatement pStmt = session.prepare(spStmt);
+            session.execute(pStmt.bind("x", 9, 8));
+        }
+
+        List<AuditEvent> events = auditEvents.stream().filter((e) -> e.getType() != AuditLogEntryType.LOGIN_SUCCESS)
+                                             .collect(Collectors.toList());
+        AuditEvent e = events.get(0);
+        Map<String, Serializable> m = e.toMap();
+        assertEquals(2, events.size());
+        assertEquals("testuser", m.get("user"));
+        assertEquals(spStmt, m.get("operation"));
+        assertEquals("testks", m.get("keyspace"));
+        assertEquals("table1", m.get("scope"));
+        assertEquals(AuditLogEntryType.PREPARE_STATEMENT, e.getType());
+
+        e = events.get(1);
+        m = e.toMap();
+        assertEquals("testuser", m.get("user"));
+        assertEquals(spStmt, m.get("operation"));
+        assertEquals("testks", m.get("keyspace"));
+        assertEquals("table1", m.get("scope"));
+        assertEquals(AuditLogEntryType.UPDATE, e.getType());
+
+    }
+
