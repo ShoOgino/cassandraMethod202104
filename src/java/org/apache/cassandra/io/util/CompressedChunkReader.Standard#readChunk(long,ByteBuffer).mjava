@@ -10,9 +10,13 @@
                 CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
                 ByteBuffer compressed = compressedHolder.get();
 
-                if (compressed.capacity() < chunk.length)
+                boolean shouldCheckCrc = shouldCheckCrc();
+
+                int length = shouldCheckCrc ? chunk.length + Integer.BYTES : chunk.length;
+
+                if (compressed.capacity() < length)
                 {
-                    compressed = allocateBuffer(chunk.length);
+                    compressed = allocateBuffer(length);
                     compressedHolder.set(compressed);
                 }
                 else
@@ -20,12 +24,25 @@
                     compressed.clear();
                 }
 
-                compressed.limit(chunk.length);
-                if (channel.read(compressed, chunk.offset) != chunk.length)
+                compressed.limit(length);
+                if (channel.read(compressed, chunk.offset) != length)
                     throw new CorruptBlockException(channel.filePath(), chunk);
 
                 compressed.flip();
                 uncompressed.clear();
+
+                compressed.position(0).limit(chunk.length);
+
+                if (shouldCheckCrc)
+                {
+                    int checksum = (int) metadata.checksumType.of(compressed);
+
+                    compressed.limit(length);
+                    if (compressed.getInt() != checksum)
+                        throw new CorruptBlockException(channel.filePath(), chunk);
+
+                    compressed.position(0).limit(chunk.length);
+                }
 
                 try
                 {
@@ -38,18 +55,6 @@
                 finally
                 {
                     uncompressed.flip();
-                }
-
-                if (getCrcCheckChance() >= 1d ||
-                    getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
-                {
-                    compressed.rewind();
-                    int checksum = (int) metadata.checksumType.of(compressed);
-
-                    compressed.clear().limit(Integer.BYTES);
-                    if (channel.read(compressed, chunk.offset + chunk.length) != Integer.BYTES
-                                || compressed.getInt(0) != checksum)
-                        throw new CorruptBlockException(channel.filePath(), chunk);
                 }
             }
             catch (CorruptBlockException e)

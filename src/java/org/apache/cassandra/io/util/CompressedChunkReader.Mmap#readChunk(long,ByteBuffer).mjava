@@ -18,6 +18,17 @@
 
                 uncompressed.clear();
 
+                if (shouldCheckCrc())
+                {
+                    int checksum = (int) metadata.checksumType.of(compressedChunk);
+
+                    compressedChunk.limit(compressedChunk.capacity());
+                    if (compressedChunk.getInt() != checksum)
+                        throw new CorruptBlockException(channel.filePath(), chunk);
+
+                    compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
+                }
+
                 try
                 {
                     metadata.compressor().uncompress(compressedChunk, uncompressed);
@@ -29,18 +40,6 @@
                 finally
                 {
                     uncompressed.flip();
-                }
-
-                if (getCrcCheckChance() >= 1d ||
-                    getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
-                {
-                    compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
-
-                    int checksum = (int) metadata.checksumType.of(compressedChunk);
-
-                    compressedChunk.limit(compressedChunk.capacity());
-                    if (compressedChunk.getInt() != checksum)
-                        throw new CorruptBlockException(channel.filePath(), chunk);
                 }
             }
             catch (CorruptBlockException e)
