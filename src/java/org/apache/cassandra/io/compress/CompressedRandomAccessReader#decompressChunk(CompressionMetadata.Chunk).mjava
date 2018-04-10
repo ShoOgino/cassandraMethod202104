@@ -15,6 +15,11 @@
         // technically flip() is unnecessary since all the remaining work uses the raw array, but if that changes
         // in the future this will save a lot of hair-pulling
         compressed.flip();
+
+        // If the checksum is on compressed data we want to check it before uncompressing the data
+        if (metadata.hasPostCompressionAdlerChecksums)
+            checkChecksumIfNeeded(chunk, compressed.array(), chunk.length);
+
         try
         {
             validBufferBytes = metadata.compressor().uncompress(compressed.array(), 0, chunk.length, buffer, 0);
@@ -24,24 +29,9 @@
             throw new CorruptBlockException(getPath(), chunk, e);
         }
 
-        if (metadata.parameters.getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
-        {
+        if (!metadata.hasPostCompressionAdlerChecksums)
+            checkChecksumIfNeeded(chunk, buffer, validBufferBytes);
 
-            if (metadata.hasPostCompressionAdlerChecksums)
-            {
-                checksum.update(compressed.array(), 0, chunk.length);
-            }
-            else
-            {
-                checksum.update(buffer, 0, validBufferBytes);
-            }
-
-            if (checksum(chunk) != (int) checksum.getValue())
-                throw new CorruptBlockException(getPath(), chunk);
-
-            // reset checksum object back to the original (blank) state
-            checksum.reset();
-        }
 
         // buffer offset is always aligned
         bufferOffset = current & ~(buffer.length - 1);
