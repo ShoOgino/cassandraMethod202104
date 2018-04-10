@@ -17,6 +17,21 @@
 
             buffer.clear();
 
+            if (getCrcCheckChance() >= 1d ||
+                getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
+            {
+                metadata.checksumType.update( checksum, compressedChunk);
+
+                compressedChunk.limit(compressedChunk.capacity());
+                if (compressedChunk.getInt() != (int) checksum.getValue())
+                    throw new CorruptBlockException(getPath(), chunk);
+
+                // reset checksum object back to the original (blank) state
+                checksum.reset();
+
+                compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
+            }
+
             try
             {
                 metadata.compressor().uncompress(compressedChunk, buffer);
@@ -28,21 +43,6 @@
             finally
             {
                 buffer.flip();
-            }
-
-            if (getCrcCheckChance() >= 1d ||
-                getCrcCheckChance() > ThreadLocalRandom.current().nextDouble())
-            {
-                compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
-
-                metadata.checksumType.update( checksum, compressedChunk);
-
-                compressedChunk.limit(compressedChunk.capacity());
-                if (compressedChunk.getInt() != (int) checksum.getValue())
-                    throw new CorruptBlockException(getPath(), chunk);
-
-                // reset checksum object back to the original (blank) state
-                checksum.reset();
             }
 
             // buffer offset is always aligned
