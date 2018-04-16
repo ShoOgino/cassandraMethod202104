@@ -1,0 +1,38 @@
+    private void compactionTestHelper(boolean singleSSTUplevel) throws Throwable
+    {
+        createTable("create table %s (id int, id2 int, t blob, primary key (id, id2))" +
+                    "with compaction = {'class':'LeveledCompactionStrategy', 'single_sstable_uplevel':" + singleSSTUplevel + ", 'sstable_size_in_mb':'1', 'max_threshold':'1000'}");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.disableAutoCompaction();
+        byte[] b = new byte[10 * 1024];
+        new Random().nextBytes(b);
+        ByteBuffer value = ByteBuffer.wrap(b);
+        for (int i = 0; i < 5000; i++)
+        {
+            for (int j = 0; j < 10; j++)
+            {
+                execute("insert into %s (id, id2, t) values (?, ?, ?)", i, j, value);
+            }
+            if (i % 100 == 0)
+                cfs.forceBlockingFlush();
+        }
+        // now we have a bunch of data in L0, first compaction will be a normal one, containing all sstables:
+        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getUnrepaired().get(0);
+        AbstractCompactionTask act = lcs.getNextBackgroundTask(0);
+        act.execute(null);
+
+        // now all sstables are laid out non-overlapping in L1, this means that the rest of the compactions
+        // will be single sstable ones, make sure that we use SingleSSTableLCSTask if singleSSTUplevel is true:
+        while (lcs.getEstimatedRemainingTasks() > 0)
+        {
+            act = lcs.getNextBackgroundTask(0);
+            assertEquals(singleSSTUplevel, act instanceof SingleSSTableLCSTask);
+            act.execute(null);
+        }
+        assertEquals(0, lcs.getLevelSize(0));
+        int l1size = lcs.getLevelSize(1);
+        // this should be 10, but it might vary a bit depending on partition sizes etc
+        assertTrue(l1size >= 8 && l1size <= 12);
+        assertTrue(lcs.getLevelSize(2) > 0);
+    }
+

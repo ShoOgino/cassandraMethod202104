@@ -1,0 +1,27 @@
+    @Override
+    protected void runMayThrow()
+    {
+        SSTableReader sstable = transaction.onlyOne();
+        StatsMetadata metadataBefore = sstable.getSSTableMetadata();
+        if (level == metadataBefore.sstableLevel)
+        {
+            logger.info("Not compacting {}, level is already {}", sstable, level);
+        }
+        else
+        {
+            try
+            {
+                logger.info("Changing level on {} from {} to {}", sstable, metadataBefore.sstableLevel, level);
+                sstable.descriptor.getMetadataSerializer().mutateLevel(sstable.descriptor, level);
+                sstable.reloadSSTableMetadata();
+            }
+            catch (Throwable t)
+            {
+                transaction.abort();
+                throw new CorruptSSTableException(t, sstable.descriptor.filenameFor(Component.DATA));
+            }
+            cfs.getTracker().notifySSTableMetadataChanged(sstable, metadataBefore);
+        }
+        finishTransaction(sstable);
+    }
+

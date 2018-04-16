@@ -1,0 +1,36 @@
+    @Test
+    public void corruptMetadataTest() throws Throwable
+    {
+        createTable("create table %s (id int primary key, t text) with compaction = {'class':'LeveledCompactionStrategy','single_sstable_uplevel':true}");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        execute("insert into %s (id, t) values (1, 'meep')");
+        cfs.forceBlockingFlush();
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+
+        String filenameToCorrupt = sstable.descriptor.filenameFor(Component.STATS);
+        RandomAccessFile file = new RandomAccessFile(filenameToCorrupt, "rw");
+        file.seek(0);
+        file.writeBytes(StringUtils.repeat('z', 2));
+        file.close();
+        boolean gotException = false;
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstable, OperationType.COMPACTION))
+        {
+            if (txn != null)
+            {
+                SingleSSTableLCSTask task = new SingleSSTableLCSTask(cfs, txn, 2);
+                task.executeInternal(null);
+            }
+        }
+        catch (Throwable t)
+        {
+            gotException = true;
+        }
+        assertTrue(gotException);
+        assertEquals(1, cfs.getLiveSSTables().size());
+        for (SSTableReader sst : cfs.getLiveSSTables())
+            assertEquals(0, sst.getSSTableMetadata().sstableLevel);
+        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getUnrepaired().iterator().next();
+        assertEquals(1, lcs.getLevelSize(0));
+        assertTrue(cfs.getTracker().getCompacting().isEmpty());
+    }
+

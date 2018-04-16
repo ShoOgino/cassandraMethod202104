@@ -1,0 +1,31 @@
+    @Test
+    public void basicTest() throws Throwable
+    {
+        createTable("create table %s (id int primary key, t text) with compaction = {'class':'LeveledCompactionStrategy','single_sstable_uplevel':true}");
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        execute("insert into %s (id, t) values (1, 'meep')");
+        cfs.forceBlockingFlush();
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstable, OperationType.COMPACTION))
+        {
+            if (txn != null)
+            {
+                SingleSSTableLCSTask task = new SingleSSTableLCSTask(cfs, txn, 2);
+                task.executeInternal(null);
+            }
+        }
+        assertEquals(1, cfs.getLiveSSTables().size());
+        cfs.getLiveSSTables().forEach(s -> assertEquals(2, s.getSSTableLevel()));
+        // make sure compaction strategy is notified:
+        LeveledCompactionStrategy lcs = (LeveledCompactionStrategy) cfs.getCompactionStrategyManager().getUnrepaired().iterator().next();
+        for (int i = 0; i < lcs.manifest.getLevelCount(); i++)
+        {
+            if (i == 2)
+                assertEquals(1, lcs.getLevelSize(i));
+            else
+                assertEquals(0, lcs.getLevelSize(i));
+        }
+        assertTrue(cfs.getTracker().getCompacting().isEmpty());
+    }
+
