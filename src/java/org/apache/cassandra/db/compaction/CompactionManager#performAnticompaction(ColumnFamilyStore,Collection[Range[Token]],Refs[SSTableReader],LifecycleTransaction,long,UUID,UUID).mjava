@@ -27,48 +27,15 @@
             logger.trace("{} Starting anticompaction for ranges {}", PreviewKind.NONE.logPrefix(parentRepairSession), ranges);
             Set<SSTableReader> sstables = new HashSet<>(validatedForRepair);
 
-            Set<SSTableReader> nonAnticompacting = new HashSet<>();
-
             Iterator<SSTableReader> sstableIterator = sstables.iterator();
             List<Range<Token>> normalizedRanges = Range.normalize(ranges);
-            Set<SSTableReader> fullyContainedSSTables = new HashSet<>();
 
-            while (sstableIterator.hasNext())
-            {
-                SSTableReader sstable = sstableIterator.next();
+            Set<SSTableReader> fullyContainedSSTables = findSSTablesToAnticompact(sstableIterator, normalizedRanges, parentRepairSession);
 
-                Range<Token> sstableRange = new Range<>(sstable.first.getToken(), sstable.last.getToken());
-
-                boolean shouldAnticompact = false;
-
-                for (Range<Token> r : normalizedRanges)
-                {
-                    if (r.contains(sstableRange))
-                    {
-                        logger.info("{} SSTable {} fully contained in range {}, mutating repairedAt instead of anticompacting", PreviewKind.NONE.logPrefix(parentRepairSession), sstable, r);
-                        fullyContainedSSTables.add(sstable);
-                        sstableIterator.remove();
-                        shouldAnticompact = true;
-                        break;
-                    }
-                    else if (sstableRange.intersects(r))
-                    {
-                        logger.info("{} SSTable {} ({}) will be anticompacted on range {}", PreviewKind.NONE.logPrefix(parentRepairSession), sstable, sstableRange, r);
-                        shouldAnticompact = true;
-                    }
-                }
-
-                if (!shouldAnticompact)
-                {
-                    logger.info("{} SSTable {} ({}) does not intersect repaired ranges {}, not touching repairedAt.", PreviewKind.NONE.logPrefix(parentRepairSession), sstable, sstableRange, normalizedRanges);
-                    nonAnticompacting.add(sstable);
-                    sstableIterator.remove();
-                }
-            }
             cfs.metric.bytesMutatedAnticompaction.inc(SSTableReader.getTotalBytes(fullyContainedSSTables));
             cfs.getCompactionStrategyManager().mutateRepaired(fullyContainedSSTables, repairedAt, pendingRepair);
-            txn.cancel(Sets.union(nonAnticompacting, fullyContainedSSTables));
-            validatedForRepair.release(Sets.union(nonAnticompacting, fullyContainedSSTables));
+            txn.cancel(fullyContainedSSTables);
+            validatedForRepair.release(fullyContainedSSTables);
             assert txn.originals().equals(sstables);
             if (!sstables.isEmpty())
                 doAntiCompaction(cfs, ranges, txn, repairedAt, pendingRepair);

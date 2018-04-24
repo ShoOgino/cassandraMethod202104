@@ -9,6 +9,7 @@
         {
             generateSStable(store,Integer.toString(table));
         }
+        int refCountBefore = Iterables.get(store.getLiveSSTables(), 0).selfRef().globalCount();
         Collection<SSTableReader> sstables = getUnrepairedSSTables(store);
         assertEquals(store.getLiveSSTables().size(), sstables.size());
 
@@ -16,14 +17,20 @@
         List<Range<Token>> ranges = Arrays.asList(range);
         UUID parentRepairSession = UUID.randomUUID();
         registerParentRepairSession(parentRepairSession, ranges, UNREPAIRED_SSTABLE, null);
-
+        boolean gotException = false;
         try (LifecycleTransaction txn = store.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
              Refs<SSTableReader> refs = Refs.ref(sstables))
         {
             CompactionManager.instance.performAnticompaction(store, ranges, refs, txn, 1, NO_PENDING_REPAIR, parentRepairSession);
         }
+        catch (IllegalStateException e)
+        {
+            gotException = true;
+        }
 
+        assertTrue(gotException);
         assertThat(store.getLiveSSTables().size(), is(10));
         assertThat(Iterables.get(store.getLiveSSTables(), 0).isRepaired(), is(false));
+        assertEquals(refCountBefore, Iterables.get(store.getLiveSSTables(), 0).selfRef().globalCount());
     }
 
