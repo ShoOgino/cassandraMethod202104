@@ -1,22 +1,20 @@
-    /**
-     * #{@inheritDoc}
-     */
-    public synchronized void loadNewSSTables(String srcPath, boolean resetLevel, boolean clearRepaired, boolean verifySSTables, boolean verifyTokens, boolean invalidateCaches, boolean jbodCheck)
+    @VisibleForTesting
+    synchronized void importNewSSTables(ImportOptions options)
     {
-        logger.info("Loading new SSTables for {}/{} from {}... (resetLevel = {}, clearRepaired = {}, verifySSTables = {}, verifyTokens = {}, invalidateCaches = {}, jbodCheck = {})",
-                    keyspace.getName(), name, srcPath, resetLevel, clearRepaired, verifySSTables, verifyTokens, invalidateCaches, jbodCheck);
+        logger.info("Loading new SSTables for {}/{}: {}",
+                    keyspace.getName(), name, options);
 
         File dir = null;
-        if (srcPath != null && !srcPath.isEmpty())
+        if (options.srcPath != null && !options.srcPath.isEmpty())
         {
-            dir = new File(srcPath);
+            dir = new File(options.srcPath);
             if (!dir.exists())
             {
-                throw new RuntimeException(String.format("Directory %s does not exist", srcPath));
+                throw new RuntimeException(String.format("Directory %s does not exist", options.srcPath));
             }
-            if (!Directories.verifyFullPermissions(dir, srcPath))
+            if (!Directories.verifyFullPermissions(dir, options.srcPath))
             {
-                throw new RuntimeException("Insufficient permissions on directory " + srcPath);
+                throw new RuntimeException("Insufficient permissions on directory " + options.srcPath);
             }
         }
 
@@ -29,7 +27,7 @@
                 directories.sstableLister(dir, Directories.OnTxnErr.IGNORE).skipTemporary(true);
 
         // verify first to avoid starting to copy sstables to the data directories and then have to abort.
-        if (verifySSTables || verifyTokens)
+        if (options.verifySSTables || options.verifyTokens)
         {
             for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
             {
@@ -38,8 +36,8 @@
                 try
                 {
                     reader = SSTableReader.open(descriptor, entry.getValue(), metadata);
-                    Verifier.Options verifierOptions = Verifier.options().extendedVerification(verifyTokens)
-                                                                         .checkOwnsTokens(verifyTokens)
+                    Verifier.Options verifierOptions = Verifier.options().extendedVerification(options.extendedVerify)
+                                                                         .checkOwnsTokens(options.verifyTokens)
                                                                          .invokeDiskFailurePolicy(false)
                                                                          .mutateRepairStatus(false).build();
                     try (Verifier verifier = new Verifier(this, reader, false, verifierOptions))
@@ -76,18 +74,18 @@
             {
                 if (new File(descriptor.filenameFor(Component.STATS)).exists())
                 {
-                    if (resetLevel)
+                    if (options.resetLevel)
                     {
                         descriptor.getMetadataSerializer().mutateLevel(descriptor, 0);
                     }
-                    if (clearRepaired)
+                    if (options.clearRepaired)
                     {
                         descriptor.getMetadataSerializer().mutateRepaired(descriptor,
                                                                           ActiveRepairService.UNREPAIRED_SSTABLE,
                                                                           null);
                     }
                 }
-                targetDirectory = findBestDiskAndInvalidateCaches(this, descriptor, srcPath, invalidateCaches, jbodCheck);
+                targetDirectory = findBestDiskAndInvalidateCaches(this, descriptor, options.srcPath, options.invalidateCaches, options.jbodCheck);
                 logger.debug("{} will get copied to {}", descriptor, targetDirectory);
             }
             catch (IOException e)
@@ -125,7 +123,7 @@
                 for (SSTableReader sstable : newSSTables)
                     sstable.selfRef().release();
                 // log which sstables we have copied so far, so that the operator can remove them
-                if (srcPath != null)
+                if (options.srcPath != null)
                     logger.error("Aborting import of sstables. {} copied, {} was corrupt", newSSTables, newDescriptor);
                 throw new RuntimeException(newDescriptor+" is corrupt, can't import", t);
             }

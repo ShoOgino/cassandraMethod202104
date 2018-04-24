@@ -90,8 +90,31 @@
             FileUtils.closeQuietly(validator);
         }
 
-        if ( !extended )
+        if (!extended)
+        {
+            if (options.checkOwnsTokens && !isOffline)
+            {
+                try (KeyIterator iter = new KeyIterator(sstable.descriptor, sstable.metadata()))
+                {
+                    List<Range<Token>> ownedRanges = Range.normalize(StorageService.instance.getLocalAndPendingRanges(cfs.metadata.keyspace));
+                    if (ownedRanges.isEmpty())
+                        return;
+                    RangeOwnHelper rangeOwnHelper = new RangeOwnHelper(ownedRanges);
+                    while (iter.hasNext())
+                    {
+                        DecoratedKey key = iter.next();
+                        rangeOwnHelper.check(key);
+                    }
+                }
+                catch (Throwable t)
+                {
+                    outputHandler.warn(t.getMessage());
+                    markAndThrow();
+                }
+            }
             return;
+        }
+
 
         outputHandler.output("Extended Verify requested, proceeding to inspect values");
 
@@ -106,7 +129,7 @@
             }
 
             List<Range<Token>> ownedRanges = isOffline ? Collections.emptyList() : Range.normalize(StorageService.instance.getLocalAndPendingRanges(cfs.metadata().keyspace));
-            int rangeIndex = -1;
+            RangeOwnHelper rangeOwnHelper = new RangeOwnHelper(ownedRanges);
             DecoratedKey prevKey = null;
 
             while (!dataFile.isEOF())
@@ -131,11 +154,14 @@
 
                 if (options.checkOwnsTokens && ownedRanges.size() > 0)
                 {
-                    while (rangeIndex == -1 || !ownedRanges.get(rangeIndex).contains(key.getToken()))
+                    try
                     {
-                        rangeIndex++;
-                        if (rangeIndex > ownedRanges.size() - 1)
-                            throw new RuntimeException(String.format("Key %s in sstable %s not owned by local ranges %s", key, sstable, ownedRanges));
+                        rangeOwnHelper.check(key);
+                    }
+                    catch (Throwable t)
+                    {
+                        outputHandler.warn(String.format("Key %s in sstable %s not owned by local ranges %s", key, sstable, ownedRanges), t);
+                        markAndThrow();
                     }
                 }
 
