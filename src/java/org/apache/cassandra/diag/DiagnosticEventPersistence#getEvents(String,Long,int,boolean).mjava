@@ -1,0 +1,34 @@
+    public SortedMap<Long, Map<String, Serializable>> getEvents(String eventClazz, Long key, int limit, boolean includeKey)
+    {
+        assert eventClazz != null;
+        assert key != null;
+        assert limit >= 0;
+
+        Class cls;
+        try
+        {
+            cls = getEventClass(eventClazz);
+        }
+        catch (ClassNotFoundException | InvalidClassException e)
+        {
+            throw new RuntimeException(e);
+        }
+        DiagnosticEventStore<Long> store = getStore(cls);
+
+        NavigableMap<Long, DiagnosticEvent> events = store.scan(key, includeKey ? limit : limit + 1);
+        if (!includeKey && !events.isEmpty()) events = events.tailMap(key, false);
+        TreeMap<Long, Map<String, Serializable>> ret = new TreeMap<>();
+        for (Map.Entry<Long, DiagnosticEvent> entry : events.entrySet())
+        {
+            DiagnosticEvent event = entry.getValue();
+            HashMap<String, Serializable> val = new HashMap<>(event.toMap());
+            val.put("class", event.getClass().getName());
+            val.put("type", event.getType().name());
+            val.put("ts", event.timestamp);
+            val.put("thread", event.threadName);
+            ret.put(entry.getKey(), val);
+        }
+        logger.debug("Returning {} {} events for key {} (limit {}) (includeKey {})", ret.size(), eventClazz, key, limit, includeKey);
+        return ret;
+    }
+

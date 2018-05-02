@@ -1,0 +1,51 @@
+    /**
+     * De-registers event handler from receiving any further events.
+     * @param event DiagnosticEvent class to unsubscribe from
+     * @param consumer Consumer registered for receiving events
+     */
+    public synchronized <E extends DiagnosticEvent> void unsubscribe(@Nullable Class<E> event, Consumer<E> consumer)
+    {
+        // all events
+        subscribersAll = ImmutableSet.copyOf(Iterables.filter(subscribersAll, (c) -> c != consumer));
+
+        // event class
+        ImmutableSetMultimap.Builder<Class<? extends DiagnosticEvent>, Consumer<DiagnosticEvent>> byClassBuilder = ImmutableSetMultimap.builder();
+        Collection<Map.Entry<Class<? extends DiagnosticEvent>, Consumer<DiagnosticEvent>>> entries = subscribersByClass.entries();
+        for (Map.Entry<Class<? extends DiagnosticEvent>, Consumer<DiagnosticEvent>> entry : entries)
+        {
+            Consumer<DiagnosticEvent> subscriber = entry.getValue();
+            if (subscriber instanceof TypedConsumerWrapper)
+                subscriber = ((TypedConsumerWrapper)subscriber).wrapped;
+
+            // other consumers or other events
+            if (subscriber != consumer || (event != null && !entry.getKey().equals(event)))
+            {
+                byClassBuilder = byClassBuilder.put(entry);
+            }
+        }
+        subscribersByClass = byClassBuilder.build();
+
+
+        // event class + type
+        ImmutableMap.Builder<Class, ImmutableSetMultimap<Enum<?>, Consumer<DiagnosticEvent>>> byClassAndTypeBuilder = ImmutableMap.builder();
+        for (Map.Entry<Class, ImmutableSetMultimap<Enum<?>, Consumer<DiagnosticEvent>>> byClassEntry : subscribersByClassAndType.entrySet())
+        {
+            ImmutableSetMultimap.Builder<Enum<?>, Consumer<DiagnosticEvent>> byTypeBuilder = ImmutableSetMultimap.builder();
+            ImmutableSetMultimap<Enum<?>, Consumer<DiagnosticEvent>> byTypeConsumers = byClassEntry.getValue();
+            Iterables.filter(byTypeConsumers.entries(), (e) ->
+            {
+                if (e == null || e.getValue() == null) return false;
+                Consumer<DiagnosticEvent> subscriber = e.getValue();
+                if (subscriber instanceof TypedConsumerWrapper)
+                    subscriber = ((TypedConsumerWrapper) subscriber).wrapped;
+                return subscriber != consumer || (event != null && !byClassEntry.getKey().equals(event));
+            }).forEach(byTypeBuilder::put);
+
+            ImmutableSetMultimap<Enum<?>, Consumer<DiagnosticEvent>> byType = byTypeBuilder.build();
+            if (!byType.isEmpty())
+                byClassAndTypeBuilder.put(byClassEntry.getKey(), byType);
+        }
+
+        subscribersByClassAndType = byClassAndTypeBuilder.build();
+    }
+
