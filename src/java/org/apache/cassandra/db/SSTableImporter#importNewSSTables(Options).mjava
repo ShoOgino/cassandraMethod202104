@@ -1,0 +1,125 @@
+    /**
+     * Imports sstables from the directories given in options.srcPaths
+     *
+     * If import fails in any of the directories, that directory is skipped and the failed directories
+     * are returned so that the user can re-upload files or remove corrupt files.
+     *
+     * If one of the directories in srcPaths is not readable/does not exist, we exit immediately to let
+     * the user change permissions or similar on the directory.
+     *
+     * @param options
+     * @return list of failed directories
+     */
+    @VisibleForTesting
+    synchronized List<String> importNewSSTables(Options options)
+    {
+        logger.info("Loading new SSTables for {}/{}: {}",
+                    cfs.keyspace.getName(), cfs.getTableName(), options);
+
+        List<Pair<Directories.SSTableLister, String>> listers = getSSTableListers(options.srcPaths);
+
+        Set<Descriptor> currentDescriptors = new HashSet<>();
+        for (SSTableReader sstable : cfs.getSSTables(SSTableSet.CANONICAL))
+            currentDescriptors.add(sstable.descriptor);
+        List<String> failedDirectories = new ArrayList<>();
+
+        // verify first to avoid starting to copy sstables to the data directories and then have to abort.
+        if (options.verifySSTables || options.verifyTokens)
+        {
+            for (Pair<Directories.SSTableLister, String> listerPair : listers)
+            {
+                Directories.SSTableLister lister = listerPair.left;
+                String dir = listerPair.right;
+                for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+                {
+                    Descriptor descriptor = entry.getKey();
+                    if (!currentDescriptors.contains(entry.getKey()))
+                    {
+                        try
+                        {
+                            verifySSTableForImport(descriptor, entry.getValue(), options.verifyTokens, options.verifySSTables, options.extendedVerify);
+                        }
+                        catch (Throwable t)
+                        {
+                            if (dir != null)
+                            {
+                                logger.error("Failed verifying sstable {} in directory {}", descriptor, dir, t);
+                                failedDirectories.add(dir);
+                            }
+                            else
+                            {
+                                logger.error("Failed verifying sstable {}", descriptor, t);
+                                throw new RuntimeException("Failed verifying sstable "+descriptor, t);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Set<SSTableReader> newSSTables = new HashSet<>();
+        for (Pair<Directories.SSTableLister, String> listerPair : listers)
+        {
+            Directories.SSTableLister lister = listerPair.left;
+            String dir = listerPair.right;
+            if (failedDirectories.contains(dir))
+                continue;
+
+            Set<MovedSSTable> movedSSTables = new HashSet<>();
+            Set<SSTableReader> newSSTablesPerDirectory = new HashSet<>();
+            for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+            {
+                try
+                {
+                    Descriptor oldDescriptor = entry.getKey();
+                    if (currentDescriptors.contains(oldDescriptor))
+                        continue;
+                    if (options.invalidateCaches && cfs.isRowCacheEnabled())
+                        invalidateCachesForSSTable(oldDescriptor);
+                    File targetDir = getTargetDirectory(dir, oldDescriptor, entry.getValue());
+                    Descriptor newDescriptor = cfs.getUniqueDescriptorFor(entry.getKey(), targetDir);
+                    maybeMutateMetadata(entry.getKey(), options);
+                    movedSSTables.add(new MovedSSTable(newDescriptor, entry.getKey(), entry.getValue()));
+                    SSTableReader sstable = SSTableReader.moveAndOpenSSTable(cfs, entry.getKey(), newDescriptor, entry.getValue());
+                    newSSTablesPerDirectory.add(sstable);
+                }
+                catch (Throwable t)
+                {
+                    newSSTablesPerDirectory.forEach(s -> s.selfRef().release());
+                    if (dir != null)
+                    {
+                        logger.error("Failed importing sstables in directory {}", dir, t);
+                        failedDirectories.add(dir);
+                        moveSSTablesBack(movedSSTables);
+                        movedSSTables.clear();
+                        newSSTablesPerDirectory.clear();
+                        break;
+                    }
+                    else
+                    {
+                        logger.error("Failed importing sstables from data directory - renamed sstables are: {}", movedSSTables);
+                        throw new RuntimeException("Failed importing sstables", t);
+                    }
+                }
+            }
+            newSSTables.addAll(newSSTablesPerDirectory);
+        }
+
+        if (newSSTables.isEmpty())
+        {
+            logger.info("No new SSTables were found for {}/{}", cfs.keyspace.getName(), cfs.getTableName());
+            return failedDirectories;
+        }
+
+        logger.info("Loading new SSTables and building secondary indexes for {}/{}: {}", cfs.keyspace.getName(), cfs.getTableName(), newSSTables);
+
+        try (Refs<SSTableReader> refs = Refs.ref(newSSTables))
+        {
+            cfs.getTracker().addSSTables(newSSTables);
+        }
+
+        logger.info("Done loading load new SSTables for {}/{}", cfs.keyspace.getName(), cfs.getTableName());
+        return failedDirectories;
+    }
+

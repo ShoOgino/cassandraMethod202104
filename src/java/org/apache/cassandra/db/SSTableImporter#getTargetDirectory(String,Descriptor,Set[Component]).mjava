@@ -1,0 +1,28 @@
+    /**
+     * Opens the sstablereader described by descriptor and figures out the correct directory for it based
+     * on the first token
+     *
+     * srcPath == null means that the sstable is in a data directory and we can use that directly.
+     *
+     * If we fail figuring out the directory we will pick the one with the most available disk space.
+     */
+    private File getTargetDirectory(String srcPath, Descriptor descriptor, Set<Component> components)
+    {
+        if (srcPath == null)
+            return descriptor.directory;
+
+        File targetDirectory = null;
+        SSTableReader sstable = null;
+        try
+        {
+            sstable = SSTableReader.open(descriptor, components, cfs.metadata);
+            targetDirectory = cfs.getDirectories().getLocationForDisk(cfs.diskBoundaryManager.getDiskBoundaries(cfs).getCorrectDiskForSSTable(sstable));
+        }
+        finally
+        {
+            if (sstable != null)
+                sstable.selfRef().release();
+        }
+        return targetDirectory == null ? cfs.getDirectories().getWriteableLocationToLoadFile(new File(descriptor.baseFilename())) : targetDirectory;
+    }
+

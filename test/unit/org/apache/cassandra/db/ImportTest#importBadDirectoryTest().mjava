@@ -1,0 +1,40 @@
+    /**
+     * If a user gives a bad directory we don't import any directories - we should let the user correct the directories
+     */
+    @Test
+    public void importBadDirectoryTest() throws Throwable
+    {
+        createTable("create table %s (id int primary key, d int)");
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        Set<SSTableReader> sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        getCurrentColumnFamilyStore().clearUnsafe();
+
+        File backupdir = moveToBackupDir(sstables);
+        for (int i = 10; i < 20; i++)
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        getCurrentColumnFamilyStore().clearUnsafe();
+
+        File backupdir2 = moveToBackupDir(sstables);
+
+        assertEquals(0, execute("select * from %s").size());
+
+        SSTableImporter.Options options = SSTableImporter.Options.options(Sets.newHashSet(backupdir.toString(), backupdir2.toString(), "/tmp/DOESNTEXIST")).build();
+        SSTableImporter importer = new SSTableImporter(getCurrentColumnFamilyStore());
+        boolean gotException = false;
+        try
+        {
+            importer.importNewSSTables(options);
+        }
+        catch (Throwable t)
+        {
+            gotException = true;
+        }
+        assertTrue(gotException);
+        assertEquals(0, execute("select * from %s").size());
+        assertEquals(0, getCurrentColumnFamilyStore().getLiveSSTables().size());
+    }
+

@@ -1,0 +1,51 @@
+    private void testCorruptHelper(boolean verify) throws Throwable
+    {
+        createTable("create table %s (id int primary key, d int)");
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        SSTableReader sstableToCorrupt = getCurrentColumnFamilyStore().getLiveSSTables().iterator().next();
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (id, d) values (?, ?)", i + 10, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        Set<SSTableReader> sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+
+        getCurrentColumnFamilyStore().clearUnsafe();
+
+        String filenameToCorrupt = sstableToCorrupt.descriptor.filenameFor(Component.STATS);
+        try (RandomAccessFile file = new RandomAccessFile(filenameToCorrupt, "rw"))
+        {
+            file.seek(0);
+            file.writeBytes(StringUtils.repeat('z', 2));
+        }
+
+        File backupdir = moveToBackupDir(sstables);
+
+        // now move a correct sstable to another directory to make sure that directory gets properly imported
+        for (int i = 100; i < 130; i++)
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        Set<SSTableReader> correctSSTables = getCurrentColumnFamilyStore().getLiveSSTables();
+
+        getCurrentColumnFamilyStore().clearUnsafe();
+        File backupdirCorrect = moveToBackupDir(correctSSTables);
+
+        File [] beforeImport = backupdir.listFiles();
+        // first we moved out 2 sstables, one correct and one corrupt in to a single directory (backupdir)
+        // then we moved out 1 sstable, a correct one (in backupdirCorrect).
+        // now import should fail import on backupdir, but import the one in backupdirCorrect.
+        SSTableImporter.Options options = SSTableImporter.Options.options(Sets.newHashSet(backupdir.toString(), backupdirCorrect.toString())).verifySSTables(verify).build();
+        SSTableImporter importer = new SSTableImporter(getCurrentColumnFamilyStore());
+        List<String> failedDirectories = importer.importNewSSTables(options);
+        assertEquals(Collections.singletonList(backupdir.toString()), failedDirectories);
+        UntypedResultSet res = execute("SELECT * FROM %s");
+        for (UntypedResultSet.Row r : res)
+        {
+            int pk = r.getInt("id");
+            assertTrue("pk = "+pk, pk >= 100 && pk < 130);
+        }
+        assertEquals("Data dir should contain one file", 1, countFiles(getCurrentColumnFamilyStore().getDirectories().getDirectoryForNewSSTables()));
+        assertArrayEquals("backupdir contained 2 files before import, should still contain 2 after failing to import it", beforeImport, backupdir.listFiles());
+        assertEquals("backupdirCorrect contained 1 file before import, should be empty after import", 0, countFiles(backupdirCorrect));
+    }
+

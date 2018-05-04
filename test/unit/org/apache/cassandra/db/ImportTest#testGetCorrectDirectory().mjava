@@ -1,0 +1,36 @@
+    @Test
+    public void testGetCorrectDirectory() throws Throwable
+    {
+        TokenMetadata metadata = StorageService.instance.getTokenMetadata();
+        metadata.updateNormalTokens(BootStrapper.getRandomTokens(metadata, 10), FBUtilities.getBroadcastAddressAndPort());
+        createTable("create table %s (id int primary key, d int)");
+        getCurrentColumnFamilyStore().disableAutoCompaction();
+
+        // generate sstables with different first tokens
+        for (int i = 0; i < 10; i++)
+        {
+            execute("insert into %s (id, d) values (?, ?)", i, i);
+            getCurrentColumnFamilyStore().forceBlockingFlush();
+        }
+
+        Set<SSTableReader> toMove = getCurrentColumnFamilyStore().getLiveSSTables();
+        getCurrentColumnFamilyStore().clearUnsafe();
+        File dir = moveToBackupDir(toMove);
+
+        Directories dirs = new Directories(getCurrentColumnFamilyStore().metadata(), Lists.newArrayList(new Directories.DataDirectory(new File("/tmp/1")),
+                                                                                                        new Directories.DataDirectory(new File("/tmp/2")),
+                                                                                                        new Directories.DataDirectory(new File("/tmp/3"))));
+        MockCFS mock = new MockCFS(getCurrentColumnFamilyStore(), dirs);
+        SSTableImporter importer = new SSTableImporter(mock);
+
+        importer.importNewSSTables(SSTableImporter.Options.options(dir.toString()).build());
+        for (SSTableReader sstable : mock.getLiveSSTables())
+        {
+            File movedDir = sstable.descriptor.directory.getCanonicalFile();
+            File correctDir = mock.getDiskBoundaries().getCorrectDiskForSSTable(sstable).location.getCanonicalFile();
+            assertTrue(movedDir.toString().startsWith(correctDir.toString()));
+        }
+        for (SSTableReader sstable : mock.getLiveSSTables())
+            sstable.selfRef().release();
+    }
+

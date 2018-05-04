@@ -1,0 +1,30 @@
+    @Test
+    public void testMoveAndOpenSSTable() throws IOException
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore("Standard1");
+        SSTableReader sstable = getNewSSTable(cfs);
+        cfs.clearUnsafe();
+        sstable.selfRef().release();
+        File tmpdir = Files.createTempDirectory("testMoveAndOpen").toFile();
+        tmpdir.deleteOnExit();
+        Descriptor notLiveDesc = new Descriptor(tmpdir, sstable.descriptor.ksname, sstable.descriptor.cfname, 100);
+        // make sure the new directory is empty and that the old files exist:
+        for (Component c : sstable.components)
+        {
+            File f = new File(notLiveDesc.filenameFor(c));
+            assertFalse(f.exists());
+            assertTrue(new File(sstable.descriptor.filenameFor(c)).exists());
+        }
+        SSTableReader.moveAndOpenSSTable(cfs, sstable.descriptor, notLiveDesc, sstable.components);
+        // make sure the files were moved:
+        for (Component c : sstable.components)
+        {
+            File f = new File(notLiveDesc.filenameFor(c));
+            assertTrue(f.exists());
+            assertTrue(f.toString().contains("-100-"));
+            f.deleteOnExit();
+            assertFalse(new File(sstable.descriptor.filenameFor(c)).exists());
+        }
+    }
+

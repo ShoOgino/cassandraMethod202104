@@ -1,4 +1,4 @@
-    @Test(expected = RuntimeException.class)
+    @Test
     public void testImportOutOfRange() throws Throwable
     {
         createTable("create table %s (id int primary key, d int)");
@@ -19,8 +19,23 @@
         File backupdir = moveToBackupDir(sstables);
         try
         {
-            ColumnFamilyStore.ImportOptions options = ColumnFamilyStore.ImportOptions.options(backupdir.toString()).verifySSTables(true).verifyTokens(true).build();
-            getCurrentColumnFamilyStore().importNewSSTables(options);
+            SSTableImporter.Options options = SSTableImporter.Options.options(backupdir.toString()).verifySSTables(true).verifyTokens(true).build();
+            SSTableImporter importer = new SSTableImporter(getCurrentColumnFamilyStore());
+            List<String> failed = importer.importNewSSTables(options);
+            assertEquals(Collections.singletonList(backupdir.toString()), failed);
+
+            // verify that we check the tokens if verifySSTables == false but verifyTokens == true:
+            options = SSTableImporter.Options.options(backupdir.toString()).verifySSTables(false).verifyTokens(true).build();
+            importer = new SSTableImporter(getCurrentColumnFamilyStore());
+            failed = importer.importNewSSTables(options);
+            assertEquals(Collections.singletonList(backupdir.toString()), failed);
+
+            // and that we can import with it disabled:
+            options = SSTableImporter.Options.options(backupdir.toString()).verifySSTables(true).verifyTokens(false).build();
+            importer = new SSTableImporter(getCurrentColumnFamilyStore());
+            failed = importer.importNewSSTables(options);
+            assertTrue(failed.isEmpty());
+
         }
         finally
         {
