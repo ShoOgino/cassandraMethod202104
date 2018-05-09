@@ -1,0 +1,31 @@
+        // For tracking purposes we consider data repaired if the sstable is either:
+        // * marked repaired
+        // * marked pending, but the local session has been committed. This reduces the window
+        //   whereby the tracking is affected by compaction backlog causing repaired sstables to
+        //   remain in the pending state
+        // If an sstable is involved in a pending repair which is not yet committed, we mark the
+        // repaired data info inconclusive, as the same data on other replicas may be in a
+        // slightly different state.
+        private boolean considerRepairedForTracking(SSTableReader sstable)
+        {
+            if (!isTrackingRepairedStatus)
+                return false;
+
+            UUID pendingRepair = sstable.getPendingRepair();
+            if (pendingRepair != ActiveRepairService.NO_PENDING_REPAIR)
+            {
+                if (ActiveRepairService.instance.consistent.local.isSessionFinalized(pendingRepair))
+                    return true;
+
+                // In the edge case where compaction is backed up long enough for the session to
+                // timeout and be purged by LocalSessions::cleanup, consider the sstable unrepaired
+                // as it will be marked unrepaired when compaction catches up
+                if (!ActiveRepairService.instance.consistent.local.sessionExists(pendingRepair))
+                    return false;
+
+                repairedDataInfo.markInconclusive();
+            }
+
+            return sstable.isRepaired();
+        }
+

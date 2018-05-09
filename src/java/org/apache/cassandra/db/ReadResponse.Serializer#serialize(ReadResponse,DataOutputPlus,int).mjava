@@ -2,10 +2,25 @@
         {
             boolean isDigest = response instanceof DigestResponse;
             ByteBuffer digest = isDigest ? ((DigestResponse)response).digest : ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
             ByteBufferUtil.writeWithVIntLength(digest, out);
             if (!isDigest)
             {
+                // From 4.0, a coordinator may request additional info about the repaired data that
+                // makes up the response, namely a digest generated from the repaired data and a
+                // flag indicating our level of confidence in that digest. The digest may be considered
+                // inconclusive if it may have been affected by some unrepaired data during read.
+                // e.g. some sstables read during this read were involved in pending but not yet
+                // committed repair sessions or an unrepaired partition tombstone meant that not all
+                // repaired sstables were read (but they might be on other replicas).
+                // If the coordinator did not request this info, the response contains an empty digest
+                // and a true for the isConclusive flag.
+                // If the messaging version is < 4.0, these are omitted altogether.
+                if (version >= MessagingService.VERSION_40)
+                {
+                    ByteBufferUtil.writeWithVIntLength(response.repairedDataDigest(), out);
+                    out.writeBoolean(response.isRepairedDigestConclusive());
+                }
+
                 ByteBuffer data = ((DataResponse)response).data;
                 ByteBufferUtil.writeWithVIntLength(data, out);
             }

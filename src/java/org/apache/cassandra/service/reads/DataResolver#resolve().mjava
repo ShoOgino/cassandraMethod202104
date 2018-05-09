@@ -8,8 +8,24 @@
 
         E replicas = replicaLayout.all().keep(transform(messages, msg -> msg.from));
         List<UnfilteredPartitionIterator> iters = new ArrayList<>(
-                Collections2.transform(messages, msg -> msg.payload.makeIterator(command)));
+        Collections2.transform(messages, msg -> msg.payload.makeIterator(command)));
         assert replicas.size() == iters.size();
+
+        // If requested, inspect each response for a digest of the replica's repaired data set
+        RepairedDataTracker repairedDataTracker = command.isTrackingRepairedStatus()
+                                                  ? new RepairedDataTracker(getRepairedDataVerifier(command))
+                                                  : null;
+        if (repairedDataTracker != null)
+        {
+            messages.forEach(msg -> {
+                if (msg.payload.mayIncludeRepairedDigest() && replicas.byEndpoint().get(msg.from).isFull())
+                {
+                    repairedDataTracker.recordDigest(msg.from,
+                                                     msg.payload.repairedDataDigest(),
+                                                     msg.payload.isRepairedDigestConclusive());
+                }
+            });
+        }
 
         /*
          * Even though every response, individually, will honor the limit, it is possible that we will, after the merge,
@@ -29,7 +45,8 @@
 
         UnfilteredPartitionIterator merged = mergeWithShortReadProtection(iters,
                                                                           replicaLayout.withSelected(replicas),
-                                                                          mergedResultCounter);
+                                                                          mergedResultCounter,
+                                                                          repairedDataTracker);
         FilteredPartitions filtered = FilteredPartitions.filter(merged, new Filter(command.nowInSec(), command.metadata().enforceStrictLiveness()));
         PartitionIterator counted = Transformation.apply(filtered, mergedResultCounter);
         return Transformation.apply(counted, new EmptyPartitionsDiscarder());

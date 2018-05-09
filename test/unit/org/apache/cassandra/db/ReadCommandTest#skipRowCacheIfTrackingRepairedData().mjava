@@ -1,0 +1,32 @@
+    @Test
+    public void skipRowCacheIfTrackingRepairedData()
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(CF6);
+
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+
+        new RowUpdateBuilder(cfs.metadata(), 0, ByteBufferUtil.bytes("key"))
+                .clustering("cc")
+                .add("a", ByteBufferUtil.bytes("abcd"))
+                .build()
+                .apply();
+
+        cfs.forceBlockingFlush();
+
+        ReadCommand readCommand = Util.cmd(cfs, Util.dk("key")).build();
+        assertTrue(cfs.isRowCacheEnabled());
+        // warm the cache
+        assertFalse(Util.getAll(readCommand).isEmpty());
+        long cacheHits = cfs.metric.rowCacheHit.getCount();
+
+        Util.getAll(readCommand);
+        assertTrue(cfs.metric.rowCacheHit.getCount() > cacheHits);
+        cacheHits = cfs.metric.rowCacheHit.getCount();
+
+        ReadCommand withRepairedInfo = readCommand.copy();
+        withRepairedInfo.trackRepairedStatus();
+        Util.getAll(withRepairedInfo);
+        assertEquals(cacheHits, cfs.metric.rowCacheHit.getCount());
+    }
+

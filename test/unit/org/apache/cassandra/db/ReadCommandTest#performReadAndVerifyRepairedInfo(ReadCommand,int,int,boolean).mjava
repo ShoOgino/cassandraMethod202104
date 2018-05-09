@@ -1,0 +1,27 @@
+    private ByteBuffer performReadAndVerifyRepairedInfo(ReadCommand command,
+                                                        int expectedPartitions,
+                                                        int expectedRowsPerPartition,
+                                                        boolean expectConclusive)
+    {
+        // perform equivalent read command multiple times and assert that
+        // the repaired data info is always consistent. Return the digest
+        // so we can verify that it changes when the repaired status of
+        // the queried tables does.
+        Set<ByteBuffer> digests = new HashSet<>();
+        for (int i = 0; i < 10; i++)
+        {
+            ReadCommand withRepairedInfo = command.copy();
+            withRepairedInfo.trackRepairedStatus();
+
+            List<FilteredPartition> partitions = Util.getAll(withRepairedInfo);
+            assertEquals(expectedPartitions, partitions.size());
+            partitions.forEach(p -> assertEquals(expectedRowsPerPartition, p.rowCount()));
+
+            ByteBuffer digest = withRepairedInfo.getRepairedDataDigest();
+            digests.add(digest);
+            assertEquals(1, digests.size());
+            assertEquals(expectConclusive, withRepairedInfo.isRepairedDataDigestConclusive());
+        }
+        return digests.iterator().next();
+    }
+
