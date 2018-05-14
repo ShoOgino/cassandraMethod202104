@@ -1,0 +1,53 @@
+    /**
+     * Create a read repair mutation from the given update, if the mutation is not larger than the maximum
+     * mutation size, otherwise return null. Or, if we're configured to be strict, throw an exception.
+     */
+    public static Mutation createRepairMutation(PartitionUpdate update, ConsistencyLevel consistency, InetAddressAndPort destination, boolean suppressException)
+    {
+        if (update == null)
+            return null;
+
+        DecoratedKey key = update.partitionKey();
+        Mutation mutation = new Mutation(update);
+        Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+        TableMetadata metadata = update.metadata();
+
+        int messagingVersion = MessagingService.instance().getVersion(destination);
+
+        int    mutationSize = (int) Mutation.serializer.serializedSize(mutation, messagingVersion);
+        int maxMutationSize = DatabaseDescriptor.getMaxMutationSize();
+
+
+        if (mutationSize <= maxMutationSize)
+        {
+            return mutation;
+        }
+        else if (DROP_OVERSIZED_READ_REPAIR_MUTATIONS)
+        {
+            logger.debug("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                         mutationSize,
+                         maxMutationSize,
+                         metadata,
+                         metadata.partitionKeyType.getString(key.getKey()),
+                         destination);
+            return null;
+        }
+        else
+        {
+            logger.warn("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                        mutationSize,
+                        maxMutationSize,
+                        metadata,
+                        metadata.partitionKeyType.getString(key.getKey()),
+                        destination);
+
+            if (!suppressException)
+            {
+                int blockFor = consistency.blockFor(keyspace);
+                Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
+                throw new ReadTimeoutException(consistency, blockFor - 1, blockFor, true);
+            }
+            return null;
+        }
+    }
+

@@ -1,0 +1,24 @@
+    @Override
+    public void awaitWrites()
+    {
+        boolean timedOut = false;
+        for (BlockingPartitionRepair repair: repairs)
+        {
+            if (!repair.awaitRepairs(DatabaseDescriptor.getWriteRpcTimeout(), TimeUnit.MILLISECONDS))
+            {
+                timedOut = true;
+            }
+        }
+        if (timedOut)
+        {
+            // We got all responses, but timed out while repairing
+            int blockFor = consistency.blockFor(cfs.keyspace);
+            if (Tracing.isTracing())
+                Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
+            else
+                logger.debug("Timeout while read-repairing after receiving all {} data and digest responses", blockFor);
+
+            throw new ReadTimeoutException(consistency, blockFor-1, blockFor, true);
+        }
+    }
+

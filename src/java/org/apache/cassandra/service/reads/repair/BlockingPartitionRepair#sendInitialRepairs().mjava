@@ -1,0 +1,19 @@
+    public void sendInitialRepairs()
+    {
+        mutationsSentTime = System.nanoTime();
+        for (Map.Entry<InetAddressAndPort, Mutation> entry: pendingRepairs.entrySet())
+        {
+            InetAddressAndPort destination = entry.getKey();
+            Mutation mutation = entry.getValue();
+            TableId tableId = extractUpdate(mutation).metadata().id;
+
+            Tracing.trace("Sending read-repair-mutation to {}", destination);
+            // use a separate verb here to avoid writing hints on timeouts
+            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), destination);
+            ColumnFamilyStore.metricsFor(tableId).readRepairRequests.mark();
+
+            if (!shouldBlockOn(destination))
+                pendingRepairs.remove(destination);
+        }
+    }
+

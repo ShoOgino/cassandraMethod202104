@@ -1,0 +1,27 @@
+    public void maybeSendAdditionalReads()
+    {
+        Preconditions.checkState(command instanceof SinglePartitionReadCommand,
+                                 "maybeSendAdditionalReads can only be called for SinglePartitionReadCommand");
+        DigestRepair repair = digestRepair;
+        if (repair == null)
+            return;
+
+        if (shouldSpeculate() && !repair.readCallback.await(cfs.sampleLatencyNanos, TimeUnit.NANOSECONDS))
+        {
+            Set<InetAddressAndPort> contacted = Sets.newHashSet(repair.initialContacts);
+            Token replicaToken = ((SinglePartitionReadCommand) command).partitionKey().getToken();
+            Iterable<InetAddressAndPort> candidates = BlockingReadRepairs.getCandidateEndpoints(cfs.keyspace, replicaToken, consistency);
+            boolean speculated = false;
+            for (InetAddressAndPort endpoint: Iterables.filter(candidates, e -> !contacted.contains(e)))
+            {
+                speculated = true;
+                Tracing.trace("Enqueuing speculative full data read to {}", endpoint);
+                MessagingService.instance().sendRR(command.createMessage(), endpoint, repair.readCallback);
+                break;
+            }
+
+            if (speculated)
+                ReadRepairMetrics.speculatedRead.mark();
+        }
+    }
+

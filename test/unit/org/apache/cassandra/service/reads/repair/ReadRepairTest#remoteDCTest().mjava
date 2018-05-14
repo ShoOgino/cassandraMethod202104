@@ -1,0 +1,34 @@
+    /**
+     * For dc local consistency levels, noop mutations and responses from remote dcs should not affect effective blockFor
+     */
+    @Test
+    public void remoteDCTest() throws Exception
+    {
+        Map<InetAddressAndPort, Mutation> repairs = new HashMap<>();
+        repairs.put(target1, mutation(cell1));
+
+
+        InetAddressAndPort remote1 = InetAddressAndPort.getByName("10.0.0.1");
+        InetAddressAndPort remote2 = InetAddressAndPort.getByName("10.0.0.2");
+        repairs.put(remote1, mutation(cell1));
+
+        Collection<InetAddressAndPort> participants = Lists.newArrayList(target1, target2, remote1, remote2);
+
+        InstrumentedReadRepairHandler handler = createRepairHandler(repairs, 2, participants);
+        handler.sendInitialRepairs();
+        Assert.assertEquals(2, handler.mutationsSent.size());
+        Assert.assertTrue(handler.mutationsSent.containsKey(target1));
+        Assert.assertTrue(handler.mutationsSent.containsKey(remote1));
+
+        Assert.assertEquals(1, handler.waitingOn());
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+
+        handler.ack(remote1);
+        Assert.assertEquals(1, handler.waitingOn());
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+
+        handler.ack(target1);
+        Assert.assertEquals(0, handler.waitingOn());
+        Assert.assertTrue(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+    }
+

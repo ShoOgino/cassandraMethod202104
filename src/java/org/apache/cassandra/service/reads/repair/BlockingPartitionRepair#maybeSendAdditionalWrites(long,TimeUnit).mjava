@@ -1,0 +1,50 @@
+    /**
+     * If it looks like we might not receive acks for all the repair mutations we sent out, combine all
+     * the unacked mutations and send them to the minority of nodes not involved in the read repair data
+     * read / write cycle. We will accept acks from them in lieu of acks from the initial mutations sent
+     * out, so long as we receive the same number of acks as repair mutations transmitted. This prevents
+     * misbehaving nodes from killing a quorum read, while continuing to guarantee monotonic quorum reads
+     */
+    public void maybeSendAdditionalWrites(long timeout, TimeUnit timeoutUnit)
+    {
+        if (awaitRepairs(timeout, timeoutUnit))
+            return;
+
+        Set<InetAddressAndPort> exclude = Sets.newHashSet(participants);
+        Iterable<InetAddressAndPort> candidates = Iterables.filter(getCandidateEndpoints(), e -> !exclude.contains(e));
+        if (Iterables.isEmpty(candidates))
+            return;
+
+        PartitionUpdate update = mergeUnackedUpdates();
+        if (update == null)
+            // final response was received between speculate
+            // timeout and call to get unacked mutation.
+            return;
+
+        ReadRepairMetrics.speculatedWrite.mark();
+
+        Mutation[] versionedMutations = new Mutation[msgVersionIdx(MessagingService.current_version) + 1];
+
+        for (InetAddressAndPort endpoint: candidates)
+        {
+            int versionIdx = msgVersionIdx(MessagingService.instance().getVersion(endpoint));
+
+            Mutation mutation = versionedMutations[versionIdx];
+
+            if (mutation == null)
+            {
+                mutation = BlockingReadRepairs.createRepairMutation(update, consistency, endpoint, true);
+                versionedMutations[versionIdx] = mutation;
+            }
+
+            if (mutation == null)
+            {
+                // the mutation is too large to send.
+                continue;
+            }
+
+            Tracing.trace("Sending speculative read-repair-mutation to {}", endpoint);
+            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), endpoint);
+        }
+    }
+
