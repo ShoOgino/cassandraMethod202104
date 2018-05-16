@@ -8,14 +8,9 @@
     {
         this(type, table, allowFiltering);
 
-        ColumnFamilyStore cfs;
-        SecondaryIndexManager secondaryIndexManager = null;
-
+        IndexRegistry indexRegistry = null;
         if (type.allowUseOfSecondaryIndices())
-        {
-            cfs = Keyspace.open(table.keyspace).getColumnFamilyStore(table.name);
-            secondaryIndexManager = cfs.indexManager;
-        }
+            indexRegistry = IndexRegistry.obtain(table);
 
         /*
          * WHERE clause. For a given entity, rules are:
@@ -40,7 +35,7 @@
             {
                 Restriction restriction = relation.toRestriction(table, boundNames);
 
-                if (!type.allowUseOfSecondaryIndices() || !restriction.hasSupportingIndex(secondaryIndexManager))
+                if (!type.allowUseOfSecondaryIndices() || !restriction.hasSupportingIndex(indexRegistry))
                     throw new InvalidRequestException(String.format("LIKE restriction is only supported on properly " +
                                                                     "indexed columns. %s is not valid.",
                                                                     relation.toString()));
@@ -61,13 +56,13 @@
         if (type.allowUseOfSecondaryIndices())
         {
             if (whereClause.containsCustomExpressions())
-                processCustomIndexExpressions(whereClause.expressions, boundNames, secondaryIndexManager);
+                processCustomIndexExpressions(whereClause.expressions, boundNames, indexRegistry);
 
-            hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(secondaryIndexManager);
+            hasQueriableClusteringColumnIndex = clusteringColumnsRestrictions.hasSupportingIndex(indexRegistry);
             hasQueriableIndex = !filterRestrictions.getCustomIndexExpressions().isEmpty()
                     || hasQueriableClusteringColumnIndex
-                    || partitionKeyRestrictions.hasSupportingIndex(secondaryIndexManager)
-                    || nonPrimaryKeyRestrictions.hasSupportingIndex(secondaryIndexManager);
+                    || partitionKeyRestrictions.hasSupportingIndex(indexRegistry)
+                    || nonPrimaryKeyRestrictions.hasSupportingIndex(indexRegistry);
         }
 
         // At this point, the select statement if fully constructed, but we still have a few things to validate

@@ -2,24 +2,21 @@
     {
         Collection<ByteBuffer> keys = restrictions.getPartitionKeys(options);
         if (keys.isEmpty())
-            return ReadQuery.EMPTY;
+            return ReadQuery.empty(table);
 
         ClusteringIndexFilter filter = makeClusteringIndexFilter(options, columnFilter);
         if (filter == null)
-            return ReadQuery.EMPTY;
+            return ReadQuery.empty(table);
 
         RowFilter rowFilter = getRowFilter(options);
 
-        // Note that we use the total limit for every key, which is potentially inefficient.
-        // However, IN + LIMIT is not a very sensible choice.
-        List<SinglePartitionReadCommand> commands = new ArrayList<>(keys.size());
+        List<DecoratedKey> decoratedKeys = new ArrayList<>(keys.size());
         for (ByteBuffer key : keys)
         {
             QueryProcessor.validateKey(key);
-            DecoratedKey dk = table.partitioner.decorateKey(ByteBufferUtil.clone(key));
-            commands.add(SinglePartitionReadCommand.create(table, nowInSec, columnFilter, rowFilter, limit, dk, filter));
+            decoratedKeys.add(table.partitioner.decorateKey(ByteBufferUtil.clone(key)));
         }
 
-        return new SinglePartitionReadCommand.Group(commands, limit);
+        return SinglePartitionReadQuery.createGroup(table, nowInSec, columnFilter, rowFilter, limit, decoratedKeys, filter);
     }
 

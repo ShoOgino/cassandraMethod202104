@@ -1,0 +1,31 @@
+    @Override
+    protected PartitionRangeReadQuery nextPageReadQuery(int pageSize)
+    {
+        DataLimits limits;
+        DataRange fullRange = query.dataRange();
+        DataRange pageRange;
+        if (lastReturnedKey == null)
+        {
+            pageRange = fullRange;
+            limits = query.limits().forPaging(pageSize);
+        }
+        else
+        {
+            // We want to include the last returned key only if we haven't achieved our per-partition limit, otherwise, don't bother.
+            boolean includeLastKey = remainingInPartition() > 0 && lastReturnedRow != null;
+            AbstractBounds<PartitionPosition> bounds = makeKeyBounds(lastReturnedKey, includeLastKey);
+            if (includeLastKey)
+            {
+                pageRange = fullRange.forPaging(bounds, query.metadata().comparator, lastReturnedRow.clustering(query.metadata()), false);
+                limits = query.limits().forPaging(pageSize, lastReturnedKey.getKey(), remainingInPartition());
+            }
+            else
+            {
+                pageRange = fullRange.forSubRange(bounds);
+                limits = query.limits().forPaging(pageSize);
+            }
+        }
+
+        return query.withUpdatedLimitsAndDataRange(limits, pageRange);
+    }
+

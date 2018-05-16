@@ -1,0 +1,31 @@
+    public MultiPartitionPager(SinglePartitionReadQuery.Group<T> group, PagingState state, ProtocolVersion protocolVersion)
+    {
+        this.limit = group.limits();
+        this.nowInSec = group.nowInSec();
+
+        int i = 0;
+        // If it's not the beginning (state != null), we need to find where we were and skip previous queries
+        // since they are done.
+        if (state != null)
+            for (; i < group.queries.size(); i++)
+                if (group.queries.get(i).partitionKey().getKey().equals(state.partitionKey))
+                    break;
+
+        if (i >= group.queries.size())
+        {
+            pagers = null;
+            return;
+        }
+
+        pagers = new SinglePartitionPager[group.queries.size() - i];
+        // 'i' is on the first non exhausted pager for the previous page (or the first one)
+        T query = group.queries.get(i);
+        pagers[0] = query.getPager(state, protocolVersion);
+
+        // Following ones haven't been started yet
+        for (int j = i + 1; j < group.queries.size(); j++)
+            pagers[j - i] = group.queries.get(j).getPager(null, protocolVersion);
+
+        remaining = state == null ? limit.count() : state.remaining;
+    }
+

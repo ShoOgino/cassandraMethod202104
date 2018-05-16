@@ -1,0 +1,69 @@
+    @Test
+    public void testModifications() throws Throwable
+    {
+        // check for clean state
+        assertRows(execute("SELECT * FROM test_virtual_ks.vt2"));
+
+        // fill the table, test UNLOGGED batch
+        execute("BEGIN UNLOGGED BATCH " +
+                "UPDATE test_virtual_ks.vt2 SET value = 1 WHERE key ='pk1';" +
+                "UPDATE test_virtual_ks.vt2 SET value = 2 WHERE key ='pk2';" +
+                "UPDATE test_virtual_ks.vt2 SET value = 3 WHERE key ='pk3';" +
+                "APPLY BATCH");
+        assertRows(execute("SELECT * FROM test_virtual_ks.vt2"),
+                   row("pk1", 1),
+                   row("pk2", 2),
+                   row("pk3", 3));
+
+        // test that LOGGED batches don't allow virtual table updates
+        assertInvalidMessage("Cannot include a virtual table statement in a logged batch",
+                             "BEGIN BATCH " +
+                             "UPDATE test_virtual_ks.vt2 SET value = 1 WHERE key ='pk1';" +
+                             "UPDATE test_virtual_ks.vt2 SET value = 2 WHERE key ='pk2';" +
+                             "UPDATE test_virtual_ks.vt2 SET value = 3 WHERE key ='pk3';" +
+                             "APPLY BATCH");
+
+        // test that UNLOGGED batch doesn't allow mixing updates for regular and virtual tables
+        createTable("CREATE TABLE %s (key text PRIMARY KEY, value int)");
+        assertInvalidMessage("Mutations for virtual and regular tables cannot exist in the same batch",
+                             "BEGIN UNLOGGED BATCH " +
+                             "UPDATE test_virtual_ks.vt2 SET value = 1 WHERE key ='pk1'" +
+                             "UPDATE %s                  SET value = 2 WHERE key ='pk2'" +
+                             "UPDATE test_virtual_ks.vt2 SET value = 3 WHERE key ='pk3'" +
+                             "APPLY BATCH");
+
+        // update a single value with UPDATE
+        execute("UPDATE test_virtual_ks.vt2 SET value = 11 WHERE key ='pk1'");
+        assertRows(execute("SELECT * FROM test_virtual_ks.vt2 WHERE key = 'pk1'"),
+                   row("pk1", 11));
+
+        // update a single value with INSERT
+        executeNet("INSERT INTO test_virtual_ks.vt2 (key, value) VALUES ('pk2', 22)");
+        assertRows(execute("SELECT * FROM test_virtual_ks.vt2 WHERE key = 'pk2'"),
+                   row("pk2", 22));
+
+        // test that deletions are (currently) rejected
+        assertInvalidMessage("Virtual tables don't support DELETE statements",
+                             "DELETE FROM test_virtual_ks.vt2 WHERE key ='pk1'");
+
+        // test that TTL is (currently) rejected with INSERT and UPDATE
+        assertInvalidMessage("Expiring columns are not supported by virtual tables",
+                             "INSERT INTO test_virtual_ks.vt2 (key, value) VALUES ('pk1', 11) USING TTL 86400");
+        assertInvalidMessage("Expiring columns are not supported by virtual tables",
+                             "UPDATE test_virtual_ks.vt2 USING TTL 86400 SET value = 11 WHERE key ='pk1'");
+
+        // test that LWT is (currently) rejected with virtual tables in batches
+        assertInvalidMessage("Conditional BATCH statements cannot include mutations for virtual tables",
+                             "BEGIN UNLOGGED BATCH " +
+                             "UPDATE test_virtual_ks.vt2 SET value = 3 WHERE key ='pk3' IF value = 2;" +
+                             "APPLY BATCH");
+
+        // test that LWT is (currently) rejected with virtual tables in UPDATEs
+        assertInvalidMessage("Conditional updates are not supported by virtual tables",
+                             "UPDATE test_virtual_ks.vt2 SET value = 3 WHERE key ='pk3' IF value = 2");
+
+        // test that LWT is (currently) rejected with virtual tables in INSERTs
+        assertInvalidMessage("Conditional updates are not supported by virtual tables",
+                             "INSERT INTO test_virtual_ks.vt2 (key, value) VALUES ('pk2', 22) IF NOT EXISTS");
+    }
+

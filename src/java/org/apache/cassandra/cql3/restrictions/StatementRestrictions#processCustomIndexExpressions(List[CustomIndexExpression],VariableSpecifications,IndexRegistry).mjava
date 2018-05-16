@@ -1,0 +1,34 @@
+    private void processCustomIndexExpressions(List<CustomIndexExpression> expressions,
+                                               VariableSpecifications boundNames,
+                                               IndexRegistry indexRegistry)
+    {
+        if (expressions.size() > 1)
+            throw new InvalidRequestException(IndexRestrictions.MULTIPLE_EXPRESSIONS);
+
+        CustomIndexExpression expression = expressions.get(0);
+
+        CFName cfName = expression.targetIndex.getCfName();
+        if (cfName.hasKeyspace()
+            && !expression.targetIndex.getKeyspace().equals(table.keyspace))
+            throw IndexRestrictions.invalidIndex(expression.targetIndex, table);
+
+        if (cfName.getColumnFamily() != null && !cfName.getColumnFamily().equals(table.name))
+            throw IndexRestrictions.invalidIndex(expression.targetIndex, table);
+
+        if (!table.indexes.has(expression.targetIndex.getIdx()))
+            throw IndexRestrictions.indexNotFound(expression.targetIndex, table);
+
+        Index index = indexRegistry.getIndex(table.indexes.get(expression.targetIndex.getIdx()).get());
+
+        if (!index.getIndexMetadata().isCustom())
+            throw IndexRestrictions.nonCustomIndexInExpression(expression.targetIndex);
+
+        AbstractType<?> expressionType = index.customExpressionValueType();
+        if (expressionType == null)
+            throw IndexRestrictions.customExpressionNotSupported(expression.targetIndex);
+
+        expression.prepareValue(table, expressionType, boundNames);
+
+        filterRestrictions.add(expression);
+    }
+

@@ -1,0 +1,85 @@
+    @Test
+    public void testQueries() throws Throwable
+    {
+        assertRowsNet(executeNet("SELECT * FROM test_virtual_ks.vt1 WHERE pk = 'UNKNOWN'"));
+
+        assertRowsNet(executeNet("SELECT * FROM test_virtual_ks.vt1 WHERE pk = 'pk1' AND c = 'UNKNOWN'"));
+
+        // Test DISTINCT query
+        assertRowsNet(executeNet("SELECT DISTINCT pk FROM test_virtual_ks.vt1"),
+                      row("pk1"),
+                      row("pk2"));
+
+        assertRowsNet(executeNet("SELECT DISTINCT pk FROM test_virtual_ks.vt1 WHERE token(pk) > token('pk1')"),
+                      row("pk2"));
+
+        // Test single partition queries
+        assertRowsNet(executeNet("SELECT v1, v2 FROM test_virtual_ks.vt1 WHERE pk = 'pk1' AND c = 'c1'"),
+                      row(11, 11L));
+
+        assertRowsNet(executeNet("SELECT c, v1, v2 FROM test_virtual_ks.vt1 WHERE pk = 'pk1' AND c IN ('c1', 'c2')"),
+                      row("c1", 11, 11L),
+                      row("c2", 12, 12L));
+
+        assertRowsNet(executeNet("SELECT c, v1, v2 FROM test_virtual_ks.vt1 WHERE pk = 'pk1' AND c IN ('c2', 'c1') ORDER BY c DESC"),
+                      row("c2", 12, 12L),
+                      row("c1", 11, 11L));
+
+        // Test multi-partition queries
+        assertRows(execute("SELECT * FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1')"),
+                   row("pk1", "c1", 11, 11L),
+                   row("pk1", "c2", 12, 12L),
+                   row("pk2", "c1", 21, 21L),
+                   row("pk2", "c2", 22, 22L));
+
+        assertRows(execute("SELECT pk, c, v1 FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1') ORDER BY c DESC"),
+                   row("pk1", "c2", 12),
+                   row("pk2", "c2", 22),
+                   row("pk1", "c1", 11),
+                   row("pk2", "c1", 21));
+
+        assertRows(execute("SELECT pk, c, v1 FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1') ORDER BY c DESC LIMIT 1"),
+                   row("pk1", "c2", 12));
+
+        assertRows(execute("SELECT c, v1, v2 FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1' , 'c3') ORDER BY c DESC PER PARTITION LIMIT 1"),
+                   row("c3", 13, 13L),
+                   row("c3", 23, 23L));
+
+        assertRows(execute("SELECT count(*) FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1')"),
+                   row(4L));
+
+        for (int pageSize = 1; pageSize < 5; pageSize++)
+        {
+            assertRowsNet(executeNetWithPaging("SELECT pk, c, v1, v2 FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1')", pageSize),
+                          row("pk1", "c1", 11, 11L),
+                          row("pk1", "c2", 12, 12L),
+                          row("pk2", "c1", 21, 21L),
+                          row("pk2", "c2", 22, 22L));
+
+            assertRowsNet(executeNetWithPaging("SELECT * FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1') LIMIT 2", pageSize),
+                          row("pk1", "c1", 11, 11L),
+                          row("pk1", "c2", 12, 12L));
+
+            assertRowsNet(executeNetWithPaging("SELECT count(*) FROM test_virtual_ks.vt1 WHERE pk IN ('pk2', 'pk1') AND c IN ('c2', 'c1')", pageSize),
+                          row(4L));
+        }
+
+        // Test range queries
+        for (int pageSize = 1; pageSize < 4; pageSize++)
+        {
+            assertRowsNet(executeNetWithPaging("SELECT * FROM test_virtual_ks.vt1 WHERE token(pk) < token('pk2') AND c IN ('c2', 'c1') ALLOW FILTERING", pageSize),
+                          row("pk1", "c1", 11, 11L),
+                          row("pk1", "c2", 12, 12L));
+
+            assertRowsNet(executeNetWithPaging("SELECT * FROM test_virtual_ks.vt1 WHERE token(pk) < token('pk2') AND c IN ('c2', 'c1') LIMIT 1 ALLOW FILTERING", pageSize),
+                          row("pk1", "c1", 11, 11L));
+
+            assertRowsNet(executeNetWithPaging("SELECT * FROM test_virtual_ks.vt1 WHERE token(pk) <= token('pk2') AND c > 'c1' PER PARTITION LIMIT 1 ALLOW FILTERING", pageSize),
+                          row("pk1", "c2", 12, 12L),
+                          row("pk2", "c2", 22, 22L));
+
+            assertRowsNet(executeNetWithPaging("SELECT count(*) FROM test_virtual_ks.vt1 WHERE token(pk) = token('pk2') AND c < 'c3' ALLOW FILTERING", pageSize),
+                          row(2L));
+        }
+    }
+
