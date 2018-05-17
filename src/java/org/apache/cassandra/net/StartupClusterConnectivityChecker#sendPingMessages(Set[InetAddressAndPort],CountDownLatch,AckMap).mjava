@@ -1,0 +1,31 @@
+    /**
+     * Sends a "connection warmup" message to each peer in the collection, on every {@link ConnectionType}
+     * used for internode messaging (that is not gossip).
+     */
+    private void sendPingMessages(Set<InetAddressAndPort> peers, CountDownLatch latch, AckMap acks)
+    {
+        IAsyncCallback responseHandler = new IAsyncCallback()
+        {
+            public boolean isLatencyForSnitch()
+            {
+                return false;
+            }
+
+            public void response(MessageIn msg)
+            {
+                if (acks.incrementAndCheck(msg.from))
+                    latch.countDown();
+            }
+        };
+
+        MessageOut<PingMessage> smallChannelMessageOut = new MessageOut<>(PING, PingMessage.smallChannelMessage,
+                                                                          PingMessage.serializer, SMALL_MESSAGE);
+        MessageOut<PingMessage> largeChannelMessageOut = new MessageOut<>(PING, PingMessage.largeChannelMessage,
+                                                                          PingMessage.serializer, LARGE_MESSAGE);
+        for (InetAddressAndPort peer : peers)
+        {
+            MessagingService.instance().sendRR(smallChannelMessageOut, peer, responseHandler);
+            MessagingService.instance().sendRR(largeChannelMessageOut, peer, responseHandler);
+        }
+    }
+

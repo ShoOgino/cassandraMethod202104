@@ -1,30 +1,50 @@
-    public void execute(Set<InetAddressAndPort> peers)
+    /**
+     * @param peers The currently known peers in the cluster; argument is not modified.
+     * @return true if the requested percentage of peers are marked ALIVE in gossip and have their connections opened;
+     * else false.
+     */
+    public boolean execute(Set<InetAddressAndPort> peers)
     {
-        if (peers == null || targetPercent == 0)
-            return;
+        if (targetPercent == 0 || peers == null)
+            return true;
 
-        // remove current node from the set
-        peers = peers.stream()
-                     .filter(peer -> !peer.equals(FBUtilities.getBroadcastAddressAndPort()))
-                     .collect(Collectors.toSet());
+        // make a copy of the set, to avoid mucking with the input (in case it's a sensitive collection)
+        peers = new HashSet<>(peers);
+        peers.remove(FBUtilities.getBroadcastAddressAndPort());
 
-        // don't block if there's no other nodes in the cluster (or we don't know about them)
-        if (peers.size() <= 0)
-            return;
+        if (peers.isEmpty())
+            return true;
 
-        logger.info("choosing to block until {}% of peers are marked alive and connections are established; max time to wait = {} seconds",
-                    targetPercent, timeoutSecs);
+        logger.info("choosing to block until {}% of the {} known peers are marked alive and connections are established; max time to wait = {} seconds",
+                    targetPercent, peers.size(), TimeUnit.NANOSECONDS.toSeconds(timeoutNanos));
 
-        // first, send out a ping message to open up the non-gossip connections
-        final AtomicInteger connectedCount = sendPingMessages(peers);
+        long startNanos = System.nanoTime();
 
-        final long startNanos = System.nanoTime();
-        final long expirationNanos = startNanos + TimeUnit.SECONDS.toNanos(timeoutSecs);
-        int completedRounds = 0;
-        while (checkStatus(peers, connectedCount, startNanos, expirationNanos < System.nanoTime(), completedRounds) == State.CONTINUE)
-        {
-            completedRounds++;
-            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MICROSECONDS);
-        }
+        AckMap acks = new AckMap(3);
+        int target = (int) ((targetPercent / 100.0) * peers.size());
+        CountDownLatch latch = new CountDownLatch(target);
+
+        // set up a listener to react to new nodes becoming alive (in gossip), and account for all the nodes that are already alive
+        Set<InetAddressAndPort> alivePeers = Sets.newSetFromMap(new ConcurrentHashMap<>());
+        AliveListener listener = new AliveListener(alivePeers, latch, acks);
+        Gossiper.instance.register(listener);
+
+        // send out a ping message to open up the non-gossip connections
+        sendPingMessages(peers, latch, acks);
+
+        for (InetAddressAndPort peer : peers)
+            if (Gossiper.instance.isAlive(peer) && alivePeers.add(peer) && acks.incrementAndCheck(peer))
+                latch.countDown();
+
+        boolean succeeded = Uninterruptibles.awaitUninterruptibly(latch, timeoutNanos, TimeUnit.NANOSECONDS);
+        Gossiper.instance.unregister(listener);
+
+        int connected = peers.size() - (int) latch.getCount();
+        logger.info("After waiting/processing for {} milliseconds, {} out of {} peers ({}%) have been marked alive and had connections established",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos),
+                    connected,
+                    peers.size(),
+                    connected / (peers.size()) * 100.0);
+        return succeeded;
     }
 

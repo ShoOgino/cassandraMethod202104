@@ -1,0 +1,58 @@
+    /**
+     * A helper function for making unit testing reasonable.
+     *
+     * @return true if the message was processed; else false.
+     */
+    @VisibleForTesting
+    boolean process()
+    {
+        MessagingService.Verb verb = message.verb;
+        if (verb == null)
+        {
+            logger.trace("Unknown verb {}", verb);
+            return false;
+        }
+
+        MessagingService.instance().metrics.addQueueWaitTime(verb.toString(),
+                                                             ApproximateTime.currentTimeMillis() - enqueueTime);
+
+        long timeTaken = message.getLifetimeInMS();
+        if (MessagingService.DROPPABLE_VERBS.contains(verb)
+            && timeTaken > message.getTimeout())
+        {
+            MessagingService.instance().incrementDroppedMessages(message, timeTaken);
+            return false;
+        }
+
+        IVerbHandler verbHandler = MessagingService.instance().getVerbHandler(verb);
+        if (verbHandler == null)
+        {
+            logger.trace("No handler for verb {}", verb);
+            return false;
+        }
+
+        try
+        {
+            verbHandler.doVerb(message, id);
+        }
+        catch (IOException ioe)
+        {
+            handleFailure(ioe);
+            throw new RuntimeException(ioe);
+        }
+        catch (TombstoneOverwhelmingException | IndexNotAvailableException e)
+        {
+            handleFailure(e);
+            logger.error(e.getMessage());
+        }
+        catch (Throwable t)
+        {
+            handleFailure(t);
+            throw t;
+        }
+
+        if (GOSSIP_VERBS.contains(message.verb))
+            Gossiper.instance.setLastProcessedMessageAt(message.constructionTime);
+        return true;
+    }
+
