@@ -1,0 +1,17 @@
+    @Test
+    public void testCompactionInvalidRTs() throws Throwable
+    {
+        // set the corruptedTombstoneStrategy to exception since these tests require it - if someone changed the default
+        // in test/conf/cassandra.yaml they would start failing
+        DatabaseDescriptor.setCorruptedTombstoneStrategy(Config.CorruptedTombstoneStrategy.exception);
+        prepare();
+        // write a range tombstone with negative local deletion time (LDTs are not set by user and should not be negative):
+        RangeTombstone rt = new RangeTombstone(Slice.ALL, new DeletionTime(System.currentTimeMillis(), -1));
+        RowUpdateBuilder rub = new RowUpdateBuilder(getCurrentColumnFamilyStore().metadata(), System.currentTimeMillis() * 1000, 22).clustering(33).addRangeTombstone(rt);
+        rub.build().apply();
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+        compactAndValidate();
+        readAndValidate(true);
+        readAndValidate(false);
+    }
+

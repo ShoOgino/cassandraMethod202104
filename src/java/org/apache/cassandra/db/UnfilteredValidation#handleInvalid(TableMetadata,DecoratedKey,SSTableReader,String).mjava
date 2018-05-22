@@ -1,0 +1,36 @@
+    public static void handleInvalid(TableMetadata metadata, DecoratedKey key, SSTableReader sstable, String invalidContent)
+    {
+        Config.CorruptedTombstoneStrategy strat = DatabaseDescriptor.getCorruptedTombstoneStrategy();
+        String keyString;
+        try
+        {
+            keyString = metadata.partitionKeyType.getString(key.getKey());
+        }
+        catch (Throwable t)
+        {
+            keyString = "[corrupt token="+key.getToken()+"]";
+        }
+
+        if (strat == Config.CorruptedTombstoneStrategy.exception)
+        {
+            String msg = String.format("Key %s in %s.%s is invalid in %s: %s",
+                                       keyString,
+                                       metadata.keyspace,
+                                       metadata.name,
+                                       sstable,
+                                       invalidContent);
+            // we mark suspect to make sure this sstable is not included in future compactions - it would just keep
+            // throwing exceptions
+            sstable.markSuspect();
+            throw new CorruptSSTableException(new MarshalException(msg), sstable.getFilename());
+        }
+        else if (strat == Config.CorruptedTombstoneStrategy.warn)
+        {
+            String msgTemplate = String.format("Key {} in %s.%s is invalid in %s: {}",
+                                               metadata.keyspace,
+                                               metadata.name,
+                                               sstable);
+            nospam1m.warn(msgTemplate, keyString, invalidContent);
+        }
+    }
+

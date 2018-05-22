@@ -1,0 +1,42 @@
+    private void readAndValidate(boolean asc) throws Throwable
+    {
+        execute("select * from %s where id = 0 order by id2 "+(asc ? "ASC" : "DESC"));
+
+        boolean gotException = false;
+        try
+        {
+            for (UntypedResultSet.Row r : execute("select * from %s")) {}
+        }
+        catch (Throwable t)
+        {
+            assertTrue(t instanceof CorruptSSTableException);
+            gotException = true;
+            Throwable cause = t;
+            while (cause != null && !(cause instanceof MarshalException))
+                cause = cause.getCause();
+            assertNotNull(cause);
+            MarshalException me = (MarshalException) cause;
+            assertTrue(me.getMessage().contains("Key 22"));
+        }
+        assertSuspectAndReset(getCurrentColumnFamilyStore().getLiveSSTables());
+        assertTrue(gotException);
+        gotException = false;
+        try
+        {
+            execute("select * from %s where id = 22 order by id2 "+(asc ? "ASC" : "DESC"));
+        }
+        catch (Throwable t)
+        {
+            assertTrue(t instanceof CorruptSSTableException);
+            gotException = true;
+            Throwable cause = t;
+            while (cause != null && !(cause instanceof MarshalException))
+                cause = cause.getCause();
+            assertNotNull(cause);
+            MarshalException me = (MarshalException) cause;
+            assertTrue(me.getMessage().contains("Key 22"));
+        }
+        assertTrue(gotException);
+        assertSuspectAndReset(getCurrentColumnFamilyStore().getLiveSSTables());
+    }
+
