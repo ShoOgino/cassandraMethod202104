@@ -17,8 +17,17 @@
                         MessageHeader header = readFirstChunk(in);
                         if (header == null)
                             return;
-                        header.from = peer;
                         messageHeader = header;
+                        state = State.READ_IP_ADDRESS;
+                        // fall-through
+                    case READ_IP_ADDRESS:
+                        // unfortunately, this assumes knowledge of how CompactEndpointSerializationHelper serializes data (the first byte is the size).
+                        // first, check that we can actually read the size byte, then check if we can read that number of bytes.
+                        // the "+ 1" is to make sure we have the size byte in addition to the serialized IP addr count of bytes in the buffer.
+                        int readableBytes = in.readableBytes();
+                        if (readableBytes < 1 || readableBytes < in.getByte(in.readerIndex()) + 1)
+                            return;
+                        messageHeader.from = CompactEndpointSerializationHelper.instance.deserialize(inputPlus, messagingVersion);
                         state = State.READ_VERB;
                         // fall-through
                     case READ_VERB:
@@ -28,34 +37,31 @@
                         state = State.READ_PARAMETERS_SIZE;
                         // fall-through
                     case READ_PARAMETERS_SIZE:
-                        long length = VIntCoding.readUnsignedVInt(in);
-                        if (length < 0)
+                        if (in.readableBytes() < PARAMETERS_SIZE_LENGTH)
                             return;
-                        messageHeader.parameterLength = (int) length;
+                        messageHeader.parameterLength = in.readInt();
                         messageHeader.parameters = messageHeader.parameterLength == 0 ? Collections.emptyMap() : new EnumMap<>(ParameterType.class);
                         state = State.READ_PARAMETERS_DATA;
                         // fall-through
                     case READ_PARAMETERS_DATA:
                         if (messageHeader.parameterLength > 0)
                         {
-                            if (in.readableBytes() < messageHeader.parameterLength)
+                            if (!readParameters(in, inputPlus, messageHeader.parameterLength, messageHeader.parameters))
                                 return;
-                            readParameters(in, inputPlus, messageHeader.parameterLength, messageHeader.parameters);
                         }
                         state = State.READ_PAYLOAD_SIZE;
                         // fall-through
                     case READ_PAYLOAD_SIZE:
-                        length = VIntCoding.readUnsignedVInt(in);
-                        if (length < 0)
+                        if (in.readableBytes() < PAYLOAD_SIZE_LENGTH)
                             return;
-                        messageHeader.payloadSize = (int) length;
+                        messageHeader.payloadSize = in.readInt();
                         state = State.READ_PAYLOAD;
                         // fall-through
                     case READ_PAYLOAD:
                         if (in.readableBytes() < messageHeader.payloadSize)
                             return;
 
-                        // TODO consider deserializing the message not on the event loop
+                        // TODO consider deserailizing the messge not on the event loop
                         MessageIn<Object> messageIn = MessageIn.read(inputPlus, messagingVersion,
                                                                      messageHeader.messageId, messageHeader.constructionTime, messageHeader.from,
                                                                      messageHeader.payloadSize, messageHeader.verb, messageHeader.parameters);

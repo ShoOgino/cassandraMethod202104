@@ -1,0 +1,34 @@
+    private MessageOutSizes calculateSerializedSize40(int version)
+    {
+        long size = 0;
+        size += TypeSizes.sizeof(verb.getId());
+
+        if (parameters.isEmpty())
+        {
+            size += VIntCoding.computeVIntSize(0);
+        }
+        else
+        {
+            // calculate the params size independently, as we write that before the actual params block
+            int paramsSize = 0;
+            for (int ii = 0; ii < parameters.size(); ii += PARAMETER_TUPLE_SIZE)
+            {
+                ParameterType type = (ParameterType)parameters.get(ii + PARAMETER_TUPLE_TYPE_OFFSET);
+                paramsSize += TypeSizes.sizeof(type.key());
+                IVersionedSerializer serializer = type.serializer;
+                Object parameter = parameters.get(ii + PARAMETER_TUPLE_PARAMETER_OFFSET);
+                int valueLength = Ints.checkedCast(serializer.serializedSize(parameter, version));
+                paramsSize += VIntCoding.computeUnsignedVIntSize(valueLength);//length prefix
+                paramsSize += valueLength;
+            }
+            size += VIntCoding.computeUnsignedVIntSize(paramsSize);
+            size += paramsSize;
+        }
+
+        long payloadSize = payload == null ? 0 : serializer.serializedSize(payload, version);
+        assert payloadSize <= Integer.MAX_VALUE; // larger values are supported in sstables but not messages
+        size += VIntCoding.computeUnsignedVIntSize(payloadSize);
+        size += payloadSize;
+        return new MessageOutSizes(size, payloadSize);
+    }
+
