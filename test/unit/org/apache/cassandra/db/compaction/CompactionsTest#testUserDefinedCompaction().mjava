@@ -1,0 +1,40 @@
+    @Test
+    public void testUserDefinedCompaction() throws Exception
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        final String cfname = "Standard3"; // use clean(no sstable) CF
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        TableMetadata table = cfs.metadata();
+
+        // disable compaction while flushing
+        cfs.disableAutoCompaction();
+
+        final int ROWS_PER_SSTABLE = 10;
+        for (int i = 0; i < ROWS_PER_SSTABLE; i++) {
+            DecoratedKey key = Util.dk(String.valueOf(i));
+            new RowUpdateBuilder(table, FBUtilities.timestampMicros(), key.getKey())
+            .clustering(ByteBufferUtil.bytes("cols"))
+            .add("val", "val1")
+            .build().applyUnsafe();
+        }
+        cfs.forceBlockingFlush();
+        Collection<SSTableReader> sstables = cfs.getLiveSSTables();
+
+        assertEquals(1, sstables.size());
+        SSTableReader sstable = sstables.iterator().next();
+
+        int prevGeneration = sstable.descriptor.generation;
+        String file = new File(sstable.descriptor.filenameFor(Component.DATA)).getAbsolutePath();
+        // submit user defined compaction on flushed sstable
+        CompactionManager.instance.forceUserDefinedCompaction(file);
+        // wait until user defined compaction finishes
+        do
+        {
+            Thread.sleep(100);
+        } while (CompactionManager.instance.getPendingTasks() > 0 || CompactionManager.instance.getActiveCompactions() > 0);
+        // CF should have only one sstable with generation number advanced
+        sstables = cfs.getLiveSSTables();
+        assertEquals(1, sstables.size());
+        assertEquals( prevGeneration + 1, sstables.iterator().next().descriptor.generation);
+    }
+

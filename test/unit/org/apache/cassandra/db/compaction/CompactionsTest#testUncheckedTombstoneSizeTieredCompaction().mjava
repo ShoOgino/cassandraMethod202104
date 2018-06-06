@@ -1,0 +1,75 @@
+    @Test
+    public void testUncheckedTombstoneSizeTieredCompaction() throws Exception
+    {
+        Map<String, String> compactionOptions = new HashMap<>();
+        compactionOptions.put("tombstone_compaction_interval", "1");
+        compactionOptions.put("unchecked_tombstone_compaction", "false");
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF_STANDARD1);
+        store.clearUnsafe();
+
+        MigrationManager.announceTableUpdate(store.metadata().unbuild().gcGraceSeconds(1).compaction(CompactionParams.stcs(compactionOptions)).build(), true);
+
+        // disable compaction while flushing
+        store.disableAutoCompaction();
+
+        //Populate sstable1 with with keys [0..9]
+        populate(KEYSPACE1, CF_STANDARD1, 0, 9, 3); //ttl=3s
+        store.forceBlockingFlush();
+
+        //Populate sstable2 with with keys [10..19] (keys do not overlap with SSTable1)
+        long timestamp2 = populate(KEYSPACE1, CF_STANDARD1, 10, 19, 3); //ttl=3s
+        store.forceBlockingFlush();
+
+        assertEquals(2, store.getLiveSSTables().size());
+
+        Iterator<SSTableReader> it = store.getLiveSSTables().iterator();
+        long originalSize1 = it.next().uncompressedLength();
+        long originalSize2 = it.next().uncompressedLength();
+
+        // wait enough to force single compaction
+        TimeUnit.SECONDS.sleep(5);
+
+        // enable compaction, submit background and wait for it to complete
+        store.enableAutoCompaction();
+        FBUtilities.waitOnFutures(CompactionManager.instance.submitBackground(store));
+        do
+        {
+            TimeUnit.SECONDS.sleep(1);
+        } while (CompactionManager.instance.getPendingTasks() > 0 || CompactionManager.instance.getActiveCompactions() > 0);
+
+        // even though both sstables were candidate for tombstone compaction
+        // it was not executed because they have an overlapping token range
+        assertEquals(2, store.getLiveSSTables().size());
+        it = store.getLiveSSTables().iterator();
+        long newSize1 = it.next().uncompressedLength();
+        long newSize2 = it.next().uncompressedLength();
+        assertEquals("candidate sstable should not be tombstone-compacted because its key range overlap with other sstable",
+                      originalSize1, newSize1);
+        assertEquals("candidate sstable should not be tombstone-compacted because its key range overlap with other sstable",
+                      originalSize2, newSize2);
+
+        // now let's enable the magic property
+        compactionOptions.put("unchecked_tombstone_compaction", "true");
+        MigrationManager.announceTableUpdate(store.metadata().unbuild().gcGraceSeconds(1).compaction(CompactionParams.stcs(compactionOptions)).build(), true);
+
+        //submit background task again and wait for it to complete
+        FBUtilities.waitOnFutures(CompactionManager.instance.submitBackground(store));
+        do
+        {
+            TimeUnit.SECONDS.sleep(1);
+        } while (CompactionManager.instance.getPendingTasks() > 0 || CompactionManager.instance.getActiveCompactions() > 0);
+
+        //we still have 2 sstables, since they were not compacted against each other
+        assertEquals(2, store.getLiveSSTables().size());
+        it = store.getLiveSSTables().iterator();
+        newSize1 = it.next().uncompressedLength();
+        newSize2 = it.next().uncompressedLength();
+        assertTrue("should be less than " + originalSize1 + ", but was " + newSize1, newSize1 < originalSize1);
+        assertTrue("should be less than " + originalSize2 + ", but was " + newSize2, newSize2 < originalSize2);
+
+        // make sure max timestamp of compacted sstables is recorded properly after compaction.
+        assertMaxTimestamp(store, timestamp2);
+    }
+

@@ -1,0 +1,38 @@
+    @Test
+    public void testSuperColumnTombstones()
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore("Super1");
+        TableMetadata table = cfs.metadata();
+        cfs.disableAutoCompaction();
+
+        DecoratedKey key = Util.dk("tskey");
+        ByteBuffer scName = ByteBufferUtil.bytes("TestSuperColumn");
+
+        // a subcolumn
+        new RowUpdateBuilder(table, FBUtilities.timestampMicros(), key.getKey())
+            .clustering(ByteBufferUtil.bytes("cols"))
+            .add("val", "val1")
+            .build().applyUnsafe();
+        cfs.forceBlockingFlush();
+
+        // shadow the subcolumn with a supercolumn tombstone
+        RowUpdateBuilder.deleteRow(table, FBUtilities.timestampMicros(), key.getKey(), ByteBufferUtil.bytes("cols")).applyUnsafe();
+        cfs.forceBlockingFlush();
+
+        CompactionManager.instance.performMaximal(cfs, false);
+        assertEquals(1, cfs.getLiveSSTables().size());
+
+        // check that the shadowed column is gone
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+        AbstractBounds<PartitionPosition> bounds = new Bounds<>(key, sstable.getPartitioner().getMinimumToken().maxKeyBound());
+        UnfilteredRowIterator ai;
+        try (ISSTableScanner scanner = sstable.getScanner())
+        {
+            ai = scanner.next();
+            final Unfiltered next = ai.next();
+            assertTrue(next.isRow());
+            assertFalse(ai.hasNext());
+        }
+    }
+
