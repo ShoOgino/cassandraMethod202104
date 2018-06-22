@@ -1,0 +1,36 @@
+    @Test
+    public void decode_ReceivedExpectedLowerMsgVersion()
+    {
+        int msgVersion = MESSAGING_VERSION - 1;
+        channel.pipeline().remove(HANDLER_NAME);
+        params = OutboundConnectionParams.builder()
+                                         .connectionId(connectionId)
+                                         .callback(handshakeResult -> callbackHandler.receive(handshakeResult))
+                                         .mode(NettyFactory.Mode.MESSAGING)
+                                         .protocolVersion(msgVersion)
+                                         .coalescingStrategy(Optional.empty())
+                                         .build();
+        handler = new OutboundHandshakeHandler(params);
+        channel.pipeline().addFirst(HANDLER_NAME, handler);
+
+        buf = new SecondHandshakeMessage(msgVersion).encode(PooledByteBufAllocator.DEFAULT);
+        channel.writeInbound(buf);
+        Assert.assertTrue(channel.inboundMessages().isEmpty());
+
+        Assert.assertEquals(msgVersion, callbackHandler.result.negotiatedMessagingVersion);
+        Assert.assertEquals(HandshakeResult.Outcome.SUCCESS, callbackHandler.result.outcome);
+        Assert.assertTrue(channel.isOpen());
+        Assert.assertFalse(channel.outboundMessages().isEmpty());
+
+        ByteBuf thridMsgBuf = (ByteBuf) channel.outboundMessages().poll();
+        try
+        {
+            ThirdHandshakeMessage thirdHandshakeMessage = ThirdHandshakeMessage.maybeDecode(thridMsgBuf);
+            Assert.assertEquals(msgVersion, thirdHandshakeMessage.messagingVersion);
+        }
+        finally
+        {
+            thridMsgBuf.release();
+        }
+    }
+
