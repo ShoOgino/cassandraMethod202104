@@ -1,0 +1,70 @@
+    @Test
+    public void testAnalyzerValidation()
+    {
+        final String TABLE_NAME = "analyzer_validation";
+        QueryProcessor.executeOnceInternal(String.format("CREATE TABLE %s.%s (" +
+                                                         "  pk text PRIMARY KEY, " +
+                                                         "  ascii_v ascii, " +
+                                                         "  bigint_v bigint, " +
+                                                         "  blob_v blob, " +
+                                                         "  boolean_v boolean, " +
+                                                         "  date_v date, " +
+                                                         "  decimal_v decimal, " +
+                                                         "  double_v double, " +
+                                                         "  float_v float, " +
+                                                         "  inet_v inet, " +
+                                                         "  int_v int, " +
+                                                         "  smallint_v smallint, " +
+                                                         "  text_v text, " +
+                                                         "  time_v time, " +
+                                                         "  timestamp_v timestamp, " +
+                                                         "  timeuuid_v timeuuid, " +
+                                                         "  tinyint_v tinyint, " +
+                                                         "  uuid_v uuid, " +
+                                                         "  varchar_v varchar, " +
+                                                         "  varint_v varint" +
+                                                         ");",
+                                                         KS_NAME,
+                                                         TABLE_NAME));
+
+        Columns regulars = Schema.instance.getTableMetadata(KS_NAME, TABLE_NAME).regularColumns();
+        List<String> allColumns = regulars.stream().map(ColumnMetadata::toString).collect(Collectors.toList());
+        List<String> textColumns = Arrays.asList("text_v", "ascii_v", "varchar_v");
+
+        new HashMap<Class<? extends AbstractAnalyzer>, List<String>>()
+        {{
+            put(StandardAnalyzer.class, textColumns);
+            put(NonTokenizingAnalyzer.class, textColumns);
+            put(DelimiterAnalyzer.class, textColumns);
+            put(NoOpAnalyzer.class, allColumns);
+        }}
+        .forEach((analyzer, supportedColumns) -> {
+            for (String column : allColumns)
+            {
+                String query = String.format("CREATE CUSTOM INDEX ON %s.%s(%s) " +
+                                             "USING 'org.apache.cassandra.index.sasi.SASIIndex' " +
+                                             "WITH OPTIONS = {'analyzer_class': '%s', 'mode':'PREFIX'};",
+                                             KS_NAME, TABLE_NAME, column, analyzer.getName());
+
+                if (supportedColumns.contains(column))
+                {
+                    QueryProcessor.executeOnceInternal(query);
+                }
+                else
+                {
+                    try
+                    {
+                        QueryProcessor.executeOnceInternal(query);
+                        Assert.fail("Expected ConfigurationException");
+                    }
+                    catch (ConfigurationException e)
+                    {
+                        // expected
+                        Assert.assertTrue("Unexpected error message " + e.getMessage(),
+                                          e.getMessage().contains("does not support type"));
+                    }
+                }
+            }
+        });
+    }
+
