@@ -1,0 +1,39 @@
+    @Test
+    public void testBlockReadingAndWritingOverWire() throws Exception
+    {
+        StreamSession session = setupStreamingSessionForTest();
+        InetAddressAndPort peer = FBUtilities.getBroadcastAddressAndPort();
+
+        CassandraEntireSSTableStreamWriter writer = new CassandraEntireSSTableStreamWriter(sstable, session, CassandraOutgoingFile.getComponentManifest(sstable));
+
+        // This is needed as Netty releases the ByteBuffers as soon as the channel is flushed
+        ByteBuf serializedFile = Unpooled.buffer(8192);
+        EmbeddedChannel channel = createMockNettyChannel(serializedFile);
+        ByteBufDataOutputStreamPlus out = ByteBufDataOutputStreamPlus.create(session, channel, 1024 * 1024);
+
+        writer.write(out);
+
+        session.prepareReceiving(new StreamSummary(sstable.metadata().id, 1, 5104));
+
+        CassandraStreamHeader header =
+            CassandraStreamHeader.builder()
+                                 .withSSTableFormat(sstable.descriptor.formatType)
+                                 .withSSTableVersion(sstable.descriptor.version)
+                                 .withSSTableLevel(0)
+                                 .withEstimatedKeys(sstable.estimatedKeys())
+                                 .withSections(Collections.emptyList())
+                                 .withSerializationHeader(sstable.header.toComponent())
+                                 .withComponentManifest(CassandraOutgoingFile.getComponentManifest(sstable))
+                                 .isEntireSSTable(true)
+                                 .withFirstKey(sstable.first)
+                                 .withTableId(sstable.metadata().id)
+                                 .build();
+
+        CassandraEntireSSTableStreamReader reader = new CassandraEntireSSTableStreamReader(new StreamMessageHeader(sstable.metadata().id, peer, session.planId(), 0, 0, 0, null), header, session);
+
+        SSTableMultiWriter sstableWriter = reader.read(new ByteBufDataInputPlus(serializedFile));
+        Collection<SSTableReader> newSstables = sstableWriter.finished();
+
+        assertEquals(1, newSstables.size());
+    }
+

@@ -1,0 +1,70 @@
+    /**
+     * @param in where this reads data from
+     * @return SSTable transferred
+     * @throws IOException if reading the remote sstable fails. Will throw an RTE if local write fails.
+     */
+    @SuppressWarnings("resource") // input needs to remain open, streams on top of it can't be closed
+    @Override
+    public SSTableMultiWriter read(DataInputPlus in) throws IOException
+    {
+        ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
+        if (cfs == null)
+        {
+            // schema was dropped during streaming
+            throw new IOException("Table " + tableId + " was dropped during streaming");
+        }
+
+        ComponentManifest manifest = header.componentManifest;
+        long totalSize = manifest.totalSize();
+
+        logger.debug("[Stream #{}] Started receiving sstable #{} from {}, size = {}, table = {}",
+                     session.planId(),
+                     fileSequenceNumber,
+                     session.peer,
+                     prettyPrintMemory(totalSize),
+                     cfs.metadata());
+
+        BigTableZeroCopyWriter writer = null;
+
+        try
+        {
+            writer = createWriter(cfs, totalSize, manifest.components());
+            long bytesRead = 0;
+            for (Component component : manifest.components())
+            {
+                long length = manifest.sizeOf(component);
+
+                logger.debug("[Stream #{}] Started receiving {} component from {}, componentSize = {}, readBytes = {}, totalSize = {}",
+                             session.planId(),
+                             component,
+                             session.peer,
+                             prettyPrintMemory(length),
+                             prettyPrintMemory(bytesRead),
+                             prettyPrintMemory(totalSize));
+
+                writer.writeComponent(component.type, in, length);
+                session.progress(writer.descriptor.filenameFor(component), ProgressInfo.Direction.IN, length, length);
+                bytesRead += length;
+
+                logger.debug("[Stream #{}] Finished receiving {} component from {}, componentSize = {}, readBytes = {}, totalSize = {}",
+                             session.planId(),
+                             component,
+                             session.peer,
+                             prettyPrintMemory(length),
+                             prettyPrintMemory(bytesRead),
+                             prettyPrintMemory(totalSize));
+            }
+
+            writer.descriptor.getMetadataSerializer().mutateLevel(writer.descriptor, header.sstableLevel);
+            return writer;
+        }
+        catch (Throwable e)
+        {
+            logger.error("[Stream {}] Error while reading sstable from stream for table = {}", session.planId(), cfs.metadata(), e);
+            if (writer != null)
+                e = writer.abort(e);
+            Throwables.throwIfUnchecked(e);
+            throw new RuntimeException(e);
+        }
+    }
+

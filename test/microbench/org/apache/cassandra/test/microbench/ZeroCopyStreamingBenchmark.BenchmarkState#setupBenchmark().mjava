@@ -1,0 +1,63 @@
+        @Setup
+        public void setupBenchmark() throws IOException
+        {
+            Keyspace keyspace = setupSchemaAndKeySpace();
+            store = keyspace.getColumnFamilyStore("Standard1");
+            generateData();
+
+            sstable = store.getLiveSSTables().iterator().next();
+            session = setupStreamingSessionForTest();
+            blockStreamWriter = new CassandraEntireSSTableStreamWriter(sstable, session, CassandraOutgoingFile.getComponentManifest(sstable));
+
+            CapturingNettyChannel blockStreamCaptureChannel = new CapturingNettyChannel(STREAM_SIZE);
+            ByteBufDataOutputStreamPlus out = ByteBufDataOutputStreamPlus.create(session, blockStreamCaptureChannel, 1024 * 1024);
+            blockStreamWriter.write(out);
+            serializedBlockStream = blockStreamCaptureChannel.getSerializedStream();
+            out.close();
+
+            session.prepareReceiving(new StreamSummary(sstable.metadata().id, 1, serializedBlockStream.readableBytes()));
+
+            CassandraStreamHeader entireSSTableStreamHeader =
+                CassandraStreamHeader.builder()
+                                     .withSSTableFormat(sstable.descriptor.formatType)
+                                     .withSSTableVersion(sstable.descriptor.version)
+                                     .withSSTableLevel(0)
+                                     .withEstimatedKeys(sstable.estimatedKeys())
+                                     .withSections(Collections.emptyList())
+                                     .withSerializationHeader(sstable.header.toComponent())
+                                     .withComponentManifest(CassandraOutgoingFile.getComponentManifest(sstable))
+                                     .isEntireSSTable(true)
+                                     .withFirstKey(sstable.first)
+                                     .withTableId(sstable.metadata().id)
+                                     .build();
+
+            blockStreamReader = new CassandraEntireSSTableStreamReader(new StreamMessageHeader(sstable.metadata().id,
+                                                                                               peer, session.planId(),
+                                                                                               0, 0, 0,
+                                                                                               null), entireSSTableStreamHeader, session);
+
+            List<Range<Token>> requestedRanges = Arrays.asList(new Range<>(sstable.first.minValue().getToken(), sstable.last.getToken()));
+            partialStreamWriter = new CassandraStreamWriter(sstable, sstable.getPositionsForRanges(requestedRanges), session);
+
+            CapturingNettyChannel partialStreamChannel = new CapturingNettyChannel(STREAM_SIZE);
+            partialStreamWriter.write(ByteBufDataOutputStreamPlus.create(session, partialStreamChannel, 1024 * 1024));
+            serializedPartialStream = partialStreamChannel.getSerializedStream();
+
+            CassandraStreamHeader partialSSTableStreamHeader =
+                CassandraStreamHeader.builder()
+                                     .withSSTableFormat(sstable.descriptor.formatType)
+                                     .withSSTableVersion(sstable.descriptor.version)
+                                     .withSSTableLevel(0)
+                                     .withEstimatedKeys(sstable.estimatedKeys())
+                                     .withSections(sstable.getPositionsForRanges(requestedRanges))
+                                     .withSerializationHeader(sstable.header.toComponent())
+                                     .withTableId(sstable.metadata().id)
+                                     .build();
+
+            partialStreamReader = new CassandraStreamReader(new StreamMessageHeader(sstable.metadata().id,
+                                                                                    peer, session.planId(),
+                                                                                    0, 0, 0,
+                                                                                    null),
+                                                            partialSSTableStreamHeader, session);
+        }
+

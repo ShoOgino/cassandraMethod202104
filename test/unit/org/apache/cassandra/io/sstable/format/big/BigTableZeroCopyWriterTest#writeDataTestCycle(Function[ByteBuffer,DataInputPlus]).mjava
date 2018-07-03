@@ -1,0 +1,33 @@
+    private void writeDataTestCycle(Function<ByteBuffer, DataInputPlus> bufferMapper)
+    {
+        File dir = store.getDirectories().getDirectoryForNewSSTables();
+        Descriptor desc = store.newSSTableDescriptor(dir);
+        TableMetadataRef metadata = Schema.instance.getTableMetadataRef(desc);
+
+        LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.STREAM);
+        Set<Component> componentsToWrite = ImmutableSet.of(Component.DATA, Component.PRIMARY_INDEX,
+                                                           Component.STATS);
+
+        BigTableZeroCopyWriter btzcw = new BigTableZeroCopyWriter(desc, metadata, txn, componentsToWrite);
+
+        for (Component component : componentsToWrite)
+        {
+            if (Files.exists(Paths.get(desc.filenameFor(component))))
+            {
+                Pair<DataInputPlus, Long> pair = getSSTableComponentData(sstable, component, bufferMapper);
+
+                btzcw.writeComponent(component.type, pair.left, pair.right);
+            }
+        }
+
+        Collection<SSTableReader> readers = btzcw.finish(true);
+
+        SSTableReader reader = readers.toArray(new SSTableReader[0])[0];
+
+        assertNotEquals(sstable.getFilename(), reader.getFilename());
+        assertEquals(sstable.estimatedKeys(), reader.estimatedKeys());
+        assertEquals(sstable.isPendingRepair(), reader.isPendingRepair());
+
+        assertRowCount(expectedRowCount);
+    }
+

@@ -1,0 +1,45 @@
+        @VisibleForTesting
+        public CassandraStreamHeader deserialize(DataInputPlus in, int version, Function<TableId, IPartitioner> partitionerMapper) throws IOException
+        {
+            Version sstableVersion = SSTableFormat.Type.current().info.getVersion(in.readUTF());
+            SSTableFormat.Type format = SSTableFormat.Type.validate(in.readUTF());
+
+            long estimatedKeys = in.readLong();
+            int count = in.readInt();
+            List<SSTableReader.PartitionPositionBounds> sections = new ArrayList<>(count);
+            for (int k = 0; k < count; k++)
+                sections.add(new SSTableReader.PartitionPositionBounds(in.readLong(), in.readLong()));
+            CompressionInfo compressionInfo = CompressionInfo.serializer.deserialize(in, version);
+            int sstableLevel = in.readInt();
+
+            SerializationHeader.Component header =  SerializationHeader.serializer.deserialize(sstableVersion, in);
+
+            TableId tableId = TableId.deserialize(in);
+            boolean isEntireSSTable = in.readBoolean();
+            ComponentManifest manifest = null;
+            DecoratedKey firstKey = null;
+
+            if (isEntireSSTable)
+            {
+                manifest = ComponentManifest.serializer.deserialize(in, version);
+                ByteBuffer keyBuf = ByteBufferUtil.readWithVIntLength(in);
+                IPartitioner partitioner = partitionerMapper.apply(tableId);
+                if (partitioner == null)
+                    throw new IllegalArgumentException(String.format("Could not determine partitioner for tableId %s", tableId));
+                firstKey = partitioner.decorateKey(keyBuf);
+            }
+
+            return builder().withSSTableFormat(format)
+                            .withSSTableVersion(sstableVersion)
+                            .withSSTableLevel(sstableLevel)
+                            .withEstimatedKeys(estimatedKeys)
+                            .withSections(sections)
+                            .withCompressionInfo(compressionInfo)
+                            .withSerializationHeader(header)
+                            .withComponentManifest(manifest)
+                            .isEntireSSTable(isEntireSSTable)
+                            .withFirstKey(firstKey)
+                            .withTableId(tableId)
+                            .build();
+        }
+
