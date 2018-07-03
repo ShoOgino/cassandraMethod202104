@@ -1,0 +1,22 @@
+    @Test
+    public void testPageSeek() throws InterruptedException, ExecutionException
+    {
+        // create spy for hint messages, stop replying after 12k (should be on 3rd page)
+        MockMessagingSpy spy = sendHintsAndResponses(20000, 12000);
+
+        // At this point the dispatcher will constantly retry the page we stopped acking,
+        // thus we receive the same hints from the page multiple times and in total more than
+        // all written hints. Lets just consume them for a while and then pause the dispatcher.
+        spy.interceptMessageOut(22000).get();
+        HintsService.instance.pauseDispatch();
+        Thread.sleep(1000);
+
+        // verify that we have a dispatch offset set for the page we're currently stuck at
+        HintsStore store = HintsService.instance.getCatalog().get(StorageService.instance.getLocalHostUUID());
+        HintsDescriptor descriptor = store.poll();
+        store.offerFirst(descriptor); // add again for cleanup during re-instanciation
+        InputPosition dispatchOffset = store.getDispatchOffset(descriptor);
+        assertTrue(dispatchOffset != null);
+        assertTrue(((ChecksummedDataInput.Position) dispatchOffset).sourcePosition > 0);
+    }
+

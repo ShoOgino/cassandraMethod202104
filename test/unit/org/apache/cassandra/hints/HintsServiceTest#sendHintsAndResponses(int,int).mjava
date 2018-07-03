@@ -1,0 +1,38 @@
+    private MockMessagingSpy sendHintsAndResponses(int noOfHints, int noOfResponses)
+    {
+        // create spy for hint messages, but only create responses for noOfResponses hints
+        MessageIn<HintResponse> messageIn = MessageIn.create(FBUtilities.getBroadcastAddress(),
+                HintResponse.instance,
+                Collections.emptyMap(),
+                MessagingService.Verb.REQUEST_RESPONSE,
+                MessagingService.current_version);
+
+        MockMessagingSpy spy;
+        if (noOfResponses != -1)
+        {
+            spy = MockMessagingService.when(verb(MessagingService.Verb.HINT)).respondN(messageIn, noOfResponses);
+        }
+        else
+        {
+            spy = MockMessagingService.when(verb(MessagingService.Verb.HINT)).respond(messageIn);
+        }
+
+        // create and write noOfHints using service
+        UUID hostId = StorageService.instance.getLocalHostUUID();
+        for (int i = 0; i < noOfHints; i++)
+        {
+            long now = System.currentTimeMillis();
+            DecoratedKey dkey = dk(String.valueOf(i));
+            CFMetaData cfMetaData = Schema.instance.getCFMetaData(KEYSPACE, TABLE);
+
+            UpdateBuilder builder = UpdateBuilder.create(cfMetaData, dkey)
+                    .withTimestamp(now)
+                    .newRow("column0")
+                    .add("val", "value0");
+            Hint hint = Hint.create((Mutation) builder.makeMutation(), now);
+
+            HintsService.instance.write(hostId, hint);
+        }
+        return spy;
+    }
+
