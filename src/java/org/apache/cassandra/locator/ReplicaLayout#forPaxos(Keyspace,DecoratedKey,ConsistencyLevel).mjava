@@ -1,0 +1,46 @@
+    public static ReplicaLayout.ForPaxos forPaxos(Keyspace keyspace, DecoratedKey key, ConsistencyLevel consistencyForPaxos) throws UnavailableException
+    {
+        Token tk = key.getToken();
+        EndpointsForToken natural = StorageService.getNaturalReplicasForToken(keyspace.getName(), tk);
+        EndpointsForToken pending = StorageService.instance.getTokenMetadata().pendingEndpointsForToken(tk, keyspace.getName());
+        if (Endpoints.haveConflicts(natural, pending))
+        {
+            natural = Endpoints.resolveConflictsInNatural(natural, pending);
+            pending = Endpoints.resolveConflictsInPending(natural, pending);
+        }
+
+        // TODO CASSANDRA-14547
+        Replicas.temporaryAssertFull(natural);
+        Replicas.temporaryAssertFull(pending);
+
+        if (consistencyForPaxos == ConsistencyLevel.LOCAL_SERIAL)
+        {
+            // Restrict natural and pending to node in the local DC only
+            String localDc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddressAndPort());
+            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+            Predicate<Replica> isLocalDc = replica -> localDc.equals(snitch.getDatacenter(replica));
+
+            natural = natural.filter(isLocalDc);
+            pending = pending.filter(isLocalDc);
+        }
+
+        int participants = pending.size() + natural.size();
+        int requiredParticipants = participants / 2 + 1; // See CASSANDRA-8346, CASSANDRA-833
+
+        EndpointsForToken all = Endpoints.concat(natural, pending);
+        EndpointsForToken selected = all.filter(IAsyncCallback.isReplicaAlive);
+        if (selected.size() < requiredParticipants)
+            throw UnavailableException.create(consistencyForPaxos, requiredParticipants, selected.size());
+
+        // We cannot allow CAS operations with 2 or more pending endpoints, see #8346.
+        // Note that we fake an impossible number of required nodes in the unavailable exception
+        // to nail home the point that it's an impossible operation no matter how many nodes are live.
+        if (pending.size() > 1)
+            throw new UnavailableException(String.format("Cannot perform LWT operation as there is more than one (%d) pending range movement", pending.size()),
+                                           consistencyForPaxos,
+                                           participants + 1,
+                                           selected.size());
+
+        return new ReplicaLayout.ForPaxos(keyspace, consistencyForPaxos, key.getToken(), requiredParticipants, natural, pending, selected, all);
+    }
+

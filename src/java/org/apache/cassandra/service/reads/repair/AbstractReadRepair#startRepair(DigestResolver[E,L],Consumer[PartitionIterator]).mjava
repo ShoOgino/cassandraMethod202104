@@ -1,0 +1,20 @@
+    // digestResolver isn't used here because we resend read requests to all participants
+    public void startRepair(DigestResolver<E, L> digestResolver, Consumer<PartitionIterator> resultConsumer)
+    {
+        getRepairMeter().mark();
+
+        // Do a full data read to resolve the correct response (and repair node that need be)
+        DataResolver<E, L> resolver = new DataResolver<>(command, replicaLayout, this, queryStartNanoTime);
+        ReadCallback<E, L> readCallback = new ReadCallback<>(resolver, replicaLayout.consistencyLevel().blockFor(cfs.keyspace),
+                                                             command, replicaLayout, queryStartNanoTime);
+
+        digestRepair = new DigestRepair(resolver, readCallback, resultConsumer);
+
+        for (Replica replica : replicaLayout.selected())
+        {
+            Tracing.trace("Enqueuing full data read to {}", replica);
+            sendReadCommand(replica.endpoint(), readCallback);
+        }
+        ReadRepairDiagnostics.startRepair(this, replicaLayout.selected().endpoints(), digestResolver, replicaLayout.all().endpoints());
+    }
+

@@ -1,0 +1,24 @@
+    @Test
+    public void testMigrateAvailableRanges() throws Throwable
+    {
+        Range<Token> testRange = new Range<>(DatabaseDescriptor.getPartitioner().getRandomToken(), DatabaseDescriptor.getPartitioner().getRandomToken());
+        String insert = String.format("INSERT INTO %s ("
+                                      + "keyspace_name, "
+                                      + "ranges) "
+                                      + " values ( ?, ? )",
+                                      SystemKeyspaceMigrator40.legacyAvailableRangesName);
+        execute(insert,
+                "foo",
+                ImmutableSet.of(SystemKeyspace.rangeToBytes(testRange)));
+        SystemKeyspaceMigrator40.migrate();
+
+        int rowCount = 0;
+        for (UntypedResultSet.Row row : execute(String.format("SELECT * FROM %s", SystemKeyspaceMigrator40.availableRangesName)))
+        {
+            rowCount++;
+            assertEquals("foo", row.getString("keyspace_name"));
+            assertEquals(ImmutableSet.of(testRange), SystemKeyspace.rawRangesToRangeSet(row.getSet("full_ranges", BytesType.instance), DatabaseDescriptor.getPartitioner()));
+        }
+        assertEquals(1, rowCount);
+    }
+

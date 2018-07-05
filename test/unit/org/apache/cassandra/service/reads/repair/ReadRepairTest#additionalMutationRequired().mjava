@@ -1,0 +1,36 @@
+    @Test
+    public void additionalMutationRequired() throws Exception
+    {
+        Mutation repair1 = mutation(cell2);
+        Mutation repair2 = mutation(cell1);
+
+        // check that the correct repairs are calculated
+        Map<Replica, Mutation> repairs = new HashMap<>();
+        repairs.put(target1, repair1);
+        repairs.put(target2, repair2);
+
+        InstrumentedReadRepairHandler<?, ?> handler = createRepairHandler(repairs, 2,
+                                                                    targets, EndpointsForRange.of(target1, target2));
+
+        Assert.assertTrue(handler.mutationsSent.isEmpty());
+
+        // check that the correct mutations are sent
+        handler.sendInitialRepairs();
+        Assert.assertEquals(2, handler.mutationsSent.size());
+        assertMutationEqual(repair1, handler.mutationsSent.get(target1.endpoint()));
+        assertMutationEqual(repair2, handler.mutationsSent.get(target2.endpoint()));
+
+        // check that a combined mutation is speculatively sent to the 3rd target
+        handler.mutationsSent.clear();
+        handler.maybeSendAdditionalWrites(0, TimeUnit.NANOSECONDS);
+        Assert.assertEquals(1, handler.mutationsSent.size());
+        assertMutationEqual(resolved, handler.mutationsSent.get(target3.endpoint()));
+
+        // check repairs stop blocking after receiving 2 acks
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+        handler.ack(target1.endpoint());
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+        handler.ack(target3.endpoint());
+        Assert.assertTrue(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+    }
+

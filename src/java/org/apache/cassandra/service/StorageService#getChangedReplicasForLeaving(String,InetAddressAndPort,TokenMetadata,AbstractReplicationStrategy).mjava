@@ -1,0 +1,77 @@
+    /**
+     * This is used in three contexts, graceful decomission, and restoreReplicaCount/removeNode.
+     * Graceful decomission should never lose data and it's going to be important that transient data
+     * is streamed to at least one other node from this one for each range.
+     *
+     * For ranges this node replicates its removal should cause a new replica to be selected either as transient or full
+     * for every range. So I believe the current code doesn't have to do anything special because it will engage in streaming
+     * for every range it replicates to at least one other node and that should propagate the transient data that was here.
+     * When I graphed this out on paper the result of removal looked correct and there are no issues such as
+     * this node needing to create a full replica for a range it transiently replicates because what is created is just another
+     * transient replica to replace this node.
+     * @param keyspaceName
+     * @param endpoint
+     * @return
+     */
+    // needs to be modified to accept either a keyspace or ARS.
+    static EndpointsByReplica getChangedReplicasForLeaving(String keyspaceName, InetAddressAndPort endpoint, TokenMetadata tokenMetadata, AbstractReplicationStrategy strat)
+    {
+        // First get all ranges the leaving endpoint is responsible for
+        RangesAtEndpoint replicas = strat.getAddressReplicas(endpoint);
+
+        if (logger.isDebugEnabled())
+            logger.debug("Node {} replicas [{}]", endpoint, StringUtils.join(replicas, ", "));
+
+        Map<Replica, EndpointsForRange> currentReplicaEndpoints = Maps.newHashMapWithExpectedSize(replicas.size());
+
+        // Find (for each range) all nodes that store replicas for these ranges as well
+        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap(); // don't do this in the loop! #7758
+        for (Replica replica : replicas)
+            currentReplicaEndpoints.put(replica, strat.calculateNaturalReplicas(replica.range().right, metadata));
+
+        TokenMetadata temp = tokenMetadata.cloneAfterAllLeft();
+
+        // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
+        // command was used), it is still present in temp and must be removed.
+        if (temp.isMember(endpoint))
+            temp.removeEndpoint(endpoint);
+
+        EndpointsByReplica.Mutable changedRanges = new EndpointsByReplica.Mutable();
+
+        // Go through the ranges and for each range check who will be
+        // storing replicas for these ranges when the leaving endpoint
+        // is gone. Whoever is present in newReplicaEndpoints list, but
+        // not in the currentReplicaEndpoints list, will be needing the
+        // range.
+        for (Replica replica : replicas)
+        {
+            EndpointsForRange newReplicaEndpoints = strat.calculateNaturalReplicas(replica.range().right, temp);
+            newReplicaEndpoints = newReplicaEndpoints.filter(newReplica -> {
+                Optional<Replica> currentReplicaOptional =
+                    tryFind(currentReplicaEndpoints.get(replica),
+                            currentReplica -> newReplica.endpoint().equals(currentReplica.endpoint())
+                    ).toJavaUtil();
+                //If it is newly replicating then yes we must do something to get the data there
+                if (!currentReplicaOptional.isPresent())
+                    return true;
+
+                Replica currentReplica = currentReplicaOptional.get();
+                //This transition requires streaming to occur
+                //Full -> transient is handled by nodetool cleanup
+                //transient -> transient and full -> full don't require any action
+                if (currentReplica.isTransient() && newReplica.isFull())
+                    return true;
+                return false;
+            });
+
+            if (logger.isDebugEnabled())
+                if (newReplicaEndpoints.isEmpty())
+                    logger.debug("Replica {} already in all replicas", replica);
+                else
+                    logger.debug("Replica {} will be responsibility of {}", replica, StringUtils.join(newReplicaEndpoints, ", "));
+            changedRanges.putAll(replica, newReplicaEndpoints, Conflict.NONE);
+        }
+
+        return changedRanges.asImmutableView();
+    }
+

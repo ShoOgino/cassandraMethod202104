@@ -1,0 +1,25 @@
+    public BlockingPartitionRepair(DecoratedKey key, Map<Replica, Mutation> repairs, int maxBlockFor, L replicaLayout)
+    {
+        this.key = key;
+        this.pendingRepairs = new ConcurrentHashMap<>(repairs);
+        this.replicaLayout = replicaLayout;
+
+        // here we remove empty repair mutations from the block for total, since
+        // we're not sending them mutations
+        int blockFor = maxBlockFor;
+        for (Replica participant: replicaLayout.selected())
+        {
+            // remote dcs can sometimes get involved in dc-local reads. We want to repair
+            // them if they do, but they shouldn't interfere with blocking the client read.
+            if (!repairs.containsKey(participant) && shouldBlockOn(participant.endpoint()))
+                blockFor--;
+        }
+
+        // there are some cases where logically identical data can return different digests
+        // For read repair, this would result in ReadRepairHandler being called with a map of
+        // empty mutations. If we'd also speculated on either of the read stages, the number
+        // of empty mutations would be greater than blockFor, causing the latch ctor to throw
+        // an illegal argument exception due to a negative start value. So here we clamp it 0
+        latch = new CountDownLatch(Math.max(blockFor, 0));
+    }
+

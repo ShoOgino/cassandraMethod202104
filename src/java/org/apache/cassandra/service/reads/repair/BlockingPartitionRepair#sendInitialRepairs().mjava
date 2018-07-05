@@ -1,20 +1,23 @@
     public void sendInitialRepairs()
     {
         mutationsSentTime = System.nanoTime();
-        for (Map.Entry<InetAddressAndPort, Mutation> entry: pendingRepairs.entrySet())
+        Replicas.assertFull(pendingRepairs.keySet());
+
+        for (Map.Entry<Replica, Mutation> entry: pendingRepairs.entrySet())
         {
-            InetAddressAndPort destination = entry.getKey();
+            Replica destination = entry.getKey();
+            Preconditions.checkArgument(destination.isFull(), "Can't send repairs to transient replicas: %s", destination);
             Mutation mutation = entry.getValue();
             TableId tableId = extractUpdate(mutation).metadata().id;
 
             Tracing.trace("Sending read-repair-mutation to {}", destination);
             // use a separate verb here to avoid writing hints on timeouts
-            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), destination);
+            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), destination.endpoint());
             ColumnFamilyStore.metricsFor(tableId).readRepairRequests.mark();
 
-            if (!shouldBlockOn(destination))
+            if (!shouldBlockOn(destination.endpoint()))
                 pendingRepairs.remove(destination);
-            ReadRepairDiagnostics.sendInitialRepair(this, destination, mutation);
+            ReadRepairDiagnostics.sendInitialRepair(this, destination.endpoint(), mutation);
         }
     }
 

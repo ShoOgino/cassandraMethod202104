@@ -1,0 +1,23 @@
+    AbstractReadExecutor(ColumnFamilyStore cfs, ReadCommand command, ReplicaLayout.ForToken replicaLayout, int initialDataRequestCount, long queryStartNanoTime)
+    {
+        this.command = command;
+        this.replicaLayout = replicaLayout;
+        this.initialDataRequestCount = initialDataRequestCount;
+        this.readRepair = ReadRepair.create(command, replicaLayout, queryStartNanoTime);
+        this.digestResolver = new DigestResolver<>(command, replicaLayout, readRepair, queryStartNanoTime);
+        this.handler = new ReadCallback<>(digestResolver, replicaLayout.consistencyLevel().blockFor(replicaLayout.keyspace()), command, replicaLayout, queryStartNanoTime);
+        this.cfs = cfs;
+        this.traceState = Tracing.instance.get();
+        this.queryStartNanoTime = queryStartNanoTime;
+
+
+        // Set the digest version (if we request some digests). This is the smallest version amongst all our target replicas since new nodes
+        // knows how to produce older digest but the reverse is not true.
+        // TODO: we need this when talking with pre-3.0 nodes. So if we preserve the digest format moving forward, we can get rid of this once
+        // we stop being compatible with pre-3.0 nodes.
+        int digestVersion = MessagingService.current_version;
+        for (Replica replica : replicaLayout.selected())
+            digestVersion = Math.min(digestVersion, MessagingService.instance().getVersion(replica.endpoint()));
+        command.setDigestVersion(digestVersion);
+    }
+

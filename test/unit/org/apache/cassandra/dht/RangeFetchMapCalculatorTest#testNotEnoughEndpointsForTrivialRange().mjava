@@ -1,7 +1,7 @@
     @Test(expected = IllegalStateException.class)
     public void testNotEnoughEndpointsForTrivialRange() throws UnknownHostException
     {
-        Multimap<Range<Token>, InetAddressAndPort> rangesWithSources = HashMultimap.create();
+        EndpointsByRange.Mutable rangesWithSources = new EndpointsByRange.Mutable();
         // add non-trivial ranges
         addNonTrivialRangeAndSources(rangesWithSources, 1, 10, "127.0.0.3", "127.0.0.51");
         addNonTrivialRangeAndSources(rangesWithSources, 11, 20, "127.0.0.3", "127.0.0.55");
@@ -9,23 +9,20 @@
         // and a trivial one:
         addTrivialRangeAndSources(rangesWithSources, 1, 10, "127.0.0.3");
 
-        RangeStreamer.ISourceFilter filter = new RangeStreamer.ISourceFilter()
+        Predicate<Replica> filter = replica ->
         {
-            public boolean shouldInclude(InetAddressAndPort endpoint)
+            try
             {
-                try
-                {
-                    if (endpoint.equals(InetAddressAndPort.getByName("127.0.0.3")))
-                        return false;
-                }
-                catch (UnknownHostException e)
-                {
-                    throw new RuntimeException(e);
-                }
-                return true;
+                if (replica.endpoint().equals(InetAddressAndPort.getByName("127.0.0.3")))
+                    return false;
             }
+            catch (UnknownHostException e)
+            {
+                throw new RuntimeException(e);
+            }
+            return true;
         };
-        RangeFetchMapCalculator calculator = new RangeFetchMapCalculator(rangesWithSources, Collections.singleton(filter), "Test");
+        RangeFetchMapCalculator calculator = new RangeFetchMapCalculator(rangesWithSources.asImmutableView(), Collections.singleton(filter), "Test");
         Multimap<InetAddressAndPort, Range<Token>> optMap = calculator.getRangeFetchMapForNonTrivialRanges();
         Multimap<InetAddressAndPort, Range<Token>> trivialMap = calculator.getRangeFetchMapForTrivialRanges(optMap);
 

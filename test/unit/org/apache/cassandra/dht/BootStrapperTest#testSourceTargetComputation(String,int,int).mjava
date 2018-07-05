@@ -24,21 +24,25 @@
             public void forceConviction(InetAddressAndPort ep) { throw new UnsupportedOperationException(); }
         };
         s.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(mockFailureDetector));
+        assertNotNull(Keyspace.open(keyspaceName));
         s.addRanges(keyspaceName, Keyspace.open(keyspaceName).getReplicationStrategy().getPendingAddressRanges(tmd, myToken, myEndpoint));
 
-        Collection<Map.Entry<InetAddressAndPort, Collection<Range<Token>>>> toFetch = s.toFetch().get(keyspaceName);
+
+        Collection<Multimap<InetAddressAndPort, FetchReplica>> toFetch = s.toFetch().get(keyspaceName);
 
         // Check we get get RF new ranges in total
-        Set<Range<Token>> ranges = new HashSet<>();
-        for (Map.Entry<InetAddressAndPort, Collection<Range<Token>>> e : toFetch)
-            ranges.addAll(e.getValue());
-
-        assertEquals(replicationFactor, ranges.size());
+        long rangesCount = toFetch.stream()
+               .map(Multimap::values)
+               .flatMap(Collection::stream)
+               .map(f -> f.remote)
+               .map(Replica::range)
+               .count();
+        assertEquals(replicationFactor, rangesCount);
 
         // there isn't any point in testing the size of these collections for any specific size.  When a random partitioner
         // is used, they will vary.
-        assert toFetch.iterator().next().getValue().size() > 0;
-        assert !toFetch.iterator().next().getKey().equals(myEndpoint);
+        assert toFetch.stream().map(Multimap::values).flatMap(Collection::stream).count() > 0;
+        assert toFetch.stream().map(Multimap::keySet).map(Collection::stream).noneMatch(myEndpoint::equals);
         return s;
     }
 

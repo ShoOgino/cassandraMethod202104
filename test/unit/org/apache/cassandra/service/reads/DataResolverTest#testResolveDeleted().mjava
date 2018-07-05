@@ -1,14 +1,15 @@
     @Test
     public void testResolveDeleted()
     {
-        DataResolver resolver = new DataResolver(ks, command, ConsistencyLevel.ALL, 2, System.nanoTime(), readRepair);
+        EndpointsForRange replicas = makeReplicas(2);
+        DataResolver resolver = new DataResolver(command, plan(replicas, ConsistencyLevel.ALL), readRepair, System.nanoTime());
         // one response with columns timestamped before a delete in another response
-        InetAddressAndPort peer1 = peer();
-        resolver.preprocess(readResponseMessage(peer1, iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("1")
-                                                                                                       .add("one", "A")
-                                                                                                       .buildUpdate())));
-        InetAddressAndPort peer2 = peer();
-        resolver.preprocess(readResponseMessage(peer2, fullPartitionDelete(cfm, dk, 1, nowInSec)));
+        InetAddressAndPort peer1 = replicas.get(0).endpoint();
+        resolver.preprocess(response(command, peer1, iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("1")
+                                                                                                     .add("one", "A")
+                                                                                                     .buildUpdate())));
+        InetAddressAndPort peer2 = replicas.get(1).endpoint();
+        resolver.preprocess(response(command, peer2, fullPartitionDelete(cfm, dk, 1, nowInSec)));
 
         try (PartitionIterator data = resolver.resolve())
         {

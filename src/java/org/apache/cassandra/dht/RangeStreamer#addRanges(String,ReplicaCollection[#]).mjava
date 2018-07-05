@@ -1,0 +1,46 @@
+    /**
+     * Add ranges to be streamed for given keyspace.
+     *
+     * @param keyspaceName keyspace name
+     * @param replicas ranges to be streamed
+     */
+    public void addRanges(String keyspaceName, ReplicaCollection<?> replicas)
+    {
+        Keyspace keyspace = Keyspace.open(keyspaceName);
+        AbstractReplicationStrategy strat = keyspace.getReplicationStrategy();
+        if(strat instanceof LocalStrategy)
+        {
+            logger.info("Not adding ranges for Local Strategy keyspace={}", keyspaceName);
+            return;
+        }
+
+        boolean useStrictSource = useStrictSourcesForRanges(strat);
+        EndpointsByReplica fetchMap = calculateRangesToFetchWithPreferredEndpoints(replicas, keyspace, useStrictSource);
+
+        for (Map.Entry<Replica, Replica> entry : fetchMap.flattenEntries())
+            logger.info("{}: range {} exists on {} for keyspace {}", description, entry.getKey(), entry.getValue(), keyspaceName);
+
+
+        Multimap<InetAddressAndPort, FetchReplica> workMap;
+        //Only use the optimized strategy if we don't care about strict sources, have a replication factor > 1, and no
+        //transient replicas.
+        if (useStrictSource || strat == null || strat.getReplicationFactor().allReplicas == 1 || strat.getReplicationFactor().hasTransientReplicas())
+        {
+            workMap = convertPreferredEndpointsToWorkMap(fetchMap);
+        }
+        else
+        {
+            workMap = getOptimizedWorkMap(fetchMap, sourceFilters, keyspaceName);
+        }
+
+        toFetch.put(keyspaceName, workMap);
+        for (Map.Entry<InetAddressAndPort, Collection<FetchReplica>> entry : workMap.asMap().entrySet())
+        {
+            if (logger.isTraceEnabled())
+            {
+                for (FetchReplica r : entry.getValue())
+                    logger.trace("{}: range source {} local range {} for keyspace {}", description, r.remote, r.local, keyspaceName);
+            }
+        }
+    }
+

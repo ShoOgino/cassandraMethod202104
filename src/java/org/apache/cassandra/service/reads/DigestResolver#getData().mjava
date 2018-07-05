@@ -1,6 +1,32 @@
     public PartitionIterator getData()
     {
         assert isDataPresent();
-        return UnfilteredPartitionIterators.filter(dataResponse.makeIterator(command), command.nowInSec());
+
+        Collection<MessageIn<ReadResponse>> responses = this.responses.snapshot();
+
+        if (!hasTransientResponse(responses))
+        {
+            return UnfilteredPartitionIterators.filter(dataResponse.payload.makeIterator(command), command.nowInSec());
+        }
+        else
+        {
+            // This path can be triggered only if we've got responses from full replicas and they match, but
+            // transient replica response still contains data, which needs to be reconciled.
+            DataResolver<E, L> dataResolver = new DataResolver<>(command,
+                                                                 replicaLayout,
+                                                                 (ReadRepair<E, L>) NoopReadRepair.instance,
+                                                                 queryStartNanoTime);
+
+            dataResolver.preprocess(dataResponse);
+            // Forward differences to all full nodes
+            for (MessageIn<ReadResponse> response : responses)
+            {
+                Replica replica = replicaLayout.getReplicaFor(response.from);
+                if (replica.isTransient())
+                    dataResolver.preprocess(response);
+            }
+
+            return dataResolver.resolve();
+        }
     }
 

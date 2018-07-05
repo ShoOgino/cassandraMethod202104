@@ -1,12 +1,17 @@
-        protected RangeForQuery computeNext()
+        protected ReplicaLayout.ForRange computeNext()
         {
             if (!ranges.hasNext())
                 return endOfData();
 
             AbstractBounds<PartitionPosition> range = ranges.next();
-            List<InetAddressAndPort> liveEndpoints = getLiveSortedEndpoints(keyspace, range.right);
-            return new RangeForQuery(range,
-                                     liveEndpoints,
-                                     consistency.filterForQuery(keyspace, liveEndpoints));
+            EndpointsForRange liveReplicas = getLiveSortedReplicas(keyspace, range.right);
+
+            int blockFor = consistency.blockFor(keyspace);
+            EndpointsForRange targetReplicas = consistency.filterForQuery(keyspace, liveReplicas);
+            int minResponses = Math.min(targetReplicas.size(), blockFor);
+
+            // Endpoitns for range here as well
+            return ReplicaLayout.forRangeRead(keyspace, consistency, range,
+                                              liveReplicas, targetReplicas.subList(0, minResponses));
         }
 

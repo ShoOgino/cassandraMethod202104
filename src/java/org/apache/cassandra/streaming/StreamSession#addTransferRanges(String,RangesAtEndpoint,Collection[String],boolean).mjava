@@ -1,0 +1,37 @@
+    /**
+     * Set up transfer for specific keyspace/ranges/CFs
+     *
+     * @param keyspace Transfer keyspace
+     * @param replicas Transfer ranges
+     * @param columnFamilies Transfer ColumnFamilies
+     * @param flushTables flush tables?
+     */
+    synchronized void addTransferRanges(String keyspace, RangesAtEndpoint replicas, Collection<String> columnFamilies, boolean flushTables)
+    {
+        failIfFinished();
+        Collection<ColumnFamilyStore> stores = getColumnFamilyStores(keyspace, columnFamilies);
+        if (flushTables)
+            flushSSTables(stores);
+
+        //Was it safe to remove this normalize, sorting seems not to matter, merging? Maybe we should have?
+        //Do we need to unwrap here also or is that just making it worse?
+        //Range and if it's transient
+        RangesAtEndpoint.Builder unwrappedRanges = RangesAtEndpoint.builder(replicas.endpoint(), replicas.size());
+        for (Replica replica : replicas)
+        {
+            for (Range<Token> unwrapped : replica.range().unwrap())
+            {
+                unwrappedRanges.add(new Replica(replica.endpoint(), unwrapped, replica.isFull()));
+            }
+        }
+        List<OutgoingStream> streams = getOutgoingStreamsForRanges(unwrappedRanges.build(), stores, pendingRepair, previewKind);
+        addTransferStreams(streams);
+        Set<Range<Token>> toBeUpdated = transferredRangesPerKeyspace.get(keyspace);
+        if (toBeUpdated == null)
+        {
+            toBeUpdated = new HashSet<>();
+        }
+        toBeUpdated.addAll(replicas.ranges());
+        transferredRangesPerKeyspace.put(keyspace, toBeUpdated);
+    }
+

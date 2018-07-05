@@ -1,0 +1,36 @@
+    static void migrateAvailableRanges()
+    {
+        ColumnFamilyStore newAvailableRanges = Keyspace.open(SchemaConstants.SYSTEM_KEYSPACE_NAME).getColumnFamilyStore(SystemKeyspace.AVAILABLE_RANGES_V2);
+
+        if (!newAvailableRanges.isEmpty())
+            return;
+
+        logger.info("{} table was empty, migrating legacy {} to {}", availableRangesName, legacyAvailableRangesName, availableRangesName);
+
+        String query = String.format("SELECT * FROM %s",
+                                     legacyAvailableRangesName);
+
+        String insert = String.format("INSERT INTO %s ("
+                                      + "keyspace_name, "
+                                      + "full_ranges, "
+                                      + "transient_ranges) "
+                                      + " values ( ?, ?, ? )",
+                                      availableRangesName);
+
+        UntypedResultSet rows = QueryProcessor.executeInternalWithPaging(query, 1000);
+        int transferred = 0;
+        for (UntypedResultSet.Row row : rows)
+        {
+            logger.debug("Transferring row {}", transferred);
+            String keyspace = row.getString("keyspace_name");
+            Set<ByteBuffer> ranges = Optional.ofNullable(row.getSet("ranges", BytesType.instance)).orElse(Collections.emptySet());
+            QueryProcessor.executeInternal(insert,
+                                           keyspace,
+                                           ranges,
+                                           Collections.emptySet());
+            transferred++;
+        }
+
+        logger.info("Migrated {} rows from legacy {} to {}", transferred, legacyAvailableRangesName, availableRangesName);
+    }
+

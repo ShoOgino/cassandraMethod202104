@@ -1,0 +1,46 @@
+    /**
+     * Optimized version that also outputs the final work map
+     */
+    private static Multimap<InetAddressAndPort, FetchReplica> getOptimizedWorkMap(EndpointsByReplica rangesWithSources,
+                                                                                  Collection<Predicate<Replica>> sourceFilters, String keyspace)
+    {
+        //For now we just aren't going to use the optimized range fetch map with transient replication to shrink
+        //the surface area to test and introduce bugs.
+        //In the future it's possible we could run it twice once for full ranges with only full replicas
+        //and once with transient ranges and all replicas. Then merge the result.
+        EndpointsByRange.Mutable unwrapped = new EndpointsByRange.Mutable();
+        for (Map.Entry<Replica, Replica> entry : rangesWithSources.flattenEntries())
+        {
+            Replicas.temporaryAssertFull(entry.getValue());
+            unwrapped.put(entry.getKey().range(), entry.getValue());
+        }
+
+        RangeFetchMapCalculator calculator = new RangeFetchMapCalculator(unwrapped.asImmutableView(), sourceFilters, keyspace);
+        Multimap<InetAddressAndPort, Range<Token>> rangeFetchMapMap = calculator.getRangeFetchMap();
+        logger.info("Output from RangeFetchMapCalculator for keyspace {}", keyspace);
+        validateRangeFetchMap(unwrapped.asImmutableView(), rangeFetchMapMap, keyspace);
+
+        //Need to rewrap as Replicas
+        Multimap<InetAddressAndPort, FetchReplica> wrapped = HashMultimap.create();
+        for (Map.Entry<InetAddressAndPort, Range<Token>> entry : rangeFetchMapMap.entries())
+        {
+            Replica toFetch = null;
+            for (Replica r : rangesWithSources.keySet())
+            {
+                if (r.range().equals(entry.getValue()))
+                {
+                    if (toFetch != null)
+                        throw new AssertionError(String.format("There shouldn't be multiple replicas for range %s, replica %s and %s here", r.range(), r, toFetch));
+                    toFetch = r;
+                }
+            }
+            if (toFetch == null)
+                throw new AssertionError("Shouldn't be possible for the Replica we fetch to be null here");
+            //Committing the cardinal sin of synthesizing a Replica, but it's ok because we assert earlier all of them
+            //are full and optimized range fetch map doesn't support transient replication yet.
+            wrapped.put(entry.getKey(), new FetchReplica(toFetch, fullReplica(entry.getKey(), entry.getValue())));
+        }
+
+        return wrapped;
+    }
+

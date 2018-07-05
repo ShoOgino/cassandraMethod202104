@@ -1,0 +1,79 @@
+    /**
+     * Return all of the neighbors with whom we share the provided range.
+     *
+     * @param keyspaceName keyspace to repair
+     * @param keyspaceLocalRanges local-range for given keyspaceName
+     * @param toRepair token to repair
+     * @param dataCenters the data centers to involve in the repair
+     *
+     * @return neighbors with whom we share the provided range
+     */
+    public static EndpointsForRange getNeighbors(String keyspaceName, Iterable<Range<Token>> keyspaceLocalRanges,
+                                          Range<Token> toRepair, Collection<String> dataCenters,
+                                          Collection<String> hosts)
+    {
+        StorageService ss = StorageService.instance;
+        EndpointsByRange replicaSets = ss.getRangeToAddressMap(keyspaceName);
+        Range<Token> rangeSuperSet = null;
+        for (Range<Token> range : keyspaceLocalRanges)
+        {
+            if (range.contains(toRepair))
+            {
+                rangeSuperSet = range;
+                break;
+            }
+            else if (range.intersects(toRepair))
+            {
+                throw new IllegalArgumentException(String.format("Requested range %s intersects a local range (%s) " +
+                                                                 "but is not fully contained in one; this would lead to " +
+                                                                 "imprecise repair. keyspace: %s", toRepair.toString(),
+                                                                 range.toString(), keyspaceName));
+            }
+        }
+        if (rangeSuperSet == null || !replicaSets.containsKey(rangeSuperSet))
+            return EndpointsForRange.empty(toRepair);
+
+        EndpointsForRange neighbors = replicaSets.get(rangeSuperSet).withoutSelf();
+
+        if (dataCenters != null && !dataCenters.isEmpty())
+        {
+            TokenMetadata.Topology topology = ss.getTokenMetadata().cloneOnlyTokenMap().getTopology();
+            Multimap<String, InetAddressAndPort> dcEndpointsMap = topology.getDatacenterEndpoints();
+            Iterable<InetAddressAndPort> dcEndpoints = concat(transform(dataCenters, dcEndpointsMap::get));
+            return neighbors.keep(dcEndpoints);
+        }
+        else if (hosts != null && !hosts.isEmpty())
+        {
+            Set<InetAddressAndPort> specifiedHost = new HashSet<>();
+            for (final String host : hosts)
+            {
+                try
+                {
+                    final InetAddressAndPort endpoint = InetAddressAndPort.getByName(host.trim());
+                    if (endpoint.equals(FBUtilities.getBroadcastAddressAndPort()) || neighbors.endpoints().contains(endpoint))
+                        specifiedHost.add(endpoint);
+                }
+                catch (UnknownHostException e)
+                {
+                    throw new IllegalArgumentException("Unknown host specified " + host, e);
+                }
+            }
+
+            if (!specifiedHost.contains(FBUtilities.getBroadcastAddressAndPort()))
+                throw new IllegalArgumentException("The current host must be part of the repair");
+
+            if (specifiedHost.size() <= 1)
+            {
+                String msg = "Specified hosts %s do not share range %s needed for repair. Either restrict repair ranges " +
+                             "with -st/-et options, or specify one of the neighbors that share this range with " +
+                             "this node: %s.";
+                throw new IllegalArgumentException(String.format(msg, hosts, toRepair, neighbors));
+            }
+
+            specifiedHost.remove(FBUtilities.getBroadcastAddressAndPort());
+            return neighbors.keep(specifiedHost);
+        }
+
+        return neighbors;
+    }
+

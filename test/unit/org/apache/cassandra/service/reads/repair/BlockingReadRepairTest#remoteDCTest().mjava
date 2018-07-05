@@ -4,30 +4,29 @@
     @Test
     public void remoteDCTest() throws Exception
     {
-        Map<InetAddressAndPort, Mutation> repairs = new HashMap<>();
-        repairs.put(target1, mutation(cell1));
+        Map<Replica, Mutation> repairs = new HashMap<>();
+        repairs.put(replica1, mutation(cell1));
 
-
-        InetAddressAndPort remote1 = InetAddressAndPort.getByName("10.0.0.1");
-        InetAddressAndPort remote2 = InetAddressAndPort.getByName("10.0.0.2");
+        Replica remote1 = ReplicaUtils.full(InetAddressAndPort.getByName("10.0.0.1"));
+        Replica remote2 = ReplicaUtils.full(InetAddressAndPort.getByName("10.0.0.2"));
         repairs.put(remote1, mutation(cell1));
 
-        Collection<InetAddressAndPort> participants = Lists.newArrayList(target1, target2, remote1, remote2);
-
-        InstrumentedReadRepairHandler handler = createRepairHandler(repairs, 2, participants);
+        EndpointsForRange participants = EndpointsForRange.of(replica1, replica2, remote1, remote2);
+        ReplicaLayout.ForRange replicaLayout = new ReplicaLayout.ForRange(ks, ConsistencyLevel.LOCAL_QUORUM, ReplicaUtils.FULL_BOUNDS, participants, participants);
+        InstrumentedReadRepairHandler handler = createRepairHandler(repairs, 2, replicaLayout);
         handler.sendInitialRepairs();
         Assert.assertEquals(2, handler.mutationsSent.size());
-        Assert.assertTrue(handler.mutationsSent.containsKey(target1));
-        Assert.assertTrue(handler.mutationsSent.containsKey(remote1));
+        Assert.assertTrue(handler.mutationsSent.containsKey(replica1.endpoint()));
+        Assert.assertTrue(handler.mutationsSent.containsKey(remote1.endpoint()));
 
         Assert.assertEquals(1, handler.waitingOn());
         Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
 
-        handler.ack(remote1);
+        handler.ack(remote1.endpoint());
         Assert.assertEquals(1, handler.waitingOn());
         Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
 
-        handler.ack(target1);
+        handler.ack(replica1.endpoint());
         Assert.assertEquals(0, handler.waitingOn());
         Assert.assertTrue(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
     }

@@ -1,0 +1,16 @@
+    private UnfilteredPartitionIterator makeAndExecuteFetchAdditionalPartitionReadCommand(int toQuery)
+    {
+        PartitionRangeReadCommand cmd = (PartitionRangeReadCommand) command;
+
+        DataLimits newLimits = cmd.limits().forShortReadRetry(toQuery);
+
+        AbstractBounds<PartitionPosition> bounds = cmd.dataRange().keyRange();
+        AbstractBounds<PartitionPosition> newBounds = bounds.inclusiveRight()
+                                                      ? new Range<>(lastPartitionKey, bounds.right)
+                                                      : new ExcludingBounds<>(lastPartitionKey, bounds.right);
+        DataRange newDataRange = cmd.dataRange().forSubRange(newBounds);
+
+        ReplicaLayout.ForRange replicaLayout = ReplicaLayout.forSingleReplica(Keyspace.open(command.metadata().keyspace), cmd.dataRange().keyRange(), source);
+        return executeReadCommand(cmd.withUpdatedLimitsAndDataRange(newLimits, newDataRange), replicaLayout);
+    }
+

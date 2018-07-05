@@ -1,0 +1,74 @@
+    @Override
+    public Collection<OutgoingStream> createOutgoingStreams(StreamSession session, RangesAtEndpoint replicas, UUID pendingRepair, PreviewKind previewKind)
+    {
+        Refs<SSTableReader> refs = new Refs<>();
+        try
+        {
+            final List<Range<PartitionPosition>> keyRanges = new ArrayList<>(replicas.size());
+            for (Replica replica : replicas)
+                keyRanges.add(Range.makeRowRange(replica.range()));
+            refs.addAll(cfs.selectAndReference(view -> {
+                Set<SSTableReader> sstables = Sets.newHashSet();
+                SSTableIntervalTree intervalTree = SSTableIntervalTree.build(view.select(SSTableSet.CANONICAL));
+                Predicate<SSTableReader> predicate;
+                if (previewKind.isPreview())
+                {
+                    predicate = getPreviewPredicate(previewKind);
+                }
+                else if (pendingRepair == ActiveRepairService.NO_PENDING_REPAIR)
+                {
+                    predicate = Predicates.alwaysTrue();
+                }
+                else
+                {
+                    predicate = s -> s.isPendingRepair() && s.getSSTableMetadata().pendingRepair.equals(pendingRepair);
+                }
+
+                for (Range<PartitionPosition> keyRange : keyRanges)
+                {
+                    // keyRange excludes its start, while sstableInBounds is inclusive (of both start and end).
+                    // This is fine however, because keyRange has been created from a token range through Range.makeRowRange (see above).
+                    // And that later method uses the Token.maxKeyBound() method to creates the range, which return a "fake" key that
+                    // sort after all keys having the token. That "fake" key cannot however be equal to any real key, so that even
+                    // including keyRange.left will still exclude any key having the token of the original token range, and so we're
+                    // still actually selecting what we wanted.
+                    for (SSTableReader sstable : Iterables.filter(View.sstablesInBounds(keyRange.left, keyRange.right, intervalTree), predicate))
+                    {
+                        sstables.add(sstable);
+                    }
+                }
+
+                if (logger.isDebugEnabled())
+                    logger.debug("ViewFilter for {}/{} sstables", sstables.size(), Iterables.size(view.select(SSTableSet.CANONICAL)));
+                return sstables;
+            }).refs);
+
+
+            List<Range<Token>> normalizedFullRanges = Range.normalize(replicas.filter(Replica::isFull).ranges());
+            List<Range<Token>> normalizedAllRanges = Range.normalize(replicas.ranges());
+            //Create outgoing file streams for ranges possibly skipping repaired ranges in sstables
+            List<OutgoingStream> streams = new ArrayList<>(refs.size());
+            for (SSTableReader sstable : refs)
+            {
+                List<Range<Token>> ranges = sstable.isRepaired() ? normalizedFullRanges : normalizedAllRanges;
+                List<SSTableReader.PartitionPositionBounds> sections = sstable.getPositionsForRanges(ranges);
+
+                Ref<SSTableReader> ref = refs.get(sstable);
+                if (sections.isEmpty())
+                {
+                    ref.release();
+                    continue;
+                }
+                streams.add(new CassandraOutgoingFile(session.getStreamOperation(), ref, sections, ranges,
+                                                      sstable.estimatedKeysForRanges(ranges)));
+            }
+
+            return streams;
+        }
+        catch (Throwable t)
+        {
+            refs.release();
+            throw t;
+        }
+    }
+

@@ -1,0 +1,33 @@
+        /**
+         * Attempts to add an endpoint to the replicas for this datacenter, adding to the replicas set if successful.
+         * Returns true if the endpoint was added, and this datacenter does not require further replicas.
+         */
+        boolean addEndpointAndCheckIfDone(InetAddressAndPort ep, Pair<String,String> location, Range<Token> replicatedRange)
+        {
+            if (done())
+                return false;
+
+            if (replicas.endpoints().contains(ep))
+                // Cannot repeat a node.
+                return false;
+
+            Replica replica = new Replica(ep, replicatedRange, rfLeft > transients);
+
+            if (racks.add(location))
+            {
+                // New rack.
+                --rfLeft;
+                replicas.add(replica, Conflict.NONE);
+                return done();
+            }
+            if (acceptableRackRepeats <= 0)
+                // There must be rfLeft distinct racks left, do not add any more rack repeats.
+                return false;
+
+            replicas.add(replica, Conflict.NONE);
+            // Added a node that is from an already met rack to match RF when there aren't enough racks.
+            --acceptableRackRepeats;
+            --rfLeft;
+            return done();
+        }
+

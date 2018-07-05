@@ -1,0 +1,31 @@
+    @Test
+    public void finalizedSessionTransientCleanup()
+    {
+        Assert.assertTrue(cfs.getLiveSSTables().isEmpty());
+        UUID repairID = registerSession(cfs, true, true);
+        LocalSessionAccessor.prepareUnsafe(repairID, COORDINATOR, PARTICIPANTS);
+        SSTableReader sstable = makeSSTable(true);
+        mutateRepaired(sstable, repairID, true);
+        csm.handleNotification(new SSTableAddedNotification(Collections.singleton(sstable), null), cfs.getTracker());
+        LocalSessionAccessor.finalizeUnsafe(repairID);
+
+        Assert.assertFalse(hasPendingStrategiesFor(repairID));
+        Assert.assertTrue(hasTransientStrategiesFor(repairID));
+        Assert.assertTrue(transientContains(sstable));
+        Assert.assertFalse(pendingContains(sstable));
+        Assert.assertFalse(repairedContains(sstable));
+        Assert.assertFalse(unrepairedContains(sstable));
+
+        cfs.getCompactionStrategyManager().enable(); // enable compaction to fetch next background task
+        AbstractCompactionTask compactionTask = csm.getNextBackgroundTask(FBUtilities.nowInSeconds());
+        Assert.assertNotNull(compactionTask);
+        Assert.assertSame(PendingRepairManager.RepairFinishedCompactionTask.class, compactionTask.getClass());
+
+        // run the compaction
+        compactionTask.execute(null);
+
+        Assert.assertTrue(cfs.getLiveSSTables().isEmpty());
+        Assert.assertFalse(hasPendingStrategiesFor(repairID));
+        Assert.assertFalse(hasTransientStrategiesFor(repairID));
+    }
+

@@ -1,0 +1,24 @@
+    public EndpointsForRange calculateNaturalReplicas(Token token, TokenMetadata metadata)
+    {
+        ArrayList<Token> ring = metadata.sortedTokens();
+        if (ring.isEmpty())
+            return EndpointsForRange.empty(new Range<>(metadata.partitioner.getMinimumToken(), metadata.partitioner.getMinimumToken()));
+
+        Token replicaEnd = TokenMetadata.firstToken(ring, token);
+        Token replicaStart = metadata.getPredecessor(replicaEnd);
+        Range<Token> replicaRange = new Range<>(replicaStart, replicaEnd);
+        Iterator<Token> iter = TokenMetadata.ringIterator(ring, token, false);
+
+        EndpointsForRange.Builder replicas = EndpointsForRange.builder(replicaRange, rf.allReplicas);
+
+        // Add the token at the index by default
+        while (replicas.size() < rf.allReplicas && iter.hasNext())
+        {
+            Token tk = iter.next();
+            InetAddressAndPort ep = metadata.getEndpoint(tk);
+            if (!replicas.containsEndpoint(ep))
+                replicas.add(new Replica(ep, replicaRange, replicas.size() < rf.fullReplicas));
+        }
+        return replicas.build();
+    }
+

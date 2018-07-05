@@ -1,0 +1,122 @@
+    /**
+     * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
+     * is not available.
+     *
+     * Note about hints:
+     * <pre>
+     * {@code
+     * | Hinted Handoff | Consist. Level |
+     * | on             |       >=1      | --> wait for hints. We DO NOT notify the handler with handler.response() for hints;
+     * | on             |       ANY      | --> wait for hints. Responses count towards consistency.
+     * | off            |       >=1      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+     * | off            |       ANY      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+     * }
+     * </pre>
+     *
+     * @throws OverloadedException if the hints cannot be written/enqueued
+     */
+    public static void sendToHintedReplicas(final Mutation mutation,
+                                            EndpointsForToken targets,
+                                            AbstractWriteResponseHandler<IMutation> responseHandler,
+                                            String localDataCenter,
+                                            Stage stage)
+    throws OverloadedException
+    {
+        // this dc replicas:
+        Collection<Replica> localDc = null;
+        // extra-datacenter replicas, grouped by dc
+        Map<String, Collection<Replica>> dcGroups = null;
+        // only need to create a Message for non-local writes
+        MessageOut<Mutation> message = null;
+
+        boolean insertLocal = false;
+        Replica localReplica = null;
+        Collection<Replica> endpointsToHint = null;
+
+        List<InetAddressAndPort> backPressureHosts = null;
+
+        for (Replica destination : targets)
+        {
+            checkHintOverload(destination);
+
+            if (FailureDetector.instance.isAlive(destination.endpoint()))
+            {
+                if (destination.isLocal())
+                {
+                    insertLocal = true;
+                    localReplica = destination;
+                }
+                else
+                {
+                    // belongs on a different server
+                    if (message == null)
+                        message = mutation.createMessage();
+
+                    String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
+
+                    // direct writes to local DC or old Cassandra versions
+                    // (1.1 knows how to forward old-style String message IDs; updated to int in 2.0)
+                    if (localDataCenter.equals(dc))
+                    {
+                        if (localDc == null)
+                            localDc = new ArrayList<>(targets.size());
+
+                        localDc.add(destination);
+                    }
+                    else
+                    {
+                        if (dcGroups == null)
+                            dcGroups = new HashMap<>();
+
+                        Collection<Replica> messages = dcGroups.get(dc);
+                        if (messages == null)
+                            messages = dcGroups.computeIfAbsent(dc, (v) -> new ArrayList<>(3)); // most DCs will have <= 3 replicas
+
+                        messages.add(destination);
+                    }
+
+                    if (backPressureHosts == null)
+                        backPressureHosts = new ArrayList<>(targets.size());
+
+                    backPressureHosts.add(destination.endpoint());
+                }
+            }
+            else
+            {
+                //Immediately mark the response as expired since the request will not be sent
+                responseHandler.expired();
+                if (shouldHint(destination))
+                {
+                    if (endpointsToHint == null)
+                        endpointsToHint = new ArrayList<>();
+
+                    endpointsToHint.add(destination);
+                }
+            }
+        }
+
+        if (backPressureHosts != null)
+            MessagingService.instance().applyBackPressure(backPressureHosts, responseHandler.currentTimeout());
+
+        if (endpointsToHint != null)
+            submitHint(mutation, EndpointsForToken.copyOf(mutation.key().getToken(), endpointsToHint), responseHandler);
+
+        if (insertLocal)
+        {
+            Preconditions.checkNotNull(localReplica);
+            performLocally(stage, localReplica, Optional.of(mutation), mutation::apply, responseHandler);
+        }
+
+        if (localDc != null)
+        {
+            for (Replica destination : localDc)
+                MessagingService.instance().sendWriteRR(message, destination, responseHandler, true);
+        }
+        if (dcGroups != null)
+        {
+            // for each datacenter, send the message to one node to relay the write to other replicas
+            for (Collection<Replica> dcTargets : dcGroups.values())
+                sendMessagesToNonlocalDC(message, EndpointsForToken.copyOf(mutation.key().getToken(), dcTargets), responseHandler);
+        }
+    }
+

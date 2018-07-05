@@ -10,9 +10,8 @@
         if (awaitRepairs(timeout, timeoutUnit))
             return;
 
-        Set<InetAddressAndPort> exclude = Sets.newHashSet(participants);
-        Iterable<InetAddressAndPort> candidates = Iterables.filter(getCandidateEndpoints(), e -> !exclude.contains(e));
-        if (Iterables.isEmpty(candidates))
+        L newCandidates = replicaLayout.forNaturalUncontacted();
+        if (newCandidates.selected().isEmpty())
             return;
 
         PartitionUpdate update = mergeUnackedUpdates();
@@ -25,28 +24,28 @@
 
         Mutation[] versionedMutations = new Mutation[msgVersionIdx(MessagingService.current_version) + 1];
 
-        for (InetAddressAndPort endpoint: candidates)
+        for (Replica replica : newCandidates.selected())
         {
-            int versionIdx = msgVersionIdx(MessagingService.instance().getVersion(endpoint));
+            int versionIdx = msgVersionIdx(MessagingService.instance().getVersion(replica.endpoint()));
 
             Mutation mutation = versionedMutations[versionIdx];
 
             if (mutation == null)
             {
-                mutation = BlockingReadRepairs.createRepairMutation(update, consistency, endpoint, true);
+                mutation = BlockingReadRepairs.createRepairMutation(update, replicaLayout.consistencyLevel(), replica.endpoint(), true);
                 versionedMutations[versionIdx] = mutation;
             }
 
             if (mutation == null)
             {
                 // the mutation is too large to send.
-                ReadRepairDiagnostics.speculatedWriteOversized(this, endpoint);
+                ReadRepairDiagnostics.speculatedWriteOversized(this, replica.endpoint());
                 continue;
             }
 
-            Tracing.trace("Sending speculative read-repair-mutation to {}", endpoint);
-            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), endpoint);
-            ReadRepairDiagnostics.speculatedWrite(this, endpoint, mutation);
+            Tracing.trace("Sending speculative read-repair-mutation to {}", replica);
+            sendRR(mutation.createMessage(MessagingService.Verb.READ_REPAIR), replica.endpoint());
+            ReadRepairDiagnostics.speculatedWrite(this, replica.endpoint(), mutation);
         }
     }
 

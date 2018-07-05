@@ -1,6 +1,25 @@
     @Test
     public void shouldMutatePendingRepair() throws InterruptedException, IOException
     {
-        shouldMutate(UNREPAIRED_SSTABLE, UUIDGen.getTimeUUID());
+        ColumnFamilyStore store = prepareColumnFamilyStore();
+        Collection<SSTableReader> sstables = getUnrepairedSSTables(store);
+        assertEquals(store.getLiveSSTables().size(), sstables.size());
+        // the sstables start at "0".getBytes() = 48, we need to include that first token, with "/".getBytes() = 47
+        Range<Token> range = new Range<Token>(new BytesToken("/".getBytes()), new BytesToken("9999".getBytes()));
+        List<Range<Token>> ranges = Arrays.asList(range);
+        UUID pendingRepair = UUID.randomUUID();
+        registerParentRepairSession(pendingRepair, ranges, UNREPAIRED_SSTABLE, pendingRepair);
+
+        try (LifecycleTransaction txn = store.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+             Refs<SSTableReader> refs = Refs.ref(sstables))
+        {
+            CompactionManager.instance.performAnticompaction(store, atEndpoint(ranges, NO_RANGES), refs, txn, pendingRepair);
+        }
+
+        assertThat(store.getLiveSSTables().size(), is(1));
+        assertThat(Iterables.get(store.getLiveSSTables(), 0).isRepaired(), is(false));
+        assertThat(Iterables.get(store.getLiveSSTables(), 0).isPendingRepair(), is(true));
+        assertThat(Iterables.get(store.getLiveSSTables(), 0).selfRef().globalCount(), is(1));
+        assertThat(store.getTracker().getCompacting().size(), is(0));
     }
 

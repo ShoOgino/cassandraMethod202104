@@ -6,20 +6,17 @@
         if (repair == null)
             return;
 
-        if (shouldSpeculate() && !repair.readCallback.await(cfs.sampleLatencyNanos, TimeUnit.NANOSECONDS))
+        if (shouldSpeculate() && !repair.readCallback.await(cfs.sampleReadLatencyNanos, TimeUnit.NANOSECONDS))
         {
-            Set<InetAddressAndPort> contacted = Sets.newHashSet(repair.initialContacts);
-            Token replicaToken = ((SinglePartitionReadCommand) command).partitionKey().getToken();
-            Iterable<InetAddressAndPort> candidates = getCandidatesForToken(replicaToken);
+            L uncontacted = replicaLayout.forNaturalUncontacted();
+            if (uncontacted.selected().isEmpty())
+                return;
 
-            Optional<InetAddressAndPort> endpoint = Iterables.tryFind(candidates, e -> !contacted.contains(e));
-            if (endpoint.isPresent())
-            {
-                Tracing.trace("Enqueuing speculative full data read to {}", endpoint);
-                sendReadCommand(endpoint.get(), repair.readCallback);
-                ReadRepairMetrics.speculatedRead.mark();
-                ReadRepairDiagnostics.speculatedRead(this, endpoint.get(), candidates);
-            }
+            Replica replica = uncontacted.selected().iterator().next();
+            Tracing.trace("Enqueuing speculative full data read to {}", replica);
+            sendReadCommand(replica.endpoint(), repair.readCallback);
+            ReadRepairMetrics.speculatedRead.mark();
+            ReadRepairDiagnostics.speculatedRead(this, replica.endpoint(), uncontacted.all().endpoints());
         }
     }
 

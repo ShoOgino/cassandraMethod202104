@@ -1,37 +1,38 @@
     @Test
     public void testResolveDisjointMultipleRowsWithRangeTombstones()
     {
-        DataResolver resolver = new DataResolver(ks, command, ConsistencyLevel.ALL, 4, System.nanoTime(), readRepair);
+        EndpointsForRange replicas = makeReplicas(4);
+        DataResolver resolver = new DataResolver(command, plan(replicas, ConsistencyLevel.ALL), readRepair, System.nanoTime());
 
         RangeTombstone tombstone1 = tombstone("1", "11", 1, nowInSec);
         RangeTombstone tombstone2 = tombstone("3", "31", 1, nowInSec);
         PartitionUpdate update = new RowUpdateBuilder(cfm, nowInSec, 1L, dk).addRangeTombstone(tombstone1)
-                                                                                  .addRangeTombstone(tombstone2)
-                                                                                  .buildUpdate();
+                                                                            .addRangeTombstone(tombstone2)
+                                                                            .buildUpdate();
 
-        InetAddressAndPort peer1 = peer();
+        InetAddressAndPort peer1 = replicas.get(0).endpoint();
         UnfilteredPartitionIterator iter1 = iter(new RowUpdateBuilder(cfm, nowInSec, 1L, dk).addRangeTombstone(tombstone1)
-                                                                                  .addRangeTombstone(tombstone2)
-                                                                                  .buildUpdate());
-        resolver.preprocess(readResponseMessage(peer1, iter1));
+                                                                                            .addRangeTombstone(tombstone2)
+                                                                                            .buildUpdate());
+        resolver.preprocess(response(command, peer1, iter1));
         // not covered by any range tombstone
-        InetAddressAndPort peer2 = peer();
+        InetAddressAndPort peer2 = replicas.get(1).endpoint();
         UnfilteredPartitionIterator iter2 = iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("0")
-                                                                                  .add("c1", "v0")
-                                                                                  .buildUpdate());
-        resolver.preprocess(readResponseMessage(peer2, iter2));
+                                                                                            .add("c1", "v0")
+                                                                                            .buildUpdate());
+        resolver.preprocess(response(command, peer2, iter2));
         // covered by a range tombstone
-        InetAddressAndPort peer3 = peer();
+        InetAddressAndPort peer3 = replicas.get(2).endpoint();
         UnfilteredPartitionIterator iter3 = iter(new RowUpdateBuilder(cfm, nowInSec, 0L, dk).clustering("10")
-                                                                                  .add("c2", "v1")
-                                                                                  .buildUpdate());
-        resolver.preprocess(readResponseMessage(peer3, iter3));
+                                                                                            .add("c2", "v1")
+                                                                                            .buildUpdate());
+        resolver.preprocess(response(command, peer3, iter3));
         // range covered by rt, but newer
-        InetAddressAndPort peer4 = peer();
+        InetAddressAndPort peer4 = replicas.get(3).endpoint();
         UnfilteredPartitionIterator iter4 = iter(new RowUpdateBuilder(cfm, nowInSec, 2L, dk).clustering("3")
-                                                                                  .add("one", "A")
-                                                                                  .buildUpdate());
-        resolver.preprocess(readResponseMessage(peer4, iter4));
+                                                                                            .add("one", "A")
+                                                                                            .buildUpdate());
+        resolver.preprocess(response(command, peer4, iter4));
         try (PartitionIterator data = resolver.resolve())
         {
             try (RowIterator rows = data.next())

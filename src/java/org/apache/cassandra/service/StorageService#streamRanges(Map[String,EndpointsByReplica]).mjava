@@ -1,0 +1,63 @@
+    /**
+     * Send data to the endpoints that will be responsible for it in the future
+     *
+     * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
+     * @return async Future for whether stream was success
+     */
+    private Future<StreamState> streamRanges(Map<String, EndpointsByReplica> rangesToStreamByKeyspace)
+    {
+        // First, we build a list of ranges to stream to each host, per table
+        Map<String, RangesByEndpoint> sessionsToStreamByKeyspace = new HashMap<>();
+
+        for (Map.Entry<String, EndpointsByReplica> entry : rangesToStreamByKeyspace.entrySet())
+        {
+            String keyspace = entry.getKey();
+            EndpointsByReplica rangesWithEndpoints = entry.getValue();
+
+            if (rangesWithEndpoints.isEmpty())
+                continue;
+
+            //Description is always Unbootstrap? Is that right?
+            Map<InetAddressAndPort, Set<Range<Token>>> transferredRangePerKeyspace = SystemKeyspace.getTransferredRanges("Unbootstrap",
+                                                                                                                         keyspace,
+                                                                                                                         StorageService.instance.getTokenMetadata().partitioner);
+            RangesByEndpoint.Mutable replicasPerEndpoint = new RangesByEndpoint.Mutable();
+            for (Map.Entry<Replica, Replica> endPointEntry : rangesWithEndpoints.flattenEntries())
+            {
+                Replica local = endPointEntry.getKey();
+                Replica remote = endPointEntry.getValue();
+                Set<Range<Token>> transferredRanges = transferredRangePerKeyspace.get(remote.endpoint());
+                if (transferredRanges != null && transferredRanges.contains(local.range()))
+                {
+                    logger.debug("Skipping transferred range {} of keyspace {}, endpoint {}", local, keyspace, remote);
+                    continue;
+                }
+
+                replicasPerEndpoint.put(remote.endpoint(), remote.decorateSubrange(local.range()));
+            }
+
+            sessionsToStreamByKeyspace.put(keyspace, replicasPerEndpoint.asImmutableView());
+        }
+
+        StreamPlan streamPlan = new StreamPlan(StreamOperation.DECOMMISSION);
+
+        // Vinculate StreamStateStore to current StreamPlan to update transferred rangeas per StreamSession
+        streamPlan.listeners(streamStateStore);
+
+        for (Map.Entry<String, RangesByEndpoint> entry : sessionsToStreamByKeyspace.entrySet())
+        {
+            String keyspaceName = entry.getKey();
+            RangesByEndpoint replicasPerEndpoint = entry.getValue();
+
+            for (Map.Entry<InetAddressAndPort, RangesAtEndpoint> rangesEntry : replicasPerEndpoint.asMap().entrySet())
+            {
+                RangesAtEndpoint replicas = rangesEntry.getValue();
+                InetAddressAndPort newEndpoint = rangesEntry.getKey();
+
+                // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
+                streamPlan.transferRanges(newEndpoint, keyspaceName, replicas);
+            }
+        }
+        return streamPlan.execute();
+    }
+

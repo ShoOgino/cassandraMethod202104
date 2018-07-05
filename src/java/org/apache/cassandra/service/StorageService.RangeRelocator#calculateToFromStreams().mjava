@@ -1,0 +1,67 @@
+        private void calculateToFromStreams()
+        {
+            logger.debug("Current tmd " + tokenMetaClone);
+            logger.debug("Updated tmd " + tokenMetaCloneAllSettled);
+            for (String keyspace : keyspaceNames)
+            {
+                // replication strategy of the current keyspace
+                AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
+                // getting collection of the currently used ranges by this keyspace
+                RangesAtEndpoint currentReplicas = strategy.getAddressReplicas(localAddress);
+
+                logger.info("Calculating ranges to stream and request for keyspace {}", keyspace);
+                //From what I have seen we only ever call this with a single token from StorageService.move(Token)
+                for (Token newToken : tokens)
+                {
+                    Collection<Token> currentTokens = tokenMetaClone.getTokens(localAddress);
+                    if (currentTokens.size() > 1 || currentTokens.isEmpty())
+                    {
+                        throw new AssertionError("Unexpected current tokens: " + currentTokens);
+                    }
+
+                    // collection of ranges which this node will serve after move to the new token
+                    RangesAtEndpoint updatedReplicas = strategy.getPendingAddressRanges(tokenMetaClone, newToken, localAddress);
+
+                    // calculated parts of the ranges to request/stream from/to nodes in the ring
+                    Pair<RangesAtEndpoint, RangesAtEndpoint> streamAndFetchOwnRanges = Pair.create(RangesAtEndpoint.empty(localAddress), RangesAtEndpoint.empty(localAddress));
+                    //In the single node token move there is nothing to do and Range subtraction is broken
+                    //so it's easier to just identify this case up front.
+                    if (tokenMetaClone.getTopology().getDatacenterEndpoints().get(DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddressAndPort()
+)).size() > 1)
+                    {
+                        streamAndFetchOwnRanges = calculateStreamAndFetchRanges(currentReplicas, updatedReplicas);
+                    }
+
+                    Multimap<InetAddressAndPort, FetchReplica> workMap = calculateRangesToFetchWithPreferredEndpoints(strategy, streamAndFetchOwnRanges.right, keyspace);
+
+                    RangesByEndpoint endpointRanges = calculateRangesToStreamWithEndpoints(streamAndFetchOwnRanges.left, strategy, tokenMetaClone, tokenMetaCloneAllSettled);
+
+                    logger.info("Endpoint ranges to stream to " + endpointRanges);
+
+                    // stream ranges
+                    for (InetAddressAndPort address : endpointRanges.keySet())
+                    {
+                        logger.debug("Will stream range {} of keyspace {} to endpoint {}", endpointRanges.get(address), keyspace, address);
+                        RangesAtEndpoint ranges = endpointRanges.get(address);
+                        streamPlan.transferRanges(address, keyspace, ranges);
+                    }
+
+                    // stream requests
+                    workMap.asMap().forEach((address, sourceAndOurReplicas) -> {
+                        RangesAtEndpoint full = sourceAndOurReplicas.stream()
+                                .filter(pair -> pair.remote.isFull())
+                                .map(pair -> pair.local)
+                                .collect(RangesAtEndpoint.collector(localAddress));
+                        RangesAtEndpoint transientReplicas = sourceAndOurReplicas.stream()
+                                .filter(pair -> pair.remote.isTransient())
+                                .map(pair -> pair.local)
+                                .collect(RangesAtEndpoint.collector(localAddress));
+                        logger.debug("Will request range {} of keyspace {} from endpoint {}", workMap.get(address), keyspace, address);
+                        streamPlan.requestRanges(address, keyspace, full, transientReplicas);
+                    });
+
+                    logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
+                }
+            }
+        }
+

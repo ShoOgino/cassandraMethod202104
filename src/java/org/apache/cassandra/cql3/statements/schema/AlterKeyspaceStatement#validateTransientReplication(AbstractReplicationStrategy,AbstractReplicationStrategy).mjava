@@ -1,0 +1,51 @@
+    private void validateTransientReplication(AbstractReplicationStrategy oldStrategy, AbstractReplicationStrategy newStrategy)
+    {
+        //If there is no read traffic there are some extra alterations you can safely make, but this is so atypical
+        //that a good default is to not allow unsafe changes
+        if (allow_unsafe_transient_changes)
+            return;
+
+        ReplicationFactor oldRF = oldStrategy.getReplicationFactor();
+        ReplicationFactor newRF = newStrategy.getReplicationFactor();
+
+        int oldTrans = oldRF.transientReplicas();
+        int oldFull = oldRF.fullReplicas;
+        int newTrans = newRF.transientReplicas();
+        int newFull = newRF.fullReplicas;
+
+        if (newTrans > 0)
+        {
+            if (DatabaseDescriptor.getNumTokens() > 1)
+                throw new ConfigurationException(String.format("Transient replication is not supported with vnodes yet"));
+
+            Keyspace ks = Keyspace.open(keyspaceName);
+            for (ColumnFamilyStore cfs : ks.getColumnFamilyStores())
+            {
+                if (cfs.viewManager.hasViews())
+                {
+                    throw new ConfigurationException("Cannot use transient replication on keyspaces using materialized views");
+                }
+
+                if (cfs.indexManager.hasIndexes())
+                {
+                    throw new ConfigurationException("Cannot use transient replication on keyspaces using secondary indexes");
+                }
+            }
+        }
+
+        //This is true right now because the transition from transient -> full lacks the pending state
+        //necessary for correctness. What would happen if we allowed this is that we would attempt
+        //to read from a transient replica as if it were a full replica.
+        if (oldFull > newFull && oldTrans > 0)
+            throw new ConfigurationException("Can't add full replicas if there are any transient replicas. You must first remove all transient replicas, then change the # of full replicas, then add back the transient replicas");
+
+        //Don't increase transient replication factor by more than one at a time if changing number of replicas
+        //Just like with changing full replicas it's not safe to do this as you could read from too many replicas
+        //that don't have the necessary data. W/O transient replication this alteration was allowed and it's not clear
+        //if it should be.
+        //This is structured so you can convert as many full replicas to transient replicas as you want.
+        boolean numReplicasChanged = oldTrans + oldFull != newTrans + newFull;
+        if (numReplicasChanged && (newTrans > oldTrans && newTrans != oldTrans + 1))
+            throw new ConfigurationException("Can only safely increase number of transients one at a time with incremental repair run in between each time");
+    }
+
