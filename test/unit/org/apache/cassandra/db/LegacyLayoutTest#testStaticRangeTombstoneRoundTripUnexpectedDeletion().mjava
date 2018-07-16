@@ -1,0 +1,32 @@
+    @Test
+    public void testStaticRangeTombstoneRoundTripUnexpectedDeletion() throws Throwable
+    {
+        // this variant of the bug deletes a row with the same clustering key value as the name of the static collection
+        QueryProcessor.executeInternal(String.format("CREATE TABLE \"%s\".legacy_static_rt_rt_1 (pk int, ck1 text, ck2 text, v int, s set<text> static, primary key (pk, ck1, ck2))", KEYSPACE));
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        CFMetaData table = keyspace.getColumnFamilyStore("legacy_static_rt_rt_1").metadata;
+        ColumnDefinition v = table.getColumnDefinition(new ColumnIdentifier("v", false));
+        ColumnDefinition bug = table.getColumnDefinition(new ColumnIdentifier("s", false));
+
+        Row.Builder builder;
+        builder = BTreeRow.unsortedBuilder(0);
+        builder.newRow(Clustering.STATIC_CLUSTERING);
+        builder.addComplexDeletion(bug, new DeletionTime(1L, 1));
+        Row staticRow = builder.build();
+
+        builder = BTreeRow.unsortedBuilder(0);
+        builder.newRow(new Clustering(UTF8Serializer.instance.serialize("s"), UTF8Serializer.instance.serialize("anything")));
+        builder.addCell(new BufferCell(v, 1L, Cell.NO_TTL, Cell.NO_DELETION_TIME, Int32Serializer.instance.serialize(1), null));
+        Row row = builder.build();
+
+        DecoratedKey pk = table.decorateKey(ByteBufferUtil.bytes(1));
+        PartitionUpdate upd = PartitionUpdate.singleRowUpdate(table, pk, row, staticRow);
+
+        try (RowIterator before = FilteredRows.filter(upd.unfilteredIterator(), FBUtilities.nowInSeconds());
+             RowIterator after = FilteredRows.filter(roundTripVia21(upd.unfilteredIterator()), FBUtilities.nowInSeconds()))
+        {
+            while (before.hasNext() || after.hasNext())
+                assertEquals(before.hasNext() ? before.next() : null, after.hasNext() ? after.next() : null);
+        }
+    }
+

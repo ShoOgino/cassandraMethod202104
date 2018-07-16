@@ -1,0 +1,33 @@
+    @Test
+    public void testStaticRangeTombstoneRoundTripCorruptRead() throws Throwable
+    {
+        // this variant of the bug corrupts the byte stream of the partition, so that a sequential read starting before
+        // this partition will fail with a CorruptSSTableException, and possible yield junk results
+        QueryProcessor.executeInternal(String.format("CREATE TABLE \"%s\".legacy_static_rt_rt_2 (pk int, ck int, nameWithLengthGreaterThan4 set<int> static, primary key (pk, ck))", KEYSPACE));
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        CFMetaData table = keyspace.getColumnFamilyStore("legacy_static_rt_rt_2").metadata;
+
+        ColumnDefinition bug = table.getColumnDefinition(new ColumnIdentifier("nameWithLengthGreaterThan4", false));
+
+        Row.Builder builder = BTreeRow.unsortedBuilder(0);
+        builder.newRow(Clustering.STATIC_CLUSTERING);
+        builder.addComplexDeletion(bug, new DeletionTime(1L, 1));
+        Row row = builder.build();
+
+        DecoratedKey pk = table.decorateKey(ByteBufferUtil.bytes(1));
+        PartitionUpdate upd = PartitionUpdate.singleRowUpdate(table, pk, row);
+
+        UnfilteredRowIterator afterRoundTripVia32 = roundTripVia21(upd.unfilteredIterator());
+        try (DataOutputBuffer out = new DataOutputBuffer())
+        {
+            // we only encounter a corruption/serialization error after writing this to a 3.0 format and reading it back
+            UnfilteredRowIteratorSerializer.serializer.serialize(afterRoundTripVia32, ColumnFilter.all(table), out, MessagingService.current_version);
+            try (DataInputBuffer in = new DataInputBuffer(out.buffer(), false);
+                 UnfilteredRowIterator afterSerialization = UnfilteredRowIteratorSerializer.serializer.deserialize(in, MessagingService.current_version, table, ColumnFilter.all(table), SerializationHelper.Flag.LOCAL))
+            {
+                while (afterSerialization.hasNext())
+                    afterSerialization.next();
+            }
+        }
+    }
+
