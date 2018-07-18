@@ -1,0 +1,46 @@
+    /**
+     * this is for handling the bug uncovered by CASSANDRA-14574.
+     *
+     * TL;DR if we run into a problem processing a message out an incoming buffer (and we close the channel, etc),
+     * do not attempt to process anymore messages from the buffer (force the channel closed and
+     * reject any more read attempts from the buffer).
+     *
+     * The idea here is to put several messages into a ByteBuf, pass that to the channel/handler, and make sure that
+     * only the initial, correct messages in the buffer are processed. After one messages fails the rest of the buffer
+     * should be ignored.
+     */
+    @Test
+    public void exceptionHandled_14574() throws IOException
+    {
+        Map<ParameterType, Object> parameters = new EnumMap<>(ParameterType.class);
+        parameters.put(ParameterType.FAILURE_RESPONSE, MessagingService.ONE_BYTE);
+        parameters.put(ParameterType.FAILURE_REASON, Shorts.checkedCast(RequestFailureReason.READ_TOO_MANY_TOMBSTONES.code));
+        MessageOut msgOut = new MessageOut<>(addr, MessagingService.Verb.ECHO, null, null, ImmutableList.of(), SMALL_MESSAGE);
+        for (Map.Entry<ParameterType, Object> param : parameters.entrySet())
+            msgOut = msgOut.withParameter(param.getKey(), param.getValue());
+
+        // put one complete, correct message into the buffer
+        serialize(msgOut, 1);
+
+        // add a second message, but intentionally corrupt it by manipulating a byte in it's range
+        int startPosition = buf.writerIndex();
+        serialize(msgOut, 2);
+        int positionToHack = startPosition + 2;
+        buf.setByte(positionToHack, buf.getByte(positionToHack) - 1);
+
+        // add one more complete, correct message into the buffer
+        serialize(msgOut, 3);
+
+        MessageIdsWrapper wrapper = new MessageIdsWrapper();
+        BaseMessageInHandler handler = getHandler(addr, messagingVersion, wrapper.messageConsumer);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        Assert.assertTrue(channel.isOpen());
+        channel.writeOneInbound(buf);
+
+        Assert.assertFalse(buf.isReadable());
+        Assert.assertEquals(BaseMessageInHandler.State.CLOSED, handler.getState());
+        Assert.assertFalse(channel.isOpen());
+        Assert.assertEquals(1, wrapper.ids.size());
+        Assert.assertEquals(Integer.valueOf(1), wrapper.ids.get(0));
+    }
+
