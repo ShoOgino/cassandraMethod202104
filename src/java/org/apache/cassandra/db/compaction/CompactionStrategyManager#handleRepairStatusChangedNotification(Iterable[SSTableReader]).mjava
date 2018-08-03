@@ -8,26 +8,21 @@
         readLock.lock();
         try
         {
-            for (SSTableReader sstable : sstables)
+            List<GroupedSSTableContainer> groups = groupSSTables(sstables);
+            for (int i = 0; i < holders.size(); i++)
             {
-                int index = compactionStrategyIndexFor(sstable);
-                if (sstable.isPendingRepair())
+                GroupedSSTableContainer group = groups.get(i);
+
+                if (group.isEmpty())
+                    continue;
+
+                AbstractStrategyHolder dstHolder = holders.get(i);
+                dstHolder.addSSTables(group);
+
+                for (AbstractStrategyHolder holder : holders)
                 {
-                    pendingRepairs.get(index).addSSTable(sstable);
-                    unrepaired.get(index).removeSSTable(sstable);
-                    repaired.get(index).removeSSTable(sstable);
-                }
-                else if (sstable.isRepaired())
-                {
-                    pendingRepairs.get(index).removeSSTable(sstable);
-                    unrepaired.get(index).removeSSTable(sstable);
-                    repaired.get(index).addSSTable(sstable);
-                }
-                else
-                {
-                    pendingRepairs.get(index).removeSSTable(sstable);
-                    repaired.get(index).removeSSTable(sstable);
-                    unrepaired.get(index).addSSTable(sstable);
+                    if (holder != dstHolder)
+                        holder.removeSSTables(group);
                 }
             }
         }

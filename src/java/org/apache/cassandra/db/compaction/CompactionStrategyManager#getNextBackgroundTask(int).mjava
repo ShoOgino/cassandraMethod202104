@@ -13,55 +13,36 @@
             if (!isEnabled())
                 return null;
 
+            int numPartitions = getNumTokenPartitions();
             // first try to promote/demote sstables from completed repairs
-            ArrayList<Pair<Integer, PendingRepairManager>> pendingRepairManagers = new ArrayList<>(pendingRepairs.size());
-            for (PendingRepairManager pendingRepair : pendingRepairs)
+            List<TaskSupplier> repairFinishedSuppliers = pendingRepairs.getRepairFinishedTaskSuppliers();
+            if (!repairFinishedSuppliers.isEmpty())
             {
-                int numPending = pendingRepair.getNumPendingRepairFinishedTasks();
-                if (numPending > 0)
+                Collections.sort(repairFinishedSuppliers);
+                for (TaskSupplier supplier : repairFinishedSuppliers)
                 {
-                    pendingRepairManagers.add(Pair.create(numPending, pendingRepair));
-                }
-            }
-            if (!pendingRepairManagers.isEmpty())
-            {
-                pendingRepairManagers.sort((x, y) -> y.left - x.left);
-                for (Pair<Integer, PendingRepairManager> pair : pendingRepairManagers)
-                {
-                    AbstractCompactionTask task = pair.right.getNextRepairFinishedTask();
+                    AbstractCompactionTask task = supplier.getTask();
                     if (task != null)
-                    {
                         return task;
-                    }
                 }
             }
 
             // sort compaction task suppliers by remaining tasks descending
-            ArrayList<Pair<Integer, Supplier<AbstractCompactionTask>>> sortedSuppliers = new ArrayList<>(repaired.size() + unrepaired.size() + 1);
+            List<TaskSupplier> suppliers = new ArrayList<>(numPartitions * holders.size());
+            for (AbstractStrategyHolder holder : holders)
+                suppliers.addAll(holder.getBackgroundTaskSuppliers(gcBefore));
 
-            for (AbstractCompactionStrategy strategy : repaired)
-                sortedSuppliers.add(Pair.create(strategy.getEstimatedRemainingTasks(), () -> strategy.getNextBackgroundTask(gcBefore)));
-
-            for (AbstractCompactionStrategy strategy : unrepaired)
-                sortedSuppliers.add(Pair.create(strategy.getEstimatedRemainingTasks(), () -> strategy.getNextBackgroundTask(gcBefore)));
-
-            for (PendingRepairManager pending : pendingRepairs)
-                sortedSuppliers.add(Pair.create(pending.getMaxEstimatedRemainingTasks(), () -> pending.getNextBackgroundTask(gcBefore)));
-
-            sortedSuppliers.sort((x, y) -> y.left - x.left);
+            Collections.sort(suppliers);
 
             // return the first non-null task
-            AbstractCompactionTask task;
-            Iterator<Supplier<AbstractCompactionTask>> suppliers = Iterables.transform(sortedSuppliers, p -> p.right).iterator();
-            assert suppliers.hasNext();
-
-            do
+            for (TaskSupplier supplier : suppliers)
             {
-                task = suppliers.next().get();
+                AbstractCompactionTask task = supplier.getTask();
+                if (task != null)
+                    return task;
             }
-            while (suppliers.hasNext() && task == null);
 
-            return task;
+            return null;
         }
         finally
         {

@@ -14,27 +14,11 @@
         readLock.lock();
         try
         {
-            Map<Integer, List<SSTableReader>> repairedSSTables = sstables.stream()
-                                                                         .filter(s -> !s.isMarkedSuspect() && s.isRepaired() && !s.isPendingRepair())
-                                                                         .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
-
-            Map<Integer, List<SSTableReader>> unrepairedSSTables = sstables.stream()
-                                                                           .filter(s -> !s.isMarkedSuspect() && !s.isRepaired() && !s.isPendingRepair())
-                                                                           .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
-
-            Map<Integer, List<SSTableReader>> pendingSSTables = sstables.stream()
-                                                                        .filter(s -> !s.isMarkedSuspect() && s.isPendingRepair())
-                                                                        .collect(Collectors.groupingBy((s) -> compactionStrategyIndexFor(s)));
-
-            for (Map.Entry<Integer, List<SSTableReader>> group : repairedSSTables.entrySet())
-                ret.add(repaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
-
-            for (Map.Entry<Integer, List<SSTableReader>> group : unrepairedSSTables.entrySet())
-                ret.add(unrepaired.get(group.getKey()).getUserDefinedTask(group.getValue(), gcBefore));
-
-            for (Map.Entry<Integer, List<SSTableReader>> group : pendingSSTables.entrySet())
-                ret.addAll(pendingRepairs.get(group.getKey()).createUserDefinedTasks(group.getValue(), gcBefore));
-
+            List<GroupedSSTableContainer> groupedSSTables = groupSSTables(sstables);
+            for (int i = 0; i < holders.size(); i++)
+            {
+                ret.addAll(holders.get(i).getUserDefinedTasks(groupedSSTables.get(i), gcBefore));
+            }
             return ret;
         }
         finally

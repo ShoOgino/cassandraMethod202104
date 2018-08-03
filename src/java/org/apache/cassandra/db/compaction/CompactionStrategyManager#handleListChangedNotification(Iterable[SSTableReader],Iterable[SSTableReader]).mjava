@@ -8,70 +8,11 @@
         readLock.lock();
         try
         {
-            // a bit of gymnastics to be able to replace sstables in compaction strategies
-            // we use this to know that a compaction finished and where to start the next compaction in LCS
-            Directories.DataDirectory [] locations = cfs.getDirectories().getWriteableLocations();
-            int locationSize = cfs.getPartitioner().splitter().isPresent() ? locations.length : 1;
-
-            List<Set<SSTableReader>> pendingRemoved = new ArrayList<>(locationSize);
-            List<Set<SSTableReader>> pendingAdded = new ArrayList<>(locationSize);
-            List<Set<SSTableReader>> repairedRemoved = new ArrayList<>(locationSize);
-            List<Set<SSTableReader>> repairedAdded = new ArrayList<>(locationSize);
-            List<Set<SSTableReader>> unrepairedRemoved = new ArrayList<>(locationSize);
-            List<Set<SSTableReader>> unrepairedAdded = new ArrayList<>(locationSize);
-
-            for (int i = 0; i < locationSize; i++)
+            List<GroupedSSTableContainer> addedGroups = groupSSTables(added);
+            List<GroupedSSTableContainer> removedGroups = groupSSTables(removed);
+            for (int i=0; i<holders.size(); i++)
             {
-                pendingRemoved.add(new HashSet<>());
-                pendingAdded.add(new HashSet<>());
-                repairedRemoved.add(new HashSet<>());
-                repairedAdded.add(new HashSet<>());
-                unrepairedRemoved.add(new HashSet<>());
-                unrepairedAdded.add(new HashSet<>());
-            }
-
-            for (SSTableReader sstable : removed)
-            {
-                int i = compactionStrategyIndexFor(sstable);
-                if (sstable.isPendingRepair())
-                    pendingRemoved.get(i).add(sstable);
-                else if (sstable.isRepaired())
-                    repairedRemoved.get(i).add(sstable);
-                else
-                    unrepairedRemoved.get(i).add(sstable);
-            }
-            for (SSTableReader sstable : added)
-            {
-                int i = compactionStrategyIndexFor(sstable);
-                if (sstable.isPendingRepair())
-                    pendingAdded.get(i).add(sstable);
-                else if (sstable.isRepaired())
-                    repairedAdded.get(i).add(sstable);
-                else
-                    unrepairedAdded.get(i).add(sstable);
-            }
-            for (int i = 0; i < locationSize; i++)
-            {
-
-                if (!pendingRemoved.get(i).isEmpty())
-                {
-                    pendingRepairs.get(i).replaceSSTables(pendingRemoved.get(i), pendingAdded.get(i));
-                }
-                else
-                {
-                    PendingRepairManager pendingManager = pendingRepairs.get(i);
-                    pendingAdded.get(i).forEach(s -> pendingManager.addSSTable(s));
-                }
-
-                if (!repairedRemoved.get(i).isEmpty())
-                    repaired.get(i).replaceSSTables(repairedRemoved.get(i), repairedAdded.get(i));
-                else
-                    repaired.get(i).addSSTables(repairedAdded.get(i));
-
-                if (!unrepairedRemoved.get(i).isEmpty())
-                    unrepaired.get(i).replaceSSTables(unrepairedRemoved.get(i), unrepairedAdded.get(i));
-                else
-                    unrepaired.get(i).addSSTables(unrepairedAdded.get(i));
+                holders.get(i).replaceSSTables(removedGroups.get(i), addedGroups.get(i));
             }
         }
         finally
