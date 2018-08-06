@@ -1,0 +1,62 @@
+    private static List<Pair<FQLQuery, ResultHandler.ComparableResultSet>> readResultFile(File dir, File queryDir)
+    {
+        List<Pair<FQLQuery, ResultHandler.ComparableResultSet>> resultSets = new ArrayList<>();
+        try (ChronicleQueue q = ChronicleQueueBuilder.single(dir).build();
+             ChronicleQueue queryQ = ChronicleQueueBuilder.single(queryDir).build())
+        {
+            ExcerptTailer tailer = q.createTailer();
+            ExcerptTailer queryTailer = queryQ.createTailer();
+            List<Pair<String, String>> columnDefinitions = new ArrayList<>();
+            List<List<String>> rowColumns = new ArrayList<>();
+            AtomicBoolean allRowsRead = new AtomicBoolean(false);
+            AtomicBoolean failedQuery = new AtomicBoolean(false);
+            while (tailer.readDocument(wire -> {
+                String type = wire.read("type").text();
+                if (type.equals("column_definitions"))
+                {
+                    int columnCount = wire.read("column_count").int32();
+                    for (int i = 0; i < columnCount; i++)
+                    {
+                        ValueIn vi = wire.read("column_definition");
+                        String name = vi.text();
+                        String dataType = vi.text();
+                        columnDefinitions.add(Pair.create(name, dataType));
+                    }
+                }
+                else if (type.equals("row"))
+                {
+                    int rowColumnCount = wire.read("row_column_count").int32();
+                    List<String> r = new ArrayList<>(rowColumnCount);
+                    for (int i = 0; i < rowColumnCount; i++)
+                    {
+                        byte[] b = wire.read("column").bytes();
+                        r.add(new String(b));
+                    }
+                    rowColumns.add(r);
+                }
+                else if (type.equals("end_resultset"))
+                {
+                    allRowsRead.set(true);
+                }
+                else if (type.equals("query_failed"))
+                {
+                    failedQuery.set(true);
+                }
+            }))
+            {
+                if (allRowsRead.get())
+                {
+                    FQLQueryReader reader = new FQLQueryReader();
+                    queryTailer.readDocument(reader);
+                    resultSets.add(Pair.create(reader.getQuery(), failedQuery.get() ? FakeResultSet.failed(new RuntimeException("failure"))
+                                                                                    : new FakeResultSet(ImmutableList.copyOf(columnDefinitions), ImmutableList.copyOf(rowColumns))));
+                    allRowsRead.set(false);
+                    failedQuery.set(false);
+                    columnDefinitions.clear();
+                    rowColumns.clear();
+                }
+            }
+        }
+        return resultSets;
+    }
+

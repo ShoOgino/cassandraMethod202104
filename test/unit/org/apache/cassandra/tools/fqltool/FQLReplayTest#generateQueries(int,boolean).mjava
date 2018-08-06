@@ -1,0 +1,43 @@
+    private File generateQueries(int count, boolean random) throws IOException
+    {
+        Random r = new Random();
+        File dir = Files.createTempDirectory("chronicle").toFile();
+        try (ChronicleQueue readQueue = ChronicleQueueBuilder.single(dir).build())
+        {
+            ExcerptAppender appender = readQueue.acquireAppender();
+
+            for (int i = 0; i < count; i++)
+            {
+                long timestamp = random ? Math.abs(r.nextLong() % 10000) : i;
+                if (random ? r.nextBoolean() : i % 2 == 0)
+                {
+                    String query = "abcdefghijklm " + i;
+                    QueryState qs = r.nextBoolean() ? queryState() : queryState("querykeyspace");
+                    FullQueryLogger.Query  q = new FullQueryLogger.Query(query, QueryOptions.DEFAULT, qs, timestamp);
+                    appender.writeDocument(q);
+                    q.release();
+                }
+                else
+                {
+                    int batchSize = random ? r.nextInt(99) + 1 : i + 1;
+                    List<String> queries = new ArrayList<>(batchSize);
+                    List<List<ByteBuffer>> values = new ArrayList<>(batchSize);
+                    for (int jj = 0; jj < (random ? r.nextInt(batchSize) : 10); jj++)
+                    {
+                        queries.add("aaaaaa batch "+i+":"+jj);
+                        values.add(Collections.emptyList());
+                    }
+                    FullQueryLogger.Batch batch = new FullQueryLogger.Batch(BatchStatement.Type.UNLOGGED,
+                                                                            queries,
+                                                                            values,
+                                                                            QueryOptions.DEFAULT,
+                                                                            queryState("someks"),
+                                                                            timestamp);
+                    appender.writeDocument(batch);
+                    batch.release();
+                }
+            }
+        }
+        return dir;
+    }
+
