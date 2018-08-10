@@ -1,0 +1,54 @@
+    /**
+     * Makes sure that max retries is honored
+     *
+     * 1. create a script that will fail 3 times before actually executing the command
+     * 2. create an external archiver that retries 2 times (this means that the script will get executed 3 times)
+     * 3. make sure the file is still on disk and that we have not successfully executed the script
+     *
+     */
+    @Test
+    public void testMaxRetries() throws IOException, InterruptedException
+    {
+        Pair<String, String> s = createFailingScript(3);
+        String script = s.left;
+        String moveDir = s.right;
+        Path logdirectory = Files.createTempDirectory("logdirectory");
+        File logfileToArchive = Files.createTempFile(logdirectory, "logfile", "xyz").toFile();
+        Files.write(logfileToArchive.toPath(), "content".getBytes());
+
+        AtomicInteger tryCounter = new AtomicInteger();
+        AtomicBoolean success = new AtomicBoolean();
+        ExternalArchiver ea = new ExternalArchiver(script + " %path", null, 1000, 2, (cmd) ->
+        {
+            try
+            {
+                ExternalArchiver.exec(cmd);
+                success.set(true);
+            }
+            catch (Throwable t)
+            {
+                tryCounter.incrementAndGet();
+                throw t;
+            }
+        });
+        ea.onReleased(0, logfileToArchive);
+        while (tryCounter.get() < 3)
+            Thread.sleep(500);
+        assertTrue(logfileToArchive.exists());
+        // and the file should not get moved:
+        Thread.sleep(5000);
+        assertTrue(logfileToArchive.exists());
+        assertFalse(success.get());
+        File [] fs = new File(moveDir).listFiles(f ->
+                                                 {
+                                                     if (f.getName().startsWith("file."))
+                                                     {
+                                                         f.deleteOnExit();
+                                                         return true;
+                                                     }
+                                                     throw new AssertionError("There should be no other files in the directory");
+                                                 });
+        assertEquals(3, fs.length); // maxRetries + the first try
+        ea.stop();
+    }
+

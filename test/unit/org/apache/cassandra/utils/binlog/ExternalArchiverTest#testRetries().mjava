@@ -1,0 +1,42 @@
+    /**
+     * Make sure retries work
+     * 1. create a script that will fail two times before executing the command
+     * 2. create an ExternalArchiver that retries two times (this means we execute the script 3 times, meaning the last one will be successful)
+     * 3. make sure the file is on disk until the script has been executed 3 times
+     * 4. make sure the file is gone and that the command was executed successfully
+     */
+    @Test
+    public void testRetries() throws IOException, InterruptedException
+    {
+        Pair<String, String> s = createFailingScript(2);
+        String script = s.left;
+        String moveDir = s.right;
+        Path logdirectory = Files.createTempDirectory("logdirectory");
+        File logfileToArchive = Files.createTempFile(logdirectory, "logfile", "xyz").toFile();
+        Files.write(logfileToArchive.toPath(), "content".getBytes());
+        AtomicInteger tryCounter = new AtomicInteger();
+        AtomicBoolean success = new AtomicBoolean();
+        ExternalArchiver ea = new ExternalArchiver(script + " %path", null, 1000, 2, (cmd) ->
+        {
+            tryCounter.incrementAndGet();
+            ExternalArchiver.exec(cmd);
+            success.set(true);
+        });
+        ea.onReleased(0, logfileToArchive);
+        while (tryCounter.get() < 2) // while we have only executed this 0 or 1 times, the file should still be on disk
+        {
+            Thread.sleep(100);
+            assertTrue(logfileToArchive.exists());
+        }
+
+        while (!success.get())
+            Thread.sleep(100);
+
+        // there will be 3 attempts in total, 2 failing ones, then the successful one:
+        assertEquals(3, tryCounter.get());
+        assertFalse(logfileToArchive.exists());
+        File movedFile = new File(moveDir, logfileToArchive.getName());
+        assertTrue(movedFile.exists());
+        ea.stop();
+    }
+
