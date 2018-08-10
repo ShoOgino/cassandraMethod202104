@@ -1,0 +1,36 @@
+    @Test
+    public void testBatchMessage()
+    {
+        // test BatchMessage path
+
+        int now = (int) (System.currentTimeMillis() / 1000);
+        int day = 86400;
+
+        String ks = createKeyspace("CREATE KEYSPACE %s WITH replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }");
+        String tbl = createTable(ks, "CREATE TABLE %s (id int primary key, val int)");
+
+        List<String> queries = ImmutableList.of(
+            format("INSERT INTO %s.%s (id, val) VALUES (0, 0) USING TTL %d;", ks, tbl, 1),
+            format("INSERT INTO %s.%s (id, val) VALUES (1, 1) USING TTL %d;", ks, tbl, 1)
+        );
+
+        ClientState cs = ClientState.forInternalCalls();
+        QueryState qs = new QueryState(cs);
+
+        List<ModificationStatement> statements = new ArrayList<>(queries.size());
+        for (String query : queries)
+            statements.add((ModificationStatement) QueryProcessor.parseStatement(query, cs));
+
+        BatchStatement batch =
+            new BatchStatement(BatchStatement.Type.UNLOGGED, VariableSpecifications.empty(), statements, Attributes.none());
+
+        // execute an BATCH message with now set to [now + 1 day], with ttl = 1, making its effective ttl = 1 day + 1.
+        QueryProcessor.instance.processBatch(batch, qs, batchQueryOptions(now + day), Collections.emptyMap(), System.nanoTime());
+
+        // verify that despite TTL having passed at now + 1 the rows are still there.
+        assertEquals(2, executeSelect(format("SELECT * FROM %s.%s", ks, tbl), now + 1, false).size());
+
+        // jump in time by one day, make sure the row expired.
+        assertEquals(0, executeSelect(format("SELECT * FROM %s.%s", ks, tbl), now + day + 1, false).size());
+    }
+
