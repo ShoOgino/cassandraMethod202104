@@ -10,18 +10,15 @@
         {
             Set<InetAddressAndPort> contacted = Sets.newHashSet(repair.initialContacts);
             Token replicaToken = ((SinglePartitionReadCommand) command).partitionKey().getToken();
-            Iterable<InetAddressAndPort> candidates = BlockingReadRepairs.getCandidateEndpoints(cfs.keyspace, replicaToken, consistency);
-            boolean speculated = false;
-            for (InetAddressAndPort endpoint: Iterables.filter(candidates, e -> !contacted.contains(e)))
-            {
-                speculated = true;
-                Tracing.trace("Enqueuing speculative full data read to {}", endpoint);
-                MessagingService.instance().sendRR(command.createMessage(), endpoint, repair.readCallback);
-                break;
-            }
+            Iterable<InetAddressAndPort> candidates = getCandidatesForToken(replicaToken);
 
-            if (speculated)
+            Optional<InetAddressAndPort> endpoint = Iterables.tryFind(candidates, e -> !contacted.contains(e));
+            if (endpoint.isPresent())
+            {
+                Tracing.trace("Enqueuing speculative full data read to {}", endpoint);
+                sendReadCommand(endpoint.get(), repair.readCallback);
                 ReadRepairMetrics.speculatedRead.mark();
+            }
         }
     }
 
