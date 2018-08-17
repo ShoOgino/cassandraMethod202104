@@ -1,0 +1,66 @@
+    @Override
+    public void execute(NodeProbe probe)
+    {
+        checkArgument(args.size() == 3 || args.size() == 1 || args.size() == 0, "Invalid arguments, either [keyspace table duration] or [duration] or no args");
+        checkArgument(topCount < capacity, "TopK count (-k) option must be smaller then the summary capacity (-s)");
+        String keyspace = null;
+        String table = null;
+        Integer durationMillis = 10000;
+        if(args.size() == 3)
+        {
+            keyspace = args.get(0);
+            table = args.get(1);
+            durationMillis = Integer.valueOf(args.get(2));
+        }
+        else if (args.size() == 1)
+        {
+            durationMillis = Integer.valueOf(args.get(0));
+        }
+        // generate the list of samplers
+        List<String> targets = Lists.newArrayList();
+        List<String> available = Arrays.stream(SamplerType.values()).map(Enum::toString).collect(Collectors.toList());
+        for (String s : samplers.split(","))
+        {
+            String sampler = s.trim().toUpperCase();
+            checkArgument(available.contains(sampler), String.format("'%s' sampler is not available from: %s", s, Arrays.toString(SamplerType.values())));
+            targets.add(sampler);
+        }
+
+        Map<String, List<CompositeData>> results;
+        try
+        {
+            if (keyspace == null)
+                results = probe.getPartitionSample(capacity, durationMillis, topCount, targets);
+            else
+                results = probe.getPartitionSample(keyspace, table, capacity, durationMillis, topCount, targets);
+
+        } catch (OpenDataException e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        AtomicBoolean first = new AtomicBoolean(true);
+        ResultBuilder rb = new ResultBuilder(first, results, targets);
+
+        for(String sampler : Lists.newArrayList("READS", "WRITES", "CAS_CONTENTIONS"))
+        {
+            rb.forType(SamplerType.valueOf(sampler), "Frequency of " + sampler.toLowerCase().replaceAll("_", " ") + " by partition")
+            .addColumn("Table", "table")
+            .addColumn("Partition", "value")
+            .addColumn("Count", "count")
+            .addColumn("+/-", "error")
+            .print();
+        }
+
+        rb.forType(SamplerType.WRITE_SIZE, "Max mutation size by partition")
+            .addColumn("Table", "table")
+            .addColumn("Partition", "value")
+            .addColumn("Bytes", "count")
+            .print();
+
+        rb.forType(SamplerType.LOCAL_READ_TIME, "Longest read query times")
+            .addColumn("Query", "value")
+            .addColumn("Microseconds", "count")
+            .print();
+    }
+

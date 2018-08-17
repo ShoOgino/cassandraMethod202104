@@ -1,0 +1,52 @@
+    @Test
+    public void sampleLoadshedding() throws Exception
+    {
+        // dont need to run this in children tests
+        if (sampler != null) return;
+        AtomicInteger called = new AtomicInteger();
+        CountDownLatch latch = new CountDownLatch(1);
+        Sampler<String> waitSampler = new Sampler<String>()
+        {
+            protected void insert(String item, long value)
+            {
+                called.incrementAndGet();
+                try
+                {
+                    latch.await(1, TimeUnit.MINUTES);
+                }
+                catch (InterruptedException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+
+            public boolean isEnabled()
+            {
+                return true;
+            }
+
+            public void beginSampling(int capacity, int durationMillis)
+            {
+            }
+
+            public List<Sample<String>> finishSampling(int count)
+            {
+                return null;
+            }
+
+            public String toString(String value)
+            {
+                return "";
+            }
+        };
+        // 1000 queued, 1 in progress, 1 to drop
+        for (int i = 0; i < 1002; i++)
+        {
+            waitSampler.addSample("TEST", 1);
+        }
+        latch.countDown();
+        waitForEmpty(1000);
+        Assert.assertEquals(1001, called.get());
+        Assert.assertEquals(1, MessagingService.instance().getDroppedMessages().get("_SAMPLE").intValue());
+    }
+
