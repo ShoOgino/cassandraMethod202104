@@ -1,0 +1,26 @@
+    private void assertRoundTripQuery(@Nullable String keyspace)
+    {
+        try (ChronicleQueue queue = ChronicleQueueBuilder.single(tempDir.toFile()).rollCycle(RollCycles.TEST_SECONDLY).build())
+        {
+            ExcerptTailer tailer = queue.createTailer();
+            assertTrue(tailer.readDocument(wire ->
+            {
+                assertEquals(0, wire.read(VERSION).int16());
+                assertEquals(SINGLE_QUERY, wire.read(TYPE).text());
+
+                assertEquals(1L, wire.read(QUERY_START_TIME).int64());
+
+                ProtocolVersion protocolVersion = ProtocolVersion.decode(wire.read(PROTOCOL_VERSION).int32());
+                assertEquals(ProtocolVersion.CURRENT, protocolVersion);
+
+                QueryOptions queryOptions = QueryOptions.codec.decode(Unpooled.wrappedBuffer(wire.read(QUERY_OPTIONS).bytes()), protocolVersion);
+                compareQueryOptions(QueryOptions.DEFAULT, queryOptions);
+
+                String wireKeyspace = wire.read(FullQueryLogger.KEYSPACE).text();
+                assertEquals(keyspace, wireKeyspace);
+
+                assertEquals("foo", wire.read(QUERY).text());
+            }));
+        }
+    }
+
