@@ -2,7 +2,8 @@
      * Sends a "connection warmup" message to each peer in the collection, on every {@link ConnectionType}
      * used for internode messaging (that is not gossip).
      */
-    private void sendPingMessages(Set<InetAddressAndPort> peers, CountDownLatch latch, AckMap acks)
+    private void sendPingMessages(Set<InetAddressAndPort> peers, Map<String, CountDownLatch> dcToRemainingPeers,
+                                  AckMap acks, Function<InetAddressAndPort, String> getDatacenter)
     {
         IAsyncCallback responseHandler = new IAsyncCallback()
         {
@@ -14,7 +15,12 @@
             public void response(MessageIn msg)
             {
                 if (acks.incrementAndCheck(msg.from))
-                    latch.countDown();
+                {
+                    String datacenter = getDatacenter.apply(msg.from);
+                    // We have to check because we might only have the local DC in the map
+                    if (dcToRemainingPeers.containsKey(datacenter))
+                        dcToRemainingPeers.get(datacenter).countDown();
+                }
             }
         };
 
