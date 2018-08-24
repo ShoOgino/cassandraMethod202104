@@ -1,0 +1,23 @@
+    public static void compare(String querylog, List<String> arguments)
+    {
+        List<ChronicleQueue> readQueues = null;
+        try (ResultHandler rh = new ResultHandler(arguments, null, null);
+             ChronicleQueue queryQ = ChronicleQueueBuilder.single(querylog).readOnly(true).build();
+             FQLQueryIterator queries = new FQLQueryIterator(queryQ.createTailer(), 1))
+        {
+            readQueues = arguments.stream().map(s -> ChronicleQueueBuilder.single(s).readOnly(true).build()).collect(Collectors.toList());
+            List<Iterator<ResultHandler.ComparableResultSet>> its = readQueues.stream().map(q -> new StoredResultSetIterator(q.createTailer())).collect(Collectors.toList());
+            while (queries.hasNext())
+                rh.handleResults(queries.next(), resultSets(its));
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            if (readQueues != null)
+                readQueues.forEach(Closeable::close);
+        }
+    }
+

@@ -1,0 +1,32 @@
+    private static List<Pair<FQLQuery, ResultHandler.ComparableResultSet>> readResultFile(File dir, File queryDir)
+    {
+        List<Pair<FQLQuery, ResultHandler.ComparableResultSet>> resultSets = new ArrayList<>();
+        try (ChronicleQueue q = ChronicleQueueBuilder.single(dir).build();
+             ChronicleQueue queryQ = ChronicleQueueBuilder.single(queryDir).build())
+        {
+            ExcerptTailer queryTailer = queryQ.createTailer();
+            FQLQueryReader queryReader = new FQLQueryReader();
+            Compare.StoredResultSetIterator resultSetIterator = new Compare.StoredResultSetIterator(q.createTailer());
+            // we need to materialize the rows in-memory to compare them easier in these tests
+            while (resultSetIterator.hasNext())
+            {
+                ResultHandler.ComparableResultSet resultSetFromDisk = resultSetIterator.next();
+                Iterator<ResultHandler.ComparableRow> rowIterFromDisk = resultSetFromDisk.iterator();
+                queryTailer.readDocument(queryReader);
+
+                FQLQuery query = queryReader.getQuery();
+                List<ResultHandler.ComparableRow> rows = new ArrayList<>();
+                while (rowIterFromDisk.hasNext())
+                {
+                    rows.add(rowIterFromDisk.next());
+                }
+                resultSets.add(Pair.create(query, new StoredResultSet(resultSetFromDisk.getColumnDefinitions(),
+                                                                      resultSetIterator.hasNext(),
+                                                                      resultSetFromDisk.wasFailed(),
+                                                                      resultSetFromDisk.getFailureException(),
+                                                                      rows::iterator)));
+            }
+        }
+        return resultSets;
+    }
+

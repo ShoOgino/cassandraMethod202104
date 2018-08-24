@@ -1,0 +1,56 @@
+    public void replay()
+    {
+        while (queryIterator.hasNext())
+        {
+            List<FQLQuery> queries = queryIterator.next();
+            for (FQLQuery query : queries)
+            {
+                if (filters.stream().anyMatch(f -> !f.test(query)))
+                    continue;
+                try (Timer.Context ctx = metrics.timer("queries").time())
+                {
+                    List<ListenableFuture<ResultHandler.ComparableResultSet>> results = new ArrayList<>(sessions.size());
+                    Statement statement = query.toStatement();
+                    for (Session session : sessions)
+                    {
+                        maybeSetKeyspace(session, query);
+                        if (debug)
+                        {
+                            out.println("Executing query:");
+                            out.println(query);
+                        }
+                        ListenableFuture<ResultSet> future = session.executeAsync(statement);
+                        results.add(handleErrors(future));
+                    }
+
+                    ListenableFuture<List<ResultHandler.ComparableResultSet>> resultList = Futures.allAsList(results);
+
+                    Futures.addCallback(resultList, new FutureCallback<List<ResultHandler.ComparableResultSet>>()
+                    {
+                        public void onSuccess(/*@Nullable */List<ResultHandler.ComparableResultSet> resultSets)
+                        {
+                            // note that the order of resultSets is signifcant here - resultSets.get(x) should
+                            // be the result from a query against targetHosts.get(x)
+                            resultHandler.handleResults(query, resultSets);
+                        }
+
+                        public void onFailure(Throwable throwable)
+                        {
+                            throw new AssertionError("Errors should be handled in FQLQuery.execute", throwable);
+                        }
+                    }, es);
+
+                    FBUtilities.waitOnFuture(resultList);
+                }
+                catch (Throwable t)
+                {
+                    out.printf("QUERY %s got exception: %s", query, t.getMessage());
+                }
+
+                Timer timer = metrics.timer("queries");
+                if (timer.getCount() % PRINT_RATE == 0)
+                    out.printf("%d queries, rate = %.2f%n", timer.getCount(), timer.getOneMinuteRate());
+            }
+        }
+    }
+
