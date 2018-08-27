@@ -1,0 +1,37 @@
+    @Test
+    public void additionalMutationRequired()
+    {
+        Mutation repair1 = mutation(cell2);
+        Mutation repair2 = mutation(cell1);
+
+        // check that the correct repairs are calculated
+        Map<InetAddressAndPort, Mutation> repairs = new HashMap<>();
+        repairs.put(target1, repair1);
+        repairs.put(target2, repair2);
+
+
+        DiagnosticPartitionReadRepairHandler handler = createRepairHandler(repairs, 2);
+
+        Assert.assertTrue(handler.updatesByEp.isEmpty());
+
+        // check that the correct mutations are sent
+        handler.sendInitialRepairs();
+        Assert.assertEquals(2, handler.updatesByEp.size());
+
+        Assert.assertEquals(repair1.toString(), handler.updatesByEp.get(target1));
+        Assert.assertEquals(repair2.toString(), handler.updatesByEp.get(target2));
+
+        // check that a combined mutation is speculatively sent to the 3rd target
+        handler.updatesByEp.clear();
+        handler.maybeSendAdditionalWrites(0, TimeUnit.NANOSECONDS);
+        Assert.assertEquals(1, handler.updatesByEp.size());
+        Assert.assertEquals(resolved.toString(), handler.updatesByEp.get(target3));
+
+        // check repairs stop blocking after receiving 2 acks
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+        handler.ack(target1);
+        Assert.assertFalse(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+        handler.ack(target3);
+        Assert.assertTrue(handler.awaitRepairs(0, TimeUnit.NANOSECONDS));
+    }
+
