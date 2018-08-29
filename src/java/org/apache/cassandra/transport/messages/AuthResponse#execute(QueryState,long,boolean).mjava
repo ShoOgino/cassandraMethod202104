@@ -1,0 +1,33 @@
+    @Override
+    protected Response execute(QueryState queryState, long queryStartNanoTime, boolean traceRequest)
+    {
+        AuditLogManager auditLogManager = AuditLogManager.getInstance();
+
+        try
+        {
+            IAuthenticator.SaslNegotiator negotiator = ((ServerConnection) connection).getSaslNegotiator(queryState);
+            byte[] challenge = negotiator.evaluateResponse(token);
+            if (negotiator.isComplete())
+            {
+                AuthenticatedUser user = negotiator.getAuthenticatedUser();
+                queryState.getClientState().login(user);
+                ClientMetrics.instance.markAuthSuccess();
+                if (auditLogManager.isAuditingEnabled())
+                    logSuccess(queryState);
+                // authentication is complete, send a ready message to the client
+                return new AuthSuccess(challenge);
+            }
+            else
+            {
+                return new AuthChallenge(challenge);
+            }
+        }
+        catch (AuthenticationException e)
+        {
+            ClientMetrics.instance.markAuthFailure();
+            if (auditLogManager.isAuditingEnabled())
+                logException(queryState, e);
+            return ErrorMessage.fromException(e);
+        }
+    }
+

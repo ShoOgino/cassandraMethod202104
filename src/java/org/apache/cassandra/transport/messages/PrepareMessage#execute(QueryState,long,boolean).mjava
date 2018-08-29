@@ -1,0 +1,27 @@
+    @Override
+    protected Message.Response execute(QueryState state, long queryStartNanoTime, boolean traceRequest)
+    {
+        AuditLogManager auditLogManager = AuditLogManager.getInstance();
+
+        try
+        {
+            if (traceRequest)
+                Tracing.instance.begin("Preparing CQL3 query", state.getClientAddress(), ImmutableMap.of("query", query));
+
+            ClientState clientState = state.getClientState().cloneWithKeyspaceIfSet(keyspace);
+            Message.Response response = ClientState.getCQLQueryHandler().prepare(query, clientState, getCustomPayload());
+
+            if (auditLogManager.isAuditingEnabled())
+                logSuccess(state);
+
+            return response;
+        }
+        catch (Exception e)
+        {
+            if (auditLogManager.isAuditingEnabled())
+                logException(state, e);
+            JVMStabilityInspector.inspectThrowable(e);
+            return ErrorMessage.fromException(e);
+        }
+    }
+

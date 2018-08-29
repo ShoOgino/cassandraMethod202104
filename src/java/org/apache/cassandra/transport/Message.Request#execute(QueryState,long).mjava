@@ -1,2 +1,37 @@
-        public abstract Response execute(QueryState queryState, long queryStartNanoTime);
+        final Response execute(QueryState queryState, long queryStartNanoTime)
+        {
+            boolean shouldTrace = false;
+            UUID tracingSessionId = null;
+
+            if (isTraceable())
+            {
+                if (isTracingRequested())
+                {
+                    shouldTrace = true;
+                    tracingSessionId = UUIDGen.getTimeUUID();
+                    Tracing.instance.newSession(tracingSessionId, getCustomPayload());
+                }
+                else if (StorageService.instance.shouldTraceProbablistically())
+                {
+                    shouldTrace = true;
+                    Tracing.instance.newSession(getCustomPayload());
+                }
+            }
+
+            Response response;
+            try
+            {
+                response = execute(queryState, queryStartNanoTime, shouldTrace);
+            }
+            finally
+            {
+                if (shouldTrace)
+                    Tracing.instance.stopSession();
+            }
+
+            if (isTraceable() && isTracingRequested())
+                response.setTracingId(tracingSessionId);
+
+            return response;
+        }
 

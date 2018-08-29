@@ -1,0 +1,36 @@
+    @Override
+    protected Message.Response execute(QueryState state, long queryStartNanoTime, boolean traceRequest)
+    {
+        AuditLogManager auditLogManager = AuditLogManager.getInstance();
+
+        try
+        {
+            if (options.getPageSize() == 0)
+                throw new ProtocolException("The page size cannot be 0");
+
+            if (traceRequest)
+                traceQuery(state);
+
+            long queryStartTime = auditLogManager.isLoggingEnabled() ? System.currentTimeMillis() : 0L;
+
+            Message.Response response = ClientState.getCQLQueryHandler().process(query, state, options, getCustomPayload(), queryStartNanoTime);
+
+            if (auditLogManager.isLoggingEnabled())
+                logSuccess(state, queryStartTime);
+
+            if (options.skipMetadata() && response instanceof ResultMessage.Rows)
+                ((ResultMessage.Rows)response).result.metadata.setSkipMetadata();
+
+            return response;
+        }
+        catch (Exception e)
+        {
+            if (auditLogManager.isLoggingEnabled())
+                logException(state, e);
+            JVMStabilityInspector.inspectThrowable(e);
+            if (!((e instanceof RequestValidationException) || (e instanceof RequestExecutionException)))
+                logger.error("Unexpected error during query", e);
+            return ErrorMessage.fromException(e);
+        }
+    }
+
