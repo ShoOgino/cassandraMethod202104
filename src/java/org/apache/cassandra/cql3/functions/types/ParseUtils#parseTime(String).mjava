@@ -1,0 +1,69 @@
+    /**
+     * Parse the given string as a time, using the following time pattern: {@code
+     * hh:mm:ss[.fffffffff]}.
+     *
+     * <p>This method is loosely based on {@code java.sql.Timestamp}.
+     *
+     * @param str The string to parse.
+     * @return A long value representing the number of nanoseconds since midnight.
+     * @throws ParseException if the string cannot be parsed.
+     * @see <a href="https://cassandra.apache.org/doc/cql3/CQL-2.2.html#usingtime">'Working with time'
+     * section of CQL specification</a>
+     */
+    static long parseTime(String str) throws ParseException
+    {
+        String nanos_s;
+
+        long hour;
+        long minute;
+        long second;
+        long a_nanos = 0;
+
+        String formatError = "Timestamp format must be hh:mm:ss[.fffffffff]";
+        String zeros = "000000000";
+
+        if (str == null) throw new IllegalArgumentException(formatError);
+        str = str.trim();
+
+        // Parse the time
+        int firstColon = str.indexOf(':');
+        int secondColon = str.indexOf(':', firstColon + 1);
+
+        // Convert the time; default missing nanos
+        if (firstColon > 0 && secondColon > 0 && secondColon < str.length() - 1)
+        {
+            int period = str.indexOf('.', secondColon + 1);
+            hour = Integer.parseInt(str.substring(0, firstColon));
+            if (hour < 0 || hour >= 24) throw new IllegalArgumentException("Hour out of bounds.");
+
+            minute = Integer.parseInt(str.substring(firstColon + 1, secondColon));
+            if (minute < 0 || minute >= 60) throw new IllegalArgumentException("Minute out of bounds.");
+
+            if (period > 0 && period < str.length() - 1)
+            {
+                second = Integer.parseInt(str.substring(secondColon + 1, period));
+                if (second < 0 || second >= 60) throw new IllegalArgumentException("Second out of bounds.");
+
+                nanos_s = str.substring(period + 1);
+                if (nanos_s.length() > 9) throw new IllegalArgumentException(formatError);
+                if (!Character.isDigit(nanos_s.charAt(0))) throw new IllegalArgumentException(formatError);
+                nanos_s = nanos_s + zeros.substring(0, 9 - nanos_s.length());
+                a_nanos = Integer.parseInt(nanos_s);
+            }
+            else if (period > 0) throw new ParseException(formatError, -1);
+            else
+            {
+                second = Integer.parseInt(str.substring(secondColon + 1));
+                if (second < 0 || second >= 60) throw new ParseException("Second out of bounds.", -1);
+            }
+        }
+        else throw new ParseException(formatError, -1);
+
+        long rawTime = 0;
+        rawTime += TimeUnit.HOURS.toNanos(hour);
+        rawTime += TimeUnit.MINUTES.toNanos(minute);
+        rawTime += TimeUnit.SECONDS.toNanos(second);
+        rawTime += a_nanos;
+        return rawTime;
+    }
+

@@ -1,0 +1,33 @@
+    @SuppressWarnings("unchecked")
+    private <T> TypeCodec<T> lookupCodec(DataType cqlType, TypeToken<T> javaType)
+    {
+        checkNotNull(cqlType, "Parameter cqlType cannot be null");
+        TypeCodec<?> codec = BUILT_IN_CODECS_MAP.get(cqlType.getName());
+        if (codec != null && (javaType == null || codec.accepts(javaType)))
+        {
+            logger.trace("Returning built-in codec {}", codec);
+            return (TypeCodec<T>) codec;
+        }
+        if (logger.isTraceEnabled())
+            logger.trace("Querying cache for codec [{} <-> {}]", toString(cqlType), toString(javaType));
+        try
+        {
+            CacheKey cacheKey = new CacheKey(cqlType, javaType);
+            codec = cache.get(cacheKey);
+        }
+        catch (UncheckedExecutionException e)
+        {
+            if (e.getCause() instanceof CodecNotFoundException)
+            {
+                throw (CodecNotFoundException) e.getCause();
+            }
+            throw new CodecNotFoundException(e.getCause());
+        }
+        catch (RuntimeException | ExecutionException e)
+        {
+            throw new CodecNotFoundException(e.getCause());
+        }
+        logger.trace("Returning cached codec {}", codec);
+        return (TypeCodec<T>) codec;
+    }
+
