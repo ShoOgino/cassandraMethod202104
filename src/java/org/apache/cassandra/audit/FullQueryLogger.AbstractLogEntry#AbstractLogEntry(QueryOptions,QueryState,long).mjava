@@ -1,10 +1,14 @@
-        AbstractWeighableMarshallable(QueryOptions queryOptions, long timeMillis)
+        AbstractLogEntry(QueryOptions queryOptions, QueryState queryState, long queryStartTime)
         {
-            this.timeMillis = timeMillis;
-            ProtocolVersion version = queryOptions.getProtocolVersion();
-            this.protocolVersion = version.asInt();
-            int optionsSize = QueryOptions.codec.encodedSize(queryOptions, version);
+            this.queryStartTime = queryStartTime;
+
+            this.protocolVersion = queryOptions.getProtocolVersion().asInt();
+            int optionsSize = QueryOptions.codec.encodedSize(queryOptions, queryOptions.getProtocolVersion());
             queryOptionsBuffer = CBUtil.allocator.buffer(optionsSize, optionsSize);
+
+            this.generatedTimestamp = queryState.generatedTimestamp();
+            this.generatedNowInSeconds = queryState.generatedNowInSeconds();
+
             /*
              * Struggled with what tradeoff to make in terms of query options which is potentially large and complicated
              * There is tension between low garbage production (or allocator overhead), small working set size, and CPU overhead reserializing the
@@ -17,18 +21,14 @@
              * some scaling.
              *
              */
-            boolean success = false;
             try
             {
-                QueryOptions.codec.encode(queryOptions, queryOptionsBuffer, version);
-                success = true;
+                QueryOptions.codec.encode(queryOptions, queryOptionsBuffer, queryOptions.getProtocolVersion());
             }
-            finally
+            catch (Throwable e)
             {
-                if (!success)
-                {
-                    queryOptionsBuffer.release();
-                }
+                queryOptionsBuffer.release();
+                throw e;
             }
         }
 

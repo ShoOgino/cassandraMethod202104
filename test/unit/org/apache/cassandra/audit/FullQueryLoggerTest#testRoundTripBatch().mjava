@@ -2,7 +2,15 @@
     public void testRoundTripBatch() throws Exception
     {
         configureFQL();
-        instance.logBatch("UNLOGGED", Arrays.asList("foo1", "foo2"), Arrays.asList(Arrays.asList(ByteBuffer.allocate(1) , ByteBuffer.allocateDirect(2)), Arrays.asList()), QueryOptions.DEFAULT, 1);
+        instance.logBatch(Type.UNLOGGED,
+                          Arrays.asList("foo1", "foo2"),
+                          Arrays.asList(Arrays.asList(ByteBuffer.allocate(1),
+                                        ByteBuffer.allocateDirect(2)),
+                                        Collections.emptyList()),
+                          QueryOptions.DEFAULT,
+                          queryState(),
+                          1);
+
         Util.spinAssertEquals(true, () ->
         {
             try (ChronicleQueue queue = ChronicleQueueBuilder.single(tempDir.toFile()).rollCycle(RollCycles.TEST_SECONDLY).build())
@@ -10,22 +18,31 @@
                 return queue.createTailer().readingDocument().isPresent();
             }
         }, 60);
+
         try (ChronicleQueue queue = ChronicleQueueBuilder.single(tempDir.toFile()).rollCycle(RollCycles.TEST_SECONDLY).build())
         {
             ExcerptTailer tailer = queue.createTailer();
             assertTrue(tailer.readDocument(wire -> {
-                assertEquals("batch", wire.read("type").text());
-                ProtocolVersion protocolVersion = ProtocolVersion.decode(wire.read("protocol-version").int32());
+                assertEquals(0, wire.read(VERSION).int16());
+                assertEquals(BATCH, wire.read(TYPE).text());
+
+                assertEquals(1L, wire.read(QUERY_START_TIME).int64());
+
+                ProtocolVersion protocolVersion = ProtocolVersion.decode(wire.read(PROTOCOL_VERSION).int32());
                 assertEquals(ProtocolVersion.CURRENT, protocolVersion);
-                QueryOptions queryOptions = QueryOptions.codec.decode(Unpooled.wrappedBuffer(wire.read("query-options").bytes()), protocolVersion);
-                assertEquals(1L, wire.read("query-time").int64());
+
+                QueryOptions queryOptions = QueryOptions.codec.decode(Unpooled.wrappedBuffer(wire.read(QUERY_OPTIONS).bytes()), protocolVersion);
                 compareQueryOptions(QueryOptions.DEFAULT, queryOptions);
-                assertEquals("UNLOGGED", wire.read("batch-type").text());
-                ValueIn in = wire.read("queries");
+
+                assertEquals(Long.MIN_VALUE, wire.read(GENERATED_TIMESTAMP).int64());
+                assertEquals(Integer.MIN_VALUE, wire.read(GENERATED_NOW_IN_SECONDS).int32());
+
+                assertEquals("UNLOGGED", wire.read(BATCH_TYPE).text());
+                ValueIn in = wire.read(QUERIES);
                 assertEquals(2, in.int32());
                 assertEquals("foo1", in.text());
                 assertEquals("foo2", in.text());
-                in = wire.read("values");
+                in = wire.read(VALUES);
                 assertEquals(2, in.int32());
                 assertEquals(2, in.int32());
                 assertTrue(Arrays.equals(new byte[1], in.bytes()));
