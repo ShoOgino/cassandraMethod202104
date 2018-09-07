@@ -6,12 +6,12 @@
                 cfs.metric.speculativeRetries.inc();
                 speculated = true;
 
+                ReplicaPlan.ForTokenRead replicaPlan = replicaPlan();
                 ReadCommand retryCommand = command;
                 Replica extraReplica;
                 if (handler.resolver.isDataPresent())
                 {
-                    extraReplica = tryFind(replicaLayout().all(),
-                            r -> !replicaLayout().selected().contains(r)).orNull();
+                    extraReplica = replicaPlan.firstUncontactedCandidate(Predicates.alwaysTrue());
 
                     // we should only use a SpeculatingReadExecutor if we have an extra replica to speculate against
                     assert extraReplica != null;
@@ -22,8 +22,7 @@
                 }
                 else
                 {
-                    extraReplica = tryFind(replicaLayout().all(),
-                            r -> r.isFull() && !replicaLayout().selected().contains(r)).orNull();
+                    extraReplica = replicaPlan.firstUncontactedCandidate(Replica::isFull);
                     if (extraReplica == null)
                     {
                         cfs.metric.speculativeInsufficientReplicas.inc();
@@ -32,6 +31,11 @@
                         return;
                     }
                 }
+
+                // we must update the plan to include this new node, else when we come to read-repair, we may not include this
+                // speculated response in the data requests we make again, and we will not be able to 'speculate' an extra repair read,
+                // nor would we be able to speculate a new 'write' if the repair writes are insufficient
+                super.replicaPlan.addToContacts(extraReplica);
 
                 if (traceState != null)
                     traceState.trace("speculating read retry on {}", extraReplica);

@@ -1,0 +1,23 @@
+    /**
+     * Take two range read plans for adjacent ranges, and check if it is OK (and worthwhile) to combine them into a single plan
+     */
+    public static ReplicaPlan.ForRangeRead maybeMerge(Keyspace keyspace, ConsistencyLevel consistencyLevel, ReplicaPlan.ForRangeRead left, ReplicaPlan.ForRangeRead right)
+    {
+        // TODO: should we be asserting that the ranges are adjacent?
+        AbstractBounds<PartitionPosition> newRange = left.range().withNewRight(right.range().right);
+        EndpointsForRange mergedCandidates = left.candidates().keep(right.candidates().endpoints());
+
+        // Check if there are enough shared endpoints for the merge to be possible.
+        if (!consistencyLevel.isSufficientLiveReplicasForRead(keyspace, mergedCandidates))
+            return null;
+
+        EndpointsForRange contacts = consistencyLevel.filterForQuery(keyspace, mergedCandidates);
+
+        // Estimate whether merging will be a win or not
+        if (!DatabaseDescriptor.getEndpointSnitch().isWorthMergingForRangeQuery(contacts, left.contacts(), right.contacts()))
+            return null;
+
+        // If we get there, merge this range and the next one
+        return new ReplicaPlan.ForRangeRead(keyspace, consistencyLevel, newRange, mergedCandidates, contacts);
+    }
+

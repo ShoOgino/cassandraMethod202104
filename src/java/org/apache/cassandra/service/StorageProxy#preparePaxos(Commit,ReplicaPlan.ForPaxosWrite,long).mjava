@@ -1,0 +1,38 @@
+    private static PrepareCallback preparePaxos(Commit toPrepare, ReplicaPlan.ForPaxosWrite replicaPlan, long queryStartNanoTime)
+    throws WriteTimeoutException
+    {
+        PrepareCallback callback = new PrepareCallback(toPrepare.update.partitionKey(), toPrepare.update.metadata(), replicaPlan.requiredParticipants(), replicaPlan.consistencyLevel(), queryStartNanoTime);
+        MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_PREPARE, toPrepare, Commit.serializer);
+        for (Replica replica: replicaPlan.contacts())
+        {
+            if (replica.isLocal())
+            {
+                StageManager.getStage(MessagingService.verbStages.get(MessagingService.Verb.PAXOS_PREPARE)).execute(new Runnable()
+                {
+                    public void run()
+                    {
+                        try
+                        {
+                            MessageIn<PrepareResponse> message = MessageIn.create(FBUtilities.getBroadcastAddressAndPort(),
+                                    PrepareVerbHandler.doPrepare(toPrepare),
+                                    Collections.emptyMap(),
+                                    MessagingService.Verb.INTERNAL_RESPONSE,
+                                    MessagingService.current_version);
+                            callback.response(message);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.error("Failed paxos prepare locally", ex);
+                        }
+                    }
+                });
+            }
+            else
+            {
+                MessagingService.instance().sendRR(message, replica.endpoint(), callback);
+            }
+        }
+        callback.await();
+        return callback;
+    }
+

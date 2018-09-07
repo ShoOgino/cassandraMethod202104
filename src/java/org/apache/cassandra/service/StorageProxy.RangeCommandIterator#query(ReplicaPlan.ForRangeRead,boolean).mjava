@@ -1,0 +1,50 @@
+        /**
+         * Queries the provided sub-range.
+         *
+         * @param replicaPlan the subRange to query.
+         * @param isFirst in the case where multiple queries are sent in parallel, whether that's the first query on
+         * that batch or not. The reason it matters is that whe paging queries, the command (more specifically the
+         * {@code DataLimits}) may have "state" information and that state may only be valid for the first query (in
+         * that it's the query that "continues" whatever we're previously queried).
+         */
+        private SingleRangeResponse query(ReplicaPlan.ForRangeRead replicaPlan, boolean isFirst)
+        {
+            PartitionRangeReadCommand rangeCommand = command.forSubRange(replicaPlan.range(), isFirst);
+            ReplicaPlan.SharedForRangeRead sharedReplicaPlan = ReplicaPlan.shared(replicaPlan);
+            ReadRepair<EndpointsForRange, ReplicaPlan.ForRangeRead> readRepair
+                    = ReadRepair.create(command, sharedReplicaPlan, queryStartNanoTime);
+            DataResolver<EndpointsForRange, ReplicaPlan.ForRangeRead> resolver
+                    = new DataResolver<>(rangeCommand, sharedReplicaPlan, readRepair, queryStartNanoTime);
+            ReadCallback<EndpointsForRange, ReplicaPlan.ForRangeRead> handler
+                    = new ReadCallback<>(resolver, rangeCommand, sharedReplicaPlan, queryStartNanoTime);
+
+            replicaPlan.assureSufficientReplicas();
+
+            // If enabled, request repaired data tracking info from full replicas but
+            // only if there are multiple full replicas to compare results from
+            if (DatabaseDescriptor.getRepairedDataTrackingForPartitionReadsEnabled()
+                    && replicaPlan.contacts().filter(Replica::isFull).size() > 1)
+            {
+                command.trackRepairedStatus();
+            }
+
+            if (replicaPlan.contacts().size() == 1 && replicaPlan.contacts().get(0).isLocal())
+            {
+                StageManager.getStage(Stage.READ).execute(new LocalReadRunnable(rangeCommand, handler));
+            }
+            else
+            {
+                for (Replica replica : replicaPlan.contacts())
+                {
+                    Tracing.trace("Enqueuing request to {}", replica);
+                    PartitionRangeReadCommand command = replica.isFull() ? rangeCommand : rangeCommand.copyAsTransientQuery();
+                    MessageOut<ReadCommand> message = command.createMessage();
+                    if (command.isTrackingRepairedStatus() && replica.isFull())
+                        message = message.withParameter(ParameterType.TRACK_REPAIRED_DATA, MessagingService.ONE_BYTE);
+                    MessagingService.instance().sendRRWithFailure(message, replica.endpoint(), handler);
+                }
+            }
+
+            return new SingleRangeResponse(resolver, handler, readRepair);
+        }
+

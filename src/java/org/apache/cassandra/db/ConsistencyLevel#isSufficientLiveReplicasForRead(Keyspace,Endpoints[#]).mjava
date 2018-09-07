@@ -1,0 +1,31 @@
+    public boolean isSufficientLiveReplicasForRead(Keyspace keyspace, Endpoints<?> liveReplicas)
+    {
+        switch (this)
+        {
+            case ANY:
+                // local hint is acceptable, and local node is always live
+                return true;
+            case LOCAL_ONE:
+                return countDCLocalReplicas(liveReplicas).isSufficient(1, 1);
+            case LOCAL_QUORUM:
+                return countDCLocalReplicas(liveReplicas).isSufficient(blockFor(keyspace), 1);
+            case EACH_QUORUM:
+                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+                {
+                    int fullCount = 0;
+                    for (Map.Entry<String, ReplicaCount> entry : countPerDCEndpoints(keyspace, liveReplicas).entrySet())
+                    {
+                        ReplicaCount count = entry.getValue();
+                        if (!count.isSufficient(localQuorumFor(keyspace, entry.getKey()), 0))
+                            return false;
+                        fullCount += count.fullReplicas;
+                    }
+                    return fullCount > 0;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            default:
+                return liveReplicas.size() >= blockFor(keyspace)
+                        && Replicas.countFull(liveReplicas) > 0;
+        }
+    }
+
