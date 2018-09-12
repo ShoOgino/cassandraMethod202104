@@ -1,0 +1,40 @@
+    @Test
+    public void testRepairStatusChanges() throws Exception
+    {
+        String ksname = KEYSPACE1;
+        String cfname = "StandardLeveled";
+        Keyspace keyspace = Keyspace.open(ksname);
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore(cfname);
+        store.disableAutoCompaction();
+
+        CompactionStrategyManager mgr = store.getCompactionStrategyManager();
+        LeveledCompactionStrategy repaired = (LeveledCompactionStrategy) mgr.getStrategies().get(0).get(0);
+        LeveledCompactionStrategy unrepaired = (LeveledCompactionStrategy) mgr.getStrategies().get(1).get(0);
+
+        // populate repaired sstables
+        populateSSTables(store);
+        assertTrue(repaired.getSSTables().isEmpty());
+        assertFalse(unrepaired.getSSTables().isEmpty());
+        mgr.mutateRepaired(store.getLiveSSTables(), FBUtilities.nowInSeconds(), null, false);
+        assertFalse(repaired.getSSTables().isEmpty());
+        assertTrue(unrepaired.getSSTables().isEmpty());
+
+        // populate unrepaired sstables
+        populateSSTables(store);
+        assertFalse(repaired.getSSTables().isEmpty());
+        assertFalse(unrepaired.getSSTables().isEmpty());
+
+        // compact them into upper levels
+        store.forceMajorCompaction();
+        assertFalse(repaired.getSSTables().isEmpty());
+        assertFalse(unrepaired.getSSTables().isEmpty());
+
+        // mark unrepair
+        mgr.mutateRepaired(store.getLiveSSTables().stream().filter(s -> s.isRepaired()).collect(Collectors.toList()),
+                           ActiveRepairService.UNREPAIRED_SSTABLE,
+                           null,
+                           false);
+        assertTrue(repaired.getSSTables().isEmpty());
+        assertFalse(unrepaired.getSSTables().isEmpty());
+    }
+
