@@ -16,17 +16,25 @@
         List<ByteBuffer> components = CompositeType.splitName(bound);
         byte eoc = CompositeType.lastEOC(bound);
 
+        // if the bound we have decoded is static, 2.2 format requires there to be N empty clusterings
+        assert !isStatic ||
+                (components.size() >= clusteringSize
+                        && all(components.subList(0, clusteringSize), ByteBufferUtil.EMPTY_BYTE_BUFFER::equals));
         // There can be  more components than the clustering size only in the case this is the bound of a collection
         // range tombstone. In which case, there is exactly one more component, and that component is the name of the
         // collection being selected/deleted.
-        assert components.size() <= clusteringSize || (!metadata.isCompactTable() && components.size() == clusteringSize + 1);
-
         ColumnDefinition collectionName = null;
-        if (components.size() > (isStatic ? 0 : clusteringSize))
+        if (components.size() > clusteringSize)
         {
+            assert clusteringSize + 1 == components.size() && !metadata.isCompactTable();
             // pop the collection name from the back of the list of clusterings
-            ByteBuffer collectionNameBytes = components.remove(isStatic ? 0 : clusteringSize);
+            ByteBuffer collectionNameBytes = components.remove(clusteringSize);
             collectionName = metadata.getColumnDefinition(collectionNameBytes);
+            if (collectionName == null) {
+                collectionName = metadata.getDroppedColumnDefinition(collectionNameBytes, isStatic);
+                if (collectionName == null)
+                    throw new RuntimeException("Unknown collection column " + UTF8Type.instance.getString(collectionNameBytes) + " during deserialization");
+            }
         }
 
         boolean isInclusive;
