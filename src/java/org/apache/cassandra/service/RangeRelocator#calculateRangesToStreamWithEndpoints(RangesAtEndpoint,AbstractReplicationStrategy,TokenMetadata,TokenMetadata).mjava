@@ -1,0 +1,56 @@
+    /**
+     * calculating endpoints to stream current ranges to if needed
+     * in some situations node will handle current ranges as part of the new ranges
+     **/
+    public static RangesByEndpoint calculateRangesToStreamWithEndpoints(RangesAtEndpoint streamRanges,
+                                                                        AbstractReplicationStrategy strat,
+                                                                        TokenMetadata tmdBefore,
+                                                                        TokenMetadata tmdAfter)
+    {
+        RangesByEndpoint.Mutable endpointRanges = new RangesByEndpoint.Mutable();
+        for (Replica toStream : streamRanges)
+        {
+            //If the range we are sending is full only send it to the new full replica
+            //There will also be a new transient replica we need to send the data to, but not
+            //the repaired data
+            EndpointsForRange oldEndpoints = strat.calculateNaturalReplicas(toStream.range().right, tmdBefore);
+            EndpointsForRange newEndpoints = strat.calculateNaturalReplicas(toStream.range().right, tmdAfter);
+            logger.debug("Need to stream {}, current endpoints {}, new endpoints {}", toStream, oldEndpoints, newEndpoints);
+
+            for (Replica newEndpoint : newEndpoints)
+            {
+                Replica oldEndpoint = oldEndpoints.byEndpoint().get(newEndpoint.endpoint());
+
+                // Nothing to do
+                if (newEndpoint.equals(oldEndpoint))
+                    continue;
+
+                // Completely new range for this endpoint
+                if (oldEndpoint == null)
+                {
+                    if (toStream.isTransient() && newEndpoint.isFull())
+                        throw new AssertionError(String.format("Need to stream %s, but only have %s which is transient and not full", newEndpoint, toStream));
+
+                    for (Range<Token> intersection : newEndpoint.range().intersectionWith(toStream.range()))
+                    {
+                        endpointRanges.put(newEndpoint.endpoint(), newEndpoint.decorateSubrange(intersection));
+                    }
+                }
+                else
+                {
+                    Set<Range<Token>> subsToStream = Collections.singleton(toStream.range());
+
+                    //First subtract what we already have
+                    if (oldEndpoint.isFull() == newEndpoint.isFull() || oldEndpoint.isFull())
+                        subsToStream = toStream.range().subtract(oldEndpoint.range());
+
+                    //Now we only stream what is still replicated
+                    subsToStream.stream()
+                                .flatMap(range -> range.intersectionWith(newEndpoint.range()).stream())
+                                .forEach(tokenRange -> endpointRanges.put(newEndpoint.endpoint(), newEndpoint.decorateSubrange(tokenRange)));
+                }
+            }
+        }
+        return endpointRanges.asImmutableView();
+    }
+

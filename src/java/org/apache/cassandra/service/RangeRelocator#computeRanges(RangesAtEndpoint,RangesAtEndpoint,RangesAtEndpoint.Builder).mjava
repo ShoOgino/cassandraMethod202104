@@ -1,0 +1,46 @@
+    private static void computeRanges(RangesAtEndpoint srcRanges, RangesAtEndpoint dstRanges, RangesAtEndpoint.Builder ranges)
+    {
+        for (Replica src : srcRanges)
+        {
+            boolean intersect = false;
+            RangesAtEndpoint remainder = null;
+            for (Replica dst : dstRanges)
+            {
+                logger.debug("Comparing {} and {}", src, dst);
+                // Stream the full range if there's no intersection
+                if (!src.intersectsOnRange(dst))
+                    continue;
+
+                // If we're transitioning from full to transient
+                if (src.isFull() && dst.isTransient())
+                    continue;
+
+                if (remainder == null)
+                {
+                    remainder = src.subtractIgnoreTransientStatus(dst.range());
+                }
+                else
+                {
+                    // Re-subtract ranges to avoid overstreaming in cases when the single range is split or merged
+                    RangesAtEndpoint.Builder newRemainder = new RangesAtEndpoint.Builder(remainder.endpoint());
+                    for (Replica replica : remainder)
+                        newRemainder.addAll(replica.subtractIgnoreTransientStatus(dst.range()));
+                    remainder = newRemainder.build();
+                }
+                intersect = true;
+            }
+
+            if (!intersect)
+            {
+                assert remainder == null;
+                logger.debug("    Doesn't intersect adding {}", src);
+                ranges.add(src); // should stream whole old range
+            }
+            else
+            {
+                ranges.addAll(remainder);
+                logger.debug("    Intersects adding {}", remainder);
+            }
+        }
+    }
+

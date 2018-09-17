@@ -1,0 +1,72 @@
+    public void calculateToFromStreams()
+    {
+        logger.debug("Current tmd: {}, Updated tmd: {}", tokenMetaClone, tokenMetaCloneAllSettled);
+
+        for (String keyspace : keyspaceNames)
+        {
+            // replication strategy of the current keyspace
+            AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
+
+            logger.info("Calculating ranges to stream and request for keyspace {}", keyspace);
+            //From what I have seen we only ever call this with a single token from StorageService.move(Token)
+            for (Token newToken : tokens)
+            {
+                Collection<Token> currentTokens = tokenMetaClone.getTokens(localAddress);
+                if (currentTokens.size() > 1 || currentTokens.isEmpty())
+                {
+                    throw new AssertionError("Unexpected current tokens: " + currentTokens);
+                }
+
+                // calculated parts of the ranges to request/stream from/to nodes in the ring
+                Pair<RangesAtEndpoint, RangesAtEndpoint> streamAndFetchOwnRanges;
+
+                //In the single node token move there is nothing to do and Range subtraction is broken
+                //so it's easier to just identify this case up front.
+                if (tokenMetaClone.getTopology().getDatacenterEndpoints().get(DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddressAndPort()
+)).size() > 1)
+                {
+                    // getting collection of the currently used ranges by this keyspace
+                    RangesAtEndpoint currentReplicas = strategy.getAddressReplicas(localAddress);
+
+                    // collection of ranges which this node will serve after move to the new token
+                    RangesAtEndpoint updatedReplicas = strategy.getPendingAddressRanges(tokenMetaClone, newToken, localAddress);
+
+                    streamAndFetchOwnRanges = calculateStreamAndFetchRanges(currentReplicas, updatedReplicas);
+                }
+                else
+                {
+                     streamAndFetchOwnRanges = Pair.create(RangesAtEndpoint.empty(localAddress), RangesAtEndpoint.empty(localAddress));
+                }
+
+                RangesByEndpoint rangesToStream = calculateRangesToStreamWithEndpoints(streamAndFetchOwnRanges.left, strategy, tokenMetaClone, tokenMetaCloneAllSettled);
+                logger.info("Endpoint ranges to stream to " + rangesToStream);
+
+                // stream ranges
+                for (InetAddressAndPort address : rangesToStream.keySet())
+                {
+                    logger.debug("Will stream range {} of keyspace {} to endpoint {}", rangesToStream.get(address), keyspace, address);
+                    RangesAtEndpoint ranges = rangesToStream.get(address);
+                    streamPlan.transferRanges(address, keyspace, ranges);
+                }
+
+                Multimap<InetAddressAndPort, RangeStreamer.FetchReplica> rangesToFetch = calculateRangesToFetchWithPreferredEndpoints(streamAndFetchOwnRanges.right, strategy, keyspace, tokenMetaClone, tokenMetaCloneAllSettled);
+
+                // stream requests
+                rangesToFetch.asMap().forEach((address, sourceAndOurReplicas) -> {
+                    RangesAtEndpoint full = sourceAndOurReplicas.stream()
+                            .filter(pair -> pair.remote.isFull())
+                            .map(pair -> pair.local)
+                            .collect(RangesAtEndpoint.collector(localAddress));
+                    RangesAtEndpoint trans = sourceAndOurReplicas.stream()
+                            .filter(pair -> pair.remote.isTransient())
+                            .map(pair -> pair.local)
+                            .collect(RangesAtEndpoint.collector(localAddress));
+                    logger.debug("Will request range {} of keyspace {} from endpoint {}", rangesToFetch.get(address), keyspace, address);
+                    streamPlan.requestRanges(address, keyspace, full, trans);
+                });
+
+                logger.debug("Keyspace {}: work map {}.", keyspace, rangesToFetch);
+            }
+        }
+    }
+

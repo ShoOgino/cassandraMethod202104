@@ -1,0 +1,33 @@
+    /**
+     * Calculate pair of ranges to stream/fetch for given two range collections
+     * (current ranges for keyspace and ranges after move to new token)
+     *
+     * With transient replication the added wrinkle is that if a range transitions from full to transient then
+     * we need to stream the range despite the fact that we are retaining it as transient. Some replica
+     * somewhere needs to transition from transient to full and we will be the source.
+     *
+     * If the range is transient and is transitioning to full then always fetch even if the range was already transient
+     * since a transiently replicated obviously needs to fetch data to become full.
+     *
+     * This why there is a continue after checking for instersection because intersection is not sufficient reason
+     * to do the subtraction since we might need to stream/fetch data anyways.
+     *
+     * @param currentRanges collection of the ranges by current token
+     * @param updatedRanges collection of the ranges after token is changed
+     * @return pair of ranges to stream/fetch for given current and updated range collections
+     */
+    public static Pair<RangesAtEndpoint, RangesAtEndpoint> calculateStreamAndFetchRanges(RangesAtEndpoint currentRanges, RangesAtEndpoint updatedRanges)
+    {
+        RangesAtEndpoint.Builder toStream = RangesAtEndpoint.builder(currentRanges.endpoint());
+        RangesAtEndpoint.Builder toFetch  = RangesAtEndpoint.builder(currentRanges.endpoint());
+        logger.debug("Calculating toStream");
+        computeRanges(currentRanges, updatedRanges, toStream);
+
+        logger.debug("Calculating toFetch");
+        computeRanges(updatedRanges, currentRanges, toFetch);
+
+        logger.debug("To stream {}", toStream);
+        logger.debug("To fetch {}", toFetch);
+        return Pair.create(toStream.build(), toFetch.build());
+    }
+
