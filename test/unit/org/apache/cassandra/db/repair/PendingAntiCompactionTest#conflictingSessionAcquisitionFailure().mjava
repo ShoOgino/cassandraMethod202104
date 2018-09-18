@@ -1,5 +1,5 @@
     @Test
-    public void pendingRepairSSTablesAreNotAcquired() throws Exception
+    public void conflictingSessionAcquisitionFailure() throws Exception
     {
         cfs.disableAutoCompaction();
         makeSSTables(2);
@@ -11,17 +11,13 @@
         Assert.assertTrue(repaired.intersects(FULL_RANGE));
         Assert.assertTrue(unrepaired.intersects(FULL_RANGE));
 
-        repaired.descriptor.getMetadataSerializer().mutateRepairMetadata(repaired.descriptor, 0, UUIDGen.getTimeUUID(), false);
+        UUID sessionId = prepareSession();
+        repaired.descriptor.getMetadataSerializer().mutateRepairMetadata(repaired.descriptor, 0, sessionId, false);
         repaired.reloadSSTableMetadata();
         Assert.assertTrue(repaired.isPendingRepair());
 
         PendingAntiCompaction.AcquisitionCallable acquisitionCallable = new PendingAntiCompaction.AcquisitionCallable(cfs, FULL_RANGE, UUIDGen.getTimeUUID());
         PendingAntiCompaction.AcquireResult result = acquisitionCallable.call();
-        Assert.assertNotNull(result);
-
-        logger.info("Originals: {}", result.txn.originals());
-        Assert.assertEquals(1, result.txn.originals().size());
-        Assert.assertTrue(result.txn.originals().contains(unrepaired));
-        result.abort();  // releases sstable refs
+        Assert.assertNull(result);
     }
 
