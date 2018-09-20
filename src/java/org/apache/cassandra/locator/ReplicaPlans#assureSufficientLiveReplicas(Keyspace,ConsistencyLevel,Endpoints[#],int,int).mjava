@@ -1,0 +1,61 @@
+    static void assureSufficientLiveReplicas(Keyspace keyspace, ConsistencyLevel consistencyLevel, Endpoints<?> allLive, int blockFor, int blockForFullReplicas) throws UnavailableException
+    {
+        switch (consistencyLevel)
+        {
+            case ANY:
+                // local hint is acceptable, and local node is always live
+                break;
+            case LOCAL_ONE:
+            {
+                Replicas.ReplicaCount localLive = countInOurDc(allLive);
+                if (!localLive.hasAtleast(blockFor, blockForFullReplicas))
+                    throw UnavailableException.create(consistencyLevel, 1, blockForFullReplicas, localLive.allReplicas(), localLive.fullReplicas());
+                break;
+            }
+            case LOCAL_QUORUM:
+            {
+                Replicas.ReplicaCount localLive = countInOurDc(allLive);
+                if (!localLive.hasAtleast(blockFor, blockForFullReplicas))
+                {
+                    if (logger.isTraceEnabled())
+                    {
+                        logger.trace(String.format("Local replicas %s are insufficient to satisfy LOCAL_QUORUM requirement of %d live replicas and %d full replicas in '%s'",
+                                allLive.filter(InOurDcTester.replicas()), blockFor, blockForFullReplicas, DatabaseDescriptor.getLocalDataCenter()));
+                    }
+                    throw UnavailableException.create(consistencyLevel, blockFor, blockForFullReplicas, localLive.allReplicas(), localLive.fullReplicas());
+                }
+                break;
+            }
+            case EACH_QUORUM:
+                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+                {
+                    int total = 0;
+                    int totalFull = 0;
+                    Collection<String> dcs = ((NetworkTopologyStrategy) keyspace.getReplicationStrategy()).getDatacenters();
+                    for (ObjectObjectCursor<String, Replicas.ReplicaCount> entry : countPerDc(dcs, allLive))
+                    {
+                        int dcBlockFor = ConsistencyLevel.localQuorumFor(keyspace, entry.key);
+                        Replicas.ReplicaCount dcCount = entry.value;
+                        if (!dcCount.hasAtleast(dcBlockFor, 0))
+                            throw UnavailableException.create(consistencyLevel, entry.key, dcBlockFor, dcCount.allReplicas(), 0, dcCount.fullReplicas());
+                        totalFull += dcCount.fullReplicas();
+                        total += dcCount.allReplicas();
+                    }
+                    if (totalFull < blockForFullReplicas)
+                        throw UnavailableException.create(consistencyLevel, blockFor, total, blockForFullReplicas, totalFull);
+                    break;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            default:
+                int live = allLive.size();
+                int full = Replicas.countFull(allLive);
+                if (live < blockFor || full < blockForFullReplicas)
+                {
+                    if (logger.isTraceEnabled())
+                        logger.trace("Live nodes {} do not satisfy ConsistencyLevel ({} required)", Iterables.toString(allLive), blockFor);
+                    throw UnavailableException.create(consistencyLevel, blockFor, blockForFullReplicas, live, full);
+                }
+                break;
+        }
+    }
+

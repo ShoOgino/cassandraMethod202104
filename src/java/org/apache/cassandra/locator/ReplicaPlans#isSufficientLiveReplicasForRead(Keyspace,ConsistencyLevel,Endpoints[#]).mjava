@@ -1,0 +1,32 @@
+    public static boolean isSufficientLiveReplicasForRead(Keyspace keyspace, ConsistencyLevel consistencyLevel, Endpoints<?> liveReplicas)
+    {
+        switch (consistencyLevel)
+        {
+            case ANY:
+                // local hint is acceptable, and local node is always live
+                return true;
+            case LOCAL_ONE:
+                return countInOurDc(liveReplicas).hasAtleast(1, 1);
+            case LOCAL_QUORUM:
+                return countInOurDc(liveReplicas).hasAtleast(consistencyLevel.blockFor(keyspace), 1);
+            case EACH_QUORUM:
+                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+                {
+                    int fullCount = 0;
+                    Collection<String> dcs = ((NetworkTopologyStrategy) keyspace.getReplicationStrategy()).getDatacenters();
+                    for (ObjectObjectCursor<String, Replicas.ReplicaCount> entry : countPerDc(dcs, liveReplicas))
+                    {
+                        Replicas.ReplicaCount count = entry.value;
+                        if (!count.hasAtleast(localQuorumFor(keyspace, entry.key), 0))
+                            return false;
+                        fullCount += count.fullReplicas();
+                    }
+                    return fullCount > 0;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            default:
+                return liveReplicas.size() >= consistencyLevel.blockFor(keyspace)
+                        && Replicas.countFull(liveReplicas) > 0;
+        }
+    }
+
