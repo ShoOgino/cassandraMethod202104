@@ -4,27 +4,55 @@
             {
                 while (next == null)
                 {
-                    if (saved == null && !iterator.hasNext())
-                        return false;
-
-                    next = saved == null ? iterator.next() : saved;
-                    saved = null;
-
-                    // The sstable iterators assume that if there is one, the static row is the first thing this deserializer will return.
-                    // However, in the old format, a range tombstone with an empty start would sort before any static cell. So we should
-                    // detect that case and return the static parts first if necessary.
-                    if (isFirst && iterator.hasNext() && isStatic(iterator.peek()))
+                    if (null != stash)
                     {
-                        saved = next;
-                        next = iterator.next();
+                        next = stash.unfiltered;
+                        nextConsumedPosition = stash.consumedPosition;
+                        stash = null;
                     }
-                    isFirst = false;
+                    else
+                    {
+                        if (!iterator.hasNext())
+                            return false;
+                        next = iterator.next();
+                        nextConsumedPosition = currentPosition() - bytesReadForNextAtom;
+                    }
+
+                    /*
+                     * The sstable iterators assume that if there is one, the static row is the first thing this deserializer will return.
+                     * However, in the old format, a range tombstone with an empty start would sort before any static cell. So we should
+                     * detect that case and return the static parts first if necessary.
+                     */
+                    if (couldBeStartOfPartition && next.isRangeTombstoneMarker() && next.clustering().size() == 0 && iterator.hasNext())
+                    {
+                        Unfiltered unfiltered = iterator.next();
+                        long consumedPosition = currentPosition() - bytesReadForNextAtom;
+
+                        stash = new Stash(unfiltered, consumedPosition);
+
+                        /*
+                         * reorder next and stash (see the comment above that explains why), but retain their positions
+                         * it's ok to do so since consumedPosition value is only used to determine if we have gone past
+                         * the end of the index ‘block’; since the edge case requires that the first value be the ‘bottom’
+                         * RT bound (i.e. with no byte buffers), this has a small and well-defined size, and it must be
+                         * the case that both unfiltered are in the same index ‘block’ if we began at the beginning of it.
+                         * if we don't do this, however, we risk aborting early and not returning the BOTTOM rt bound,
+                         * if the static row is large enough to cross block boundaries.
+                         */
+                        if (isStatic(unfiltered))
+                        {
+                            stash.unfiltered = next;
+                            next = unfiltered;
+                        }
+                    }
+                    couldBeStartOfPartition = false;
 
                     // When reading old tables, we sometimes want to skip static data (due to how staticly defined column of compact
                     // tables are handled).
                     if (skipStatic && isStatic(next))
                         next = null;
                 }
+
                 return true;
             }
             catch (IOError e)
