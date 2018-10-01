@@ -1,0 +1,45 @@
+    @Test
+    public void testCreate5NodeStandardSyncTasksWithTransient()
+    {
+        List<TreeResponse> treeResponses = Arrays.asList(treeResponse(addr1, range1, "one",   range2, "one",   range3, "one"),
+                                                         treeResponse(addr2, range1, "two",   range2, "two",   range3, "two"),
+                                                         treeResponse(addr3, range1, "three", range2, "three", range3, "three"),
+                                                         treeResponse(addr4, range1, "four",  range2, "four",  range3, "four"),
+                                                         treeResponse(addr5, range1, "five",  range2, "five",  range3, "five"));
+
+        Predicate<InetAddressAndPort> isTransient = ep -> ep.equals(addr4) || ep.equals(addr5);
+        Map<SyncNodePair, SyncTask> tasks = toMap(RepairJob.createStandardSyncTasks(desc,
+                                                                                    treeResponses,
+                                                                                    addr1, // local
+                                                                                    isTransient, // transient
+                                                                                    false,
+                                                                                    true,
+                                                                                    PreviewKind.ALL));
+
+        SyncNodePair[] pairs = new SyncNodePair[] {pair(addr1, addr2),
+                                                   pair(addr1, addr3),
+                                                   pair(addr1, addr4),
+                                                   pair(addr1, addr5),
+                                                   pair(addr2, addr4),
+                                                   pair(addr2, addr4),
+                                                   pair(addr2, addr5),
+                                                   pair(addr3, addr4),
+                                                   pair(addr3, addr5)};
+
+        for (SyncNodePair pair : pairs)
+        {
+            SyncTask task = tasks.get(pair);
+            // Local only if addr1 is a coordinator
+            assertEquals(task.isLocal(), pair.coordinator.equals(addr1));
+
+            boolean isRemote = !pair.coordinator.equals(addr1) && !pair.peer.equals(addr1);
+            boolean involvesTransient = isTransient.test(pair.coordinator) || isTransient.test(pair.peer);
+            assertEquals(String.format("Coordinator: %s\n, Peer: %s\n",pair.coordinator, pair.peer),
+                         isRemote && involvesTransient,
+                         task instanceof AsymmetricRemoteSyncTask);
+
+            // All ranges to be synchronised
+            Assert.assertEquals(Arrays.asList(range1, range2, range3), task.rangesToSync);
+        }
+    }
+

@@ -1,0 +1,37 @@
+    public static void testLocalSyncWithTransient(InetAddressAndPort local, boolean pullRepair)
+    {
+        List<TreeResponse> treeResponses = Arrays.asList(treeResponse(addr1, range1, "one",   range2, "one",   range3, "one"),
+                                                         treeResponse(addr2, range1, "two",   range2, "two",   range3, "two"),
+                                                         treeResponse(addr3, range1, "three", range2, "three", range3, "three"),
+                                                         treeResponse(addr4, range1, "four",  range2, "four",  range3, "four"),
+                                                         treeResponse(addr5, range1, "five",  range2, "five",  range3, "five"));
+
+        Predicate<InetAddressAndPort> isTransient = ep -> ep.equals(addr4) || ep.equals(addr5);
+        Map<SyncNodePair, SyncTask> tasks = toMap(RepairJob.createStandardSyncTasks(desc,
+                                                                                    treeResponses,
+                                                                                    local, // local
+                                                                                    isTransient, // transient
+                                                                                    false,
+                                                                                    pullRepair,
+                                                                                    PreviewKind.ALL));
+
+        assertEquals(9, tasks.size());
+        for (InetAddressAndPort addr : new InetAddressAndPort[]{ addr1, addr2, addr3 })
+        {
+            if (local.equals(addr))
+                continue;
+
+            LocalSyncTask task = (LocalSyncTask) tasks.get(pair(local, addr));
+            assertTrue(task.requestRanges);
+            assertEquals(!pullRepair, task.transferRanges);
+        }
+
+        LocalSyncTask task = (LocalSyncTask) tasks.get(pair(local, addr4));
+        assertTrue(task.requestRanges);
+        assertFalse(task.transferRanges);
+
+        task = (LocalSyncTask) tasks.get(pair(local, addr5));
+        assertTrue(task.requestRanges);
+        assertFalse(task.transferRanges);
+    }
+

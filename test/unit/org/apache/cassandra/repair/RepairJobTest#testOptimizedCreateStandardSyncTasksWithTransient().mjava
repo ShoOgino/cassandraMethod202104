@@ -1,0 +1,31 @@
+    @Test
+    public void testOptimizedCreateStandardSyncTasksWithTransient()
+    {
+        List<TreeResponse> treeResponses = Arrays.asList(treeResponse(addr1, range1, "same",      range2, "same", range3, "same"),
+                                                         treeResponse(addr2, range1, "different", range2, "same", range3, "different"),
+                                                         treeResponse(addr3, range1, "same",      range2, "same", range3, "same"));
+
+        RepairJobDesc desc = new RepairJobDesc(UUID.randomUUID(), UUID.randomUUID(), "ks", "cf", Arrays.asList());
+        Map<SyncNodePair, SyncTask> tasks = toMap(RepairJob.createOptimisedSyncingSyncTasks(desc,
+                                                                                            treeResponses,
+                                                                                            addr1, // local
+                                                                                            ep -> ep.equals(addr3),
+                                                                                            addr -> "DC1",
+                                                                                            false,
+                                                                                            PreviewKind.ALL));
+
+        assertEquals(3, tasks.size());
+        SyncTask task = tasks.get(pair(addr1, addr2));
+        assertTrue(task.isLocal());
+        assertElementEquals(Arrays.asList(range1, range3), task.rangesToSync);
+        assertTrue(((LocalSyncTask)task).requestRanges);
+        assertFalse(((LocalSyncTask)task).transferRanges);
+
+        assertStreamRangeFromEither(tasks, Arrays.asList(range3),
+                                    addr2, addr1, addr3);
+
+        task = tasks.get(pair(addr2, addr3));
+        assertFalse(task.isLocal());
+        assertElementEquals(Arrays.asList(range1), task.rangesToSync);
+    }
+

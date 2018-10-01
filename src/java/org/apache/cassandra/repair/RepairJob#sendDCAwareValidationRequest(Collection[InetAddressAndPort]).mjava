@@ -4,7 +4,7 @@
     private ListenableFuture<List<TreeResponse>> sendDCAwareValidationRequest(Collection<InetAddressAndPort> endpoints)
     {
         String message = String.format("Requesting merkle trees for %s (to %s)", desc.columnFamily, endpoints);
-        logger.info("{} {}", previewKind.logPrefix(desc.sessionId), message);
+        logger.info("{} {}", session.previewKind.logPrefix(desc.sessionId), message);
         Tracing.traceRepair(message);
         int nowInSec = FBUtilities.nowInSeconds();
         List<ListenableFuture<TreeResponse>> tasks = new ArrayList<>(endpoints.size());
@@ -26,22 +26,22 @@
         {
             Queue<InetAddressAndPort> requests = entry.getValue();
             InetAddressAndPort address = requests.poll();
-            ValidationTask firstTask = new ValidationTask(desc, address, nowInSec, previewKind);
+            ValidationTask firstTask = new ValidationTask(desc, address, nowInSec, session.previewKind);
             logger.info("Validating {}", address);
-            session.waitForValidation(Pair.create(desc, address), firstTask);
+            session.trackValidationCompletion(Pair.create(desc, address), firstTask);
             tasks.add(firstTask);
             ValidationTask currentTask = firstTask;
             while (requests.size() > 0)
             {
                 final InetAddressAndPort nextAddress = requests.poll();
-                final ValidationTask nextTask = new ValidationTask(desc, nextAddress, nowInSec, previewKind);
+                final ValidationTask nextTask = new ValidationTask(desc, nextAddress, nowInSec, session.previewKind);
                 tasks.add(nextTask);
                 Futures.addCallback(currentTask, new FutureCallback<TreeResponse>()
                 {
                     public void onSuccess(TreeResponse result)
                     {
                         logger.info("Validating {}", nextAddress);
-                        session.waitForValidation(Pair.create(desc, nextAddress), nextTask);
+                        session.trackValidationCompletion(Pair.create(desc, nextAddress), nextTask);
                         taskExecutor.execute(nextTask);
                     }
 

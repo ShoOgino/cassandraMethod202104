@@ -1,55 +1,13 @@
     private ListenableFuture<List<SyncStat>> optimisedSyncing(List<TreeResponse> trees)
     {
-        InetAddressAndPort local = FBUtilities.getLocalAddressAndPort();
+        List<SyncTask> syncTasks = createOptimisedSyncingSyncTasks(desc,
+                                                                   trees,
+                                                                   FBUtilities.getLocalAddressAndPort(),
+                                                                   this::isTransient,
+                                                                   this::getDC,
+                                                                   session.isIncremental,
+                                                                   session.previewKind);
 
-        List<SyncTask> syncTasks = new ArrayList<>();
-        // We need to difference all trees one against another
-        DifferenceHolder diffHolder = new DifferenceHolder(trees);
-
-        logger.debug("diffs = {}", diffHolder);
-        PreferedNodeFilter preferSameDCFilter = (streaming, candidates) ->
-                                                candidates.stream()
-                                                          .filter(node -> getDC(streaming)
-                                                                          .equals(getDC(node)))
-                                                          .collect(Collectors.toSet());
-        ImmutableMap<InetAddressAndPort, HostDifferences> reducedDifferences = ReduceHelper.reduce(diffHolder, preferSameDCFilter);
-
-        for (int i = 0; i < trees.size(); i++)
-        {
-            InetAddressAndPort address = trees.get(i).endpoint;
-
-            // we don't stream to transient replicas
-            if (isTransient(address))
-                continue;
-
-            HostDifferences streamsFor = reducedDifferences.get(address);
-            if (streamsFor != null)
-            {
-                Preconditions.checkArgument(streamsFor.get(address).isEmpty(), "We should not fetch ranges from ourselves");
-                for (InetAddressAndPort fetchFrom : streamsFor.hosts())
-                {
-                    List<Range<Token>> toFetch = streamsFor.get(fetchFrom);
-                    logger.debug("{} is about to fetch {} from {}", address, toFetch, fetchFrom);
-                    SyncTask task;
-                    if (address.equals(local))
-                    {
-                        task = new LocalSyncTask(desc, address, fetchFrom, toFetch, isIncremental ? desc.parentSessionId : null,
-                                                 true, false, session.previewKind);
-                    }
-                    else
-                    {
-                        task = new AsymmetricRemoteSyncTask(desc, address, fetchFrom, toFetch, previewKind);
-                        session.waitForSync(Pair.create(desc, task.nodePair()), (AsymmetricRemoteSyncTask) task);
-                    }
-                    syncTasks.add(task);
-                    taskExecutor.submit(task);
-                }
-            }
-            else
-            {
-                logger.debug("Node {} has nothing to stream", address);
-            }
-        }
-        return Futures.allAsList(syncTasks);
+        return executeTasks(syncTasks);
     }
 
