@@ -1,0 +1,31 @@
+        TestEnvironment(int threadCount, long duration, int poolSize)
+        {
+            this.threadCount = threadCount;
+            this.duration = duration;
+            this.poolSize = poolSize;
+            until = System.nanoTime() + duration;
+            latch = new CountDownLatch(threadCount);
+            sharedRecycle = new SPSCQueue[threadCount];
+            makingProgress = new AtomicBoolean[threadCount];
+            burnFreed = new AtomicBoolean(false);
+            freedAllMemory = new AtomicBoolean[threadCount];
+            executorService = Executors.newFixedThreadPool(threadCount + 2);
+            threadResultFuture = new ArrayList<>(threadCount);
+
+            for (int i = 0; i < sharedRecycle.length; i++)
+            {
+                sharedRecycle[i] = new SPSCQueue<>();
+                makingProgress[i] = new AtomicBoolean(false);
+                freedAllMemory[i] = new AtomicBoolean(false);
+            }
+
+            // Divide the poolSize across our threads, deliberately over-subscribing it.  Threads
+            // allocate a different amount of memory each - 1*quanta, 2*quanta, ... N*quanta.
+            // Thread0 is always going to be a single CHUNK, then to allocate increasing amounts
+            // using their own algorithm the targetSize should be poolSize / targetSizeQuanta.
+            //
+            // This should divide double the poolSize across the working threads,
+            // plus CHUNK_SIZE for thread0 and 1/10 poolSize for the burn producer/consumer pair.
+            targetSizeQuanta = 2 * poolSize / sum1toN(threadCount - 1);
+        }
+

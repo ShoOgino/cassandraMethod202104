@@ -1,0 +1,64 @@
+    private void startBurnerThreads(TestEnvironment testEnv)
+    {
+        // setup some high churn allocate/deallocate, without any checking
+        final SPSCQueue<ByteBuffer> burn = new SPSCQueue<>();
+        final CountDownLatch doneAdd = new CountDownLatch(1);
+        testEnv.addCheckedFuture(testEnv.executorService.submit(new TestUntil(testEnv.until)
+        {
+            int count = 0;
+            final ThreadLocalRandom rand = ThreadLocalRandom.current();
+            void testOne() throws Exception
+            {
+                if (count * BufferPool.CHUNK_SIZE >= testEnv.poolSize / 10)
+                {
+                    if (burn.exhausted)
+                    {
+                        count = 0;
+                        testEnv.burnFreed.compareAndSet(false, true);
+                    } else
+                    {
+                        Thread.yield();
+                    }
+                    return;
+                }
+
+                ByteBuffer buffer = BufferPool.tryGet(BufferPool.CHUNK_SIZE);
+                if (buffer == null)
+                {
+                    Thread.yield();
+                    return;
+                }
+
+                // 50/50 chance of returning the buffer from the producer thread, or
+                // pass it on to the consumer.
+                if (rand.nextBoolean())
+                    BufferPool.put(buffer);
+                else
+                    burn.add(buffer);
+
+                count++;
+            }
+            void cleanup()
+            {
+                doneAdd.countDown();
+            }
+        }));
+        testEnv.threadResultFuture.add(testEnv.executorService.submit(new TestUntil(testEnv.until)
+        {
+            void testOne() throws Exception
+            {
+                ByteBuffer buffer = burn.poll();
+                if (buffer == null)
+                {
+                    Thread.yield();
+                    return;
+                }
+                BufferPool.put(buffer);
+            }
+            void cleanup()
+            {
+                Uninterruptibles.awaitUninterruptibly(doneAdd);
+            }
+        }));
+    }
+
