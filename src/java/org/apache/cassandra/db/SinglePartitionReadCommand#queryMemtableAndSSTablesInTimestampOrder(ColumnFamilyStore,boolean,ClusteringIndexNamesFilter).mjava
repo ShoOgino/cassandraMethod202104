@@ -29,7 +29,12 @@
                 UnfilteredRowIterator clonedFilter = copyOnHeap
                                                    ? UnfilteredRowIterators.cloningIterator(iter, HeapAllocator.instance)
                                                    : iter;
-                result = add(isForThrift() ? ThriftResultsMerger.maybeWrap(clonedFilter, nowInSec()) : clonedFilter, result, filter, false);
+                result = add(
+                    RTBoundValidator.validate(isForThrift() ? ThriftResultsMerger.maybeWrap(clonedFilter, nowInSec()) : clonedFilter, RTBoundValidator.Stage.MEMTABLE, false),
+                    result,
+                    filter,
+                    false
+                );
             }
         }
 
@@ -68,10 +73,29 @@
                                                                                  metricsCollector)))
                 {
                     if (!iter.partitionLevelDeletion().isLive())
-                        result = add(UnfilteredRowIterators.noRowsIterator(iter.metadata(), iter.partitionKey(), Rows.EMPTY_STATIC_ROW, iter.partitionLevelDeletion(), filter.isReversed()), result, filter, sstable.isRepaired());
+                    {
+                        result = add(
+                            UnfilteredRowIterators.noRowsIterator(iter.metadata(),
+                                                                  iter.partitionKey(),
+                                                                  Rows.EMPTY_STATIC_ROW,
+                                                                  iter.partitionLevelDeletion(),
+                                                                  filter.isReversed()),
+                            result,
+                            filter,
+                            sstable.isRepaired()
+                        );
+                    }
                     else
-                        result = add(iter, result, filter, sstable.isRepaired());
+                    {
+                        result = add(
+                            RTBoundValidator.validate(iter, RTBoundValidator.Stage.SSTABLE, false),
+                            result,
+                            filter,
+                            sstable.isRepaired()
+                        );
+                    }
                 }
+
                 continue;
             }
 
@@ -87,7 +111,13 @@
 
                 if (sstable.isRepaired())
                     onlyUnrepaired = false;
-                result = add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter, result, filter, sstable.isRepaired());
+
+                result = add(
+                    RTBoundValidator.validate(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter, RTBoundValidator.Stage.SSTABLE, false),
+                    result,
+                    filter,
+                    sstable.isRepaired()
+                );
             }
         }
 
