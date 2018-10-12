@@ -1,0 +1,154 @@
+        // Reads the unfiltered from disk and load them into the reader buffer. It stops reading when either the partition
+        // is fully read, or when stopReadingDisk() returns true.
+        protected void loadFromDisk(Slice.Bound start,
+                                    Slice.Bound end,
+                                    boolean hasPreviousBlock,
+                                    boolean hasNextBlock,
+                                    ClusteringPrefix currentFirstName,
+                                    ClusteringPrefix nextLastName) throws IOException
+        {
+            // start != null means it's the block covering the beginning of the slice, so it has to be the last block for this slice.
+            assert start == null || !hasNextBlock;
+
+            buffer.reset();
+            skipFirstIteratedItem = false;
+            skipLastIteratedItem = false;
+
+            boolean isFirst = true;
+
+            // If the start might be in this block, skip everything that comes before it.
+            if (start != null)
+            {
+                while (deserializer.hasNext() && deserializer.compareNextTo(start) <= 0 && !stopReadingDisk())
+                {
+                    isFirst = false;
+                    if (deserializer.nextIsRow())
+                        deserializer.skipNext();
+                    else
+                        updateOpenMarker((RangeTombstoneMarker)deserializer.readNext());
+                }
+            }
+
+            // If we have an open marker, it's either one from what we just skipped or it's one that open in the next (or
+            // one of the next) index block (if openMarker == openMarkerAtStartOfBlock).
+            if (openMarker != null)
+            {
+                // We have to feed a marker to the buffer, because that marker is likely to be close later and ImmtableBTreePartition
+                // doesn't take kindly to marker that comes without their counterpart. If that's the last block we're gonna read (for
+                // the current slice at least) it's easy because we'll want to return that open marker at the end of the data in this
+                // block anyway, so we have nothing more to do than adding it to the buffer.
+                // If it's not the last block however, in which case we know we'll have start == null, it means this marker is really
+                // open in a next block and so while we do need to add it the buffer for the reason mentioned above, we don't
+                // want to "return" it just yet, we'll wait until we reach it in the next blocks. That's why we trigger
+                // skipLastIteratedItem in that case (this is first item of the block, but we're iterating in reverse order
+                // so it will be last returned by the iterator).
+                RangeTombstone.Bound markerStart = start == null ? RangeTombstone.Bound.BOTTOM : RangeTombstone.Bound.fromSliceBound(start);
+                buffer.add(new RangeTombstoneBoundMarker(markerStart, openMarker));
+                if (hasNextBlock)
+                    skipLastIteratedItem = true;
+            }
+
+            // Now deserialize everything until we reach our requested end (if we have one)
+            // See SSTableIterator.ForwardRead.computeNext() for why this is a strict inequality below: this is the same
+            // reasoning here.
+            while (deserializer.hasNext()
+                   && (end == null || deserializer.compareNextTo(end) < 0)
+                   && !stopReadingDisk())
+            {
+                Unfiltered unfiltered = deserializer.readNext();
+
+                if (isFirst && openMarker == null
+                    && currentFirstName != null && nextLastName != null
+                    && (precedes(currentFirstName, nextLastName) || precedes(unfiltered.clustering(), currentFirstName)))
+                {
+                    // Range tombstones spanning multiple index blocks when reading legacy sstables need special handling.
+                    // Pre-3.0, the column index didn't encode open markers. Instead, open range tombstones were rewritten
+                    // at the start of index blocks they at least partially covered. These rewritten RTs found at the
+                    // beginning of index blocks need to be handled as though they were an open marker, otherwise iterator
+                    // validation will fail and/or some rows will be excluded from the result. These rewritten RTs can be
+                    // detected based on their relation to the current index block and the next one depending on what wrote
+                    // the sstable. For sstables coming from a memtable flush, a rewritten RT will have a clustering value
+                    // less than the first name of its index block. For sstables coming from compaction, the index block
+                    // first name will be the RT open bound, which will be less than the last name of the next block. So,
+                    // here we compare the first name of this block to the last name of the next block to detect the
+                    // compaction case, and clustering value of the unfiltered we just read to the index block's first name
+                    // to detect the flush case.
+                    Verify.verify(!sstable.descriptor.version.storeRows());
+                    Verify.verify(openMarker == null);
+                    Verify.verify(!skipLastIteratedItem);
+                    Verify.verify(unfiltered.isRangeTombstoneMarker());
+                    buffer.add(unfiltered);
+                    if (hasNextBlock)
+                        skipLastIteratedItem = true;
+                }
+                else if (isFirst && nextLastName != null && !precedes(nextLastName, unfiltered.clustering()))
+                {
+                    // When dealing with old format sstable, we have the problem that a row can span 2 index block, i.e. it can
+                    // start at the end of a block and end at the beginning of the next one. That's not a problem per se for
+                    // UnfilteredDeserializer.OldFormatSerializer, since it always read rows entirely, even if they span index
+                    // blocks, but as we reading index block in reverse we must be careful to not read the end of the row at
+                    // beginning of a block before we're reading the beginning of that row. So what we do is that if we detect
+                    // that the row starting this block is also the row ending the next one we're read (previous on disk), then
+                    // we'll skip that first result and  let it be read with the next block.
+                    Verify.verify(!sstable.descriptor.version.storeRows());
+                    isFirst = false;
+                }
+                else if (unfiltered.isEmpty())
+                {
+                    isFirst = false;
+                }
+                else
+                {
+                    buffer.add(unfiltered);
+                    isFirst = false;
+                }
+
+                if (unfiltered.isRangeTombstoneMarker())
+                    updateOpenMarker((RangeTombstoneMarker)unfiltered);
+            }
+
+            if (!sstable.descriptor.version.storeRows()
+                && deserializer.hasNext()
+                && (end == null || deserializer.compareNextTo(end) < 0))
+            {
+                // Range tombstone start and end bounds are stored together in legacy sstables. When we read one, we
+                // stash the closing bound until we reach the appropriate place to emit it, which is immediately before
+                // the next unfiltered with a greater clustering.
+                // If SSTRI considers the block exhausted before encountering such a clustering though, this end marker
+                // will never be emitted. So here we just check if there's a closing bound left in the deserializer.
+                // If there is, we compare it against the most recently emitted unfiltered (i.e.: the last unfiltered
+                // that this RT would enclose. And we have to do THAT comparison because the last name field on the
+                // current index block will be whatever was written at the end of the index block (i.e. the last name
+                // physically in the block), not the closing bound of the range tombstone (i.e. the last name logically
+                // in the block). If all this indicates that there is indeed a range tombstone we're missing, we add it
+                // to the buffer and update the open marker field.
+                Unfiltered unfiltered = deserializer.readNext();
+                RangeTombstoneMarker marker = unfiltered.isRangeTombstoneMarker() ? (RangeTombstoneMarker) unfiltered : null;
+                if (marker != null && marker.isClose(false)
+                    && (mostRecentlyEmitted == null || precedes(marker.clustering(), mostRecentlyEmitted.clustering())))
+                {
+                    buffer.add(marker);
+                    updateOpenMarker(marker);
+                }
+            }
+
+            // If we have an open marker, we should close it before finishing
+            if (openMarker != null)
+            {
+                // This is the reverse problem than the one at the start of the block. Namely, if it's the first block
+                // we deserialize for the slice (the one covering the slice end basically), then it's easy, we just want
+                // to add the close marker to the buffer and return it normally.
+                // If it's note our first block (for the slice) however, it means that marker closed in a previously read
+                // block and we have already returned it. So while we should still add it to the buffer for the sake of
+                // not breaking ImmutableBTreePartition, we should skip it when returning from the iterator, hence the
+                // skipFirstIteratedItem (this is the last item of the block, but we're iterating in reverse order so it will
+                // be the first returned by the iterator).
+                RangeTombstone.Bound markerEnd = end == null ? RangeTombstone.Bound.TOP : RangeTombstone.Bound.fromSliceBound(end);
+                buffer.add(new RangeTombstoneBoundMarker(markerEnd, openMarker));
+                if (hasPreviousBlock)
+                    skipFirstIteratedItem = true;
+            }
+
+            buffer.build();
+        }
+
