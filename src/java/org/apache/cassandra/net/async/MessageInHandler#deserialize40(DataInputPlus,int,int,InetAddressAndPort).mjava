@@ -1,0 +1,29 @@
+    private static MessageIn<?> deserialize40(DataInputPlus in, int id, int version, InetAddressAndPort from) throws IOException
+    {
+        MessagingService.Verb verb = MessagingService.Verb.fromId(in.readInt());
+
+        Map<ParameterType, Object> parameters = Collections.emptyMap();
+        int parameterLength = (int) in.readUnsignedVInt();
+        if (parameterLength != 0)
+        {
+            parameters = new EnumMap<>(ParameterType.class);
+            byte[] bytes = new byte[parameterLength];
+            in.readFully(bytes);
+            try (DataInputBuffer buffer = new DataInputBuffer(bytes))
+            {
+                readParameters(() -> buffer.available() == 0, buffer, version, parameters);
+            }
+        }
+
+        Object payload = null;
+        int payloadSize = (int) in.readUnsignedVInt();
+        if (payloadSize > 0)
+        {
+            IVersionedSerializer serializer = MessagingService.getVerbSerializer(verb, id);
+            if (serializer == null) in.skipBytesFully(payloadSize);
+            else payload = serializer.deserialize(in, version);
+        }
+
+        return new MessageIn<>(from, payload, parameters, verb, version, System.nanoTime());
+    }
+
