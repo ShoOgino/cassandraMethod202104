@@ -1,0 +1,23 @@
+    /**
+     * RTL doesn't correctly merge range tombstones in some situations (see CASSANDRA-14894)
+     */
+    @Test
+    public void testWithNoopBoundaryMarkers()
+    {
+        PartitionUpdate update = new PartitionUpdate(cfm, dk, cfm.partitionColumns(), 1);
+        RangeTombstoneList rtl = new RangeTombstoneList(cfm.comparator, 10);
+        rtl.add(rt(1, 2, 5, 5));
+        rtl.add(rt(3, 4, 5, 5));
+        rtl.add(rt(5, 6, 5, 5));
+        rtl.add(rt(0, 8, 6, 6)); // <- supersedes all other tombstones
+
+        Assert.assertEquals(3, rtl.size());
+
+        try (UnfilteredRowIterator partition = createMergeIterator(update.iterator(), rtl.iterator(), false))
+        {
+            assertRtMarker(partition.next(), ClusteringPrefix.Kind.INCL_START_BOUND, 0);
+            assertRtMarker(partition.next(), ClusteringPrefix.Kind.INCL_END_BOUND, 8);
+            assertFalse(partition.hasNext());
+        }
+    }
+
