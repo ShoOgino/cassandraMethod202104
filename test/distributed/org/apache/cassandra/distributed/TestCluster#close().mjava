@@ -1,16 +1,35 @@
     @Override
-    public void close()
+    public void close() throws InterruptedException, TimeoutException, ExecutionException
     {
         List<Future<?>> futures = instances.stream()
                 .map(i -> exec.submit(i::shutdown))
                 .collect(Collectors.toList());
 
-//        withThreadLeakCheck(futures);
-
         // Make sure to only delete directory when threads are stopped
-        exec.submit(() -> {
+        Future combined = exec.submit(() -> {
             FBUtilities.waitOnFutures(futures);
             FileUtils.deleteRecursive(root);
         });
+
+        combined.get(60, TimeUnit.SECONDS);
+
+        exec.shutdownNow();
+        exec.awaitTermination(10, TimeUnit.SECONDS);
+
+//        withThreadLeakCheck(futures);
+        Set<Thread> threadSet = Thread.getAllStackTraces().keySet();
+        for (Thread thread : threadSet)
+        {
+            if (thread instanceof FastThreadLocalThread)
+                ((FastThreadLocalThread)thread).setThreadLocalMap(null);
+        }
+
+        InternalThreadLocalMap.remove();
+        InternalThreadLocalMap.destroy();
+
+        FastThreadLocal.removeAll();
+        FastThreadLocal.destroy();
+
+        System.gc();
     }
 
