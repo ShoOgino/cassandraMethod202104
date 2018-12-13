@@ -1,0 +1,50 @@
+    @Test
+    public void testBlockedAcquisition() throws ExecutionException, InterruptedException
+    {
+        cfs.disableAutoCompaction();
+        ExecutorService es = Executors.newFixedThreadPool(1);
+
+        makeSSTables(2);
+        UUID prsid = UUID.randomUUID();
+        Set<SSTableReader> sstables = cfs.getLiveSSTables();
+        List<ISSTableScanner> scanners = sstables.stream().map(SSTableReader::getScanner).collect(Collectors.toList());
+        try
+        {
+            try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+                 CompactionController controller = new CompactionController(cfs, sstables, 0);
+                 CompactionIterator ci = CompactionManager.getAntiCompactionIterator(scanners, controller, 0, UUID.randomUUID(), CompactionManager.instance.getMetrics()))
+            {
+                // `ci` is our imaginary ongoing anticompaction which makes no progress until after 30s
+                // now we try to start a new AC, which will try to cancel all ongoing compactions
+
+                CompactionManager.instance.getMetrics().beginCompaction(ci);
+                PendingAntiCompaction pac = new PendingAntiCompaction(prsid, Collections.singleton(cfs), atEndpoint(FULL_RANGE, NO_RANGES), es);
+                ListenableFuture fut = pac.run();
+                try
+                {
+                    fut.get(30, TimeUnit.SECONDS);
+                }
+                catch (TimeoutException e)
+                {
+                    // expected, we wait 1 minute for compactions to get cancelled in runWithCompactionsDisabled
+                }
+                Assert.assertTrue(ci.hasNext());
+                ci.next(); // this would throw exception if the CompactionIterator was abortable
+                try
+                {
+                    fut.get();
+                    Assert.fail("We should get exception when trying to start a new anticompaction with the same sstables");
+                }
+                catch (Throwable t)
+                {
+
+                }
+            }
+        }
+        finally
+        {
+            es.shutdown();
+            ISSTableScanner.closeAllAndPropagate(scanners, null);
+        }
+    }
+

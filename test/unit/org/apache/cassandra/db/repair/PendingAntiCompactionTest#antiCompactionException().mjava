@@ -1,0 +1,42 @@
+    /**
+     * Makes sure that PendingAntiCompaction fails when anticompaction throws exception
+     */
+    @Test
+    public void antiCompactionException()
+    {
+        cfs.disableAutoCompaction();
+        makeSSTables(2);
+        UUID prsid = UUID.randomUUID();
+        ListeningExecutorService es = MoreExecutors.listeningDecorator(MoreExecutors.newDirectExecutorService());
+        PendingAntiCompaction pac = new PendingAntiCompaction(prsid, Collections.singleton(cfs), atEndpoint(FULL_RANGE, NO_RANGES), es) {
+            @Override
+            protected AcquisitionCallback getAcquisitionCallback(UUID prsId, RangesAtEndpoint tokenRanges)
+            {
+                return new AcquisitionCallback(prsid, tokenRanges)
+                {
+                    @Override
+                    ListenableFuture<?> submitPendingAntiCompaction(AcquireResult result)
+                    {
+                        Runnable r = new WrappedRunnable()
+                        {
+                            protected void runMayThrow()
+                            {
+                                throw new CompactionInterruptedException(null);
+                            }
+                        };
+                        return es.submit(r);
+                    }
+                };
+            }
+        };
+        ListenableFuture<?> fut = pac.run();
+        try
+        {
+            fut.get();
+            Assert.fail("Should throw exception");
+        }
+        catch(Throwable t)
+        {
+        }
+    }
+

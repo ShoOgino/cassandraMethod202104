@@ -1,0 +1,63 @@
+    @Test
+    public void testUnblockedAcquisition() throws ExecutionException, InterruptedException
+    {
+        cfs.disableAutoCompaction();
+        ExecutorService es = Executors.newFixedThreadPool(1);
+        makeSSTables(2);
+        UUID prsid = prepareSession();
+        Set<SSTableReader> sstables = cfs.getLiveSSTables();
+        List<ISSTableScanner> scanners = sstables.stream().map(SSTableReader::getScanner).collect(Collectors.toList());
+        try
+        {
+            try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+                 CompactionController controller = new CompactionController(cfs, sstables, 0);
+                 CompactionIterator ci = new CompactionIterator(OperationType.COMPACTION, scanners, controller, 0, UUID.randomUUID()))
+            {
+                // `ci` is our imaginary ongoing anticompaction which makes no progress until after 5s
+                // now we try to start a new AC, which will try to cancel all ongoing compactions
+
+                CompactionManager.instance.getMetrics().beginCompaction(ci);
+                PendingAntiCompaction pac = new PendingAntiCompaction(prsid, Collections.singleton(cfs), atEndpoint(FULL_RANGE, NO_RANGES), es);
+                ListenableFuture fut = pac.run();
+                try
+                {
+                    fut.get(5, TimeUnit.SECONDS);
+                }
+                catch (TimeoutException e)
+                {
+                    // expected, we wait 1 minute for compactions to get cancelled in runWithCompactionsDisabled, but we are not iterating
+                    // CompactionIterator so the compaction is not actually cancelled
+                }
+                try
+                {
+                    Assert.assertTrue(ci.hasNext());
+                    ci.next();
+                    Assert.fail("CompactionIterator should be abortable");
+                }
+                catch (CompactionInterruptedException e)
+                {
+                    CompactionManager.instance.getMetrics().finishCompaction(ci);
+                    txn.abort();
+                    // expected
+                }
+                CountDownLatch cdl = new CountDownLatch(1);
+                Futures.addCallback(fut, new FutureCallback<Object>()
+                {
+                    public void onSuccess(@Nullable Object o)
+                    {
+                        cdl.countDown();
+                    }
+
+                    public void onFailure(Throwable throwable)
+                    {
+                    }
+                });
+                Assert.assertTrue(cdl.await(1, TimeUnit.MINUTES));
+            }
+        }
+        finally
+        {
+            es.shutdown();
+        }
+    }
+
