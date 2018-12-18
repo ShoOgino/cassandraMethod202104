@@ -1,0 +1,57 @@
+    @Override
+    public void startup(ICluster cluster)
+    {
+        sync(() -> {
+            try
+            {
+                mkdirs();
+
+                Config.setOverrideLoadConfig(() -> loadConfig(config));
+                DatabaseDescriptor.setDaemonInitialized();
+                DatabaseDescriptor.createAllDirectories();
+
+                // We need to persist this as soon as possible after startup checks.
+                // This should be the first write to SystemKeyspace (CASSANDRA-11742)
+                SystemKeyspace.persistLocalMetadata();
+
+                try
+                {
+                    // load schema from disk
+                    Schema.instance.loadFromDisk();
+                }
+                catch (Exception e)
+                {
+                    throw e;
+                }
+
+                Keyspace.setInitialized();
+
+                // Replay any CommitLogSegments found on disk
+                try
+                {
+                    CommitLog.instance.recover();
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+
+                initializeRing(cluster);
+                registerMockMessaging(cluster);
+
+                SystemKeyspace.finishStartup();
+
+                if (!FBUtilities.getBroadcastAddress().equals(broadcastAddressAndPort().address))
+                    throw new IllegalStateException();
+                if (DatabaseDescriptor.getStoragePort() != broadcastAddressAndPort().port)
+                    throw new IllegalStateException();
+            }
+            catch (Throwable t)
+            {
+                if (t instanceof RuntimeException)
+                    throw (RuntimeException) t;
+                throw new RuntimeException(t);
+            }
+        }).run();
+    }
+
