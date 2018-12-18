@@ -1,14 +1,24 @@
         @SuppressWarnings("resource")
         private AcquireResult acquireTuple()
         {
-            List<SSTableReader> sstables = Lists.newArrayList(getSSTables());
-            if (sstables.isEmpty())
-                return new AcquireResult(cfs, null, null);
+            // this method runs with compactions stopped & disabled
+            try
+            {
+                // using predicate might throw if there are conflicting ranges
+                Set<SSTableReader> sstables = cfs.getLiveSSTables().stream().filter(predicate).collect(Collectors.toSet());
+                if (sstables.isEmpty())
+                    return new AcquireResult(cfs, null, null);
 
-            LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
-            if (txn != null)
-                return new AcquireResult(cfs, Refs.ref(sstables), txn);
-            else
-                return null;
+                LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
+                if (txn != null)
+                    return new AcquireResult(cfs, Refs.ref(sstables), txn);
+            }
+            catch (SSTableAcquisitionException e)
+            {
+                logger.warn(e.getMessage());
+                logger.debug("Got exception trying to acquire sstables", e);
+            }
+
+            return null;
         }
 

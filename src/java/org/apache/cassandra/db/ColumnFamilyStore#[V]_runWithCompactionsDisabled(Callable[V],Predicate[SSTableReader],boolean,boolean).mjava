@@ -1,0 +1,49 @@
+    public <V> V runWithCompactionsDisabled(Callable<V> callable, Predicate<SSTableReader> sstablesPredicate, boolean interruptValidation, boolean interruptViews)
+    {
+        // synchronize so that concurrent invocations don't re-enable compactions partway through unexpectedly,
+        // and so we only run one major compaction at a time
+        synchronized (this)
+        {
+            logger.trace("Cancelling in-progress compactions for {}", metadata.name);
+
+            Iterable<ColumnFamilyStore> selfWithAuxiliaryCfs = interruptViews
+                                                               ? Iterables.concat(concatWithIndexes(), viewManager.allViewsCfs())
+                                                               : concatWithIndexes();
+
+            for (ColumnFamilyStore cfs : selfWithAuxiliaryCfs)
+                cfs.getCompactionStrategyManager().pause(); // todo: make sure anticompaction pauses!
+            try
+            {
+                // interrupt in-progress compactions
+                CompactionManager.instance.interruptCompactionForCFs(selfWithAuxiliaryCfs, sstablesPredicate, interruptValidation);
+                CompactionManager.instance.waitForCessation(selfWithAuxiliaryCfs, sstablesPredicate);
+
+                // doublecheck that we finished, instead of timing out
+                for (ColumnFamilyStore cfs : selfWithAuxiliaryCfs)
+                {
+                    if (cfs.getTracker().getCompacting().stream().anyMatch(sstablesPredicate))
+                    {
+                        logger.warn("Unable to cancel in-progress compactions for {}.  Perhaps there is an unusually large row in progress somewhere, or the system is simply overloaded.", metadata.name);
+                        return null;
+                    }
+                }
+                logger.trace("Compactions successfully cancelled");
+
+                // run our task
+                try
+                {
+                    return callable.call();
+                }
+                catch (Exception e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+            finally
+            {
+                for (ColumnFamilyStore cfs : selfWithAuxiliaryCfs)
+                    cfs.getCompactionStrategyManager().resume();
+            }
+        }
+    }
+

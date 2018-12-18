@@ -1,0 +1,23 @@
+    @Test
+    public void testIndexSummaryRedistributionTracking() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk int, ck int, a int, b int, PRIMARY KEY (pk, ck))");
+        getCurrentColumnFamilyStore().disableAutoCompaction();
+        for (int i = 0; i < 5; i++)
+        {
+            execute("INSERT INTO %s (pk, ck, a, b) VALUES ("+i+", 2, 3, 4)");
+            getCurrentColumnFamilyStore().forceBlockingFlush();
+        }
+        Set<SSTableReader> sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        try (LifecycleTransaction txn = getCurrentColumnFamilyStore().getTracker().tryModify(sstables, OperationType.INDEX_SUMMARY))
+        {
+            Map<TableId, LifecycleTransaction> transactions = ImmutableMap.<TableId, LifecycleTransaction>builder().put(getCurrentColumnFamilyStore().metadata().id, txn).build();
+            IndexSummaryRedistribution isr = new IndexSummaryRedistribution(new ArrayList<>(sstables), transactions, 1000);
+            MockActiveCompactions mockActiveCompactions = new MockActiveCompactions();
+            CompactionManager.instance.runIndexSummaryRedistribution(isr, mockActiveCompactions);
+            assertTrue(mockActiveCompactions.finished);
+            assertNotNull(mockActiveCompactions.holder);
+            assertEquals(sstables, mockActiveCompactions.holder.getCompactionInfo().getSSTables());
+        }
+    }
+

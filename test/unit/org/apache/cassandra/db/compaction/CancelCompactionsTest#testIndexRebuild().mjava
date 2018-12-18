@@ -1,0 +1,63 @@
+    /**
+     * Make sure index rebuilds get cancelled
+     */
+    @Test
+    public void testIndexRebuild() throws ExecutionException, InterruptedException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        List<SSTableReader> sstables = createSSTables(cfs, 5, 0);
+        Index idx = new StubIndex(cfs, null);
+        CountDownLatch indexBuildStarted = new CountDownLatch(1);
+        CountDownLatch indexBuildRunning = new CountDownLatch(1);
+        CountDownLatch compactionsStopped = new CountDownLatch(1);
+        ReducingKeyIterator reducingKeyIterator = new ReducingKeyIterator(sstables)
+        {
+            @Override
+            public boolean hasNext()
+            {
+                indexBuildStarted.countDown();
+                try
+                {
+                    indexBuildRunning.await();
+                }
+                catch (InterruptedException e)
+                {
+                    throw new RuntimeException();
+                }
+                return false;
+            }
+        };
+        Future<?> f = CompactionManager.instance.submitIndexBuild(new CollatedViewIndexBuilder(cfs, Collections.singleton(idx), reducingKeyIterator, ImmutableSet.copyOf(sstables)));
+        // wait for hasNext to get called
+        indexBuildStarted.await();
+        assertEquals(1, CompactionManager.instance.active.getCompactions().size());
+        boolean foundCompaction = false;
+        for (CompactionInfo.Holder holder : CompactionManager.instance.active.getCompactions())
+        {
+            if (holder.getCompactionInfo().getSSTables().equals(new HashSet<>(sstables)))
+            {
+                assertFalse(holder.isStopRequested());
+                foundCompaction = true;
+            }
+        }
+        assertTrue(foundCompaction);
+        cfs.runWithCompactionsDisabled(() -> {compactionsStopped.countDown(); return null;}, (sstable) -> true, false, false);
+        // wait for the runWithCompactionsDisabled callable
+        compactionsStopped.await();
+        assertEquals(1, CompactionManager.instance.active.getCompactions().size());
+        foundCompaction = false;
+        for (CompactionInfo.Holder holder : CompactionManager.instance.active.getCompactions())
+        {
+            if (holder.getCompactionInfo().getSSTables().equals(new HashSet<>(sstables)))
+            {
+                assertTrue(holder.isStopRequested());
+                foundCompaction = true;
+            }
+        }
+        assertTrue(foundCompaction);
+        // signal that the index build should be finished
+        indexBuildRunning.countDown();
+        f.get();
+        assertTrue(CompactionManager.instance.active.getCompactions().isEmpty());
+    }
+

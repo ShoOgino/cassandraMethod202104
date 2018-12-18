@@ -1,0 +1,44 @@
+    /**
+     * makes sure we only cancel compactions if the precidate says we have overlapping sstables
+     */
+    @Test
+    public void cancelTest() throws InterruptedException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        List<SSTableReader> sstables = createSSTables(cfs, 10, 0);
+        Set<SSTableReader> toMarkCompacting = new HashSet<>(sstables.subList(0, 3));
+
+        TestCompactionTask tct = new TestCompactionTask(cfs, toMarkCompacting);
+        try
+        {
+            tct.start();
+
+            List<CompactionInfo.Holder> activeCompactions = CompactionManager.instance.active.getCompactions();
+            assertEquals(1, activeCompactions.size());
+            assertEquals(activeCompactions.get(0).getCompactionInfo().getSSTables(), toMarkCompacting);
+            // predicate requires the non-compacting sstables, should not cancel the one currently compacting:
+            cfs.runWithCompactionsDisabled(() -> null, (sstable) -> !toMarkCompacting.contains(sstable), false, false);
+            assertEquals(1, activeCompactions.size());
+            assertFalse(activeCompactions.get(0).isStopRequested());
+
+            // predicate requires the compacting ones - make sure stop is requested and that when we abort that
+            // compaction we actually run the callable (countdown the latch)
+            CountDownLatch cdl = new CountDownLatch(1);
+            Thread t = new Thread(() -> cfs.runWithCompactionsDisabled(() -> { cdl.countDown(); return null; }, toMarkCompacting::contains, false, false));
+            t.start();
+            while (!activeCompactions.get(0).isStopRequested())
+                Thread.sleep(100);
+
+            // cdl.countDown will not get executed until we have aborted all compactions for the sstables in toMarkCompacting
+            assertFalse(cdl.await(2, TimeUnit.SECONDS));
+            tct.abort();
+            // now the compactions are aborted and we can successfully wait for the latch
+            t.join();
+            assertTrue(cdl.await(2, TimeUnit.SECONDS));
+        }
+        finally
+        {
+            tct.abort();
+        }
+    }
+

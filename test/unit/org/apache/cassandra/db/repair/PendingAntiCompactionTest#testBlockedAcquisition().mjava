@@ -1,5 +1,5 @@
     @Test
-    public void testBlockedAcquisition() throws ExecutionException, InterruptedException
+    public void testBlockedAcquisition() throws ExecutionException, InterruptedException, TimeoutException
     {
         cfs.disableAutoCompaction();
         ExecutorService es = Executors.newFixedThreadPool(1);
@@ -12,33 +12,27 @@
         {
             try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.ANTICOMPACTION);
                  CompactionController controller = new CompactionController(cfs, sstables, 0);
-                 CompactionIterator ci = CompactionManager.getAntiCompactionIterator(scanners, controller, 0, UUID.randomUUID(), CompactionManager.instance.getMetrics()))
+                 CompactionIterator ci = CompactionManager.getAntiCompactionIterator(scanners, controller, 0, UUID.randomUUID(), CompactionManager.instance.active))
             {
                 // `ci` is our imaginary ongoing anticompaction which makes no progress until after 30s
                 // now we try to start a new AC, which will try to cancel all ongoing compactions
 
-                CompactionManager.instance.getMetrics().beginCompaction(ci);
+                CompactionManager.instance.active.beginCompaction(ci);
                 PendingAntiCompaction pac = new PendingAntiCompaction(prsid, Collections.singleton(cfs), atEndpoint(FULL_RANGE, NO_RANGES), es);
                 ListenableFuture fut = pac.run();
                 try
                 {
                     fut.get(30, TimeUnit.SECONDS);
+                    fail("the future should throw exception since we try to start a new anticompaction when one is already running");
                 }
-                catch (TimeoutException e)
+                catch (ExecutionException e)
                 {
-                    // expected, we wait 1 minute for compactions to get cancelled in runWithCompactionsDisabled
+                    assertTrue(e.getCause() instanceof PendingAntiCompaction.SSTableAcquisitionException);
                 }
-                Assert.assertTrue(ci.hasNext());
-                ci.next(); // this would throw exception if the CompactionIterator was abortable
-                try
-                {
-                    fut.get();
-                    Assert.fail("We should get exception when trying to start a new anticompaction with the same sstables");
-                }
-                catch (Throwable t)
-                {
 
-                }
+                assertEquals(1, getCompactionsFor(cfs).size());
+                for (CompactionInfo.Holder holder : getCompactionsFor(cfs))
+                    assertFalse(holder.isStopRequested());
             }
         }
         finally

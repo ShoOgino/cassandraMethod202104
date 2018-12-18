@@ -1,0 +1,24 @@
+    @Test
+    public void testSecondaryIndexTracking() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk int, ck int, a int, b int, PRIMARY KEY (pk, ck))");
+        String idxName = createIndex("CREATE INDEX on %s(a)");
+        getCurrentColumnFamilyStore().disableAutoCompaction();
+        for (int i = 0; i < 5; i++)
+        {
+            execute("INSERT INTO %s (pk, ck, a, b) VALUES ("+i+", 2, 3, 4)");
+            getCurrentColumnFamilyStore().forceBlockingFlush();
+        }
+
+        Index idx = getCurrentColumnFamilyStore().indexManager.getIndexByName(idxName);
+        Set<SSTableReader> sstables = getCurrentColumnFamilyStore().getLiveSSTables();
+        SecondaryIndexBuilder builder = idx.getBuildTaskSupport().getIndexBuildTask(getCurrentColumnFamilyStore(), Collections.singleton(idx), sstables);
+
+        MockActiveCompactions mockActiveCompactions = new MockActiveCompactions();
+        CompactionManager.instance.submitIndexBuild(builder, mockActiveCompactions).get();
+
+        assertTrue(mockActiveCompactions.finished);
+        assertNotNull(mockActiveCompactions.holder);
+        assertEquals(sstables, mockActiveCompactions.holder.getCompactionInfo().getSSTables());
+    }
+

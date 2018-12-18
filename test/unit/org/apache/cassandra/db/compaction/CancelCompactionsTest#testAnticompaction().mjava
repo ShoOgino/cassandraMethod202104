@@ -1,0 +1,62 @@
+    @Test
+    public void testAnticompaction() throws InterruptedException, ExecutionException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        List<SSTableReader> sstables = createSSTables(cfs, 10, 0);
+        List<SSTableReader> alreadyRepairedSSTables = createSSTables(cfs, 10, 10);
+        for (SSTableReader sstable : alreadyRepairedSSTables)
+            AbstractPendingRepairTest.mutateRepaired(sstable, System.currentTimeMillis());
+        assertEquals(20, cfs.getLiveSSTables().size());
+        List<TestCompactionTask> tcts = new ArrayList<>();
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(0, 2))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(3, 4))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(5, 7))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(8, 9))));
+
+        List<TestCompactionTask> nonAffectedTcts = new ArrayList<>();
+        nonAffectedTcts.add(new TestCompactionTask(cfs, new HashSet<>(alreadyRepairedSSTables)));
+
+        try
+        {
+            tcts.forEach(TestCompactionTask::start);
+            nonAffectedTcts.forEach(TestCompactionTask::start);
+            List<CompactionInfo.Holder> activeCompactions = CompactionManager.instance.active.getCompactions();
+            assertEquals(5, activeCompactions.size());
+            // make sure that sstables are fully contained so that the metadata gets mutated
+            Range<Token> range = new Range<>(token(-1), token(49));
+
+            UUID prsid = UUID.randomUUID();
+            ActiveRepairService.instance.registerParentRepairSession(prsid, InetAddressAndPort.getLocalHost(), Collections.singletonList(cfs), Collections.singleton(range), true, 1, true, PreviewKind.NONE);
+
+            InetAddressAndPort local = FBUtilities.getBroadcastAddressAndPort();
+            RangesAtEndpoint rae = RangesAtEndpoint.builder(local).add(new Replica(local, range, true)).build();
+
+            PendingAntiCompaction pac = new PendingAntiCompaction(prsid, Collections.singleton(cfs), rae, Executors.newSingleThreadExecutor());
+            Future<?> fut = pac.run();
+            Thread.sleep(600);
+            List<TestCompactionTask> toAbort = new ArrayList<>();
+            for (CompactionInfo.Holder holder : CompactionManager.instance.active.getCompactions())
+            {
+                if (holder.getCompactionInfo().getSSTables().stream().anyMatch(sstable -> sstable.intersects(Collections.singleton(range)) && !sstable.isRepaired() && !sstable.isPendingRepair()))
+                {
+                    assertTrue(holder.isStopRequested());
+                    for (TestCompactionTask tct : tcts)
+                        if (tct.sstables.equals(holder.getCompactionInfo().getSSTables()))
+                            toAbort.add(tct);
+                }
+                else
+                    assertFalse(holder.isStopRequested());
+            }
+            assertEquals(2, toAbort.size());
+            toAbort.forEach(TestCompactionTask::abort);
+            fut.get();
+            for (SSTableReader sstable : sstables)
+                assertTrue(!sstable.intersects(Collections.singleton(range)) || sstable.isPendingRepair());
+        }
+        finally
+        {
+            tcts.forEach(TestCompactionTask::abort);
+            nonAffectedTcts.forEach(TestCompactionTask::abort);
+        }
+    }
+

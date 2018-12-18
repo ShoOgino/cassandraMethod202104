@@ -1,0 +1,36 @@
+    @Test
+    public void testSSTablePredicateOngoingAntiCompaction()
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        cfs.disableAutoCompaction();
+        List<SSTableReader> sstables = new ArrayList<>();
+        List<SSTableReader> repairedSSTables = new ArrayList<>();
+        List<SSTableReader> pendingSSTables = new ArrayList<>();
+        for (int i = 1; i <= 10; i++)
+        {
+            SSTableReader sstable = MockSchema.sstable(i, i * 10, i * 10 + 9, cfs);
+            sstables.add(sstable);
+        }
+        for (int i = 1; i <= 10; i++)
+        {
+            SSTableReader sstable = MockSchema.sstable(i + 10, i * 10, i * 10 + 9, cfs);
+            AbstractPendingRepairTest.mutateRepaired(sstable, System.currentTimeMillis());
+            repairedSSTables.add(sstable);
+        }
+        for (int i = 1; i <= 10; i++)
+        {
+            SSTableReader sstable = MockSchema.sstable(i + 20, i * 10, i * 10 + 9, cfs);
+            AbstractPendingRepairTest.mutateRepaired(sstable, UUID.randomUUID(), false);
+            pendingSSTables.add(sstable);
+        }
+
+        cfs.addSSTables(sstables);
+        cfs.addSSTables(repairedSSTables);
+
+        // if we are compacting the non-repaired non-pending sstables, we should get an error
+        tryPredicate(cfs, sstables, null, true);
+        // make sure we don't try to grab pending or repaired sstables;
+        tryPredicate(cfs, repairedSSTables, sstables, false);
+        tryPredicate(cfs, pendingSSTables, sstables, false);
+    }
+

@@ -1,0 +1,31 @@
+    private void tryPredicate(ColumnFamilyStore cfs, List<SSTableReader> compacting, List<SSTableReader> expectedLive, boolean shouldFail)
+    {
+        CompactionInfo.Holder holder = new CompactionInfo.Holder()
+        {
+            public CompactionInfo getCompactionInfo()
+            {
+                return new CompactionInfo(cfs.metadata(), OperationType.ANTICOMPACTION, 0, 1000, UUID.randomUUID(), compacting);
+            }
+        };
+        CompactionManager.instance.active.beginCompaction(holder);
+        try
+        {
+            PendingAntiCompaction.AntiCompactionPredicate predicate =
+            new PendingAntiCompaction.AntiCompactionPredicate(Collections.singleton(new Range<>(new Murmur3Partitioner.LongToken(0), new Murmur3Partitioner.LongToken(100))),
+                                                              UUID.randomUUID());
+            Set<SSTableReader> live = cfs.getLiveSSTables().stream().filter(predicate).collect(Collectors.toSet());
+            if (shouldFail)
+                fail("should fail - we try to grab already anticompacting sstables for anticompaction");
+            assertEquals(live, new HashSet<>(expectedLive));
+        }
+        catch (PendingAntiCompaction.SSTableAcquisitionException e)
+        {
+            if (!shouldFail)
+                fail("We should not fail filtering sstables");
+        }
+        finally
+        {
+            CompactionManager.instance.active.finishCompaction(holder);
+        }
+    }
+

@@ -1,0 +1,33 @@
+    Future<?> submitCacheWrite(final AutoSavingCache.Writer writer, ActiveCompactionsTracker activeCompactions)
+    {
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                if (!AutoSavingCache.flushInProgress.add(writer.cacheType()))
+                {
+                    logger.trace("Cache flushing was already in progress: skipping {}", writer.getCompactionInfo());
+                    return;
+                }
+                try
+                {
+                    activeCompactions.beginCompaction(writer);
+                    try
+                    {
+                        writer.saveCache();
+                    }
+                    finally
+                    {
+                        activeCompactions.finishCompaction(writer);
+                    }
+                }
+                finally
+                {
+                    AutoSavingCache.flushInProgress.remove(writer.cacheType());
+                }
+            }
+        };
+
+        return executor.submitIfRunning(runnable, "cache write");
+    }
+

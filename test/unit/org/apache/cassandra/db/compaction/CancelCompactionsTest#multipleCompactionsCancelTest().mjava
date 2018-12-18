@@ -1,0 +1,57 @@
+    /**
+     * make sure we only cancel relevant compactions when there are multiple ongoing compactions
+     */
+    @Test
+    public void multipleCompactionsCancelTest() throws InterruptedException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        List<SSTableReader> sstables = createSSTables(cfs, 10, 0);
+
+        List<TestCompactionTask> tcts = new ArrayList<>();
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(0, 3))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(6, 9))));
+
+        try
+        {
+            tcts.forEach(TestCompactionTask::start);
+
+            List<CompactionInfo.Holder> activeCompactions = CompactionManager.instance.active.getCompactions();
+            assertEquals(2, activeCompactions.size());
+
+            Set<Set<SSTableReader>> compactingSSTables = new HashSet<>();
+            compactingSSTables.add(activeCompactions.get(0).getCompactionInfo().getSSTables());
+            compactingSSTables.add(activeCompactions.get(1).getCompactionInfo().getSSTables());
+            Set<Set<SSTableReader>> expectedSSTables = new HashSet<>();
+            expectedSSTables.add(new HashSet<>(sstables.subList(0, 3)));
+            expectedSSTables.add(new HashSet<>(sstables.subList(6, 9)));
+            assertEquals(compactingSSTables, expectedSSTables);
+
+            cfs.runWithCompactionsDisabled(() -> null, (sstable) -> false, false, false);
+            assertEquals(2, activeCompactions.size());
+            assertTrue(activeCompactions.stream().noneMatch(CompactionInfo.Holder::isStopRequested));
+
+            CountDownLatch cdl = new CountDownLatch(1);
+            // start a compaction which only needs the sstables where first token is > 50 - these are the sstables compacted by tcts.get(1)
+            Thread t = new Thread(() -> cfs.runWithCompactionsDisabled(() -> { cdl.countDown(); return null; }, (sstable) -> first(sstable) > 50, false, false));
+            t.start();
+            activeCompactions = CompactionManager.instance.active.getCompactions();
+            assertEquals(2, activeCompactions.size());
+            Thread.sleep(500);
+            for (CompactionInfo.Holder holder : activeCompactions)
+            {
+                if (holder.getCompactionInfo().getSSTables().containsAll(sstables.subList(6, 9)))
+                    assertTrue(holder.isStopRequested());
+                else
+                    assertFalse(holder.isStopRequested());
+            }
+            tcts.get(1).abort();
+            assertEquals(1, CompactionManager.instance.active.getCompactions().size());
+            cdl.await();
+            t.join();
+        }
+        finally
+        {
+            tcts.forEach(TestCompactionTask::abort);
+        }
+    }
+

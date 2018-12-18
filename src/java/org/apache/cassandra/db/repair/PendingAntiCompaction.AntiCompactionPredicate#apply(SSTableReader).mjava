@@ -1,0 +1,37 @@
+        public boolean apply(SSTableReader sstable)
+        {
+            if (!sstable.intersects(ranges))
+                return false;
+
+            StatsMetadata metadata = sstable.getSSTableMetadata();
+
+            // exclude repaired sstables
+            if (metadata.repairedAt != UNREPAIRED_SSTABLE)
+                return false;
+
+            // exclude sstables pending repair, but record session ids for
+            // non-finalized sessions for a later error message
+            if (metadata.pendingRepair != NO_PENDING_REPAIR)
+            {
+                if (!ActiveRepairService.instance.consistent.local.isSessionFinalized(metadata.pendingRepair))
+                {
+                    String message = String.format("Prepare phase for incremental repair session %s has failed because it encountered " +
+                                                   "intersecting sstables belonging to another incremental repair session (%s). This is " +
+                                                   "caused by starting an incremental repair session before a previous one has completed. " +
+                                                   "Check nodetool repair_admin for hung sessions and fix them.", prsid, metadata.pendingRepair);
+                    throw new SSTableAcquisitionException(message);
+                }
+                return false;
+            }
+            CompactionInfo ci = CompactionManager.instance.active.getCompactionForSSTable(sstable);
+            if (ci != null && ci.getTaskType() == OperationType.ANTICOMPACTION)
+            {
+                // todo: start tracking the parent repair session id that created the anticompaction to be able to give a better error messsage here:
+                String message = String.format("Prepare phase for incremental repair session %s has failed because it encountered " +
+                                               "intersecting sstables belonging to another incremental repair session. This is " +
+                                               "caused by starting multiple conflicting incremental repairs at the same time", prsid);
+                throw new SSTableAcquisitionException(message);
+            }
+            return true;
+        }
+

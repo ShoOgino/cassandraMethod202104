@@ -1,0 +1,60 @@
+    /**
+     * Makes sure sub range compaction now only cancels the relevant compactions, not all of them
+     */
+    @Test
+    public void testSubrangeCompaction() throws InterruptedException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        List<SSTableReader> sstables = createSSTables(cfs, 10, 0);
+
+        List<TestCompactionTask> tcts = new ArrayList<>();
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(0, 2))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(3, 4))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(5, 7))));
+        tcts.add(new TestCompactionTask(cfs, new HashSet<>(sstables.subList(8, 9))));
+        try
+        {
+            tcts.forEach(TestCompactionTask::start);
+
+            List<CompactionInfo.Holder> activeCompactions = CompactionManager.instance.active.getCompactions();
+            assertEquals(4, activeCompactions.size());
+            Range<Token> range = new Range<>(token(0), token(49));
+            Thread t = new Thread(() -> {
+                try
+                {
+                    cfs.forceCompactionForTokenRange(Collections.singleton(range));
+                }
+                catch (Throwable e)
+                {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            t.start();
+
+            Thread.sleep(500);
+            assertEquals(4, CompactionManager.instance.active.getCompactions().size());
+            List<TestCompactionTask> toAbort = new ArrayList<>();
+            for (CompactionInfo.Holder holder : CompactionManager.instance.active.getCompactions())
+            {
+                if (holder.getCompactionInfo().getSSTables().stream().anyMatch(sstable -> sstable.intersects(Collections.singleton(range))))
+                {
+                    assertTrue(holder.isStopRequested());
+                    for (TestCompactionTask tct : tcts)
+                        if (tct.sstables.equals(holder.getCompactionInfo().getSSTables()))
+                            toAbort.add(tct);
+                }
+                else
+                    assertFalse(holder.isStopRequested());
+            }
+            assertEquals(2, toAbort.size());
+            toAbort.forEach(TestCompactionTask::abort);
+            t.join();
+
+        }
+        finally
+        {
+            tcts.forEach(TestCompactionTask::abort);
+        }
+    }
+
