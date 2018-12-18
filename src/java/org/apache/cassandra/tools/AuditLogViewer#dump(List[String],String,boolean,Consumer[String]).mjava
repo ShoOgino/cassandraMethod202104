@@ -1,0 +1,34 @@
+    static void dump(List<String> pathList, String rollCycle, boolean follow, Consumer<String> displayFun)
+    {
+        //Backoff strategy for spinning on the queue, not aggressive at all as this doesn't need to be low latency
+        Pauser pauser = Pauser.millis(100);
+        List<ExcerptTailer> tailers = pathList.stream()
+                                              .distinct()
+                                              .map(path -> ChronicleQueueBuilder.single(new File(path)).readOnly(true).rollCycle(RollCycles.valueOf(rollCycle)).build())
+                                              .map(SingleChronicleQueue::createTailer)
+                                              .collect(Collectors.toList());
+        boolean hadWork = true;
+        while (hadWork)
+        {
+            hadWork = false;
+            for (ExcerptTailer tailer : tailers)
+            {
+                while (tailer.readDocument(new DisplayRecord(displayFun)))
+                {
+                    hadWork = true;
+                }
+            }
+
+            if (follow)
+            {
+                if (!hadWork)
+                {
+                    //Chronicle queue doesn't support blocking so use this backoff strategy
+                    pauser.pause();
+                }
+                //Don't terminate the loop even if there wasn't work
+                hadWork = true;
+            }
+        }
+    }
+
