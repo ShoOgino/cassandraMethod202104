@@ -1,0 +1,33 @@
+    @VisibleForTesting
+    List<SyncTask> createSyncTasks(List<TreeResponse> trees, InetAddress local)
+    {
+        List<SyncTask> syncTasks = new ArrayList<>();
+        // We need to difference all trees one against another
+        for (int i = 0; i < trees.size() - 1; ++i)
+        {
+            TreeResponse r1 = trees.get(i);
+            for (int j = i + 1; j < trees.size(); ++j)
+            {
+                TreeResponse r2 = trees.get(j);
+                SyncTask task;
+
+                List<Range<Token>> differences = MerkleTrees.difference(r1.trees, r2.trees);
+
+                if (r1.endpoint.equals(local) || r2.endpoint.equals(local))
+                {
+                    task = new LocalSyncTask(desc, r1.endpoint, r2.endpoint, differences, repairedAt);
+                }
+                else
+                {
+                    task = new RemoteSyncTask(desc, r1.endpoint, r2.endpoint, differences);
+                    // RemoteSyncTask expects SyncComplete message sent back.
+                    // Register task to RepairSession to receive response.
+                    session.waitForSync(Pair.create(desc, new NodePair(r1.endpoint, r2.endpoint)), (RemoteSyncTask) task);
+                }
+                syncTasks.add(task);
+                taskExecutor.submit(task);
+            }
+        }
+        return syncTasks;
+    }
+
