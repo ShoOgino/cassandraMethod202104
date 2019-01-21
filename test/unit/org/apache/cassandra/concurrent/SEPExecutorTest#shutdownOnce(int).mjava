@@ -1,0 +1,29 @@
+    private static void shutdownOnce(int run) throws Throwable
+    {
+        SharedExecutorPool sharedPool = new SharedExecutorPool("SharedPool");
+        String MAGIC = "UNREPEATABLE_MAGIC_STRING";
+        OutputStream nullOutputStream = new OutputStream() {
+            public void write(int b) { }
+        };
+        PrintStream nullPrintSteam = new PrintStream(nullOutputStream);
+
+        for (int idx = 0; idx < 20; idx++)
+        {
+            ExecutorService es = sharedPool.newExecutor(FBUtilities.getAvailableProcessors(), Integer.MAX_VALUE, "STAGE", run + MAGIC + idx);
+            // Write to black hole
+            es.execute(() -> nullPrintSteam.println("TEST" + es));
+        }
+
+        // shutdown does not guarantee that threads are actually dead once it exits, only that they will stop promptly afterwards
+        sharedPool.shutdown();
+        for (Thread thread : Thread.getAllStackTraces().keySet())
+        {
+            if (thread.getName().contains(MAGIC))
+            {
+                thread.join(100);
+                if (thread.isAlive())
+                    Assert.fail(thread + " is still running " + Arrays.toString(thread.getStackTrace()));
+            }
+        }
+    }
+
