@@ -1,0 +1,28 @@
+        /*
+         * Long and the short of it is that we don't want to serve logback a fake System.out/err.
+         * ConsoleAppender is replaced so it always goes to the real System.out/err, but logback itself
+         * will at times try to log to System.out/err when it has issues.
+         *
+         * Now here is the problem. There is a deadlock if a thread logs to System.out, blocks on the async
+         * appender queue, and the async appender thread tries to log to System.out directly as part of some
+         * internal logback issue.
+         *
+         * So to prevent this we have to exhaustively check before locking in the PrintStream and forward
+         * to real System.out/err if it is the async appender
+         */
+        private boolean isAsyncAppender()
+        {
+            //Set the thread id based on the name
+            Thread currentThread = Thread.currentThread();
+            long currentThreadId = currentThread.getId();
+            if (asyncAppenderThreadId == Long.MIN_VALUE &&
+                currentThread.getName().equals("AsyncAppender-Worker-ASYNC") &&
+                !InstanceClassLoader.wasLoadedByAnInstanceClassLoader(currentThread.getClass()))
+            {
+                asyncAppenderThreadId = currentThreadId;
+            }
+            if (currentThreadId == asyncAppenderThreadId)
+                original.println("Was in async appender");
+            return currentThreadId == asyncAppenderThreadId;
+        }
+

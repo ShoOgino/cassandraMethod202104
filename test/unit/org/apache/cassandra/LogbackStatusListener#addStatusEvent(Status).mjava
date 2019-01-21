@@ -1,27 +1,33 @@
     @Override
     public void addStatusEvent(Status s)
     {
-        if (s.getLevel() != 0 || s.getEffectiveLevel() != 0)
-            hadError = true;
-
-        if (!hadError && s.getMessage().equals("Registering current configuration as safe fallback point"))
+        if (!haveInstalled && (s.getLevel() != 0 || s.getEffectiveLevel() != 0))
         {
-            try
-            {
-                installReplacementStreams();
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
+            // if we encounter an error during setup, we're not sure what state we're in, so we just don't switch
+            // we should log this fact, though, so that we know that we're not necessarily capturing stdout
+            LoggerFactory.getLogger(LogbackStatusListener.class)
+                         .warn("Encountered non-info status in logger setup; aborting stdout capture: '" + s.getMessage() + '\'');
+            hadPreInstallError = true;
+        }
+
+        if (hadPreInstallError)
+            return;
+
+        if (s.getMessage().startsWith("Registering current configuration as safe fallback point"))
+        {
+            onStart(null);
+        }
+
+        if (haveInstalled && !haveRegisteredListener)
+        {
+            // we register ourselves as a listener after the fact, because we enable ourselves before the LoggerFactory
+            // is properly initialised, hence before it can accept any LoggerContextListener registrations
+            tryRegisterListener();
         }
 
         if (s.getMessage().equals("Logback context being closed via shutdown hook"))
         {
-            if (replacementOut != null) replacementOut.flush();
-            if (replacementErr != null) replacementErr.flush();
-            System.setErr(originalErr);
-            System.setOut(originalOut);
+            onStop(null);
         }
     }
 
