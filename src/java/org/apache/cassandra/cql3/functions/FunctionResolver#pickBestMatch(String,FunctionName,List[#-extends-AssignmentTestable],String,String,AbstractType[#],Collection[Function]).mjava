@@ -1,0 +1,64 @@
+    private static Function pickBestMatch(String keyspace,
+                                          FunctionName name,
+                                          List<? extends AssignmentTestable> providedArgs,
+                                          String receiverKs,
+                                          String receiverCf, AbstractType<?> receiverType,
+                                          Collection<Function> candidates)
+    {
+        List<Function> compatibles = null;
+        for (Function toTest : candidates)
+        {
+            if (matchReturnType(toTest, receiverType))
+            {
+                AssignmentTestable.TestResult r = matchAguments(keyspace, toTest, providedArgs, receiverKs, receiverCf);
+                switch (r)
+                {
+                    case EXACT_MATCH:
+                        // We always favor exact matches
+                        return toTest;
+                    case WEAKLY_ASSIGNABLE:
+                        if (compatibles == null)
+                            compatibles = new ArrayList<>();
+                        compatibles.add(toTest);
+                        break;
+                }
+            }
+        }
+
+        if (compatibles == null)
+        {
+            if (OperationFcts.isOperation(name))
+                throw invalidRequest("the '%s' operation is not supported between %s and %s",
+                                     OperationFcts.getOperator(name), providedArgs.get(0), providedArgs.get(1));
+
+            throw invalidRequest("Invalid call to function %s, none of its type signatures match (known type signatures: %s)",
+                                 name, format(candidates));
+        }
+
+        if (compatibles.size() > 1)
+        {
+            if (OperationFcts.isOperation(name))
+            {
+                if (receiverType != null && !containsMarkers(providedArgs))
+                {
+                    for (Function toTest : compatibles)
+                    {
+                        List<AbstractType<?>> argTypes = toTest.argTypes();
+                        if (receiverType.equals(argTypes.get(0)) && receiverType.equals(argTypes.get(1)))
+                            return toTest;
+                    }
+                }
+                throw invalidRequest("Ambiguous '%s' operation with args %s and %s: use type casts to disambiguate",
+                                     OperationFcts.getOperator(name), providedArgs.get(0), providedArgs.get(1));
+            }
+
+            if (OperationFcts.isNegation(name))
+                throw invalidRequest("Ambiguous negation: use type casts to disambiguate");
+
+            throw invalidRequest("Ambiguous call to function %s (can be matched by following signatures: %s): use type casts to disambiguate",
+                                 name, format(compatibles));
+        }
+
+        return compatibles.get(0);
+    }
+
