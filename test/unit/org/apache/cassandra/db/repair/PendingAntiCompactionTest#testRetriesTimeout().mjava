@@ -1,0 +1,35 @@
+    @Test
+    public void testRetriesTimeout() throws InterruptedException, ExecutionException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        cfs.addSSTable(MockSchema.sstable(1, true, cfs));
+        ExecutorService es = Executors.newFixedThreadPool(1);
+        CompactionInfo.Holder holder = new CompactionInfo.Holder()
+        {
+            public CompactionInfo getCompactionInfo()
+            {
+                return new CompactionInfo(cfs.metadata(), OperationType.ANTICOMPACTION, 0, 0, UUID.randomUUID(), cfs.getLiveSSTables());
+            }
+        };
+        try
+        {
+            PendingAntiCompaction.AntiCompactionPredicate acp = new PendingAntiCompaction.AntiCompactionPredicate(FULL_RANGE, UUID.randomUUID())
+            {
+                @Override
+                public boolean apply(SSTableReader sstable)
+                {
+                    throw new PendingAntiCompaction.SSTableAcquisitionException("blah");
+                }
+            };
+            CompactionManager.instance.active.beginCompaction(holder);
+            PendingAntiCompaction.AcquisitionCallable acquisitionCallable = new PendingAntiCompaction.AcquisitionCallable(cfs, UUID.randomUUID(), 2, 1000, acp);
+            Future fut = es.submit(acquisitionCallable);
+            assertNull(fut.get());
+        }
+        finally
+        {
+            es.shutdown();
+            CompactionManager.instance.active.finishCompaction(holder);
+        }
+    }
+
