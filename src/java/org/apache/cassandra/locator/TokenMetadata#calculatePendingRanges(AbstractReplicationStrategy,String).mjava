@@ -24,50 +24,49 @@
     public void calculatePendingRanges(AbstractReplicationStrategy strategy, String keyspaceName)
     {
         // avoid race between both branches - do not use a lock here as this will block any other unrelated operations!
+        long startedAt = System.currentTimeMillis();
         synchronized (pendingRanges)
         {
-            if (bootstrapTokens.isEmpty() && leavingEndpoints.isEmpty() && movingEndpoints.isEmpty())
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
+            // create clone of current state
+            BiMultiValMap<Token, InetAddress> bootstrapTokensClone;
+            Set<InetAddress> leavingEndpointsClone;
+            Set<Pair<Token, InetAddress>> movingEndpointsClone;
+            TokenMetadata metadata;
 
-                pendingRanges.put(keyspaceName, new PendingRangeMaps());
-            }
-            else
+            lock.readLock().lock();
+            try
             {
+                if (bootstrapTokens.isEmpty() && leavingEndpoints.isEmpty() && movingEndpoints.isEmpty())
+                {
+                    if (logger.isTraceEnabled())
+                        logger.trace("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
+
+                    pendingRanges.put(keyspaceName, new PendingRangeMaps());
+
+                    return;
+                }
+
                 if (logger.isDebugEnabled())
                     logger.debug("Starting pending range calculation for {}", keyspaceName);
 
-                long startedAt = System.currentTimeMillis();
-
-                // create clone of current state
-                BiMultiValMap<Token, InetAddress> bootstrapTokens = new BiMultiValMap<>();
-                Set<InetAddress> leavingEndpoints = new HashSet<>();
-                Set<Pair<Token, InetAddress>> movingEndpoints = new HashSet<>();
-                TokenMetadata metadata;
-
-                lock.readLock().lock();
-                try
-                {
-                    bootstrapTokens.putAll(this.bootstrapTokens);
-                    leavingEndpoints.addAll(this.leavingEndpoints);
-                    movingEndpoints.addAll(this.movingEndpoints);
-                    metadata = this.cloneOnlyTokenMap();
-                }
-                finally
-                {
-                    lock.readLock().unlock();
-                }
-
-                pendingRanges.put(keyspaceName, calculatePendingRanges(strategy, metadata, bootstrapTokens,
-                                                                       leavingEndpoints, movingEndpoints));
-                long took = System.currentTimeMillis() - startedAt;
-
-                if (logger.isDebugEnabled())
-                    logger.debug("Pending range calculation for {} completed (took: {}ms)", keyspaceName, took);
-                if (logger.isTraceEnabled())
-                    logger.trace("Calculated pending ranges for {}:\n{}", keyspaceName, (pendingRanges.isEmpty() ? "<empty>" : printPendingRanges()));
+                bootstrapTokensClone  = new BiMultiValMap<>(this.bootstrapTokens);
+                leavingEndpointsClone = new HashSet<>(this.leavingEndpoints);
+                movingEndpointsClone = new HashSet<>(this.movingEndpoints);
+                metadata = this.cloneOnlyTokenMap();
             }
+            finally
+            {
+                lock.readLock().unlock();
+            }
+
+            pendingRanges.put(keyspaceName, calculatePendingRanges(strategy, metadata, bootstrapTokensClone,
+                                                                   leavingEndpointsClone, movingEndpointsClone));
+            long took = System.currentTimeMillis() - startedAt;
+
+            if (logger.isDebugEnabled())
+                logger.debug("Pending range calculation for {} completed (took: {}ms)", keyspaceName, took);
+            if (logger.isTraceEnabled())
+                logger.trace("Calculated pending ranges for {}:\n{}", keyspaceName, (pendingRanges.isEmpty() ? "<empty>" : printPendingRanges()));
         }
     }
 
