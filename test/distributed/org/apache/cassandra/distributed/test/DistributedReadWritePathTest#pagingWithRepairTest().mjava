@@ -1,0 +1,32 @@
+    @Test
+    public void pagingWithRepairTest() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(3)))
+        {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+
+            int size = 10;
+            Object[][] results = new Object[size][];
+            for (int i = 0; i < size; i++)
+            {
+                // Make sure that data lands on different nodes and not coordinator
+                cluster.get(i % 2 == 0 ? 2 : 3).executeInternal("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (1, ?, ?)",
+                                                                i, i);
+
+                results[i] = new Object[] { 1, i, i};
+            }
+
+            // Make sure paged read returns same results with different page sizes
+            for (int pageSize : new int[] { 1, 2, 3, 5, 10, 20, 50})
+            {
+                assertRows(cluster.coordinator(1).executeWithPaging("SELECT * FROM " + KEYSPACE + ".tbl",
+                                                                    ConsistencyLevel.ALL,
+                                                                    pageSize),
+                           results);
+            }
+
+            assertRows(cluster.get(1).executeInternal("SELECT * FROM " + KEYSPACE + ".tbl"),
+                       results);
+        }
+    }
+

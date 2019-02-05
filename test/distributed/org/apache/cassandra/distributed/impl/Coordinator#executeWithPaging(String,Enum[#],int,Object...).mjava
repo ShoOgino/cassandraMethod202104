@@ -1,0 +1,52 @@
+    @Override
+    public Iterator<Object[]> executeWithPaging(String query, Enum<?> consistencyLevelOrigin, int pageSize, Object... boundValues)
+    {
+        if (pageSize <= 0)
+            throw new IllegalArgumentException("Page size should be strictly positive but was " + pageSize);
+
+        return instance.sync(() -> {
+            ConsistencyLevel consistencyLevel = ConsistencyLevel.valueOf(consistencyLevelOrigin.name());
+            CQLStatement prepared = QueryProcessor.getStatement(query, ClientState.forInternalCalls()).statement;
+            List<ByteBuffer> boundBBValues = new ArrayList<>();
+            for (Object boundValue : boundValues)
+            {
+                boundBBValues.add(ByteBufferUtil.objectToBytes(boundValue));
+            }
+
+            prepared.validate(QueryState.forInternalCalls().getClientState());
+            assert prepared instanceof SelectStatement : "Only SELECT statements can be executed with paging";
+
+            ClientState clientState = QueryState.forInternalCalls().getClientState();
+            SelectStatement selectStatement = (SelectStatement) prepared;
+            QueryOptions queryOptions = QueryOptions.create(consistencyLevel,
+                                                            boundBBValues,
+                                                            false,
+                                                            pageSize,
+                                                            null,
+                                                            null,
+                                                            Server.CURRENT_VERSION);
+            Pageable pageable = selectStatement.getPageableCommand(queryOptions);
+
+            // Usually pager fetches a single page (see SelectStatement#execute). We need to iterate over all
+            // of the results lazily.
+            QueryPager pager = QueryPagers.pager(pageable, consistencyLevel, clientState, null);
+            Iterator<Object[]> iter = RowUtil.toObjects(selectStatement.getResultMetadata().names,
+                                                        UntypedResultSet.create(selectStatement,
+                                                                                pager,
+                                                                                pageSize).iterator());
+
+            // We have to make sure iterator is not running on main thread.
+            return new Iterator<Object[]>() {
+                public boolean hasNext()
+                {
+                    return instance.sync(() -> iter.hasNext()).call();
+                }
+
+                public Object[] next()
+                {
+                    return instance.sync(() -> iter.next()).call();
+                }
+            };
+        }).call();
+    }
+
