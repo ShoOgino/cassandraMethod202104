@@ -1,0 +1,34 @@
+    @Override
+    public Object[][] execute(String query, Enum<?> consistencyLevelOrigin, Object... boundValues)
+    {
+        return instance.sync(() -> {
+            CQLStatement prepared = QueryProcessor.getStatement(query, ClientState.forInternalCalls());
+            List<ByteBuffer> boundBBValues = new ArrayList<>();
+            ConsistencyLevel consistencyLevel = ConsistencyLevel.valueOf(consistencyLevelOrigin.name());
+            for (Object boundValue : boundValues)
+            {
+                boundBBValues.add(ByteBufferUtil.objectToBytes(boundValue));
+            }
+
+            ResultMessage res = prepared.execute(QueryState.forInternalCalls(),
+                                                 QueryOptions.create(consistencyLevel,
+                                                                     boundBBValues,
+                                                                     false,
+                                                                     10,
+                                                                     null,
+                                                                     null,
+                                                                     ProtocolVersion.V4,
+                                                                     null),
+                                                 System.nanoTime());
+
+            if (res != null && res.kind == ResultMessage.Kind.ROWS)
+            {
+                return RowUtil.toObjects((ResultMessage.Rows) res);
+            }
+            else
+            {
+                return new Object[][]{};
+            }
+        }).call();
+    }
+
