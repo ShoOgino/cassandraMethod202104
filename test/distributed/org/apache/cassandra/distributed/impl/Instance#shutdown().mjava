@@ -1,0 +1,36 @@
+    public void shutdown()
+    {
+        sync((ExecutorService executor) -> {
+            Throwable error = null;
+            error = parallelRun(error, executor,
+                    Gossiper.instance::stop,
+                    CompactionManager.instance::forceShutdown,
+                    BatchlogManager.instance::shutdown,
+                    HintsService.instance::shutdownBlocking,
+                    CommitLog.instance::shutdownBlocking,
+                    SecondaryIndexManager::shutdownExecutors,
+                    ColumnFamilyStore::shutdownFlushExecutor,
+                    ColumnFamilyStore::shutdownPostFlushExecutor,
+                    ColumnFamilyStore::shutdownReclaimExecutor,
+                    PendingRangeCalculatorService.instance::shutdownExecutor,
+                    BufferPool::shutdownLocalCleaner,
+                    StorageService.instance::shutdownBGMonitor,
+                    Ref::shutdownReferenceReaper,
+                    Memtable.MEMORY_POOL::shutdown,
+                    ScheduledExecutors::shutdownAndWait,
+                    SSTableReader::shutdownBlocking
+            );
+            error = parallelRun(error, executor,
+                                MessagingService.instance()::shutdown
+            );
+            error = parallelRun(error, executor,
+                                StageManager::shutdownAndWait,
+                                SharedExecutorPool.SHARED::shutdown
+            );
+            LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+            loggerContext.stop();
+            super.shutdown();
+            Throwables.maybeFail(error);
+        }).accept(isolatedExecutor);
+    }
+
