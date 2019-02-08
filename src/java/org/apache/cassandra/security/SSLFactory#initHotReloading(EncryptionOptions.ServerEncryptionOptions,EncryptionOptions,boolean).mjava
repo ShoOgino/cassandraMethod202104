@@ -1,39 +1,44 @@
     /**
      * Determines whether to hot reload certificates and schedules a periodic task for it.
      *
-     * @param serverEncryptionOptions
-     * @param clientEncryptionOptions
+     * @param serverOpts Server encryption options (Internode)
+     * @param clientOpts Client encryption options (Native Protocol)
      */
-    public static synchronized void initHotReloading(EncryptionOptions.ServerEncryptionOptions serverEncryptionOptions,
-                                                     EncryptionOptions clientEncryptionOptions,
-                                                     boolean force)
+    public static synchronized void initHotReloading(EncryptionOptions.ServerEncryptionOptions serverOpts,
+                                                     EncryptionOptions clientOpts,
+                                                     boolean force) throws IOException
     {
         if (isHotReloadingInitialized && !force)
             return;
 
         logger.debug("Initializing hot reloading SSLContext");
 
+        validateSslCerts(serverOpts, clientOpts);
+
         List<HotReloadableFile> fileList = new ArrayList<>();
 
-        if (serverEncryptionOptions.enabled)
+        if (serverOpts != null && serverOpts.enabled)
         {
-            fileList.add(new HotReloadableFile(serverEncryptionOptions.keystore));
-            fileList.add(new HotReloadableFile(serverEncryptionOptions.truststore));
+            fileList.add(new HotReloadableFile(serverOpts.keystore));
+            fileList.add(new HotReloadableFile(serverOpts.truststore));
         }
 
-        if (clientEncryptionOptions.enabled)
+        if (clientOpts != null && clientOpts.enabled)
         {
-            fileList.add(new HotReloadableFile(clientEncryptionOptions.keystore));
-            fileList.add(new HotReloadableFile(clientEncryptionOptions.truststore));
+            fileList.add(new HotReloadableFile(clientOpts.keystore));
+            fileList.add(new HotReloadableFile(clientOpts.truststore));
         }
 
         hotReloadableFiles = ImmutableList.copyOf(fileList);
 
         if (!isHotReloadingInitialized)
         {
-            ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(SSLFactory::checkCertFilesForHotReloading,
-                                                                     DEFAULT_HOT_RELOAD_INITIAL_DELAY_SEC,
-                                                                     DEFAULT_HOT_RELOAD_PERIOD_SEC, TimeUnit.SECONDS);
+            ScheduledExecutors.scheduledTasks
+                .scheduleWithFixedDelay(() -> checkCertFilesForHotReloading(
+                                                DatabaseDescriptor.getInternodeMessagingEncyptionOptions(),
+                                                DatabaseDescriptor.getNativeProtocolEncryptionOptions()),
+                                        DEFAULT_HOT_RELOAD_INITIAL_DELAY_SEC,
+                                        DEFAULT_HOT_RELOAD_PERIOD_SEC, TimeUnit.SECONDS);
         }
 
         isHotReloadingInitialized = true;

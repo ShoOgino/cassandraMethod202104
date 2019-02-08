@@ -1,0 +1,41 @@
+    @Test
+    public void testSslFactoryHotReload_CorruptOrNonExistentFile_DoesNotClearExistingSslContext() throws IOException,
+                                                                                                         InterruptedException
+    {
+        try
+        {
+            addKeystoreOptions(encryptionOptions);
+
+            File testKeystoreFile = new File(encryptionOptions.keystore + ".test");
+            FileUtils.copyFile(new File(encryptionOptions.keystore),testKeystoreFile);
+            encryptionOptions.keystore = testKeystoreFile.getPath();
+
+            EncryptionOptions options = new ServerEncryptionOptions(encryptionOptions);
+            options.enabled = true;
+
+            SSLFactory.initHotReloading((ServerEncryptionOptions) options, options, true);
+            SslContext oldCtx = SSLFactory.getSslContext(options, true, SSLFactory.SocketType.CLIENT, OpenSsl
+                                                                                                          .isAvailable());
+            SSLFactory.checkCertFilesForHotReloading((ServerEncryptionOptions) options, options);
+            Thread.sleep(5000);
+
+            FileUtils.touch(testKeystoreFile);
+            FileUtils.forceDelete(testKeystoreFile);
+
+            SSLFactory.checkCertFilesForHotReloading((ServerEncryptionOptions) options, options);;
+            SslContext newCtx = SSLFactory.getSslContext(options, true, SSLFactory.SocketType.CLIENT, OpenSsl
+                                                                                                          .isAvailable());
+
+            Assert.assertSame(oldCtx, newCtx);
+        }
+        catch (Exception e)
+        {
+            throw e;
+        }
+        finally
+        {
+            DatabaseDescriptor.loadConfig();
+            FileUtils.deleteQuietly(new File(encryptionOptions.keystore + ".test"));
+        }
+    }
+
