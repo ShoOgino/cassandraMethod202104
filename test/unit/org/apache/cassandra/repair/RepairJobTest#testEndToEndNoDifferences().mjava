@@ -1,0 +1,34 @@
+    /**
+     * Ensure we can do an end to end repair of consistent data and get the messages we expect
+     */
+    @Test
+    public void testEndToEndNoDifferences() throws Exception
+    {
+        Map<InetAddress, MerkleTrees> mockTrees = new HashMap<>();
+        mockTrees.put(FBUtilities.getBroadcastAddress(), createInitialTree(false));
+        mockTrees.put(addr2, createInitialTree(false));
+        mockTrees.put(addr3, createInitialTree(false));
+
+        List<MessageOut> observedMessages = new ArrayList<>();
+        interceptRepairMessages(mockTrees, observedMessages);
+
+        job.run();
+
+        RepairResult result = job.get(TEST_TIMEOUT_S, TimeUnit.SECONDS);
+
+        assertEquals(3, result.stats.size());
+        // Should be one RemoteSyncTask left behind (other two should be local)
+        assertExpectedDifferences(session.getSyncingTasks().values(), 0);
+
+        // RepairJob should send out SNAPSHOTS -> VALIDATIONS -> done
+        List<RepairMessage.Type> expectedTypes = new ArrayList<>();
+        for (int i = 0; i < 3; i++)
+            expectedTypes.add(RepairMessage.Type.SNAPSHOT);
+        for (int i = 0; i < 3; i++)
+            expectedTypes.add(RepairMessage.Type.VALIDATION_REQUEST);
+
+        assertEquals(expectedTypes, observedMessages.stream()
+                                                    .map(k -> ((RepairMessage) k.payload).messageType)
+                                                    .collect(Collectors.toList()));
+    }
+

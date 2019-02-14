@@ -1,0 +1,68 @@
+    /**
+     * Regression test for CASSANDRA-14096. We should not retain memory in the RepairSession once the
+     * ValidationTask -> SyncTask transform is done.
+     */
+    @Test
+    public void testNoTreesRetainedAfterDifference() throws Throwable
+    {
+        Map<InetAddress, MerkleTrees> mockTrees = new HashMap<>();
+        mockTrees.put(FBUtilities.getBroadcastAddress(), createInitialTree(false));
+        mockTrees.put(addr2, createInitialTree(true));
+        mockTrees.put(addr3, createInitialTree(false));
+
+        List<MessageOut> observedMessages = new ArrayList<>();
+        interceptRepairMessages(mockTrees, observedMessages);
+
+        List<TreeResponse> mockTreeResponses = mockTrees.entrySet().stream()
+                                                        .map(e -> new TreeResponse(e.getKey(), e.getValue()))
+                                                        .collect(Collectors.toList());
+
+        long singleTreeSize = ObjectSizes.measureDeep(mockTrees.get(addr2));
+
+        // Use a different local address so we get all RemoteSyncs (as LocalSyncs try to reach out over the network).
+        List<SyncTask> syncTasks = job.createSyncTasks(mockTreeResponses, addr4);
+
+        // SyncTasks themselves should not contain significant memory
+        assertTrue(ObjectSizes.measureDeep(syncTasks) < 0.8 * singleTreeSize);
+
+        ListenableFuture<List<SyncStat>> syncResults = Futures.transform(Futures.immediateFuture(mockTreeResponses), new AsyncFunction<List<TreeResponse>, List<SyncStat>>()
+        {
+            public ListenableFuture<List<SyncStat>> apply(List<TreeResponse> treeResponses)
+            {
+                return Futures.allAsList(syncTasks);
+            }
+        }, session.taskExecutor);
+
+        // The session can retain memory in the contained executor until the threads expire, so we wait for the threads
+        // that ran the Tree -> SyncTask conversions to die and release the memory
+        int millisUntilFreed;
+        for (millisUntilFreed = 0; millisUntilFreed < TEST_TIMEOUT_S * 1000; millisUntilFreed += THREAD_TIMEOUT_MILLIS)
+        {
+            // The measured size of the syncingTasks, and result of the computation should be much smaller
+            if (ObjectSizes.measureDeep(session) < 0.8 * singleTreeSize)
+                break;
+            TimeUnit.MILLISECONDS.sleep(THREAD_TIMEOUT_MILLIS);
+        }
+
+        assertTrue(millisUntilFreed < TEST_TIMEOUT_S * 1000);
+
+        List<SyncStat> results = syncResults.get(TEST_TIMEOUT_S, TimeUnit.SECONDS);
+
+        assertTrue(ObjectSizes.measureDeep(results) < 0.8 * singleTreeSize);
+
+        assertEquals(3, results.size());
+        // Should be two RemoteSyncTasks with ranges and one empty one
+        assertExpectedDifferences(new ArrayList<>(session.getSyncingTasks().values()), 1, 1, 0);
+
+        int numDifferent = 0;
+        for (SyncStat stat : results)
+        {
+            if (stat.nodes.endpoint1.equals(addr2) || stat.nodes.endpoint2.equals(addr2))
+            {
+                assertEquals(1, stat.numberOfDifferences);
+                numDifferent++;
+            }
+        }
+        assertEquals(2, numDifferent);
+    }
+
