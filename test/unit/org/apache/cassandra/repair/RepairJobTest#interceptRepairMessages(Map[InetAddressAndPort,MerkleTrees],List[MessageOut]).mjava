@@ -1,0 +1,47 @@
+    private void interceptRepairMessages(Map<InetAddressAndPort, MerkleTrees> mockTrees,
+                                         List<MessageOut> messageCapture)
+    {
+        MessagingService.instance().addMessageSink(new IMessageSink()
+        {
+            public boolean allowOutgoingMessage(MessageOut message, int id, InetAddressAndPort to)
+            {
+                if (message == null || !(message.payload instanceof RepairMessage))
+                    return false;
+
+                // So different Thread's messages don't overwrite each other.
+                synchronized (messageLock)
+                {
+                    messageCapture.add(message);
+                }
+
+                RepairMessage rm = (RepairMessage) message.payload;
+                switch (rm.messageType)
+                {
+                    case SNAPSHOT:
+                        MessageIn<?> messageIn = MessageIn.create(to, null,
+                                                                  Collections.emptyMap(),
+                                                                  MessagingService.Verb.REQUEST_RESPONSE,
+                                                                  MessagingService.current_version);
+                        MessagingService.instance().receive(messageIn, id);
+                        break;
+                    case VALIDATION_REQUEST:
+                        session.validationComplete(sessionJobDesc, to, mockTrees.get(to));
+                        break;
+                    case SYNC_REQUEST:
+                        SyncRequest syncRequest = (SyncRequest) rm;
+                        session.syncComplete(sessionJobDesc, new SyncNodePair(syncRequest.src, syncRequest.dst),
+                                             true, Collections.emptyList());
+                        break;
+                    default:
+                        break;
+                }
+                return false;
+            }
+
+            public boolean allowIncomingMessage(MessageIn message, int id)
+            {
+                return message.verb == MessagingService.Verb.REQUEST_RESPONSE;
+            }
+        });
+    }
+

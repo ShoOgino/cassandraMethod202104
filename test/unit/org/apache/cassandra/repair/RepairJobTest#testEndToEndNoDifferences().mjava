@@ -1,0 +1,33 @@
+    /**
+     * Ensure RepairJob issues the right messages in an end to end repair of consistent data
+     */
+    @Test
+    public void testEndToEndNoDifferences() throws InterruptedException, ExecutionException, TimeoutException
+    {
+        Map<InetAddressAndPort, MerkleTrees> mockTrees = new HashMap<>();
+        mockTrees.put(FBUtilities.getBroadcastAddressAndPort(), createInitialTree(false));
+        mockTrees.put(addr2, createInitialTree(false));
+        mockTrees.put(addr3, createInitialTree(false));
+
+        List<MessageOut> observedMessages = new ArrayList<>();
+        interceptRepairMessages(mockTrees, observedMessages);
+
+        job.run();
+
+        RepairResult result = job.get(TEST_TIMEOUT_S, TimeUnit.SECONDS);
+
+        // Since there are no differences, there should be nothing to sync.
+        assertEquals(0, result.stats.size());
+
+        // RepairJob should send out SNAPSHOTS -> VALIDATIONS -> done
+        List<RepairMessage.Type> expectedTypes = new ArrayList<>();
+        for (int i = 0; i < 3; i++)
+            expectedTypes.add(RepairMessage.Type.SNAPSHOT);
+        for (int i = 0; i < 3; i++)
+            expectedTypes.add(RepairMessage.Type.VALIDATION_REQUEST);
+
+        assertEquals(expectedTypes, observedMessages.stream()
+                                                    .map(k -> ((RepairMessage) k.payload).messageType)
+                                                    .collect(Collectors.toList()));
+    }
+

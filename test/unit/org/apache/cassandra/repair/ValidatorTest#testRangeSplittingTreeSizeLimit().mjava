@@ -1,0 +1,72 @@
+    /*
+     * Test for CASSANDRA-11390. When there are multiple subranges the trees should
+     * automatically size down to make each subrange fit in the provided memory
+     * 1. Limit the size of all the trees
+     * 2. Submit a validation against more than one range
+     * 3. Check that we have the right number and sizes of trees
+     */
+    @Test
+    public void testRangeSplittingTreeSizeLimit() throws Exception
+    {
+        Keyspace ks = Keyspace.open(keyspace);
+        ColumnFamilyStore cfs = ks.getColumnFamilyStore(columnFamily);
+        cfs.clearUnsafe();
+
+        DatabaseDescriptor.setRepairSessionSpaceInMegabytes(1);
+
+        // disable compaction while flushing
+        cfs.disableAutoCompaction();
+
+        // 2 ** 14 rows would normally use 2^14 leaves, but with only 1 meg we should only use 2^12
+        CompactionsTest.populate(keyspace, columnFamily, 0, 1 << 14, 0);
+
+        cfs.forceBlockingFlush();
+        assertEquals(1, cfs.getLiveSSTables().size());
+
+        // wait enough to force single compaction
+        TimeUnit.SECONDS.sleep(5);
+
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+        UUID repairSessionId = UUIDGen.getTimeUUID();
+
+        List<Range<Token>> ranges = splitHelper(new Range<>(sstable.first.getToken(), sstable.last.getToken()), 2);
+
+
+        final RepairJobDesc desc = new RepairJobDesc(repairSessionId, UUIDGen.getTimeUUID(), cfs.keyspace.getName(),
+                                                     cfs.getTableName(), ranges);
+
+        ActiveRepairService.instance.registerParentRepairSession(repairSessionId, FBUtilities.getBroadcastAddressAndPort(),
+                                                                 Collections.singletonList(cfs), desc.ranges, false, ActiveRepairService.UNREPAIRED_SSTABLE,
+                                                                 false, PreviewKind.NONE);
+
+        final CompletableFuture<MessageOut> outgoingMessageSink = registerOutgoingMessageSink();
+        Validator validator = new Validator(desc, FBUtilities.getBroadcastAddressAndPort(), 0, true, false, PreviewKind.NONE);
+        ValidationManager.instance.submitValidation(cfs, validator);
+
+        MessageOut message = outgoingMessageSink.get(TEST_TIMEOUT, TimeUnit.SECONDS);
+        MerkleTrees trees = ((ValidationComplete) message.payload).trees;
+
+        // Should have 4 trees each with a depth of on average 10 (since each range should have gotten 0.25 megabytes)
+        Iterator<Map.Entry<Range<Token>, MerkleTree>> iterator = trees.iterator();
+        int numTrees = 0;
+        double totalResolution = 0;
+        while (iterator.hasNext())
+        {
+            long size = iterator.next().getValue().size();
+            // So it turns out that sstable range estimates are pretty variable, depending on the sampling we can
+            // get a wide range of values here. So we just make sure that we're smaller than in the single range
+            // case and have the right total size.
+            assertTrue(size <= (1 << 11));
+            assertTrue(size >= (1 << 9));
+            totalResolution += size;
+            numTrees += 1;
+        }
+
+        assertEquals(trees.rowCount(), 1 << 14);
+        assertEquals(4, numTrees);
+
+        // With a single tree and a megabyte we should had a total resolution of 2^12 leaves; with multiple
+        // ranges we should get similar overall resolution, but not more.
+        assertTrue(totalResolution > (1 << 11) && totalResolution < (1 << 13));
+    }
+
