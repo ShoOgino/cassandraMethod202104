@@ -1,0 +1,59 @@
+    private AbstractType<?> validateColumn(Descriptor desc, CFMetaData tableMetadata, ColumnDefinition.Kind kind, ByteBuffer name, AbstractType<?> type)
+    {
+        ColumnDefinition cd = tableMetadata.getColumnDefinition(name);
+        if (cd == null)
+        {
+            // In case the column was dropped, there is not much that we can actually validate.
+            // The column could have been recreated using the same or a different kind or the same or
+            // a different type. Lottery...
+
+            cd = tableMetadata.getDroppedColumnDefinition(name, kind == ColumnDefinition.Kind.STATIC);
+            if (cd == null)
+            {
+                for (IndexMetadata indexMetadata : tableMetadata.getIndexes())
+                {
+                    String target = indexMetadata.options.get(IndexTarget.TARGET_OPTION_NAME);
+                    if (target != null && ByteBufferUtil.bytes(target).equals(name))
+                    {
+                        warn.accept(String.format("sstable %s: contains column '%s', which is not a column in the table '%s.%s', but a target for that table's index '%s'",
+                                                  desc,
+                                                  logColumnName(name),
+                                                  tableMetadata.ksName,
+                                                  tableMetadata.cfName,
+                                                  indexMetadata.name));
+                        return type;
+                    }
+                }
+
+                warn.accept(String.format("sstable %s: contains column '%s', which is not present in the schema",
+                                          desc,
+                                          logColumnName(name)));
+            }
+            else
+            {
+                // This is a best-effort approach to handle the case of a UDT column created *AND* dropped in
+                // C* 3.0.
+                if (type instanceof UserType && cd.type instanceof TupleType)
+                {
+                    // At this point, we know that the type belongs to a dropped column, recorded with the
+                    // dropped column type "TupleType" and using "UserType" in the sstable. So it is very
+                    // likely, that this belongs to a dropped UDT. Fix that information to tuple-type.
+                    return fixType(desc, name, type, cd.type, true);
+                }
+            }
+
+            return type;
+        }
+
+        // At this point, the column name is known to be a "non-dropped" column in the table.
+        if (cd.kind != kind)
+            error("sstable %s: contains column '%s' as a %s column, but is of kind %s in the schema",
+                  desc,
+                  logColumnName(name),
+                  kind.name().toLowerCase(),
+                  cd.kind.name().toLowerCase());
+        else
+            type = fixType(desc, name, type, cd.type, false);
+        return type;
+    }
+

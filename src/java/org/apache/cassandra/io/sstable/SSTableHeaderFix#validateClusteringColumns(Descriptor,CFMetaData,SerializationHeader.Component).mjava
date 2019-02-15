@@ -1,0 +1,36 @@
+    private List<AbstractType<?>> validateClusteringColumns(Descriptor desc, CFMetaData tableMetadata, SerializationHeader.Component header)
+    {
+        List<AbstractType<?>> headerClusteringTypes = header.getClusteringTypes();
+        List<AbstractType<?>> clusteringTypes = new ArrayList<>();
+        boolean clusteringMismatch = false;
+        List<ColumnDefinition> schemaClustering = tableMetadata.clusteringColumns();
+        if (schemaClustering.size() != headerClusteringTypes.size())
+        {
+            clusteringMismatch = true;
+            // Just use the original types. Since the number of clustering columns don't match, there's nothing to
+            // meaningfully validate against.
+            clusteringTypes.addAll(headerClusteringTypes);
+        }
+        else
+        {
+            for (int i = 0; i < headerClusteringTypes.size(); i++)
+            {
+                AbstractType<?> headerType = headerClusteringTypes.get(i);
+                ColumnDefinition column = schemaClustering.get(i);
+                AbstractType<?> schemaType = column.type;
+                AbstractType<?> fixedType = fixType(desc, column.name.bytes, headerType, schemaType, false);
+                if (fixedType == null)
+                    clusteringMismatch = true;
+                else
+                    headerType = fixedType;
+                clusteringTypes.add(headerType);
+            }
+        }
+        if (clusteringMismatch)
+            error("sstable %s: mismatch in clustering columns between sstable serialization-header and schema (%s vs %s)",
+                  desc,
+                  headerClusteringTypes.stream().map(AbstractType::asCQL3Type).map(CQL3Type::toString).collect(Collectors.joining(",")),
+                  schemaClustering.stream().map(cd -> cd.type.asCQL3Type().toString()).collect(Collectors.joining(",")));
+        return clusteringTypes;
+    }
+

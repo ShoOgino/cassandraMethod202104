@@ -1,0 +1,58 @@
+    private File buildFakeSSTable(File dir, int generation, List<ColumnDefinition> cols, Function<Stream<ColumnDefinition>, Stream<ColumnDefinition>> freezer)
+    {
+        CFMetaData headerMetadata = CFMetaData.create("ks", "cf",
+                                                      UUID.randomUUID(),
+                                                      false, true, false, false, false,
+                                                      cols,
+                                                      new Murmur3Partitioner());
+
+        List<ColumnDefinition> schemaCols = freezer.apply(cols.stream()).collect(Collectors.toList());
+        tableMetadata = CFMetaData.create("ks", "cf",
+                                          UUID.randomUUID(),
+                                          false, true, false, false, false,
+                                          schemaCols,
+                                          new Murmur3Partitioner());
+
+        try
+        {
+            Descriptor desc = new Descriptor(version, dir, "ks", "cf", generation, SSTableFormat.Type.BIG, Component.DATA);
+
+            // Just create the component files - we don't really need those.
+            for (Component component : requiredComponents)
+                assertTrue(new File(desc.filenameFor(component)).createNewFile());
+
+            AbstractType<?> partitionKey = headerMetadata.getKeyValidator();
+            List<AbstractType<?>> clusteringKey = headerMetadata.clusteringColumns()
+                                                                .stream()
+                                                                .map(cd -> cd.type)
+                                                                .collect(Collectors.toList());
+            Map<ByteBuffer, AbstractType<?>> staticColumns = headerMetadata.allColumns()
+                                                                           .stream()
+                                                                           .filter(cd -> cd.kind == ColumnDefinition.Kind.STATIC)
+                                                                           .collect(Collectors.toMap(cd -> cd.name.bytes, cd -> cd.type, (a, b) -> a));
+            Map<ByteBuffer, AbstractType<?>> regularColumns = headerMetadata.allColumns()
+                                                                            .stream()
+                                                                            .filter(cd -> cd.kind == ColumnDefinition.Kind.REGULAR)
+                                                                            .collect(Collectors.toMap(cd -> cd.name.bytes, cd -> cd.type, (a, b) -> a));
+
+            File statsFile = new File(desc.filenameFor(Component.STATS));
+            SerializationHeader.Component header = SerializationHeader.Component.buildComponentForTools(partitionKey,
+                                                                                                        clusteringKey,
+                                                                                                        staticColumns,
+                                                                                                        regularColumns,
+                                                                                                        EncodingStats.NO_STATS);
+
+            try (SequentialWriter out = new SequentialWriter(statsFile))
+            {
+                desc.getMetadataSerializer().serialize(Collections.singletonMap(MetadataType.HEADER, header), out, version);
+                out.finish();
+            }
+
+            return new File(desc.filenameFor(Component.DATA));
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

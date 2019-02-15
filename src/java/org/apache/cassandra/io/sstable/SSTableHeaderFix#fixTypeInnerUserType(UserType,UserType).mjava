@@ -1,0 +1,32 @@
+    private AbstractType<?> fixTypeInnerUserType(UserType cHeader, UserType cSchema)
+    {
+        if (!cHeader.keyspace.equals(cSchema.keyspace) || !cHeader.name.equals(cSchema.name))
+            // different UDT - bummer...
+            return null;
+
+        if (cHeader.isMultiCell() != cSchema.isMultiCell())
+        {
+            if (cHeader.isMultiCell() && !cSchema.isMultiCell())
+            {
+                // C* 3.0 writes broken SerializationHeader.Component instances - i.e. broken UDT type
+                // definitions into the sstable -Stats.db file, because 3.0 does not enclose frozen UDTs
+                // (and all UDTs in 3.0 were frozen) with an '' bracket. Since CASSANDRA-7423 (support
+                // for non-frozen UDTs, committed to C* 3.6), that frozen-bracket is quite important.
+                // Non-frozen (= multi-cell) UDTs are serialized in a fundamentally different way than
+                // frozen UDTs in sstables - most importantly, the order of serialized columns depends on
+                // the type: fixed-width types first, then variable length types (like frozen types),
+                // multi-cell types last. If C* >= 3.6 reads an sstable with a UDT that's written by
+                // C* < 3.6, a variety of CorruptSSTableExceptions get logged and clients will encounter
+                // read errors.
+                // At this point, we know that the type belongs to a "live" (non-dropped) column, so it
+                // is safe to correct the information from the header.
+                return cSchema;
+            }
+
+            // In all other cases, there's not much we can do.
+            return null;
+        }
+
+        return cHeader;
+    }
+

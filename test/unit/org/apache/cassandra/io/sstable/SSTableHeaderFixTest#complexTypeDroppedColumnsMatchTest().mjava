@@ -1,0 +1,50 @@
+    @Test
+    public void complexTypeDroppedColumnsMatchTest() throws Exception
+    {
+        File dir = temporaryFolder;
+
+        List<ColumnDefinition> cols = new ArrayList<>();
+        cols.add(ColumnDefinition.partitionKeyDef("ks", "cf", "pk", udtPK, 0));
+        cols.add(ColumnDefinition.clusteringDef("ks", "cf", "ck", udtCK, 0));
+        commonColumns(cols);
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "tuple_in_tuple", tupleInTuple));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_nested", udtNested));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_tuple", udtInTuple));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "tuple_in_composite", tupleInComposite));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_composite", udtInComposite));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_list", udtInList));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_set", udtInSet));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_map", udtInMap));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_frozen_list", udtInFrozenList));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_frozen_set", udtInFrozenSet));
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "udt_in_frozen_map", udtInFrozenMap));
+        File sstable = buildFakeSSTable(dir, 1, cols, true);
+
+        for (String col : new String[]{"tuple_in_tuple", "udt_nested", "udt_in_tuple",
+                                       "tuple_in_composite", "udt_in_composite",
+                                       "udt_in_list", "udt_in_set", "udt_in_map",
+                                       "udt_in_frozen_list", "udt_in_frozen_set", "udt_in_frozen_map"})
+        {
+            ColumnDefinition cd = getColDef(col);
+            tableMetadata.removeColumnDefinition(cd);
+            AbstractType<?> dropType = SchemaKeyspace.expandUserTypes(cd.type);
+            tableMetadata.recordColumnDrop(new ColumnDefinition(cd.ksName, cd.cfName, cd.name, dropType, cd.position(), cd.kind), FBUtilities.timestampMicros());
+        }
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+        assertEquals(Sets.newHashSet("pk", "ck", "regular_b", "static_b", "udt_nested"), updatedColumns);
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        // do not check the inner types, as the inner types were not fixed in the serialization-header (test thing)
+        assertFrozenUdt(header, true, false);
+    }
+

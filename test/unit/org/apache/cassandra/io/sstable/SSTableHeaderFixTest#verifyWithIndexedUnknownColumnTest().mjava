@@ -1,0 +1,34 @@
+    /**
+     * Simulates the case when an sstable contains a column not present in the table but as a target for an index.
+     * It can just be ignored.
+     */
+    @Test
+    public void verifyWithIndexedUnknownColumnTest() throws Exception
+    {
+        File dir = temporaryFolder;
+        List<ColumnDefinition> cols = new ArrayList<>();
+        cols.add(ColumnDefinition.partitionKeyDef("ks", "cf", "pk", udtPK, 0));
+        cols.add(ColumnDefinition.clusteringDef("ks", "cf", "ck", udtCK, 0));
+        commonColumns(cols);
+        cols.add(ColumnDefinition.regularDef("ks", "cf", "solr_query", UTF8Type.instance));
+        File sstable = buildFakeSSTable(dir, 1, cols, true);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        ColumnDefinition cd = getColDef("solr_query");
+        tableMetadata.indexes(tableMetadata.getIndexes().with(IndexMetadata.fromSchemaMetadata("some search index", IndexMetadata.Kind.CUSTOM, Collections.singletonMap(IndexTarget.TARGET_OPTION_NAME, "solr_query"))));
+        tableMetadata.removeColumnDefinition(cd);
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        assertFrozenUdt(header, true, true);
+    }
+
