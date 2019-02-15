@@ -1,0 +1,19 @@
+    @Test
+    public void test2iCancellation() throws Throwable
+    {
+        createTable("create table %s (id int primary key, something int)");
+        createIndex("create index on %s(something)");
+        getCurrentColumnFamilyStore().disableAutoCompaction();
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (id, something) values (?, ?)", i, i);
+        flush();
+        ColumnFamilyStore idx = getCurrentColumnFamilyStore().indexManager.getAllIndexColumnFamilyStores().iterator().next();
+        Set<SSTableReader> sstables = new HashSet<>();
+        try (LifecycleTransaction txn = idx.getTracker().tryModify(idx.getLiveSSTables(), OperationType.COMPACTION))
+        {
+            getCurrentColumnFamilyStore().runWithCompactionsDisabled(() -> true, (sstable) -> { sstables.add(sstable); return true;}, false, false, false);
+        }
+        // the predicate only gets compacting sstables, and we are only compacting the 2i sstables - with interruptIndexes = false we should see no sstables here
+        assertTrue(sstables.isEmpty());
+    }
+
