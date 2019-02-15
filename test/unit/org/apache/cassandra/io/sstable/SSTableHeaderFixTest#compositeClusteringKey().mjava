@@ -1,0 +1,27 @@
+    @Test
+    public void compositeClusteringKey() throws Exception
+    {
+        TableMetadata.Builder cols = TableMetadata.builder("ks", "cf")
+                                                  .addPartitionKeyColumn("pk", udtPK)
+                                                  .addClusteringColumn("ck1", Int32Type.instance)
+                                                  .addClusteringColumn("ck2", udtCK);
+        commonColumns(cols);
+
+        File dir = temporaryFolder;
+        File sstable = buildFakeSSTable(dir, 1, cols, true);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertEquals(Arrays.asList(Int32Type.instance, udtCK), header.getClusteringTypes());
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+        assertEquals(Sets.newHashSet("pk", "ck2", "regular_b", "static_b"), updatedColumns);
+
+        header = readHeader(sstable);
+        assertEquals(Arrays.asList(Int32Type.instance, udtCK.freeze()), header.getClusteringTypes());
+    }
+

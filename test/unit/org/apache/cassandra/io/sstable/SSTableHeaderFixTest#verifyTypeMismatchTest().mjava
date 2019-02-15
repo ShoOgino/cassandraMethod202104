@@ -1,0 +1,30 @@
+    /**
+     * Very basic test whether {@link SSTableHeaderFix} detect a type mismatch (regular_c 'int' vs 'float').
+     */
+    @Test
+    public void verifyTypeMismatchTest() throws Exception
+    {
+        File dir = temporaryFolder;
+        File sstable = generateFakeSSTable(dir, 1);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        ColumnMetadata cd = getColDef("regular_c");
+        tableMetadata = tableMetadata.unbuild()
+                                     .removeRegularOrStaticColumn(cd.name)
+                                     .addRegularColumn("regular_c", FloatType.instance)
+                                     .build();
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertTrue(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+    }
+

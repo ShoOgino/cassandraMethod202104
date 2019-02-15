@@ -1,0 +1,32 @@
+    public static void fixNonFrozenUDTIfUpgradeFrom30()
+    {
+        String previousVersionString = FBUtilities.getPreviousReleaseVersionString();
+        if (previousVersionString == null)
+            return;
+        CassandraVersion previousVersion = new CassandraVersion(previousVersionString);
+        if (previousVersion.major != 3 || previousVersion.minor > 0)
+        {
+            // Not an upgrade from 3.0 to 3.x, nothing to do here
+            return;
+        }
+
+        if (SKIP_AUTOMATIC_FIX_ON_UPGRADE)
+        {
+            logger.warn("Detected upgrade from {} to {}, but -D{}=true, NOT fixing UDT type references in " +
+                        "sstable metadata serialization-headers",
+                        previousVersionString,
+                        FBUtilities.getReleaseVersionString(),
+                        SKIPAUTOMATICUDTFIX);
+            return;
+        }
+
+        logger.info("Detected upgrade from {} to {}, fixing UDT type references in sstable metadata serialization-headers",
+                    previousVersionString,
+                    FBUtilities.getReleaseVersionString());
+
+        SSTableHeaderFix instance = SSTableHeaderFix.builder()
+                                                    .schemaCallback(() -> Schema.instance::getTableMetadata)
+                                                    .build();
+        instance.execute();
+    }
+

@@ -1,0 +1,39 @@
+    @Test
+    public void complexTypeMatchTest() throws Exception
+    {
+        File dir = temporaryFolder;
+
+        TableMetadata.Builder cols = TableMetadata.builder("ks", "cf")
+                                                  .addPartitionKeyColumn("pk", udtPK)
+                                                  .addClusteringColumn("ck", udtCK);
+        commonColumns(cols);
+        cols.addRegularColumn("tuple_in_tuple", tupleInTuple)
+            .addRegularColumn("udt_nested", udtNested)
+            .addRegularColumn("udt_in_tuple", udtInTuple)
+            .addRegularColumn("tuple_in_composite", tupleInComposite)
+            .addRegularColumn("udt_in_composite", udtInComposite)
+            .addRegularColumn("udt_in_list", udtInList)
+            .addRegularColumn("udt_in_set", udtInSet)
+            .addRegularColumn("udt_in_map", udtInMap)
+            .addRegularColumn("udt_in_frozen_list", udtInFrozenList)
+            .addRegularColumn("udt_in_frozen_set", udtInFrozenSet)
+            .addRegularColumn("udt_in_frozen_map", udtInFrozenMap);
+        File sstable = buildFakeSSTable(dir, 1, cols, true);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+        assertEquals(Sets.newHashSet("pk", "ck", "regular_b", "static_b",
+                                     "udt_nested", "udt_in_composite", "udt_in_list", "udt_in_set", "udt_in_map"), updatedColumns);
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        assertFrozenUdt(header, true, true);
+    }
+

@@ -1,0 +1,34 @@
+    /**
+     * Simulates the case when an sstable contains a column not present in the schema, which can just be ignored.
+     */
+    @Test
+    public void verifyWithUnknownColumnTest() throws Exception
+    {
+        File dir = temporaryFolder;
+        TableMetadata.Builder cols = TableMetadata.builder("ks", "cf")
+                                                  .addPartitionKeyColumn("pk", udtPK)
+                                                  .addClusteringColumn("ck", udtCK);
+        commonColumns(cols);
+        cols.addRegularColumn("solr_query", UTF8Type.instance);
+        File sstable = buildFakeSSTable(dir, 1, cols, true);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        ColumnMetadata cd = getColDef("solr_query");
+        tableMetadata = tableMetadata.unbuild()
+                                     .removeRegularOrStaticColumn(cd.name)
+                                     .build();
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        assertFrozenUdt(header, true, true);
+    }
+

@@ -1,0 +1,118 @@
+    @Test
+    public void variousDroppedUserTypes() throws Exception
+    {
+        File dir = temporaryFolder;
+
+        TableMetadata.Builder cols = TableMetadata.builder("ks", "cf")
+                                                  .addPartitionKeyColumn("pk", udtPK)
+                                                  .addClusteringColumn("ck", udtCK);
+
+        ColSpec[] colSpecs = new ColSpec[]
+                {
+                        // 'frozen<udt>' / live
+                        new ColSpec("frozen_udt_as_frozen_udt_live",
+                                    makeUDT2("frozen_udt_as_frozen_udt_live", false),
+                                    makeUDT2("frozen_udt_as_frozen_udt_live", false),
+                                    false,
+                                    false),
+                        // 'frozen<udt>' / live / as 'udt'
+                        new ColSpec("frozen_udt_as_unfrozen_udt_live",
+                                    makeUDT2("frozen_udt_as_unfrozen_udt_live", false),
+                                    makeUDT2("frozen_udt_as_unfrozen_udt_live", true),
+                                    false,
+                                    true),
+                        // 'frozen<udt>' / dropped
+                        new ColSpec("frozen_udt_as_frozen_udt_dropped",
+                                    makeUDT2("frozen_udt_as_frozen_udt_dropped", true).freezeNestedMulticellTypes().freeze().expandUserTypes(),
+                                    makeUDT2("frozen_udt_as_frozen_udt_dropped", false),
+                                    makeUDT2("frozen_udt_as_frozen_udt_dropped", false),
+                                    true,
+                                    false),
+                        // 'frozen<udt>' / dropped / as 'udt'
+                        new ColSpec("frozen_udt_as_unfrozen_udt_dropped",
+                                    makeUDT2("frozen_udt_as_unfrozen_udt_dropped", true).freezeNestedMulticellTypes().freeze().expandUserTypes(),
+                                    makeUDT2("frozen_udt_as_unfrozen_udt_dropped", true),
+                                    makeUDT2("frozen_udt_as_unfrozen_udt_dropped", false),
+                                    true,
+                                    true),
+                        // 'udt' / live
+                        new ColSpec("unfrozen_udt_as_unfrozen_udt_live",
+                                    makeUDT2("unfrozen_udt_as_unfrozen_udt_live", true),
+                                    makeUDT2("unfrozen_udt_as_unfrozen_udt_live", true),
+                                    false,
+                                    false),
+                        // 'udt' / dropped
+// TODO unable to test dropping a non-frozen UDT, as that requires an unfrozen tuple as well
+//                        new ColSpec("unfrozen_udt_as_unfrozen_udt_dropped",
+//                                    makeUDT2("unfrozen_udt_as_unfrozen_udt_dropped", true).freezeNestedMulticellTypes().expandUserTypes(),
+//                                    makeUDT2("unfrozen_udt_as_unfrozen_udt_dropped", true),
+//                                    makeUDT2("unfrozen_udt_as_unfrozen_udt_dropped", true),
+//                                    true,
+//                                    false),
+                        // 'frozen<tuple>' as 'TupleType(multiCell=false' (there is nothing like 'FrozenType(TupleType(')
+                        new ColSpec("frozen_tuple_as_frozen_tuple_live",
+                                    makeTupleSimple(),
+                                    makeTupleSimple(),
+                                    false,
+                                    false),
+                        // 'frozen<tuple>' as 'TupleType(multiCell=false' (there is nothing like 'FrozenType(TupleType(')
+                        new ColSpec("frozen_tuple_as_frozen_tuple_dropped",
+                                    makeTupleSimple(),
+                                    makeTupleSimple(),
+                                    true,
+                                    false)
+                };
+
+        Arrays.stream(colSpecs).forEach(c -> cols.addRegularColumn(c.name,
+                                                                   // use the initial column type for the serialization header header.
+                                                                   c.preFix));
+
+        Map<String, ColSpec> colSpecMap = Arrays.stream(colSpecs).collect(Collectors.toMap(c -> c.name, c -> c));
+        File sstable = buildFakeSSTable(dir, 1, cols, c -> {
+            ColSpec cs = colSpecMap.get(c.name.toString());
+            if (cs == null)
+                return c;
+            // update the column type in the schema to the "correct" one.
+            return c.withNewType(cs.schema);
+        });
+
+        Arrays.stream(colSpecs)
+              .filter(c -> c.dropped)
+              .forEach(c -> {
+                  ColumnMetadata cd = getColDef(c.name);
+                  tableMetadata = tableMetadata.unbuild()
+                                               .removeRegularOrStaticColumn(cd.name)
+                                               .recordColumnDrop(cd, FBUtilities.timestampMicros())
+                                               .build();
+              });
+
+        SerializationHeader.Component header = readHeader(sstable);
+        for (ColSpec colSpec : colSpecs)
+        {
+            AbstractType<?> hdrType = header.getRegularColumns().get(ByteBufferUtil.bytes(colSpec.name));
+            assertEquals(colSpec.name, colSpec.preFix, hdrType);
+            assertEquals(colSpec.name, colSpec.preFix.isMultiCell(), hdrType.isMultiCell());
+        }
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertTrue(headerFix.hasChanges());
+        // Verify that all columns to fix are in the updatedColumns set (paranoid, yet)
+        Arrays.stream(colSpecs)
+              .filter(c -> c.mustFix)
+              .forEach(c -> assertTrue("expect " + c.name + " to be updated, but was not (" + updatedColumns + ")", updatedColumns.contains(c.name)));
+        // Verify that the number of updated columns maches the expected number of columns to fix
+        assertEquals(Arrays.stream(colSpecs).filter(c -> c.mustFix).count(), updatedColumns.size());
+
+        header = readHeader(sstable);
+        for (ColSpec colSpec : colSpecs)
+        {
+            AbstractType<?> hdrType = header.getRegularColumns().get(ByteBufferUtil.bytes(colSpec.name));
+            assertEquals(colSpec.name, colSpec.expect, hdrType);
+            assertEquals(colSpec.name, colSpec.expect.isMultiCell(), hdrType.isMultiCell());
+        }
+    }
+

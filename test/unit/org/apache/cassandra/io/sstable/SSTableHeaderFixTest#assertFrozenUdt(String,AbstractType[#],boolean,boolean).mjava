@@ -1,0 +1,63 @@
+    private void assertFrozenUdt(String name, AbstractType<?> type, boolean frozen, boolean checkInner)
+    {
+        if (type instanceof CompositeType)
+        {
+            if (checkInner)
+                for (AbstractType<?> component : ((CompositeType) type).types)
+                    assertFrozenUdt(name, component, frozen, true);
+        }
+        else if (type instanceof CollectionType)
+        {
+            if (checkInner)
+            {
+                if (type instanceof MapType)
+                {
+                    MapType map = (MapType) type;
+                    // only descend for non-frozen types (checking frozen in frozen is just stupid)
+                    if (map.isMultiCell())
+                    {
+                        assertFrozenUdt(name + "<map-key>", map.getKeysType(), frozen, true);
+                        assertFrozenUdt(name + "<map-value>", map.getValuesType(), frozen, true);
+                    }
+                }
+                else if (type instanceof SetType)
+                {
+                    SetType set = (SetType) type;
+                    // only descend for non-frozen types (checking frozen in frozen is just stupid)
+                    if (set.isMultiCell())
+                        assertFrozenUdt(name + "<set>", set.getElementsType(), frozen, true);
+                }
+                else if (type instanceof ListType)
+                {
+                    ListType list = (ListType) type;
+                    // only descend for non-frozen types (checking frozen in frozen is just stupid)
+                    if (list.isMultiCell())
+                        assertFrozenUdt(name + "<list>", list.getElementsType(), frozen, true);
+                }
+            }
+        }
+        else if (type instanceof TupleType)
+        {
+            if (checkInner)
+            {
+                TupleType tuple = (TupleType) type;
+                // only descend for non-frozen types (checking frozen in frozen is just stupid)
+                if (tuple.isMultiCell())
+                    for (AbstractType<?> component : tuple.allTypes())
+                        assertFrozenUdt(name + "<tuple>", component, frozen, true);
+            }
+        }
+
+        if (type instanceof UserType)
+        {
+            String typeString = type.toString();
+            assertEquals(name + ": " + typeString, frozen, !type.isMultiCell());
+            if (typeString.startsWith(UserType.class.getName() + '('))
+                if (frozen)
+                    fail(name + ": " + typeString);
+            if (typeString.startsWith(FrozenType.class.getName() + '(' + UserType.class.getName() + '('))
+                if (!frozen)
+                    fail(name + ": " + typeString);
+        }
+    }
+

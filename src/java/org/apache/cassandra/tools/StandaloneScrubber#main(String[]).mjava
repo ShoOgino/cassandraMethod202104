@@ -33,34 +33,106 @@
 
             OutputHandler handler = new OutputHandler.SystemOutput(options.verbose, options.debug);
             Directories.SSTableLister lister = cfs.getDirectories().sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true);
+            List<Pair<Descriptor, Set<Component>>> listResult = new ArrayList<>();
+
+            // create snapshot
+            for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+            {
+                Descriptor descriptor = entry.getKey();
+                Set<Component> components = entry.getValue();
+                if (!components.contains(Component.DATA))
+                    continue;
+
+                listResult.add(Pair.create(descriptor, components));
+
+                File snapshotDirectory = Directories.getSnapshotDirectory(descriptor, snapshotName);
+                SSTableReader.createLinks(descriptor, components, snapshotDirectory.getPath());
+            }
+            System.out.println(String.format("Pre-scrub sstables snapshotted into snapshot %s", snapshotName));
+
+            if (options.headerFixMode != Options.HeaderFixMode.OFF)
+            {
+                // Run the frozen-UDT checks _before_ the sstables are opened
+
+                List<String> logOutput = new ArrayList<>();
+
+                SSTableHeaderFix.Builder headerFixBuilder = SSTableHeaderFix.builder()
+                                                                            .logToList(logOutput)
+                                                                            .schemaCallback(() -> Schema.instance::getTableMetadata);
+                if (options.headerFixMode == Options.HeaderFixMode.VALIDATE)
+                    headerFixBuilder = headerFixBuilder.dryRun();
+
+                for (Pair<Descriptor, Set<Component>> p : listResult)
+                    headerFixBuilder.withPath(Paths.get(p.left.filenameFor(Component.DATA)));
+
+                SSTableHeaderFix headerFix = headerFixBuilder.build();
+                try
+                {
+                    headerFix.execute();
+                }
+                catch (Exception e)
+                {
+                    JVMStabilityInspector.inspectThrowable(e);
+                    if (options.debug)
+                        e.printStackTrace(System.err);
+                }
+
+                if (headerFix.hasChanges() || headerFix.hasError())
+                    logOutput.forEach(System.out::println);
+
+                if (headerFix.hasError())
+                {
+                    System.err.println("Errors in serialization-header detected, aborting.");
+                    System.exit(1);
+                }
+
+                switch (options.headerFixMode)
+                {
+                    case VALIDATE_ONLY:
+                    case FIX_ONLY:
+                        System.out.printf("Not continuing with scrub, since '--%s %s' was specified.%n",
+                                          HEADERFIX_OPTION,
+                                          options.headerFixMode.asCommandLineOption());
+                        System.exit(0);
+                    case VALIDATE:
+                        if (headerFix.hasChanges())
+                        {
+                            System.err.printf("Unfixed, but fixable errors in serialization-header detected, aborting. " +
+                                              "Use a non-validating mode ('-e %s' or '-e %s') for --%s%n",
+                                              Options.HeaderFixMode.FIX.asCommandLineOption(),
+                                              Options.HeaderFixMode.FIX_ONLY.asCommandLineOption(),
+                                              HEADERFIX_OPTION);
+                            System.exit(2);
+                        }
+                        break;
+                    case FIX:
+                        break;
+                }
+            }
 
             List<SSTableReader> sstables = new ArrayList<>();
 
-            // Scrub sstables
-            for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+            // Open sstables
+            for (Pair<Descriptor, Set<Component>> pair : listResult)
             {
-                Set<Component> components = entry.getValue();
+                Descriptor descriptor = pair.left;
+                Set<Component> components = pair.right;
                 if (!components.contains(Component.DATA))
                     continue;
 
                 try
                 {
-                    SSTableReader sstable = SSTableReader.openNoValidation(entry.getKey(), components, cfs);
+                    SSTableReader sstable = SSTableReader.openNoValidation(descriptor, components, cfs);
                     sstables.add(sstable);
-
-                    File snapshotDirectory = Directories.getSnapshotDirectory(sstable.descriptor, snapshotName);
-                    sstable.createLinks(snapshotDirectory.getPath());
-
                 }
                 catch (Exception e)
                 {
                     JVMStabilityInspector.inspectThrowable(e);
-                    System.err.println(String.format("Error Loading %s: %s", entry.getKey(), e.getMessage()));
+                    System.err.println(String.format("Error Loading %s: %s", descriptor, e.getMessage()));
                     if (options.debug)
                         e.printStackTrace(System.err);
                 }
             }
-            System.out.println(String.format("Pre-scrub sstables snapshotted into snapshot %s", snapshotName));
 
             if (!options.manifestCheckOnly)
             {

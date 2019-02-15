@@ -1,0 +1,69 @@
+    private AbstractType<?> validatePartitionKey(Descriptor desc, TableMetadata tableMetadata, SerializationHeader.Component header)
+    {
+        boolean keyMismatch = false;
+        AbstractType<?> headerKeyType = header.getKeyType();
+        AbstractType<?> schemaKeyType = tableMetadata.partitionKeyType;
+        boolean headerKeyComposite = headerKeyType instanceof CompositeType;
+        boolean schemaKeyComposite = schemaKeyType instanceof CompositeType;
+        if (headerKeyComposite != schemaKeyComposite)
+        {
+            // one is a composite partition key, the other is not - very suspicious
+            keyMismatch = true;
+        }
+        else if (headerKeyComposite) // && schemaKeyComposite
+        {
+            // Note, the logic is similar as just calling 'fixType()' using the composite partition key,
+            // but the log messages should use the composite partition key column names.
+            List<AbstractType<?>> headerKeyComponents = ((CompositeType) headerKeyType).types;
+            List<AbstractType<?>> schemaKeyComponents = ((CompositeType) schemaKeyType).types;
+            if (headerKeyComponents.size() != schemaKeyComponents.size())
+            {
+                // different number of components in composite partition keys - very suspicious
+                keyMismatch = true;
+                // Just use the original type from the header. Since the number of partition key components
+                // don't match, there's nothing to meaningfully validate against.
+            }
+            else
+            {
+                // fix components in composite partition key, if necessary
+                List<AbstractType<?>> newComponents = new ArrayList<>(schemaKeyComponents.size());
+                for (int i = 0; i < schemaKeyComponents.size(); i++)
+                {
+                    AbstractType<?> headerKeyComponent = headerKeyComponents.get(i);
+                    AbstractType<?> schemaKeyComponent = schemaKeyComponents.get(i);
+                    AbstractType<?> fixedType = fixType(desc,
+                                                        tableMetadata.partitionKeyColumns().get(i).name.bytes,
+                                                        headerKeyComponent,
+                                                        schemaKeyComponent,
+                                                        false);
+                    if (fixedType == null)
+                        keyMismatch = true;
+                    else
+                        headerKeyComponent = fixedType;
+                    newComponents.add(fixType(desc,
+                                              tableMetadata.partitionKeyColumns().get(i).name.bytes,
+                                              headerKeyComponent,
+                                              schemaKeyComponent,
+                                              false));
+                }
+                headerKeyType = CompositeType.getInstance(newComponents);
+            }
+        }
+        else
+        {
+            // fix non-composite partition key, if necessary
+            AbstractType<?> fixedType = fixType(desc, tableMetadata.partitionKeyColumns().get(0).name.bytes, headerKeyType, schemaKeyType, false);
+            if (fixedType == null)
+                // non-composite partition key doesn't match and cannot be fixed
+                keyMismatch = true;
+            else
+                headerKeyType = fixedType;
+        }
+        if (keyMismatch)
+            error("sstable %s: Mismatch in partition key type between sstable serialization-header and schema (%s vs %s)",
+                  desc,
+                  headerKeyType.asCQL3Type(),
+                  schemaKeyType.asCQL3Type());
+        return headerKeyType;
+    }
+

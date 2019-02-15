@@ -1,0 +1,28 @@
+    @Test
+    public void verifyTypeMatchCompositeKeyTest() throws Exception
+    {
+        File dir = temporaryFolder;
+
+        TableMetadata.Builder cols = TableMetadata.builder("ks", "cf")
+                                                  .addPartitionKeyColumn("pk1", UTF8Type.instance)
+                                                  .addPartitionKeyColumn("pk2", udtPK)
+                                                  .addClusteringColumn("ck", udtCK);
+        commonColumns(cols);
+        File sstable = buildFakeSSTable(dir, 1, cols, false);
+
+        SerializationHeader.Component header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+
+        SSTableHeaderFix headerFix = builder().withPath(sstable.toPath())
+                                              .build();
+        headerFix.execute();
+
+        assertFalse(headerFix.hasError());
+        assertFalse(headerFix.hasChanges());
+        assertTrue(updatedColumns.isEmpty());
+
+        // must not have re-written the stats-component
+        header = readHeader(sstable);
+        assertFrozenUdt(header, false, true);
+    }
+

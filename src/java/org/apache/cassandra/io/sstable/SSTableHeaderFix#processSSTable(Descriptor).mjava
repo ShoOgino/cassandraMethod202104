@@ -1,0 +1,67 @@
+    private void processSSTable(Descriptor desc)
+    {
+        if (desc.cfname.indexOf('.') != -1)
+        {
+            // secondary index not checked
+
+            // partition-key is the indexed column type
+            // clustering-key is org.apache.cassandra.db.marshal.PartitionerDefinedOrder
+            // no static columns, no regular columns
+            return;
+        }
+
+        TableMetadata tableMetadata = schemaCallback.apply(desc);
+        if (tableMetadata == null)
+        {
+            error("Table %s.%s not found in the schema - NOT checking sstable %s", desc.ksname, desc.cfname, desc);
+            return;
+        }
+
+        Set<Component> components = SSTable.discoverComponentsFor(desc);
+        if (components.stream().noneMatch(c -> c.type == Component.Type.STATS))
+        {
+            error("sstable %s has no -Statistics.db component.", desc);
+            return;
+        }
+
+        Map<MetadataType, MetadataComponent> metadata = readSSTableMetadata(desc);
+        if (metadata == null)
+            return;
+
+        MetadataComponent component = metadata.get(MetadataType.HEADER);
+        if (!(component instanceof SerializationHeader.Component))
+        {
+            error("sstable %s: Expected %s, but got %s from metadata.get(MetadataType.HEADER)",
+                  desc,
+                  SerializationHeader.Component.class.getName(),
+                  component != null ? component.getClass().getName() : "'null'");
+            return;
+        }
+        SerializationHeader.Component header = (SerializationHeader.Component) component;
+
+        // check partition key type
+        AbstractType<?> keyType = validatePartitionKey(desc, tableMetadata, header);
+
+        // check clustering columns
+        List<AbstractType<?>> clusteringTypes = validateClusteringColumns(desc, tableMetadata, header);
+
+        // check static and regular columns
+        Map<ByteBuffer, AbstractType<?>> staticColumns = validateColumns(desc, tableMetadata, header.getStaticColumns(), ColumnMetadata.Kind.STATIC);
+        Map<ByteBuffer, AbstractType<?>> regularColumns = validateColumns(desc, tableMetadata, header.getRegularColumns(), ColumnMetadata.Kind.REGULAR);
+
+        SerializationHeader.Component newHeader = SerializationHeader.Component.buildComponentForTools(keyType,
+                                                                                                       clusteringTypes,
+                                                                                                       staticColumns,
+                                                                                                       regularColumns,
+                                                                                                       header.getEncodingStats());
+
+        // SerializationHeader.Component has no equals(), but a "good" toString()
+        if (header.toString().equals(newHeader.toString()))
+            return;
+
+        Map<MetadataType, MetadataComponent> newMetadata = new LinkedHashMap<>(metadata);
+        newMetadata.put(MetadataType.HEADER, newHeader);
+
+        updates.add(Pair.create(desc, newMetadata));
+    }
+

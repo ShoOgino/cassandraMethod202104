@@ -1,0 +1,53 @@
+    private File buildFakeSSTable(File dir, int generation, TableMetadata.Builder cols, Function<ColumnMetadata, ColumnMetadata> freezer)
+    {
+        TableMetadata headerMetadata = cols.build();
+
+        TableMetadata.Builder schemaCols = TableMetadata.builder("ks", "cf");
+        for (ColumnMetadata cm : cols.columns())
+            schemaCols.addColumn(freezer.apply(cm));
+        tableMetadata = schemaCols.build();
+
+        try
+        {
+
+            Descriptor desc = new Descriptor(version, dir, "ks", "cf", generation, SSTableFormat.Type.BIG);
+
+            // Just create the component files - we don't really need those.
+            for (Component component : requiredComponents)
+                assertTrue(new File(desc.filenameFor(component)).createNewFile());
+
+            AbstractType<?> partitionKey = headerMetadata.partitionKeyType;
+            List<AbstractType<?>> clusteringKey = headerMetadata.clusteringColumns()
+                                                                .stream()
+                                                                .map(cd -> cd.type)
+                                                                .collect(Collectors.toList());
+            Map<ByteBuffer, AbstractType<?>> staticColumns = headerMetadata.columns()
+                                                                           .stream()
+                                                                           .filter(cd -> cd.kind == ColumnMetadata.Kind.STATIC)
+                                                                           .collect(Collectors.toMap(cd -> cd.name.bytes, cd -> cd.type, (a, b) -> a));
+            Map<ByteBuffer, AbstractType<?>> regularColumns = headerMetadata.columns()
+                                                                            .stream()
+                                                                            .filter(cd -> cd.kind == ColumnMetadata.Kind.REGULAR)
+                                                                            .collect(Collectors.toMap(cd -> cd.name.bytes, cd -> cd.type, (a, b) -> a));
+
+            File statsFile = new File(desc.filenameFor(Component.STATS));
+            SerializationHeader.Component header = SerializationHeader.Component.buildComponentForTools(partitionKey,
+                                                                                                        clusteringKey,
+                                                                                                        staticColumns,
+                                                                                                        regularColumns,
+                                                                                                        EncodingStats.NO_STATS);
+
+            try (SequentialWriter out = new SequentialWriter(statsFile))
+            {
+                desc.getMetadataSerializer().serialize(Collections.singletonMap(MetadataType.HEADER, header), out, version);
+                out.finish();
+            }
+
+            return new File(desc.filenameFor(Component.DATA));
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
