@@ -1,0 +1,44 @@
+    @Test
+    public void testMockedMessagingPrepareTimeout() throws InterruptedException, ExecutionException, TimeoutException
+    {
+        MockMessagingSpy spyPrepare = createPrepareSpy(Collections.emptySet(), Collections.singleton(PARTICIPANT3));
+        MockMessagingSpy sendFailSessionUnexpectedSpy = createFailSessionSpy(Lists.newArrayList(PARTICIPANT1, PARTICIPANT2, PARTICIPANT3));
+
+        UUID uuid = registerSession(cfs, true, true);
+        CoordinatorSession coordinator = ActiveRepairService.instance.consistent.coordinated.registerSession(uuid, PARTICIPANTS, false);
+        AtomicBoolean repairSubmitted = new AtomicBoolean(false);
+        SettableFuture<List<RepairSessionResult>> repairFuture = SettableFuture.create();
+        Supplier<ListenableFuture<List<RepairSessionResult>>> sessionSupplier = () ->
+        {
+            repairSubmitted.set(true);
+            return repairFuture;
+        };
+
+        // coordinator sends prepare requests to create local session and perform anticompaction
+        AtomicBoolean hasFailures = new AtomicBoolean(false);
+        Assert.assertFalse(repairSubmitted.get());
+
+        // execute repair and start prepare phase
+        ListenableFuture<Boolean> sessionResult = coordinator.execute(sessionSupplier, hasFailures);
+        try
+        {
+            sessionResult.get(1, TimeUnit.SECONDS);
+            fail("Completed session without failure after prepare failed");
+        }
+        catch (ExecutionException e)
+        {
+            fail("Failed session in prepare failed during timeout from participant");
+        }
+        catch (TimeoutException e)
+        {
+            // expected
+        }
+        // we won't send out any fail session message in case of timeouts
+        spyPrepare.expectMockedMessageIn(2).get(100, TimeUnit.MILLISECONDS);
+        sendFailSessionUnexpectedSpy.interceptNoMsg(100, TimeUnit.MILLISECONDS);
+        Assert.assertFalse(repairSubmitted.get());
+        Assert.assertFalse(hasFailures.get());
+        Assert.assertEquals(ConsistentSession.State.PREPARING, coordinator.getState());
+        Assert.assertFalse(ActiveRepairService.instance.consistent.local.isSessionInProgress(uuid));
+    }
+

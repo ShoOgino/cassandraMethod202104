@@ -1,8 +1,9 @@
     @VisibleForTesting
     int antiCompactGroup(ColumnFamilyStore cfs,
-                                 RangesAtEndpoint ranges,
-                                 LifecycleTransaction txn,
-                                 UUID pendingRepair)
+                         RangesAtEndpoint ranges,
+                         LifecycleTransaction txn,
+                         UUID pendingRepair,
+                         BooleanSupplier isCancelled)
     {
         Preconditions.checkArgument(!ranges.isEmpty(), "need at least one full or transient range");
         long groupMaxDataAge = -1;
@@ -69,7 +70,7 @@
 
              AbstractCompactionStrategy.ScannerList scanners = strategy.getScanners(txn.originals());
              CompactionController controller = new CompactionController(cfs, sstableAsSet, getDefaultGcBefore(cfs, nowInSec));
-             CompactionIterator ci = getAntiCompactionIterator(scanners.scanners, controller, nowInSec, UUIDGen.getTimeUUID(), active))
+             CompactionIterator ci = getAntiCompactionIterator(scanners.scanners, controller, nowInSec, UUIDGen.getTimeUUID(), active, isCancelled))
         {
             int expectedBloomFilterSize = Math.max(cfs.metadata().params.minIndexInterval, (int)(SSTableReader.getApproximateKeyCount(sstableAsSet)));
 
@@ -132,8 +133,16 @@
         }
         catch (Throwable e)
         {
-            JVMStabilityInspector.inspectThrowable(e);
-            logger.error("Error anticompacting " + txn, e);
+            if (e instanceof CompactionInterruptedException && isCancelled.getAsBoolean())
+            {
+                logger.info("Anticompaction has been canceled for session {}", pendingRepair);
+                logger.trace(e.getMessage(), e);
+            }
+            else
+            {
+                JVMStabilityInspector.inspectThrowable(e);
+                logger.error("Error anticompacting " + txn + " for " + pendingRepair, e);
+            }
             throw e;
         }
     }

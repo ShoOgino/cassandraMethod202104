@@ -20,8 +20,8 @@
         }
         catch (Throwable e)
         {
-            logger.trace("Error retrieving ParentRepairSession for session {}, responding with failure", sessionID);
-            sendMessage(coordinator, new FailSession(sessionID));
+            logger.error("Error retrieving ParentRepairSession for session {}, responding with failure", sessionID);
+            sendMessage(coordinator, new PrepareConsistentResponse(sessionID, getBroadcastAddressAndPort(), false));
             return;
         }
 
@@ -33,7 +33,8 @@
 
         KeyspaceRepairManager repairManager = parentSession.getKeyspace().getRepairManager();
         RangesAtEndpoint tokenRanges = filterLocalRanges(parentSession.getKeyspace().getName(), parentSession.getRanges());
-        ListenableFuture repairPreparation = prepareSession(repairManager, sessionID, parentSession.getColumnFamilyStores(), tokenRanges, executor);
+        ListenableFuture repairPreparation = prepareSession(repairManager, sessionID, parentSession.getColumnFamilyStores(),
+                                                            tokenRanges, executor, () -> session.getState() != PREPARING);
 
         Futures.addCallback(repairPreparation, new FutureCallback<Object>()
         {
@@ -41,7 +42,7 @@
             {
                 try
                 {
-                    logger.debug("Prepare phase for incremental repair session {} completed", sessionID);
+                    logger.info("Prepare phase for incremental repair session {} completed", sessionID);
                     if (session.getState() != FAILED)
                     {
                         setStateAndSave(session, PREPARED);
@@ -49,7 +50,8 @@
                     }
                     else
                     {
-                        logger.debug("Session {} failed before anticompaction completed", sessionID);
+                        logger.info("Session {} failed before anticompaction completed", sessionID);
+                        sendMessage(coordinator, new PrepareConsistentResponse(sessionID, getBroadcastAddressAndPort(), false));
                     }
                 }
                 finally

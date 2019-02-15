@@ -1,0 +1,38 @@
+    private void testMockedMessagingPrepareFailure() throws InterruptedException, ExecutionException, TimeoutException
+    {
+        // we expect FailSession messages to all participants
+        MockMessagingSpy sendFailSessionExpectedSpy = createFailSessionSpy(Lists.newArrayList(PARTICIPANT1, PARTICIPANT2, PARTICIPANT3));
+
+        UUID uuid = registerSession(cfs, true, true);
+        CoordinatorSession coordinator = ActiveRepairService.instance.consistent.coordinated.registerSession(uuid, PARTICIPANTS, false);
+        AtomicBoolean repairSubmitted = new AtomicBoolean(false);
+        SettableFuture<List<RepairSessionResult>> repairFuture = SettableFuture.create();
+        Supplier<ListenableFuture<List<RepairSessionResult>>> sessionSupplier = () ->
+        {
+            repairSubmitted.set(true);
+            return repairFuture;
+        };
+
+        // coordinator sends prepare requests to create local session and perform anticompaction
+        AtomicBoolean proposeFailed = new AtomicBoolean(false);
+        Assert.assertFalse(repairSubmitted.get());
+
+        // execute repair and start prepare phase
+        ListenableFuture<Boolean> sessionResult = coordinator.execute(sessionSupplier, proposeFailed);
+        Assert.assertFalse(proposeFailed.get());
+        // prepare completed
+        try
+        {
+            sessionResult.get(1, TimeUnit.SECONDS);
+            fail("Completed session without failure after prepare failed");
+        }
+        catch (ExecutionException e)
+        {
+        }
+        sendFailSessionExpectedSpy.interceptMessageOut(3).get(1, TimeUnit.SECONDS);
+        Assert.assertFalse(repairSubmitted.get());
+        Assert.assertTrue(proposeFailed.get());
+        Assert.assertEquals(ConsistentSession.State.FAILED, coordinator.getState());
+        Assert.assertFalse(ActiveRepairService.instance.consistent.local.isSessionInProgress(uuid));
+    }
+

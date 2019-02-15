@@ -1,0 +1,53 @@
+    @Test
+    public void testMockedMessagingHappyPath() throws InterruptedException, ExecutionException, TimeoutException
+    {
+
+        MockMessagingSpy spyPrepare = createPrepareSpy(Collections.emptySet(), Collections.emptySet());
+        MockMessagingSpy spyFinalize = createFinalizeSpy(Collections.emptySet(), Collections.emptySet());
+        MockMessagingSpy spyCommit = createCommitSpy();
+
+        UUID uuid = registerSession(cfs, true, true);
+        CoordinatorSession coordinator = ActiveRepairService.instance.consistent.coordinated.registerSession(uuid, PARTICIPANTS, false);
+        AtomicBoolean repairSubmitted = new AtomicBoolean(false);
+        SettableFuture<List<RepairSessionResult>> repairFuture = SettableFuture.create();
+        Supplier<ListenableFuture<List<RepairSessionResult>>> sessionSupplier = () ->
+        {
+            repairSubmitted.set(true);
+            return repairFuture;
+        };
+
+        // coordinator sends prepare requests to create local session and perform anticompaction
+        AtomicBoolean hasFailures = new AtomicBoolean(false);
+        Assert.assertFalse(repairSubmitted.get());
+
+        // execute repair and start prepare phase
+        ListenableFuture<Boolean> sessionResult = coordinator.execute(sessionSupplier, hasFailures);
+        Assert.assertFalse(sessionResult.isDone());
+        Assert.assertFalse(hasFailures.get());
+        // prepare completed
+        spyPrepare.interceptMessageOut(3).get(1, TimeUnit.SECONDS);
+        Assert.assertFalse(sessionResult.isDone());
+        Assert.assertFalse(hasFailures.get());
+
+        // set result from local repair session
+        repairFuture.set(Lists.newArrayList(createResult(coordinator), createResult(coordinator), createResult(coordinator)));
+
+        // finalize phase
+        spyFinalize.interceptMessageOut(3).get(1, TimeUnit.SECONDS);
+        Assert.assertFalse(sessionResult.isDone());
+        Assert.assertFalse(hasFailures.get());
+
+        // commit phase
+        spyCommit.interceptMessageOut(3).get(1, TimeUnit.SECONDS);
+        Assert.assertTrue(sessionResult.get());
+        Assert.assertFalse(hasFailures.get());
+
+        // expect no other messages except from intercepted so far
+        spyPrepare.interceptNoMsg(100, TimeUnit.MILLISECONDS);
+        spyFinalize.interceptNoMsg(100, TimeUnit.MILLISECONDS);
+        spyCommit.interceptNoMsg(100, TimeUnit.MILLISECONDS);
+
+        Assert.assertEquals(ConsistentSession.State.FINALIZED, coordinator.getState());
+        Assert.assertFalse(ActiveRepairService.instance.consistent.local.isSessionInProgress(uuid));
+    }
+
