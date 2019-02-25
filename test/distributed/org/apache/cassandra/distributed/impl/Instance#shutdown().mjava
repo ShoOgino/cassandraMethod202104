@@ -1,7 +1,7 @@
     @Override
-    public void shutdown()
+    public Future<Void> shutdown()
     {
-        sync((ExecutorService executor) -> {
+        Future<?> future = async((ExecutorService executor) -> {
             Throwable error = null;
             error = parallelRun(error, executor,
                     Gossiper.instance::stop,
@@ -29,10 +29,13 @@
                                 StageManager::shutdownAndWait,
                                 SharedExecutorPool.SHARED::shutdown
             );
+
             LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
             loggerContext.stop();
-            super.shutdown();
             Throwables.maybeFail(error);
-        }).accept(isolatedExecutor);
+        }).apply(isolatedExecutor);
+
+        return CompletableFuture.runAsync(ThrowingRunnable.toRunnable(future::get), isolatedExecutor)
+                                .thenRun(super::shutdown);
     }
 
