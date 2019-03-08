@@ -1,0 +1,37 @@
+    @Test
+    public void prepareExecuteTest()
+    {
+        createTable("create table %s (id int primary key, v int)");
+        MockListener listener = new MockListener(getCurrentColumnFamilyStore());
+        QueryEvents.instance.registerListener(listener);
+        Session session = sessionNet();
+        String query = formatQuery("select * from %s where id = 1");
+        PreparedStatement ps = session.prepare(query);
+        listener.verify("prepareSuccess", 1);
+        assertEquals(query, listener.query);
+        assertTrue(listener.statement instanceof SelectStatement);
+        Statement s = ps.bind();
+        session.execute(s);
+        listener.verify(newArrayList("prepareSuccess", "executeSuccess"), newArrayList(1, 1));
+
+        QueryProcessor.clearPreparedStatements(false);
+        s = ps.bind();
+        session.execute(s); // this re-prepares the query!!
+        listener.verify(newArrayList("prepareSuccess", "executeSuccess", "executeFailure"), newArrayList(2, 2, 1));
+
+        query = formatQuery("select abcdef from %s where id = 1");
+        Exception expectedException = null;
+        try
+        {
+            session.prepare(query);
+            fail("should fail");
+        }
+        catch (Exception e)
+        {
+            expectedException = e;
+        }
+        listener.verify(newArrayList("prepareSuccess", "prepareFailure", "executeSuccess", "executeFailure"), newArrayList(2, 1, 2, 1));
+        assertNotNull(listener.e);
+        assertNotNull(expectedException);
+    }
+

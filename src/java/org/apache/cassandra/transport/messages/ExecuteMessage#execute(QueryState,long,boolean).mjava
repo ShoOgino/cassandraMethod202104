@@ -1,12 +1,11 @@
     @Override
     protected Message.Response execute(QueryState state, long queryStartNanoTime, boolean traceRequest)
     {
-        AuditLogManager auditLogManager = AuditLogManager.getInstance();
-
+        QueryHandler.Prepared prepared = null;
         try
         {
             QueryHandler handler = ClientState.getCQLQueryHandler();
-            QueryHandler.Prepared prepared = handler.getPrepared(statementId);
+            prepared = handler.getPrepared(statementId);
             if (prepared == null)
                 throw new PreparedQueryNotFoundException(statementId);
 
@@ -23,12 +22,11 @@
             // by wrapping the QueryOptions.
             QueryOptions queryOptions = QueryOptions.addColumnSpecifications(options, prepared.statement.getBindVariables());
 
-            long requestStartTime = auditLogManager.isLoggingEnabled() ? System.currentTimeMillis() : 0L;
+            long requestStartTime = System.currentTimeMillis();
 
             Message.Response response = handler.processPrepared(statement, state, queryOptions, getCustomPayload(), queryStartNanoTime);
 
-            if (auditLogManager.isLoggingEnabled())
-                logSuccess(state, prepared, requestStartTime);
+            QueryEvents.instance.notifyExecuteSuccess(prepared.statement, prepared.rawCQLStatement, options, state, requestStartTime, response);
 
             if (response instanceof ResultMessage.Rows)
             {
@@ -64,8 +62,7 @@
         }
         catch (Exception e)
         {
-            if (auditLogManager.isAuditingEnabled())
-                logException(state, e);
+            QueryEvents.instance.notifyExecuteFailure(prepared, options, state, e);
             JVMStabilityInspector.inspectThrowable(e);
             return ErrorMessage.fromException(e);
         }

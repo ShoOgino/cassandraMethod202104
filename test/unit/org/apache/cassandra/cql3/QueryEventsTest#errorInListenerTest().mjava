@@ -1,0 +1,55 @@
+    @Test
+    public void errorInListenerTest() throws Throwable
+    {
+        createTable("create table %s (id int primary key, v int)");
+        QueryEvents.Listener listener = new QueryEvents.Listener()
+        {
+            @Override
+            public void querySuccess(CQLStatement statement, String query, QueryOptions options, QueryState state, long queryTime, Message.Response response)
+            {
+                throw new AssertionError("whoo");
+            }
+
+            @Override
+            public void queryFailure(@Nullable CQLStatement statement, String query, QueryOptions options, QueryState state, Exception cause)
+            {
+                throw new AssertionError("whee");
+            }
+        };
+
+        QueryEvents.instance.registerListener(listener);
+
+        executeNet("insert into %s (id, v) values (2,2)");
+        ResultSet rs = executeNet("select * from %s");
+        assertEquals(2, rs.one().getInt("id"));
+
+        // record the exception without the throwing listener:
+        QueryEvents.instance.unregisterListener(listener);
+        Exception expected = null;
+        try
+        {
+            executeNet("select blabla from %s");
+            fail("Query should throw");
+        }
+        catch (Exception e)
+        {
+            expected = e;
+        }
+
+        QueryEvents.instance.registerListener(listener);
+        // and with the listener:
+        try
+        {
+            executeNet("select blabla from %s");
+            fail("Query should throw");
+        }
+        catch (Exception e)
+        {
+            // make sure we throw the same exception even if the listener throws;
+            assertSame(expected.getClass(), e.getClass());
+            assertEquals(expected.getMessage(), e.getMessage());
+        }
+
+
+    }
+

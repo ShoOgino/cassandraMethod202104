@@ -1,0 +1,36 @@
+        public BinLog build(boolean cleanDirectory)
+        {
+            logger.info("Attempting to configure bin log: Path: {} Roll cycle: {} Blocking: {} Max queue weight: {} Max log size:{} Archive command: {}", path, rollCycle, blocking, maxQueueWeight, maxLogSize, archiveCommand);
+            synchronized (currentPaths)
+            {
+                if (currentPaths.contains(path))
+                    throw new IllegalStateException("Already logging to " + path);
+                currentPaths.add(path);
+            }
+            try
+            {
+                // create the archiver before cleaning directories - ExternalArchiver will try to archive any existing file.
+                BinLogArchiver archiver = Strings.isNullOrEmpty(archiveCommand) ? new DeletingArchiver(maxLogSize) : new ExternalArchiver(archiveCommand, path, maxArchiveRetries);
+                if (cleanDirectory)
+                {
+                    logger.info("Cleaning directory: {} as requested", path);
+                    if (path.toFile().exists())
+                    {
+                        Throwable error = cleanDirectory(path.toFile(), null);
+                        if (error != null)
+                        {
+                            throw new RuntimeException(error);
+                        }
+                    }
+                }
+                BinLog binlog = new BinLog(path, RollCycles.valueOf(rollCycle), maxQueueWeight, archiver, blocking);
+                binlog.start();
+                return binlog;
+            }
+            catch (Exception e)
+            {
+                currentPaths.remove(path);
+                throw e;
+            }
+        }
+

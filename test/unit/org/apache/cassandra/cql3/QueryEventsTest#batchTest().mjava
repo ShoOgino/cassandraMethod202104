@@ -1,0 +1,44 @@
+    @Test
+    public void batchTest()
+    {
+        createTable("create table %s (id int primary key, v int)");
+        BatchMockListener listener = new BatchMockListener(getCurrentColumnFamilyStore());
+        QueryEvents.instance.registerListener(listener);
+        Session session = sessionNet();
+        com.datastax.driver.core.BatchStatement batch = new com.datastax.driver.core.BatchStatement(com.datastax.driver.core.BatchStatement.Type.UNLOGGED);
+        String q1 = formatQuery("insert into %s (id, v) values (?, ?)");
+        PreparedStatement ps = session.prepare(q1);
+        batch.add(ps.bind(1,1));
+        batch.add(ps.bind(2,2));
+        String q2 = formatQuery("insert into %s (id, v) values (1,1)");
+        batch.add(new SimpleStatement(formatQuery("insert into %s (id, v) values (1,1)")));
+        session.execute(batch);
+
+        listener.verify(newArrayList("prepareSuccess", "batchSuccess"), newArrayList(1, 1));
+        assertEquals(3, listener.queries.size());
+        assertEquals(BatchStatement.Type.UNLOGGED, listener.batchType);
+        assertEquals(newArrayList(q1, q1, q2), listener.queries);
+        assertEquals(newArrayList(newArrayList(ByteBufferUtil.bytes(1), ByteBufferUtil.bytes(1)),
+                                  newArrayList(ByteBufferUtil.bytes(2), ByteBufferUtil.bytes(2)),
+                                  newArrayList(newArrayList())), listener.values);
+
+        batch.add(new SimpleStatement("insert into abc.def (id, v) values (1,1)"));
+        try
+        {
+            session.execute(batch);
+            fail("Batch should fail");
+        }
+        catch (Exception e)
+        {
+            // ok
+        }
+        listener.verify(newArrayList("prepareSuccess", "batchSuccess", "batchFailure"), newArrayList(1, 1, 1));
+        assertEquals(3, listener.queries.size());
+        assertEquals(BatchStatement.Type.UNLOGGED, listener.batchType);
+        assertEquals(newArrayList(q1, q1, q2), listener.queries);
+        assertEquals(newArrayList(newArrayList(ByteBufferUtil.bytes(1), ByteBufferUtil.bytes(1)),
+                                  newArrayList(ByteBufferUtil.bytes(2), ByteBufferUtil.bytes(2)),
+                                  newArrayList(newArrayList()),
+                                  newArrayList(newArrayList())), listener.values);
+    }
+
