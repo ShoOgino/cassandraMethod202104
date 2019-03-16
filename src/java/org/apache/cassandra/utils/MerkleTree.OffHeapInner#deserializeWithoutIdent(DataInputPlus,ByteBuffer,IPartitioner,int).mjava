@@ -1,0 +1,33 @@
+        static int deserializeWithoutIdent(DataInputPlus in, ByteBuffer buffer, IPartitioner partitioner, int version) throws IOException
+        {
+            if (buffer.remaining() < maxOffHeapSize(partitioner))
+                throw new IllegalStateException("Insufficient remaining bytes to deserialize Inner node off-heap");
+
+            final int offset = buffer.position();
+
+            int tokenSize = Token.serializer.deserializeSize(in);
+            byte[] tokenBytes = getTempArray(tokenSize);
+            in.readFully(tokenBytes, 0, tokenSize);
+
+            buffer.putShort(offset + OffHeapInner.TOKEN_LENGTH_OFFSET, Shorts.checkedCast(tokenSize));
+            buffer.position(offset + OffHeapInner.TOKEN_BYTES_OFFSET);
+            buffer.put(tokenBytes, 0, tokenSize);
+
+            int leftPointer  = OffHeapNode.deserialize(in, buffer, partitioner, version);
+            int rightPointer = OffHeapNode.deserialize(in, buffer, partitioner, version);
+
+            buffer.putInt(offset + OffHeapInner.LEFT_CHILD_POINTER_OFFSET,  leftPointer);
+            buffer.putInt(offset + OffHeapInner.RIGHT_CHILD_POINTER_OFFSET, rightPointer);
+
+            int leftHashOffset  = hashBytesOffset(leftPointer);
+            int rightHashOffset = hashBytesOffset(rightPointer);
+
+            for (int i = 0; i < HASH_SIZE; i += 8)
+            {
+                buffer.putLong(offset + OffHeapInner.HASH_BYTES_OFFSET + i,
+                               buffer.getLong(leftHashOffset  + i) ^ buffer.getLong(rightHashOffset + i));
+            }
+
+            return offset;
+        }
+

@@ -6,18 +6,32 @@
         // populate and validate the tree
         mt.maxsize(256);
         mt.init();
-        for (TreeRange range : mt.invalids())
+        for (TreeRange range : mt.rangeIterator())
             range.addAll(new HIterator(range.right));
 
         byte[] initialhash = mt.hash(full);
 
         DataOutputBuffer out = new DataOutputBuffer();
-        MerkleTree.serializer.serialize(mt, out, MessagingService.current_version);
+        mt.serialize(out, MessagingService.current_version);
         byte[] serialized = out.toByteArray();
 
-        DataInputPlus in = new DataInputBuffer(serialized);
-        MerkleTree restored = MerkleTree.serializer.deserialize(in, MessagingService.current_version);
+        MerkleTree restoredOnHeap =
+            MerkleTree.deserialize(new DataInputBuffer(serialized), false, MessagingService.current_version);
+        MerkleTree restoredOffHeap =
+            MerkleTree.deserialize(new DataInputBuffer(serialized), true, MessagingService.current_version);
+        MerkleTree movedOffHeap = mt.moveOffHeap();
 
-        assertHashEquals(initialhash, restored.hash(full));
+        assertHashEquals(initialhash, restoredOnHeap.hash(full));
+        assertHashEquals(initialhash, restoredOffHeap.hash(full));
+        assertHashEquals(initialhash, movedOffHeap.hash(full));
+
+        assertEquals(mt, restoredOnHeap);
+        assertEquals(mt, restoredOffHeap);
+        assertEquals(mt, movedOffHeap);
+
+        assertEquals(restoredOnHeap, restoredOffHeap);
+        assertEquals(restoredOnHeap, movedOffHeap);
+
+        assertEquals(restoredOffHeap, movedOffHeap);
     }
 

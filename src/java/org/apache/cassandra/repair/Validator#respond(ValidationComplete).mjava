@@ -1,0 +1,29 @@
+    private void respond(ValidationComplete response)
+    {
+        if (initiatorIsRemote())
+        {
+            MessagingService.instance().send(Message.out(REPAIR_REQ, response), initiator);
+            return;
+        }
+
+        /*
+         * For local initiators, DO NOT send the message to self over loopback. This is a wasted ser/de loop
+         * and a ton of garbage. Instead, move the trees off heap and invoke message handler. We could do it
+         * directly, since this method will only be called from {@code Stage.ENTI_ENTROPY}, but we do instead
+         * execute a {@code Runnable} on the stage - in case that assumption ever changes by accident.
+         */
+        StageManager.getStage(Stage.ANTI_ENTROPY).execute(() ->
+        {
+            ValidationComplete movedResponse = response;
+            try
+            {
+                movedResponse = response.tryMoveOffHeap();
+            }
+            catch (IOException e)
+            {
+                logger.error("Failed to move local merkle tree for {} off heap", desc, e);
+            }
+            ActiveRepairService.instance.handleMessage(initiator, movedResponse);
+        });
+    }
+

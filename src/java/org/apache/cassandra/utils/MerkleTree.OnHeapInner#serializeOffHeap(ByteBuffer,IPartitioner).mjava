@@ -1,0 +1,30 @@
+        int serializeOffHeap(ByteBuffer buffer, IPartitioner partitioner) throws IOException
+        {
+            if (buffer.remaining() < OffHeapInner.maxOffHeapSize(partitioner))
+                throw new IllegalStateException("Insufficient remaining bytes to deserialize Inner node off-heap");
+
+            final int offset = buffer.position();
+
+            int tokenSize = partitioner.getTokenFactory().byteSize(token);
+            buffer.putShort(offset + OffHeapInner.TOKEN_LENGTH_OFFSET, Shorts.checkedCast(tokenSize));
+            buffer.position(offset + OffHeapInner.TOKEN_BYTES_OFFSET);
+            partitioner.getTokenFactory().serialize(token, buffer);
+
+            int  leftPointer =  left.serializeOffHeap(buffer, partitioner);
+            int rightPointer = right.serializeOffHeap(buffer, partitioner);
+
+            buffer.putInt(offset + OffHeapInner.LEFT_CHILD_POINTER_OFFSET,  leftPointer);
+            buffer.putInt(offset + OffHeapInner.RIGHT_CHILD_POINTER_OFFSET, rightPointer);
+
+            int  leftHashOffset = OffHeapInner.hashBytesOffset(leftPointer);
+            int rightHashOffset = OffHeapInner.hashBytesOffset(rightPointer);
+
+            for (int i = 0; i < HASH_SIZE; i += 8)
+            {
+                buffer.putLong(offset + OffHeapInner.HASH_BYTES_OFFSET + i,
+                               buffer.getLong(leftHashOffset  + i) ^ buffer.getLong(rightHashOffset + i));
+            }
+
+            return offset;
+        }
+

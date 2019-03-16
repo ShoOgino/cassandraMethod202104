@@ -1,12 +1,11 @@
     /**
-     * TODO: This function could be optimized into a depth first traversal of
-     * the two trees in parallel.
+     * TODO: This function could be optimized into a depth first traversal of the two trees in parallel.
      *
      * Takes two trees and a range for which they have hashes, but are inconsistent.
      * @return FULLY_INCONSISTENT if active is inconsistent, PARTIALLY_INCONSISTENT if only a subrange is inconsistent.
      */
     @VisibleForTesting
-    static int differenceHelper(MerkleTree ltree, MerkleTree rtree, List<TreeRange> diff, TreeRange active)
+    static Difference differenceHelper(MerkleTree ltree, MerkleTree rtree, List<TreeRange> diff, TreeRange active)
     {
         if (active.depth == Byte.MAX_VALUE)
             return CONSISTENT;
@@ -21,29 +20,26 @@
             return FULLY_INCONSISTENT;
         }
 
-        TreeDifference left = new TreeDifference(active.left, midpoint, inc(active.depth));
-        TreeDifference right = new TreeDifference(midpoint, active.right, inc(active.depth));
+        TreeRange left = new TreeRange(active.left, midpoint, active.depth + 1);
+        TreeRange right = new TreeRange(midpoint, active.right, active.depth + 1);
         logger.debug("({}) Hashing sub-ranges [{}, {}] for {} divided by midpoint {}", active.depth, left, right, active, midpoint);
-        byte[] lhash, rhash;
-        Hashable lnode, rnode;
+        Node lnode, rnode;
 
         // see if we should recurse left
         lnode = ltree.find(left);
         rnode = rtree.find(left);
-        lhash = lnode.hash();
-        rhash = rnode.hash();
-        left.setSize(lnode.sizeOfRange(), rnode.sizeOfRange());
-        left.setRows(lnode.rowsInRange(), rnode.rowsInRange());
 
-        int ldiff = CONSISTENT;
-        boolean lreso = lhash != null && rhash != null;
-        if (lreso && !Arrays.equals(lhash, rhash))
+        Difference ldiff = CONSISTENT;
+        if (null != lnode && null != rnode && lnode.hashesDiffer(rnode))
         {
             logger.debug("({}) Inconsistent digest on left sub-range {}: [{}, {}]", active.depth, left, lnode, rnode);
-            if (lnode instanceof Leaf) ldiff = FULLY_INCONSISTENT;
-            else ldiff = differenceHelper(ltree, rtree, diff, left);
+
+            if (lnode instanceof Leaf)
+                ldiff = FULLY_INCONSISTENT;
+            else
+                ldiff = differenceHelper(ltree, rtree, diff, left);
         }
-        else if (!lreso)
+        else if (null == lnode || null == rnode)
         {
             logger.debug("({}) Left sub-range fully inconsistent {}", active.depth, left);
             ldiff = FULLY_INCONSISTENT;
@@ -52,20 +48,18 @@
         // see if we should recurse right
         lnode = ltree.find(right);
         rnode = rtree.find(right);
-        lhash = lnode.hash();
-        rhash = rnode.hash();
-        right.setSize(lnode.sizeOfRange(), rnode.sizeOfRange());
-        right.setRows(lnode.rowsInRange(), rnode.rowsInRange());
 
-        int rdiff = CONSISTENT;
-        boolean rreso = lhash != null && rhash != null;
-        if (rreso && !Arrays.equals(lhash, rhash))
+        Difference rdiff = CONSISTENT;
+        if (null != lnode && null != rnode && lnode.hashesDiffer(rnode))
         {
             logger.debug("({}) Inconsistent digest on right sub-range {}: [{}, {}]", active.depth, right, lnode, rnode);
-            if (rnode instanceof Leaf) rdiff = FULLY_INCONSISTENT;
-            else rdiff = differenceHelper(ltree, rtree, diff, right);
+
+            if (rnode instanceof Leaf)
+                rdiff = FULLY_INCONSISTENT;
+            else
+                rdiff = differenceHelper(ltree, rtree, diff, right);
         }
-        else if (!rreso)
+        else if (null == lnode || null == rnode)
         {
             logger.debug("({}) Right sub-range fully inconsistent {}", active.depth, right);
             rdiff = FULLY_INCONSISTENT;
