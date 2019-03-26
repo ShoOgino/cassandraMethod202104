@@ -1,16 +1,30 @@
     public void redistributeSummaries() throws IOException
     {
-        Pair<List<SSTableReader>, Map<TableId, LifecycleTransaction>> compactingAndNonCompacting = getCompactingAndNonCompactingSSTables();
+        Pair<Long, Map<TableId, LifecycleTransaction>> redistributionTransactionInfo = getRestributionTransactions();
+        Map<TableId, LifecycleTransaction> transactions = redistributionTransactionInfo.right;
+        long nonRedistributingOffHeapSize = redistributionTransactionInfo.left;
         try
         {
-            redistributeSummaries(new IndexSummaryRedistribution(compactingAndNonCompacting.left,
-                                                                 compactingAndNonCompacting.right,
+            redistributeSummaries(new IndexSummaryRedistribution(transactions,
+                                                                 nonRedistributingOffHeapSize,
                                                                  this.memoryPoolBytes));
+        }
+        catch (Exception e)
+        {
+            if (!(e instanceof CompactionInterruptedException))
+                logger.error("Got exception during index summary redistribution", e);
+            throw e;
         }
         finally
         {
-            for (LifecycleTransaction modifier : compactingAndNonCompacting.right.values())
-                modifier.close();
+            try
+            {
+                FBUtilities.closeAll(transactions.values());
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
         }
     }
 
