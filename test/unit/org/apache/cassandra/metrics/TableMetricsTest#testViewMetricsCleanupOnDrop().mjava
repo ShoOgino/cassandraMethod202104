@@ -1,0 +1,21 @@
+    @Test
+    public void testViewMetricsCleanupOnDrop()
+    {
+        String tableName = TABLE + "_metrics_cleanup";
+        String viewName = TABLE + "_materialized_view_cleanup";
+        CassandraMetricsRegistry registry = CassandraMetricsRegistry.Metrics;
+        Supplier<Stream<String>> metrics = () -> registry.getNames().stream().filter(m -> m.contains(viewName));
+
+        // no metrics before creating
+        assertEquals(0, metrics.get().count());
+
+        recreateTable(tableName);
+        session.execute(String.format("CREATE MATERIALIZED VIEW %s.%s AS SELECT id,val1 FROM %s.%s WHERE id IS NOT NULL AND val1 IS NOT NULL PRIMARY KEY (id,val1);", KEYSPACE, viewName, KEYSPACE, tableName));
+        // some metrics
+        assertTrue(metrics.get().count() > 0);
+
+        session.execute(String.format("DROP MATERIALIZED VIEW IF EXISTS %s.%s;", KEYSPACE, viewName));
+        // no metrics after drop
+        assertEquals(metrics.get().collect(Collectors.joining(",")), 0, metrics.get().count());
+    }
+

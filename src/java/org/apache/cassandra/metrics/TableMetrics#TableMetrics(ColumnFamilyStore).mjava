@@ -110,52 +110,45 @@
             }
         });
         memtableSwitchCount = createTableCounter("MemtableSwitchCount");
-        estimatedPartitionSizeHistogram = Metrics.register(factory.createMetricName("EstimatedPartitionSizeHistogram"),
-                                                           aliasFactory.createMetricName("EstimatedRowSizeHistogram"),
-                                                           new Gauge<long[]>()
-                                                           {
-                                                               public long[] getValue()
-                                                               {
-                                                                   return combineHistograms(cfs.getSSTables(SSTableSet.CANONICAL), new GetHistogram()
-                                                                   {
-                                                                       public EstimatedHistogram getHistogram(SSTableReader reader)
-                                                                       {
-                                                                           return reader.getEstimatedPartitionSize();
-                                                                       }
-                                                                   });
-                                                               }
-                                                           });
-        estimatedPartitionCount = Metrics.register(factory.createMetricName("EstimatedPartitionCount"),
-                                                   aliasFactory.createMetricName("EstimatedRowCount"),
-                                                   new Gauge<Long>()
-                                                   {
-                                                       public Long getValue()
-                                                       {
-                                                           long memtablePartitions = 0;
-                                                           for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
-                                                               memtablePartitions += memtable.partitionCount();
-                                                           try(ColumnFamilyStore.RefViewFragment refViewFragment = cfs.selectAndReference(View.selectFunction(SSTableSet.CANONICAL)))
-                                                           {
-                                                               return SSTableReader.getApproximateKeyCount(refViewFragment.sstables) + memtablePartitions;
-                                                           }
-
-                                                       }
-                                                   });
-        estimatedColumnCountHistogram = Metrics.register(factory.createMetricName("EstimatedColumnCountHistogram"),
-                                                         aliasFactory.createMetricName("EstimatedColumnCountHistogram"),
-                                                         new Gauge<long[]>()
-                                                         {
-                                                             public long[] getValue()
-                                                             {
-                                                                 return combineHistograms(cfs.getSSTables(SSTableSet.CANONICAL), new GetHistogram()
-                                                                 {
-                                                                     public EstimatedHistogram getHistogram(SSTableReader reader)
-                                                                     {
-                                                                         return reader.getEstimatedCellPerPartitionCount();
-                                                                     }
-                                                                 });
+        estimatedPartitionSizeHistogram = createTableGauge("EstimatedPartitionSizeHistogram", "EstimatedRowSizeHistogram", new Gauge<long[]>()
+        {
+            public long[] getValue()
+            {
+                return combineHistograms(cfs.getSSTables(SSTableSet.CANONICAL), new GetHistogram()
+                {
+                    public EstimatedHistogram getHistogram(SSTableReader reader)
+                    {
+                        return reader.getEstimatedPartitionSize();
+                    }
+                });
             }
-        });
+        }, null);
+        estimatedPartitionCount = createTableGauge("EstimatedPartitionCount", "EstimatedRowCount", new Gauge<Long>()
+        {
+            public Long getValue()
+            {
+                long memtablePartitions = 0;
+                for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
+                   memtablePartitions += memtable.partitionCount();
+                try(ColumnFamilyStore.RefViewFragment refViewFragment = cfs.selectAndReference(View.selectFunction(SSTableSet.CANONICAL)))
+                {
+                    return SSTableReader.getApproximateKeyCount(refViewFragment.sstables) + memtablePartitions;
+                }
+            }
+        }, null);
+        estimatedColumnCountHistogram = createTableGauge("EstimatedColumnCountHistogram", "EstimatedColumnCountHistogram", new Gauge<long[]>()
+        {
+            public long[] getValue()
+            {
+                return combineHistograms(cfs.getSSTables(SSTableSet.CANONICAL), new GetHistogram()
+                {
+                    public EstimatedHistogram getHistogram(SSTableReader reader)
+                    {
+                        return reader.getEstimatedCellPerPartitionCount();
+                    }
+                });
+            }
+        }, null);
         sstablesPerReadHistogram = createTableHistogram("SSTablesPerReadHistogram", cfs.keyspace.metric.sstablesPerReadHistogram, true);
         compressionRatio = createTableGauge("CompressionRatio", new Gauge<Double>()
         {
@@ -229,9 +222,9 @@
             }
         });
 
-        readLatency = new LatencyMetrics(factory, "Read", cfs.keyspace.metric.readLatency, globalReadLatency);
-        writeLatency = new LatencyMetrics(factory, "Write", cfs.keyspace.metric.writeLatency, globalWriteLatency);
-        rangeLatency = new LatencyMetrics(factory, "Range", cfs.keyspace.metric.rangeLatency, globalRangeLatency);
+        readLatency = createLatencyMetrics("Read", cfs.keyspace.metric.readLatency, globalReadLatency);
+        writeLatency = createLatencyMetrics("Write", cfs.keyspace.metric.writeLatency, globalWriteLatency);
+        rangeLatency = createLatencyMetrics("Range", cfs.keyspace.metric.rangeLatency, globalRangeLatency);
         pendingFlushes = createTableCounter("PendingFlushes");
         bytesFlushed = createTableCounter("BytesFlushed");
 
@@ -479,9 +472,7 @@
         additionalWrites = createTableCounter("AdditionalWrites");
         additionalWriteLatencyNanos = createTableGauge("AdditionalWriteLatencyNanos", () -> cfs.additionalWriteLatencyNanos);
 
-        keyCacheHitRate = Metrics.register(factory.createMetricName("KeyCacheHitRate"),
-                                           aliasFactory.createMetricName("KeyCacheHitRate"),
-                                           new RatioGauge()
+        keyCacheHitRate = createTableGauge("KeyCacheHitRate", "KeyCacheHitRate", new RatioGauge()
         {
             @Override
             public Ratio getRatio()
@@ -504,14 +495,14 @@
                     requests += sstable.getKeyCacheRequest();
                 return Math.max(requests, 1); // to avoid NaN.
             }
-        });
+        }, null);
         tombstoneScannedHistogram = createTableHistogram("TombstoneScannedHistogram", cfs.keyspace.metric.tombstoneScannedHistogram, false);
         liveScannedHistogram = createTableHistogram("LiveScannedHistogram", cfs.keyspace.metric.liveScannedHistogram, false);
         colUpdateTimeDeltaHistogram = createTableHistogram("ColUpdateTimeDeltaHistogram", cfs.keyspace.metric.colUpdateTimeDeltaHistogram, false);
-        coordinatorReadLatency = Metrics.timer(factory.createMetricName("CoordinatorReadLatency"));
-        coordinatorScanLatency = Metrics.timer(factory.createMetricName("CoordinatorScanLatency"));
-        coordinatorWriteLatency = Metrics.timer(factory.createMetricName("CoordinatorWriteLatency"));
-        waitingOnFreeMemtableSpace = Metrics.histogram(factory.createMetricName("WaitingOnFreeMemtableSpace"), false);
+        coordinatorReadLatency = createTableTimer("CoordinatorReadLatency");
+        coordinatorScanLatency = createTableTimer("CoordinatorScanLatency");
+        coordinatorWriteLatency = createTableTimer("CoordinatorWriteLatency");
+        waitingOnFreeMemtableSpace = createTableHistogram("WaitingOnFreeMemtableSpace", false);
 
         // We do not want to capture view mutation specific metrics for a view
         // They only makes sense to capture on the base table
@@ -542,9 +533,9 @@
 
         droppedMutations = createTableCounter("DroppedMutations");
 
-        casPrepare = new LatencyMetrics(factory, "CasPrepare", cfs.keyspace.metric.casPrepare);
-        casPropose = new LatencyMetrics(factory, "CasPropose", cfs.keyspace.metric.casPropose);
-        casCommit = new LatencyMetrics(factory, "CasCommit", cfs.keyspace.metric.casCommit);
+        casPrepare = createLatencyMetrics("CasPrepare", cfs.keyspace.metric.casPrepare);
+        casPropose = createLatencyMetrics("CasPropose", cfs.keyspace.metric.casPropose);
+        casCommit = createLatencyMetrics("CasCommit", cfs.keyspace.metric.casCommit);
 
         repairsStarted = createTableCounter("RepairJobsStarted");
         repairsCompleted = createTableCounter("RepairJobsCompleted");
