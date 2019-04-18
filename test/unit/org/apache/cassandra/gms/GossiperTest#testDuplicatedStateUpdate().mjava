@@ -1,0 +1,76 @@
+    @Test
+    public void testDuplicatedStateUpdate() throws Exception
+    {
+        VersionedValue.VersionedValueFactory valueFactory =
+            new VersionedValue.VersionedValueFactory(DatabaseDescriptor.getPartitioner());
+
+        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, hostIds, 2);
+        try
+        {
+            InetAddress remoteHostAddress = hosts.get(1);
+
+            EndpointState initialRemoteState = Gossiper.instance.getEndpointStateForEndpoint(remoteHostAddress);
+            HeartBeatState initialRemoteHeartBeat = initialRemoteState.getHeartBeatState();
+
+            //Util.createInitialRing should have initialized remoteHost's HeartBeatState's generation to 1
+            assertEquals(initialRemoteHeartBeat.getGeneration(), 1);
+
+            HeartBeatState proposedRemoteHeartBeat = new HeartBeatState(initialRemoteHeartBeat.getGeneration());
+            EndpointState proposedRemoteState = new EndpointState(proposedRemoteHeartBeat);
+
+            final Token token = DatabaseDescriptor.getPartitioner().getRandomToken();
+            VersionedValue tokensValue = valueFactory.tokens(Collections.singletonList(token));
+            proposedRemoteState.addApplicationState(ApplicationState.TOKENS, tokensValue);
+
+            Gossiper.instance.register(
+            new IEndpointStateChangeSubscriber()
+            {
+                public void onJoin(InetAddress endpoint, EndpointState epState) { }
+
+                public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) { }
+
+                public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value)
+                {
+                    assertEquals(ApplicationState.TOKENS, state);
+                    stateChangedNum++;
+                }
+
+                public void onAlive(InetAddress endpoint, EndpointState state) { }
+
+                public void onDead(InetAddress endpoint, EndpointState state) { }
+
+                public void onRemove(InetAddress endpoint) { }
+
+                public void onRestart(InetAddress endpoint, EndpointState state) { }
+            }
+            );
+
+            stateChangedNum = 0;
+            Gossiper.instance.applyStateLocally(ImmutableMap.of(remoteHostAddress, proposedRemoteState));
+            assertEquals(1, stateChangedNum);
+
+            HeartBeatState actualRemoteHeartBeat = Gossiper.instance.getEndpointStateForEndpoint(remoteHostAddress).getHeartBeatState();
+            assertEquals(proposedRemoteHeartBeat.getGeneration(), actualRemoteHeartBeat.getGeneration());
+
+            // Clone a new HeartBeatState
+            proposedRemoteHeartBeat = new HeartBeatState(initialRemoteHeartBeat.getGeneration(), proposedRemoteHeartBeat.getHeartBeatVersion());
+            proposedRemoteState = new EndpointState(proposedRemoteHeartBeat);
+
+            // Bump the heartbeat version and use the same TOKENS state
+            proposedRemoteHeartBeat.updateHeartBeat();
+            proposedRemoteState.addApplicationState(ApplicationState.TOKENS, tokensValue);
+
+            // The following state change should only update heartbeat without updating the TOKENS state
+            Gossiper.instance.applyStateLocally(ImmutableMap.of(remoteHostAddress, proposedRemoteState));
+            assertEquals(1, stateChangedNum);
+
+            actualRemoteHeartBeat = Gossiper.instance.getEndpointStateForEndpoint(remoteHostAddress).getHeartBeatState();
+            assertEquals(proposedRemoteHeartBeat.getGeneration(), actualRemoteHeartBeat.getGeneration());
+        }
+        finally
+        {
+            // clean up the gossip states
+            Gossiper.instance.endpointStateMap.clear();
+        }
+    }
+
