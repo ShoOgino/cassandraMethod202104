@@ -17,7 +17,25 @@
             public Iterable<SSTableReader> filterSSTables(LifecycleTransaction transaction)
             {
                 List<SSTableReader> sortedSSTables = Lists.newArrayList(transaction.originals());
-                Collections.sort(sortedSSTables, new SSTableReader.SizeComparator());
+                Iterator<SSTableReader> sstableIter = sortedSSTables.iterator();
+                int totalSSTables = 0;
+                int skippedSStables = 0;
+                while (sstableIter.hasNext())
+                {
+                    SSTableReader sstable = sstableIter.next();
+                    totalSSTables++;
+                    if (!needsCleanup(sstable, ranges))
+                    {
+                        logger.debug("Not cleaning up {} ([{}, {}]) - no tokens outside owned ranges {}",
+                                     sstable, sstable.first.getToken(), sstable.last.getToken(), ranges);
+                        sstableIter.remove();
+                        transaction.cancel(sstable);
+                        skippedSStables++;
+                    }
+                }
+                logger.info("Skipping cleanup for {}/{} sstables for {}.{} since they are fully contained in owned ranges ({})",
+                            skippedSStables, totalSSTables, cfStore.keyspace.getName(), cfStore.getTableName(), ranges);
+                sortedSSTables.sort(new SSTableReader.SizeComparator());
                 return sortedSSTables;
             }
 
