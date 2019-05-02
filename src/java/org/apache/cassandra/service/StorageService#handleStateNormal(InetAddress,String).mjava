@@ -7,8 +7,6 @@
     private void handleStateNormal(final InetAddress endpoint, final String status)
     {
         Collection<Token> tokens = getTokensFor(endpoint);
-        Set<Token> tokensToUpdateInMetadata = new HashSet<>();
-        Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
         Set<InetAddress> endpointsToRemove = new HashSet<>();
 
         if (logger.isDebugEnabled())
@@ -76,62 +74,11 @@
                 tokenMetadata.updateHostId(hostId, endpoint);
         }
 
-        for (final Token token : tokens)
-        {
-            // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
-            InetAddress currentOwner = tokenMetadata.getEndpoint(token);
-            if (currentOwner == null)
-            {
-                logger.debug("New node {} at token {}", endpoint, token);
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-            }
-            else if (endpoint.equals(currentOwner))
-            {
-                // set state back to normal, since the node may have tried to leave, but failed and is now back up
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-            }
-            else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
-            {
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-
-                // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
-                // a host no longer has any tokens, we'll want to remove it.
-                Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
-                epToTokenCopy.get(currentOwner).remove(token);
-                if (epToTokenCopy.get(currentOwner).size() < 1)
-                    endpointsToRemove.add(currentOwner);
-
-                logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
-                                          endpoint,
-                                          currentOwner,
-                                          token,
-                                          endpoint));
-            }
-            else
-            {
-                logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
-                                           endpoint,
-                                           currentOwner,
-                                           token,
-                                           endpoint));
-            }
-        }
-
         // capture because updateNormalTokens clears moving and member status
         boolean isMember = tokenMetadata.isMember(endpoint);
         boolean isMoving = tokenMetadata.isMoving(endpoint);
-        tokenMetadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
-        for (InetAddress ep : endpointsToRemove)
-        {
-            removeEndpoint(ep);
-            if (replacing && DatabaseDescriptor.getReplaceAddress().equals(ep))
-                Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-        }
-        if (!tokensToUpdateInSystemKeyspace.isEmpty())
-            SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace, StageManager.getStage(Stage.MUTATION));
+
+        updateTokenMetadata(endpoint, tokens, endpointsToRemove);
 
         if (isMoving || operationMode == Mode.MOVING)
         {
