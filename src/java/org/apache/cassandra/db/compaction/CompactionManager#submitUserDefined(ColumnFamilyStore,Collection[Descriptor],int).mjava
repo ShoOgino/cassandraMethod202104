@@ -2,7 +2,7 @@
     {
         Runnable runnable = new WrappedRunnable()
         {
-            protected void runMayThrow()
+            protected void runMayThrow() throws Exception
             {
                 // look up the sstables now that we're on the compaction executor, so we don't try to re-compact
                 // something that was already being compacted earlier.
@@ -28,10 +28,17 @@
                 else
                 {
                     List<AbstractCompactionTask> tasks = cfs.getCompactionStrategyManager().getUserDefinedTasks(sstables, gcBefore);
-                    for (AbstractCompactionTask task : tasks)
+                    try
                     {
-                        if (task != null)
-                            task.execute(metrics);
+                        for (AbstractCompactionTask task : tasks)
+                        {
+                            if (task != null)
+                                task.execute(metrics);
+                        }
+                    }
+                    finally
+                    {
+                        FBUtilities.closeAll(tasks.stream().map(task -> task.transaction).collect(Collectors.toList()));
                     }
                 }
             }
