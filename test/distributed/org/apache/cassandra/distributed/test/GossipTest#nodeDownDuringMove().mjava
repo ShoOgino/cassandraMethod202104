@@ -1,0 +1,66 @@
+    @Test
+    public void nodeDownDuringMove() throws Throwable
+    {
+        int liveCount = 1;
+        System.setProperty("cassandra.consistent.rangemovement", "false");
+        try (Cluster cluster = Cluster.create(2 + liveCount, EnumSet.of(Feature.GOSSIP)))
+        {
+            int fail = liveCount + 1;
+            int late = fail + 1;
+            for (int i = 1 ; i <= liveCount ; ++i)
+                cluster.get(i).startup();
+            cluster.get(fail).startup();
+            Collection<String> expectTokens = cluster.get(fail).callsOnInstance(() ->
+                StorageService.instance.getTokenMetadata().getTokens(FBUtilities.getBroadcastAddress())
+                                       .stream().map(Object::toString).collect(Collectors.toList())
+            ).call();
+
+            InetAddress failAddress = cluster.get(fail).broadcastAddressAndPort().address;
+            // wait for NORMAL state
+            for (int i = 1 ; i <= liveCount ; ++i)
+            {
+                cluster.get(i).acceptsOnInstance((InetAddress endpoint) -> {
+                    EndpointState ep;
+                    while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                           || ep.getApplicationState(ApplicationState.STATUS) == null
+                           || !ep.getApplicationState(ApplicationState.STATUS).value.startsWith("NORMAL"))
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10L));
+                }).accept(failAddress);
+            }
+
+            // set ourselves to MOVING, and wait for it to propagate
+            cluster.get(fail).runOnInstance(() -> {
+
+                Token token = Iterables.getFirst(StorageService.instance.getTokenMetadata().getTokens(FBUtilities.getBroadcastAddress()), null);
+                Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, StorageService.instance.valueFactory.moving(token));
+            });
+
+            for (int i = 1 ; i <= liveCount ; ++i)
+            {
+                cluster.get(i).acceptsOnInstance((InetAddress endpoint) -> {
+                    EndpointState ep;
+                    while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                           || (ep.getApplicationState(ApplicationState.STATUS) == null
+                               || !ep.getApplicationState(ApplicationState.STATUS).value.startsWith("MOVING")))
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10L));
+                }).accept(failAddress);
+            }
+
+            cluster.get(fail).shutdown(false).get();
+            cluster.get(late).startup();
+            cluster.get(late).acceptsOnInstance((InetAddress endpoint) -> {
+                EndpointState ep;
+                while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                       || !ep.getApplicationState(ApplicationState.STATUS).value.startsWith("MOVING"))
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10L));
+            }).accept(failAddress);
+
+            Collection<String> tokens = cluster.get(late).appliesOnInstance((InetAddress endpoint) ->
+                StorageService.instance.getTokenMetadata().getTokens(failAddress)
+                                       .stream().map(Object::toString).collect(Collectors.toList())
+            ).apply(failAddress);
+
+            Assert.assertEquals(expectTokens, tokens);
+        }
+    }
+
