@@ -1,0 +1,31 @@
+    public long writeFileToChannel(FileChannel file, StreamRateLimiter limiter, int batchSize, int lowWaterMark, int highWaterMark) throws IOException
+    {
+        final long length = file.size();
+        long bytesTransferred = 0;
+
+        final SharedFileChannel sharedFile = SharedDefaultFileRegion.share(file);
+        try
+        {
+            while (bytesTransferred < length)
+            {
+                int toWrite = (int) min(batchSize, length - bytesTransferred);
+
+                limiter.acquire(toWrite);
+                ChannelPromise promise = beginFlush(toWrite, lowWaterMark, highWaterMark);
+
+                SharedDefaultFileRegion fileRegion = new SharedDefaultFileRegion(sharedFile, bytesTransferred, toWrite);
+                channel.writeAndFlush(fileRegion, promise);
+
+                if (logger.isTraceEnabled())
+                    logger.trace("Writing {} bytes at position {} of {}", toWrite, bytesTransferred, length);
+                bytesTransferred += toWrite;
+            }
+
+            return bytesTransferred;
+        }
+        finally
+        {
+            sharedFile.release();
+        }
+    }
+

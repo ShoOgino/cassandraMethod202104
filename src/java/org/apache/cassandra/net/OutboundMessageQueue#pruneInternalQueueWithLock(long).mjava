@@ -1,0 +1,31 @@
+    /*
+     * Prune the internal queue in-place.
+     */
+    private void pruneInternalQueueWithLock(long nowNanos)
+    {
+        class Pruner implements PrunableArrayQueue.Pruner<Message<?>>
+        {
+            private long earliestExpiresAt = Long.MAX_VALUE;
+
+            public boolean shouldPrune(Message<?> message)
+            {
+                return !shouldSend(message, nowNanos);
+            }
+
+            public void onPruned(Message<?> message)
+            {
+                onExpired.accept(message);
+            }
+
+            public void onKept(Message<?> message)
+            {
+                earliestExpiresAt = min(message.expiresAtNanos(), earliestExpiresAt);
+            }
+        }
+
+        Pruner pruner = new Pruner();
+        internalQueue.prune(pruner);
+
+        maybeUpdateMinimumExpiryTime(pruner.earliestExpiresAt);
+    }
+

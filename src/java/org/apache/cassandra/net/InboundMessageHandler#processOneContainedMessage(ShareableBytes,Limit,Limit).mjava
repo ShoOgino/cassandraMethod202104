@@ -1,0 +1,35 @@
+    private boolean processOneContainedMessage(ShareableBytes bytes, Limit endpointReserve, Limit globalReserve) throws IOException
+    {
+        ByteBuffer buf = bytes.get();
+
+        long currentTimeNanos = approxTime.now();
+        Header header = serializer.extractHeader(buf, peer, currentTimeNanos, version);
+        long timeElapsed = currentTimeNanos - header.createdAtNanos;
+        int size = serializer.inferMessageSize(buf, buf.position(), buf.limit(), version);
+
+        if (approxTime.isAfter(currentTimeNanos, header.expiresAtNanos))
+        {
+            callbacks.onHeaderArrived(size, header, timeElapsed, NANOSECONDS);
+            callbacks.onArrivedExpired(size, header, false, timeElapsed, NANOSECONDS);
+            receivedCount++;
+            receivedBytes += size;
+            bytes.skipBytes(size);
+            return true;
+        }
+
+        if (!acquireCapacity(endpointReserve, globalReserve, size, currentTimeNanos, header.expiresAtNanos))
+            return false;
+
+        callbacks.onHeaderArrived(size, header, timeElapsed, NANOSECONDS);
+        callbacks.onArrived(size, header, timeElapsed, NANOSECONDS);
+        receivedCount++;
+        receivedBytes += size;
+
+        if (size <= largeThreshold)
+            processSmallMessage(bytes, size, header);
+        else
+            processLargeMessage(bytes, size, header);
+
+        return true;
+    }
+

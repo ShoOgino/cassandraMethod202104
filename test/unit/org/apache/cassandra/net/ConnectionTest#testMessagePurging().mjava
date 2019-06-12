@@ -1,0 +1,59 @@
+    @Test
+    public void testMessagePurging() throws Throwable
+    {
+        testManual((settings, inbound, outbound, endpoint) -> {
+            Runnable testWhileDisconnected = () -> {
+                try
+                {
+                    for (int i = 0; i < 5; i++)
+                    {
+                        Message<?> message = Message.builder(Verb._TEST_1, noPayload)
+                                                    .withExpiresAt(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(50L))
+                                                    .build();
+                        outbound.enqueue(message);
+                        Assert.assertFalse(outbound.isConnected());
+                        Assert.assertEquals(1, outbound.pendingCount());
+                        CompletableFuture.runAsync(() -> {
+                            while (outbound.pendingCount() > 0 && !Thread.interrupted()) {}
+                        }).get(10, SECONDS);
+                        // Message should have been purged
+                        Assert.assertEquals(0, outbound.pendingCount());
+                    }
+                }
+                catch (Throwable t)
+                {
+                    throw new RuntimeException(t);
+                }
+            };
+
+            testWhileDisconnected.run();
+
+            try
+            {
+                inbound.open().sync();
+                CountDownLatch receiveDone = new CountDownLatch(1);
+                CountDownLatch deliveryDone = new CountDownLatch(1);
+
+                unsafeSetHandler(Verb._TEST_1, () -> msg -> receiveDone.countDown());
+                outbound.enqueue(Message.out(Verb._TEST_1, noPayload));
+                Assert.assertEquals(1, outbound.pendingCount());
+                outbound.unsafeRunOnDelivery(deliveryDone::countDown);
+
+                Assert.assertTrue(receiveDone.await(10, SECONDS));
+                Assert.assertTrue(deliveryDone.await(10, SECONDS));
+                Assert.assertEquals(0, receiveDone.getCount());
+                Assert.assertEquals(0, outbound.pendingCount());
+            }
+            finally
+            {
+                inbound.close().get(10, SECONDS);
+                // Wait until disconnected
+                CompletableFuture.runAsync(() -> {
+                    while (outbound.isConnected() && !Thread.interrupted()) {}
+                }).get(10, SECONDS);
+            }
+
+            testWhileDisconnected.run();
+        });
+    }
+

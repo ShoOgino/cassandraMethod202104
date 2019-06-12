@@ -1,0 +1,35 @@
+    /**
+     * The default task queue used by {@code NioEventLoop} and {@code EpollEventLoop} is {@code MpscUnboundedArrayQueue},
+     * provided by JCTools. While efficient, it has an undesirable quality for a queue backing an event loop: it is
+     * not non-blocking, and can cause the event loop to busy-spin while waiting for a partially completed task
+     * offer, if the producer thread has been suspended mid-offer. Sadly, there is currently no way to work around
+     * this behaviour in application-logic.
+     *
+     * As it happens, however, we have an MPSC queue implementation that is perfectly fit for this purpose -
+     * {@link ManyToOneConcurrentLinkedQueue}, that is non-blocking, and already used throughout the codebase.
+     *
+     * Unfortunately, there is no Netty API or to override the default queue, so we have to resort to reflection,
+     * for now.
+     *
+     * We filed a Netty issue asking for this capability to be provided cleanly:
+     * https://github.com/netty/netty/issues/9105, and hopefully Netty will implement it some day. When and if
+     * that happens, this reflection-based workaround should be removed.
+     */
+    private static EventLoopGroup overwriteMPSCQueues(MultithreadEventLoopGroup eventLoopGroup)
+    {
+        try
+        {
+            for (EventExecutor eventExecutor : (EventExecutor[]) childrenField.get(eventLoopGroup))
+            {
+                SingleThreadEventLoop eventLoop = (SingleThreadEventLoop) eventExecutor;
+                taskQueueField.set(eventLoop, new ManyToOneConcurrentLinkedQueue<>());
+                tailTasksField.set(eventLoop, new ManyToOneConcurrentLinkedQueue<>());
+            }
+            return eventLoopGroup;
+        }
+        catch (IllegalAccessException e)
+        {
+            throw new IllegalStateException(e);
+        }
+    }
+

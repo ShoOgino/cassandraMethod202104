@@ -1,0 +1,33 @@
+    private void testRandomSequenceOfFrames(Random random, FrameEncoder encoder, FrameDecoder decoder)
+    {
+        SequenceOfFrames sequenceOfFrames = sequenceOfFrames(random, encoder);
+
+        List<byte[]> uncompressed = sequenceOfFrames.original;
+        ShareableBytes frames = sequenceOfFrames.frames;
+        int[] boundaries = sequenceOfFrames.boundaries;
+
+        int end = frames.get().limit();
+        List<FrameDecoder.Frame> out = new ArrayList<>();
+        int prevBoundary = -1;
+        for (int i = 0 ; i < end ; )
+        {
+            int limit = i + random.nextInt(1 + end - i);
+            decoder.decode(out, frames.slice(i, limit));
+            int boundary = Arrays.binarySearch(boundaries, limit);
+            if (boundary < 0) boundary = -2 -boundary;
+
+            while (prevBoundary < boundary)
+            {
+                ++prevBoundary;
+                Assert.assertTrue(out.size() >= 1 + prevBoundary);
+                verify(uncompressed.get(prevBoundary), ((FrameDecoder.IntactFrame) out.get(prevBoundary)).contents);
+            }
+            i = limit;
+        }
+        for (FrameDecoder.Frame frame : out)
+            frame.release();
+        frames.release();
+        Assert.assertEquals(null, decoder.stash);
+        Assert.assertTrue(decoder.frames.isEmpty());
+    }
+

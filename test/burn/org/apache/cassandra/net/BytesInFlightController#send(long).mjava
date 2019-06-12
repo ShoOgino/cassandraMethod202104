@@ -1,0 +1,26 @@
+    public void send(long bytes) throws InterruptedException
+    {
+        long sentBytes = sentBytesUpdater.getAndAdd(this, bytes);
+        maybeProcessDeferred();
+        if ((sentBytes - receivedBytes) >= maximumInFlightBytes)
+        {
+            long waitUntilReceived = sentBytes - maximumInFlightBytes;
+            // overlap shouldn't occur, but cannot guarantee it when we modify maximumInFlightBytes
+            Thread prev = waitingToSend.putIfAbsent(waitUntilReceived, Thread.currentThread());
+            while (prev != null)
+                prev = waitingToSend.putIfAbsent(++waitUntilReceived, Thread.currentThread());
+
+            boolean isInterrupted;
+            while (!(isInterrupted = Thread.currentThread().isInterrupted())
+                   && waitUntilReceived - receivedBytes >= 0
+                   && waitingToSend.get(waitUntilReceived) != null)
+            {
+                LockSupport.park();
+            }
+            waitingToSend.remove(waitUntilReceived);
+
+            if (isInterrupted)
+                throw new InterruptedException();
+        }
+    }
+

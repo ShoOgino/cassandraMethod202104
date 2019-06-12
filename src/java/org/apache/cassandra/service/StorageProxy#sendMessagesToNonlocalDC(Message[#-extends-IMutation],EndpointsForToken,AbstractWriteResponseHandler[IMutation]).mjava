@@ -1,0 +1,30 @@
+    /*
+     * Send the message to the first replica of targets, and have it forward the message to others in its DC
+     *
+     * TODO: are targets shuffled? do we want them to be to spread out forwarding burden?
+     */
+    private static void sendMessagesToNonlocalDC(Message<? extends IMutation> message,
+                                                 EndpointsForToken targets,
+                                                 AbstractWriteResponseHandler<IMutation> handler)
+    {
+        if (targets.size() > 1)
+        {
+            EndpointsForToken forwardToReplicas = targets.subList(1, targets.size());
+
+            for (Replica replica : forwardToReplicas)
+            {
+                MessagingService.instance().callbacks.addWithExpiration(handler, message, replica, handler.replicaPlan.consistencyLevel(), true);
+                logger.trace("Adding FWD message to {}@{}", message.id(), replica);
+            }
+
+            // starting with 4.0, use the same message id for all replicas
+            long[] messageIds = new long[forwardToReplicas.size()];
+            Arrays.fill(messageIds, message.id());
+
+            message = message.withForwardTo(new ForwardingInfo(forwardToReplicas.endpointList(), messageIds));
+        }
+
+        MessagingService.instance().sendWriteWithCallback(message, targets.get(0), handler, true);
+        logger.trace("Sending message to {}@{}", message.id(), targets.get(0));
+    }
+

@@ -1,25 +1,16 @@
-    /**
-     * @return A buffer with decompressed data.
-     */
-    public ByteBuf serialize(LZ4Compressor compressor, ByteBuffer in, int version)
+    public static AsyncStreamingOutputPlus.Write serialize(LZ4Compressor compressor, ByteBuffer in, int version)
     {
-        final int uncompressedLength = in.remaining();
-        int maxLength = compressor.maxCompressedLength(uncompressedLength);
-        ByteBuf out = allocator.directBuffer(maxLength);
-        try
-        {
-            ByteBuffer compressedNioBuffer = out.nioBuffer(HEADER_LENGTH, maxLength - HEADER_LENGTH);
-            compressor.compress(in, compressedNioBuffer);
-            final int compressedLength = compressedNioBuffer.position();
-            out.setInt(0, compressedLength);
-            out.setInt(4, uncompressedLength);
-            out.writerIndex(HEADER_LENGTH + compressedLength);
-        }
-        catch (Exception e)
-        {
-            if (out != null)
-                out.release();
-        }
-        return out;
+        assert version == current_version;
+        return bufferSupplier -> {
+            int uncompressedLength = in.remaining();
+            int maxLength = compressor.maxCompressedLength(uncompressedLength);
+            ByteBuffer out = bufferSupplier.get(maxLength);
+            out.position(HEADER_LENGTH);
+            compressor.compress(in, out);
+            int compressedLength = out.position() - HEADER_LENGTH;
+            out.putInt(0, compressedLength);
+            out.putInt(4, uncompressedLength);
+            out.flip();
+        };
     }
 

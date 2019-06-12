@@ -1,0 +1,28 @@
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) throws CorruptLZ4Frame
+        {
+            assert msg instanceof BufferPoolAllocator.Wrapped;
+            ByteBuffer buf = ((BufferPoolAllocator.Wrapped) msg).adopt();
+            // netty will probably have mis-predicted the space needed
+            BufferPool.putUnusedPortion(buf);
+
+            CorruptLZ4Frame error = null;
+            try
+            {
+                decode(frames, ShareableBytes.wrap(buf));
+            }
+            catch (CorruptLZ4Frame e)
+            {
+                error = e;
+            }
+            finally
+            {
+                decodedFrameCount += frames.size();
+                while (!frames.isEmpty())
+                    ctx.fireChannelRead(frames.poll());
+            }
+
+            if (null != error)
+                throw error;
+        }
+

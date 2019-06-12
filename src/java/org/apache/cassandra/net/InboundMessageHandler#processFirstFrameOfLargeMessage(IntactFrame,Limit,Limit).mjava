@@ -1,0 +1,20 @@
+    private boolean processFirstFrameOfLargeMessage(IntactFrame frame, Limit endpointReserve, Limit globalReserve) throws IOException
+    {
+        ShareableBytes bytes = frame.contents;
+        ByteBuffer buf = bytes.get();
+
+        long currentTimeNanos = approxTime.now();
+        Header header = serializer.extractHeader(buf, peer, currentTimeNanos, version);
+        int size = serializer.inferMessageSize(buf, buf.position(), buf.limit(), version);
+
+        boolean expired = approxTime.isAfter(currentTimeNanos, header.expiresAtNanos);
+        if (!expired && !acquireCapacity(endpointReserve, globalReserve, size, currentTimeNanos, header.expiresAtNanos))
+            return false;
+
+        callbacks.onHeaderArrived(size, header, currentTimeNanos - header.createdAtNanos, NANOSECONDS);
+        receivedBytes += buf.remaining();
+        largeMessage = new LargeMessage(size, header, expired);
+        largeMessage.supply(frame);
+        return true;
+    }
+

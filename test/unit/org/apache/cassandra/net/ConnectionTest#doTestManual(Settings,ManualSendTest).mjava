@@ -1,0 +1,28 @@
+    private void doTestManual(Settings settings, ManualSendTest test) throws Throwable
+    {
+        InetAddressAndPort endpoint = FBUtilities.getBroadcastAddressAndPort();
+        InboundConnectionSettings inboundSettings = settings.inbound.apply(new InboundConnectionSettings())
+                                                                    .withBindAddress(endpoint)
+                                                                    .withSocketFactory(factory);
+        InboundSockets inbound = new InboundSockets(Collections.singletonList(inboundSettings));
+        OutboundConnectionSettings outboundTemplate = settings.outbound.apply(new OutboundConnectionSettings(endpoint))
+                                                                       .withDefaultReserveLimits()
+                                                                       .withSocketFactory(factory)
+                                                                       .withDefaults(ConnectionCategory.MESSAGING);
+        ResourceLimits.EndpointAndGlobal reserveCapacityInBytes = new ResourceLimits.EndpointAndGlobal(new ResourceLimits.Concurrent(outboundTemplate.applicationSendQueueReserveEndpointCapacityInBytes), outboundTemplate.applicationSendQueueReserveGlobalCapacityInBytes);
+        OutboundConnection outbound = new OutboundConnection(settings.type, outboundTemplate, reserveCapacityInBytes);
+        try
+        {
+            logger.info("Running {} {} -> {}", outbound.messagingVersion(), outbound.settings(), inboundSettings);
+            test.accept(settings, inbound, outbound, endpoint);
+        }
+        finally
+        {
+            outbound.close(false);
+            inbound.close().get(30L, SECONDS);
+            outbound.close(false).get(30L, SECONDS);
+            resetVerbs();
+            MessagingService.instance().messageHandlers.clear();
+        }
+    }
+

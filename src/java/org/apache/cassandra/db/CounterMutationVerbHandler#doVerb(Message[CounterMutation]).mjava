@@ -1,0 +1,20 @@
+    public void doVerb(final Message<CounterMutation> message)
+    {
+        long queryStartNanoTime = System.nanoTime();
+        final CounterMutation cm = message.payload;
+        logger.trace("Applying forwarded {}", cm);
+
+        String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getLocalDatacenter();
+        // We should not wait for the result of the write in this thread,
+        // otherwise we could have a distributed deadlock between replicas
+        // running this VerbHandler (see #4578).
+        // Instead, we use a callback to send the response. Note that the callback
+        // will not be called if the request timeout, but this is ok
+        // because the coordinator of the counter mutation will timeout on
+        // it's own in that case.
+        StorageProxy.applyCounterMutationOnLeader(cm,
+                                                  localDataCenter,
+                                                  () -> MessagingService.instance().send(message.emptyResponse(), message.from()),
+                                                  queryStartNanoTime);
+    }
+

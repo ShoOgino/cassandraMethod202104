@@ -1,0 +1,30 @@
+    private static SequenceOfFrames sequenceOfFrames(Random random, FrameEncoder encoder)
+    {
+        int frameCount = 1 + random.nextInt(8);
+        List<byte[]> uncompressed = new ArrayList<>();
+        List<ByteBuf> compressed = new ArrayList<>();
+        int[] cumulativeCompressedLength = new int[frameCount];
+        for (int i = 0 ; i < frameCount ; ++i)
+        {
+            byte[] bytes = randomishBytes(random, 1, 1 << 15);
+            uncompressed.add(bytes);
+
+            FrameEncoder.Payload payload = encoder.allocator().allocate(true, bytes.length);
+            payload.buffer.put(bytes);
+            payload.finish();
+
+            ByteBuf buffer = encoder.encode(true, payload.buffer);
+            compressed.add(buffer);
+            cumulativeCompressedLength[i] = (i == 0 ? 0 : cumulativeCompressedLength[i - 1]) + buffer.readableBytes();
+        }
+
+        ByteBuffer frames = BufferPool.getAtLeast(cumulativeCompressedLength[frameCount - 1], BufferType.OFF_HEAP);
+        for (ByteBuf buffer : compressed)
+        {
+            frames.put(buffer.internalNioBuffer(buffer.readerIndex(), buffer.readableBytes()));
+            buffer.release();
+        }
+        frames.flip();
+        return new SequenceOfFrames(uncompressed, cumulativeCompressedLength, frames);
+    }
+

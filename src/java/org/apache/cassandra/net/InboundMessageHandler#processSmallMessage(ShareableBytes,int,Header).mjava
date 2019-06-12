@@ -1,0 +1,41 @@
+    private void processSmallMessage(ShareableBytes bytes, int size, Header header)
+    {
+        ByteBuffer buf = bytes.get();
+        final int begin = buf.position();
+        final int end = buf.limit();
+        buf.limit(begin + size); // cap to expected message size
+
+        Message<?> message = null;
+        try (DataInputBuffer in = new DataInputBuffer(buf, false))
+        {
+            Message<?> m = serializer.deserialize(in, header, version);
+            if (in.available() > 0) // bytes remaining after deser: deserializer is busted
+                throw new InvalidSerializedSizeException(header.verb, size, size - in.available());
+            message = m;
+        }
+        catch (IncompatibleSchemaException e)
+        {
+            callbacks.onFailedDeserialize(size, header, e);
+            noSpamLogger.info("{} incompatible schema encountered while deserializing a message", id(), e);
+        }
+        catch (Throwable t)
+        {
+            JVMStabilityInspector.inspectThrowable(t, false);
+            callbacks.onFailedDeserialize(size, header, t);
+            logger.error("{} unexpected exception caught while deserializing a message", id(), t);
+        }
+        finally
+        {
+            if (null == message)
+                releaseCapacity(size);
+
+            // no matter what, set position to the beginning of the next message and restore limit, so that
+            // we can always keep on decoding the frame even on failure to deserialize previous message
+            buf.position(begin + size);
+            buf.limit(end);
+        }
+
+        if (null != message)
+            dispatch(new ProcessSmallMessage(message, size));
+    }
+

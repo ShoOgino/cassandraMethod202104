@@ -1,0 +1,29 @@
+        private Message deserialize()
+        {
+            try (ChunkedInputPlus input = ChunkedInputPlus.of(buffers))
+            {
+                Message<?> m = serializer.deserialize(input, header, version);
+                int remainder = input.remainder();
+                if (remainder > 0)
+                    throw new InvalidSerializedSizeException(header.verb, size, size - remainder);
+                return m;
+            }
+            catch (IncompatibleSchemaException e)
+            {
+                callbacks.onFailedDeserialize(size, header, e);
+                noSpamLogger.info("{} incompatible schema encountered while deserializing a message", id(), e);
+            }
+            catch (Throwable t)
+            {
+                JVMStabilityInspector.inspectThrowable(t, false);
+                callbacks.onFailedDeserialize(size, header, t);
+                logger.error("{} unexpected exception caught while deserializing a message", id(), t);
+            }
+            finally
+            {
+                buffers.clear(); // closing the input will have ensured that the buffers were released no matter what
+            }
+
+            return null;
+        }
+

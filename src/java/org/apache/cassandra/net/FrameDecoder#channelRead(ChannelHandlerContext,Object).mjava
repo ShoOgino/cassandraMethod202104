@@ -1,0 +1,28 @@
+    /**
+     * Called by Netty pipeline when a new message arrives; we anticipate in normal operation
+     * this will receive messages of type {@link BufferPoolAllocator.Wrapped} or
+     * {@link BufferPoolAllocator.Wrapped}.
+     *
+     * These buffers are unwrapped and passed to {@link #decode(Collection, ShareableBytes)},
+     * which collects decoded frames into {@link #frames}, which we send upstream in {@link #deliver}
+     */
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws IOException
+    {
+        if (msg instanceof BufferPoolAllocator.Wrapped)
+        {
+            ByteBuffer buf = ((BufferPoolAllocator.Wrapped) msg).adopt();
+            // netty will probably have mis-predicted the space needed
+            allocator.putUnusedPortion(buf);
+            channelRead(ShareableBytes.wrap(buf));
+        }
+        else if (msg instanceof ShareableBytes) // legacy LZ4 decoder
+        {
+            channelRead((ShareableBytes) msg);
+        }
+        else
+        {
+            throw new IllegalArgumentException();
+        }
+    }
+

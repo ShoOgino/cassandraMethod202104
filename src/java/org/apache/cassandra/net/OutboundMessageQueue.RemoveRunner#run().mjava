@@ -1,0 +1,42 @@
+        public void run()
+        {
+            Set<Message<?>> remove = Collections.newSetFromMap(new IdentityHashMap<>());
+            removeRunner = null;
+            Remove undo = getAndSet(null);
+            while (undo.message != null)
+            {
+                remove.add(undo.message);
+                undo = undo.next;
+            }
+
+            class Remover implements PrunableArrayQueue.Pruner<Message<?>>
+            {
+                private long earliestExpiresAt = Long.MAX_VALUE;
+
+                @Override
+                public boolean shouldPrune(Message<?> message)
+                {
+                    return remove.contains(message);
+                }
+
+                @Override
+                public void onPruned(Message<?> message)
+                {
+                    removed.add(message);
+                }
+
+                @Override
+                public void onKept(Message<?> message)
+                {
+                    earliestExpiresAt = min(message.expiresAtNanos(), earliestExpiresAt);
+                }
+            }
+
+            Remover remover = new Remover();
+            earliestExpiresAt = Long.MAX_VALUE;
+            externalQueue.drain(internalQueue::offer);
+            internalQueue.prune(remover);
+            maybeUpdateMinimumExpiryTime(remover.earliestExpiresAt);
+            done.countDown();
+        }
+

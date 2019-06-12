@@ -1,0 +1,61 @@
+    private void doWrite(ChannelOutboundBuffer flush, long flushBytes)
+    {
+        while (true) {
+            Object msg = flush.current();
+            if (msg == null) {
+                this.flush = null;
+                this.flushBytes = 0;
+                return;
+            }
+
+            if (inFlight >= inFlightLimit)
+            {
+                this.flush = flush;
+                this.flushBytes = flushBytes;
+                return;
+            }
+
+            ByteBuf buf;
+            if (msg instanceof FileRegion)
+            {
+                buf = GlobalBufferPoolAllocator.instance.directBuffer((int) ((FileRegion) msg).count());
+                try
+                {
+                    ((FileRegion) msg).transferTo(new WritableByteChannel()
+                    {
+                        public int write(ByteBuffer src)
+                        {
+                            buf.setBytes(0, src);
+                            return buf.writerIndex();
+                        }
+
+                        public boolean isOpen() { return false; }
+
+                        public void close() { }
+                    }, 0);
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+            else if (msg instanceof ByteBuf)
+            {
+                buf = ((ByteBuf)msg).copy();
+            }
+            else if (msg instanceof FrameEncoder.Payload)
+            {
+                buf = Unpooled.wrappedBuffer(((FrameEncoder.Payload)msg).buffer).copy();
+            }
+            else
+            {
+                System.err.println("Unexpected message type " + msg);
+                throw new IllegalArgumentException();
+            }
+
+            inFlight += buf.readableBytes();
+            handleOutboundMessage(buf);
+            flush.remove();
+        }
+    }
+

@@ -1,0 +1,61 @@
+        @SuppressWarnings({ "resource", "RedundantSuppression" }) // make eclipse warnings go away
+        boolean doRun(Established established)
+        {
+            Message<?> send = queue.tryPoll(approxTime.now(), this::execute);
+            if (send == null)
+                return false;
+
+            AsyncMessageOutputPlus out = null;
+            try
+            {
+                int messageSize = send.serializedSize(established.messagingVersion);
+                out = new AsyncMessageOutputPlus(established.channel, DEFAULT_BUFFER_SIZE, messageSize, established.payloadAllocator);
+                // actual message size for this version is larger than permitted maximum
+                if (messageSize > DatabaseDescriptor.getInternodeMaxMessageSizeInBytes())
+                    throw new Message.OversizedMessageException(messageSize);
+
+                Tracing.instance.traceOutgoingMessage(send, established.settings.connectTo);
+                Message.serializer.serialize(send, out, established.messagingVersion);
+
+                if (out.position() != messageSize)
+                    throw new InvalidSerializedSizeException(send.verb(), messageSize, out.position());
+
+                out.close();
+                sentCount += 1;
+                sentBytes += messageSize;
+                releaseCapacity(1, canonicalSize(send));
+                return hasPending();
+            }
+            catch (Throwable t)
+            {
+                boolean tryAgain = true;
+
+                if (out != null)
+                {
+                    out.discard();
+                    if (out.flushed() > 0 ||
+                        isCausedBy(t, cause ->    isConnectionReset(cause)
+                                               || cause instanceof Errors.NativeIoException
+                                               || cause instanceof AsyncChannelOutputPlus.FlushException))
+                    {
+                        // close the channel, and wait for eventLoop to execute
+                        disconnectNow(established).awaitUninterruptibly();
+                        tryAgain = false;
+                        try
+                        {
+                            // after closing, wait until we are signalled about the in flight writes;
+                            // this ensures flushedToNetwork() is correct below
+                            out.waitUntilFlushed(0, 0);
+                        }
+                        catch (Throwable ignore)
+                        {
+                            // irrelevant
+                        }
+                    }
+                }
+
+                onFailedSerialize(send, established.messagingVersion, out == null ? 0 : (int) out.flushedToNetwork(), t);
+                return tryAgain;
+            }
+        }
+

@@ -1,0 +1,43 @@
+    private Future<Result<SuccessType>> initiate(EventLoop eventLoop)
+    {
+        if (logger.isTraceEnabled())
+            logger.trace("creating outbound bootstrap to {}, requestVersion: {}", settings, requestMessagingVersion);
+
+        if (!settings.authenticate())
+        {
+            // interrupt other connections, so they must attempt to re-authenticate
+            MessagingService.instance().interruptOutbound(settings.to);
+            return new FailedFuture<>(eventLoop, new IOException("authentication failed to " + settings.to));
+        }
+
+        // this is a bit ugly, but is the easiest way to ensure that if we timeout we can propagate a suitable error message
+        // and still guarantee that, if on timing out we raced with success, the successfully created channel is handled
+        AtomicBoolean timedout = new AtomicBoolean();
+        Future<Void> bootstrap = createBootstrap(eventLoop)
+                                 .connect()
+                                 .addListener(future -> {
+                                     eventLoop.execute(() -> {
+                                         if (!future.isSuccess())
+                                         {
+                                             if (future.isCancelled() && !timedout.get())
+                                                 resultPromise.cancel(true);
+                                             else if (future.isCancelled())
+                                                 resultPromise.tryFailure(new IOException("Timeout handshaking with " + settings.connectTo));
+                                             else
+                                                 resultPromise.tryFailure(future.cause());
+                                         }
+                                     });
+                                 });
+
+        ScheduledFuture<?> timeout = eventLoop.schedule(() -> {
+            timedout.set(true);
+            bootstrap.cancel(false);
+        }, TIMEOUT_MILLIS, MILLISECONDS);
+        bootstrap.addListener(future -> timeout.cancel(true));
+
+        // Note that the bootstrap future's listeners may be invoked outside of the eventLoop,
+        // as Epoll failures on connection and disconnect may be run on the GlobalEventExecutor
+        // Since this FutureResult's listeners are all given to our resultPromise, they are guaranteed to be invoked by the eventLoop.
+        return new FutureResult<>(resultPromise, bootstrap);
+    }
+

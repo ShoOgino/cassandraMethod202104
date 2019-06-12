@@ -1,0 +1,89 @@
+    private static InboundMessageCallbacks makeMessageCallbacks(InetAddressAndPort peer, InboundCounters counters, GlobalMetricCallbacks globalMetrics, MessageConsumer messageConsumer)
+    {
+        LatencyConsumer internodeLatency = globalMetrics.internodeLatencyRecorder(peer);
+
+        return new InboundMessageCallbacks()
+        {
+            @Override
+            public void onHeaderArrived(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+                // do not log latency if we are within error bars of zero
+                if (timeElapsed > unit.convert(approxTime.error(), NANOSECONDS))
+                    internodeLatency.accept(timeElapsed, unit);
+            }
+
+            @Override
+            public void onArrived(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+            }
+
+            @Override
+            public void onArrivedExpired(int messageSize, Header header, boolean wasCorrupt, long timeElapsed, TimeUnit unit)
+            {
+                counters.addExpired(messageSize);
+
+                globalMetrics.recordInternodeDroppedMessage(header.verb, timeElapsed, unit);
+            }
+
+            @Override
+            public void onArrivedCorrupt(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+                counters.addError(messageSize);
+
+                messageConsumer.fail(header, new Crc.InvalidCrc(0, 0)); // could use one of the original exceptions?
+            }
+
+            @Override
+            public void onClosedBeforeArrival(int messageSize, Header header, int bytesReceived, boolean wasCorrupt, boolean wasExpired)
+            {
+                counters.addError(messageSize);
+
+                messageConsumer.fail(header, new InvalidSerializedSizeException(header.verb, messageSize, bytesReceived));
+            }
+
+            @Override
+            public void onExpired(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+                counters.addExpired(messageSize);
+
+                globalMetrics.recordInternodeDroppedMessage(header.verb, timeElapsed, unit);
+            }
+
+            @Override
+            public void onFailedDeserialize(int messageSize, Header header, Throwable t)
+            {
+                counters.addError(messageSize);
+
+                /*
+                 * If an exception is caught during deser, return a failure response immediately
+                 * instead of waiting for the callback on the other end to expire.
+                 */
+                messageConsumer.fail(header, t);
+            }
+
+            @Override
+            public void onDispatched(int messageSize, Header header)
+            {
+                counters.addPending(messageSize);
+            }
+
+            @Override
+            public void onExecuting(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+                globalMetrics.recordInternalLatency(header.verb, timeElapsed, unit);
+            }
+
+            @Override
+            public void onExecuted(int messageSize, Header header, long timeElapsed, TimeUnit unit)
+            {
+                counters.removePending(messageSize);
+            }
+
+            @Override
+            public void onProcessed(int messageSize, Header header)
+            {
+                counters.addProcessed(messageSize);
+            }
+        };
+    }
+

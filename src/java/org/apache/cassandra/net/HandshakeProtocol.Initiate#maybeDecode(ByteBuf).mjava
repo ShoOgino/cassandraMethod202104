@@ -1,0 +1,49 @@
+        static Initiate maybeDecode(ByteBuf buf) throws IOException
+        {
+            if (buf.readableBytes() < MIN_LENGTH)
+                return null;
+
+            ByteBuffer nio = buf.nioBuffer();
+            int start = nio.position();
+            try (DataInputBuffer in = new DataInputBuffer(nio, false))
+            {
+                validateLegacyProtocolMagic(in.readInt());
+                int flags = in.readInt();
+
+                int requestedMessagingVersion = getBits(flags, 8, 8);
+                int minMessagingVersion = getBits(flags, 16, 8);
+                int maxMessagingVersion = getBits(flags, 24, 8);
+                int framingBits = getBits(flags, 2, 1) | (getBits(flags, 4, 1) << 1);
+                Framing framing = Framing.forId(framingBits);
+
+                boolean isStream = getBits(flags, 3, 1) == 1;
+
+                ConnectionType type = isStream
+                                    ? ConnectionType.STREAMING
+                                    : ConnectionType.fromId(getBits(flags, 0, 2));
+
+                InetAddressAndPort from = null;
+
+                if (requestedMessagingVersion >= VERSION_40 && maxMessagingVersion >= MessagingService.VERSION_40)
+                {
+                    from = inetAddressAndPortSerializer.deserialize(in, requestedMessagingVersion);
+
+                    int computed = computeCrc32(nio, start, nio.position());
+                    int read = in.readInt();
+                    if (read != computed)
+                        throw new InvalidCrc(read, computed);
+                }
+
+                buf.skipBytes(nio.position() - start);
+                return new Initiate(requestedMessagingVersion,
+                                    minMessagingVersion == 0 && maxMessagingVersion == 0
+                                        ? null : new AcceptVersions(minMessagingVersion, maxMessagingVersion),
+                                    type, framing, from);
+
+            }
+            catch (EOFException e)
+            {
+                return null;
+            }
+        }
+

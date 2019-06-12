@@ -27,7 +27,7 @@
         // extra-datacenter replicas, grouped by dc
         Map<String, Collection<Replica>> dcGroups = null;
         // only need to create a Message for non-local writes
-        MessageOut<Mutation> message = null;
+        Message<Mutation> message = null;
 
         boolean insertLocal = false;
         Replica localReplica = null;
@@ -50,7 +50,7 @@
                 {
                     // belongs on a different server
                     if (message == null)
-                        message = mutation.createMessage();
+                        message = Message.outWithFlag(MUTATION_REQ, mutation, MessageFlag.CALL_BACK_ON_FAILURE);
 
                     String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
 
@@ -96,7 +96,7 @@
         }
 
         if (backPressureHosts != null)
-            MessagingService.instance().applyBackPressure(backPressureHosts, responseHandler.currentTimeout());
+            MessagingService.instance().applyBackPressure(backPressureHosts, responseHandler.currentTimeoutNanos());
 
         if (endpointsToHint != null)
             submitHint(mutation, EndpointsForToken.copyOf(mutation.key().getToken(), endpointsToHint), responseHandler);
@@ -104,13 +104,13 @@
         if (insertLocal)
         {
             Preconditions.checkNotNull(localReplica);
-            performLocally(stage, localReplica, Optional.of(mutation), mutation::apply, responseHandler);
+            performLocally(stage, localReplica, mutation::apply, responseHandler);
         }
 
         if (localDc != null)
         {
             for (Replica destination : localDc)
-                MessagingService.instance().sendWriteRR(message, destination, responseHandler, true);
+                MessagingService.instance().sendWriteWithCallback(message, destination, responseHandler, true);
         }
         if (dcGroups != null)
         {

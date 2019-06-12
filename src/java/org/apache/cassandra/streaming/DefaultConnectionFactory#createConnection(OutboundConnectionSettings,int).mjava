@@ -1,0 +1,18 @@
+    @Override
+    public Channel createConnection(OutboundConnectionSettings template, int messagingVersion) throws IOException
+    {
+        EventLoop eventLoop = MessagingService.instance().socketFactory.outboundStreamingGroup().next();
+
+        int attempts = 0;
+        while (true)
+        {
+            Future<Result<StreamingSuccess>> result = initiateStreaming(eventLoop, template.withDefaults(ConnectionCategory.STREAMING), messagingVersion);
+            result.awaitUninterruptibly(); // initiate has its own timeout, so this is "guaranteed" to return relatively promptly
+            if (result.isSuccess())
+                return result.getNow().success().channel;
+
+            if (++attempts == MAX_CONNECT_ATTEMPTS)
+                throw new IOException("failed to connect to " + template.to + " for streaming data", result.cause());
+        }
+    }
+

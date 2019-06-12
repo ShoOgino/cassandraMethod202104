@@ -5,33 +5,19 @@
      * @see org.apache.cassandra.io.util.DataOutputPlus#write(java.nio.ByteBuffer)
      */
     @Override
-    public void write(ByteBuffer toWrite) throws IOException
+    public void write(ByteBuffer src) throws IOException
     {
-        if (toWrite.hasArray())
+        int srcPos = src.position();
+        int srcCount;
+        int trgAvailable;
+        while ((srcCount = src.limit() - srcPos) > (trgAvailable = buffer.remaining()))
         {
-            write(toWrite.array(), toWrite.arrayOffset() + toWrite.position(), toWrite.remaining());
+            FastByteOperations.copy(src, srcPos, buffer, buffer.position(), trgAvailable);
+            buffer.position(buffer.position() + trgAvailable);
+            srcPos += trgAvailable;
+            doFlush(src.limit() - srcPos);
         }
-        else
-        {
-            assert toWrite.isDirect();
-            MemoryUtil.duplicateDirectByteBuffer(toWrite, hollowBuffer);
-            int toWriteRemaining = toWrite.remaining();
-
-            if (toWriteRemaining > buffer.remaining())
-            {
-                if (strictFlushing)
-                {
-                    writeExcessSlow();
-                }
-                else
-                {
-                    doFlush(toWriteRemaining - buffer.remaining());
-                    while (hollowBuffer.remaining() > buffer.capacity())
-                        channel.write(hollowBuffer);
-                }
-            }
-
-            buffer.put(hollowBuffer);
-        }
+        FastByteOperations.copy(src, srcPos, buffer, buffer.position(), srcCount);
+        buffer.position(buffer.position() + srcCount);
     }
 

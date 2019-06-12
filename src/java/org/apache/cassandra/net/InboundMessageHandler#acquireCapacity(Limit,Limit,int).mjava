@@ -1,0 +1,50 @@
+    private ResourceLimits.Outcome acquireCapacity(Limit endpointReserve, Limit globalReserve, int bytes)
+    {
+        long currentQueueSize = queueSize;
+
+        /*
+         * acquireCapacity() is only ever called on the event loop, and as such queueSize is only ever increased
+         * on the event loop. If there is enough capacity, we can safely addAndGet() and immediately return.
+         */
+        if (currentQueueSize + bytes <= queueCapacity)
+        {
+            queueSizeUpdater.addAndGet(this, bytes);
+            return ResourceLimits.Outcome.SUCCESS;
+        }
+
+        // we know we don't have enough local queue capacity for the entire message, so we need to borrow some from reserve capacity
+        long allocatedExcess = min(currentQueueSize + bytes - queueCapacity, bytes);
+
+        if (!globalReserve.tryAllocate(allocatedExcess))
+            return ResourceLimits.Outcome.INSUFFICIENT_GLOBAL;
+
+        if (!endpointReserve.tryAllocate(allocatedExcess))
+        {
+            globalReserve.release(allocatedExcess);
+            globalWaitQueue.signal();
+            return ResourceLimits.Outcome.INSUFFICIENT_GLOBAL;
+        }
+
+        long newQueueSize = queueSizeUpdater.addAndGet(this, bytes);
+        long actualExcess = max(0, min(newQueueSize - queueCapacity, bytes));
+
+        /*
+         * It's possible that some permits were released at some point after we loaded current queueSize,
+         * and we can satisfy more of the permits using our exclusive per-connection capacity, needing
+         * less than previously estimated from the reserves. If that's the case, release the now unneeded
+         * permit excess back to endpoint/global reserves.
+         */
+        if (actualExcess != allocatedExcess) // actualExcess < allocatedExcess
+        {
+            long excess = allocatedExcess - actualExcess;
+
+            endpointReserve.release(excess);
+            globalReserve.release(excess);
+
+            endpointWaitQueue.signal();
+            globalWaitQueue.signal();
+        }
+
+        return ResourceLimits.Outcome.SUCCESS;
+    }
+

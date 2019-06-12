@@ -1,40 +1,28 @@
     @Test
     public void testRequestResponse() throws InterruptedException, ExecutionException
     {
-        // echo message that we like to mock as incoming reply for outgoing echo message
-        MessageIn<EchoMessage> echoMessageIn = MessageIn.create(FBUtilities.getBroadcastAddressAndPort(),
-                EchoMessage.instance,
-                Collections.emptyMap(),
-                MessagingService.Verb.ECHO,
-                MessagingService.current_version);
+        // echo message that we like to mock as incoming response for outgoing echo message
+        Message<NoPayload> echoMessage = Message.out(ECHO_REQ, NoPayload.noPayload);
         MockMessagingSpy spy = MockMessagingService
                 .when(
                         all(
                                 to(FBUtilities.getBroadcastAddressAndPort()),
-                                verb(MessagingService.Verb.ECHO)
+                                verb(ECHO_REQ)
                         )
                 )
-                .respond(echoMessageIn);
+                .respond(echoMessage);
 
-        MessageOut<EchoMessage> echoMessageOut = new MessageOut<>(MessagingService.Verb.ECHO, EchoMessage.instance, EchoMessage.serializer);
-        MessagingService.instance().sendRR(echoMessageOut, FBUtilities.getBroadcastAddressAndPort(), new IAsyncCallback()
+        Message<NoPayload> echoMessageOut = Message.out(ECHO_REQ, NoPayload.noPayload);
+        MessagingService.instance().sendWithCallback(echoMessageOut, FBUtilities.getBroadcastAddressAndPort(), msg ->
         {
-            public void response(MessageIn msg)
-            {
-                assertEquals(MessagingService.Verb.ECHO, msg.verb);
-                assertEquals(echoMessageIn.payload, msg.payload);
-            }
-
-            public boolean isLatencyForSnitch()
-            {
-                return false;
-            }
+            assertEquals(ECHO_REQ, msg.verb());
+            assertEquals(echoMessage.payload, msg.payload);
         });
 
         // we must have intercepted the outgoing message at this point
-        MessageOut<?> msg = spy.captureMessageOut().get();
+        Message<?> msg = spy.captureMessageOut().get();
         assertEquals(1, spy.messagesIntercepted);
-        assertTrue(msg == echoMessageOut);
+        assertSame(echoMessage.payload, msg.payload);
 
         // and return a mocked response
         assertEquals(1, spy.mockedMessageResponses);

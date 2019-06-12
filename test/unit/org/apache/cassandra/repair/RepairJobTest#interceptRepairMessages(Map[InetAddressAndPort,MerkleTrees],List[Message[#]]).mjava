@@ -1,0 +1,35 @@
+    private void interceptRepairMessages(Map<InetAddressAndPort, MerkleTrees> mockTrees,
+                                         List<Message<?>> messageCapture)
+    {
+        MessagingService.instance().inboundSink.add(message -> message.verb().isResponse());
+        MessagingService.instance().outboundSink.add((message, to) -> {
+            if (message == null || !(message.payload instanceof RepairMessage))
+                return false;
+
+            // So different Thread's messages don't overwrite each other.
+            synchronized (messageLock)
+            {
+                messageCapture.add(message);
+            }
+
+            RepairMessage rm = (RepairMessage) message.payload;
+            switch (rm.messageType)
+            {
+                case SNAPSHOT:
+                    MessagingService.instance().callbacks.removeAndRespond(message.id(), to, message.emptyResponse());
+                    break;
+                case VALIDATION_REQUEST:
+                    session.validationComplete(sessionJobDesc, to, mockTrees.get(to));
+                    break;
+                case SYNC_REQUEST:
+                    SyncRequest syncRequest = (SyncRequest) rm;
+                    session.syncComplete(sessionJobDesc, new SyncNodePair(syncRequest.src, syncRequest.dst),
+                                         true, Collections.emptyList());
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
+    }
+

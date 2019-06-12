@@ -1,0 +1,22 @@
+    /**
+     * Try to acquire the necessary resource permits for a number of pending bytes for this connection.
+     *
+     * Since the owner limit is shared amongst multiple connections, our semantics cannot be super trivial.
+     * Were they per-connection, we could simply perform an atomic increment of the queue size, then
+     * allocate any excess we need in the reserve, and on release free everything we see from both.
+     * Since we are coordinating two independent atomic variables we have to track every byte we allocate in reserve
+     * and ensure it is matched by a corresponding released byte. We also need to be sure we do not permit another
+     * releasing thread to release reserve bytes we have not yet - and may never - actually reserve.
+     *
+     * As such, we have to first check if we would need reserve bytes, then allocate them *before* we increment our
+     * queue size.  We only increment the queue size if the reserve bytes are definitely not needed, or we could first
+     * obtain them.  If in the process of obtaining any reserve bytes the queue size changes, we have some bytes that are
+     * reserved for us, but may be a different number to that we need.  So we must continue to track these.
+     *
+     * In the happy path, this is still efficient as we simply CAS
+     */
+    private Outcome acquireCapacity(long bytes)
+    {
+        return acquireCapacity(1, bytes);
+    }
+

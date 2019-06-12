@@ -1,0 +1,79 @@
+        void initiate(ChannelHandlerContext ctx, ByteBuf in) throws IOException
+        {
+            initiate = HandshakeProtocol.Initiate.maybeDecode(in);
+            if (initiate == null)
+                return;
+
+            logger.trace("Received handshake initiation message from peer {}, message = {}", ctx.channel().remoteAddress(), initiate);
+            if (initiate.acceptVersions != null)
+            {
+                logger.trace("Connection version {} (min {}) from {}", initiate.acceptVersions.max, initiate.acceptVersions.min, initiate.from);
+
+                final AcceptVersions accept;
+
+                if (initiate.type.isStreaming())
+                    accept = settings.acceptStreaming;
+                else
+                    accept = settings.acceptMessaging;
+
+                int useMessagingVersion = max(accept.min, min(accept.max, initiate.acceptVersions.max));
+                ByteBuf flush = new HandshakeProtocol.Accept(useMessagingVersion, accept.max).encode(ctx.alloc());
+
+                AsyncChannelPromise.writeAndFlush(ctx, flush, (ChannelFutureListener) future -> {
+                    if (!future.isSuccess())
+                        exceptionCaught(future.channel(), future.cause());
+                });
+
+                if (initiate.acceptVersions.min > accept.max)
+                {
+                    logger.info("peer {} only supports messaging versions higher ({}) than this node supports ({})", ctx.channel().remoteAddress(), initiate.acceptVersions.min, current_version);
+                    failHandshake(ctx);
+                }
+                else if (initiate.acceptVersions.max < accept.min)
+                {
+                    logger.info("peer {} only supports messaging versions lower ({}) than this node supports ({})", ctx.channel().remoteAddress(), initiate.acceptVersions.max, minimum_version);
+                    failHandshake(ctx);
+                }
+                else
+                {
+                    if (initiate.type.isStreaming())
+                        setupStreamingPipeline(initiate.from, ctx);
+                    else
+                        setupMessagingPipeline(initiate.from, useMessagingVersion, initiate.acceptVersions.max, ctx.pipeline());
+                }
+            }
+            else
+            {
+                int version = initiate.requestMessagingVersion;
+                assert version < VERSION_40 && version >= settings.acceptMessaging.min;
+                logger.trace("Connection version {} from {}", version, ctx.channel().remoteAddress());
+
+                if (initiate.type.isStreaming())
+                {
+                    // streaming connections are per-session and have a fixed version.  we can't do anything with a wrong-version stream connection, so drop it.
+                    if (version != settings.acceptStreaming.max)
+                    {
+                        logger.warn("Received stream using protocol version {} (my version {}). Terminating connection", version, settings.acceptStreaming.max);
+                        failHandshake(ctx);
+                    }
+                    setupStreamingPipeline(initiate.from, ctx);
+                }
+                else
+                {
+                    // if this version is < the MS version the other node is trying
+                    // to connect with, the other node will disconnect
+                    ByteBuf response = HandshakeProtocol.Accept.respondPre40(settings.acceptMessaging.max, ctx.alloc());
+                    AsyncChannelPromise.writeAndFlush(ctx, response,
+                          (ChannelFutureListener) future -> {
+                               if (!future.isSuccess())
+                                   exceptionCaught(future.channel(), future.cause());
+                    });
+
+                    if (version < VERSION_30)
+                        throw new IOException(String.format("Unable to read obsolete message version %s from %s; The earliest version supported is 3.0.0", version, ctx.channel().remoteAddress()));
+
+                    // we don't setup the messaging pipeline here, as the legacy messaging handshake requires one more message to finish
+                }
+            }
+        }
+

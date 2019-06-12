@@ -1,0 +1,30 @@
+    private void testLargeColumns(int nodes, int columnSize, int rowCount) throws Throwable
+    {
+        Random random = new Random();
+        long seed = ThreadLocalRandom.current().nextLong();
+        logger.info("Using seed {}", seed);
+
+        try (Cluster cluster = init(Cluster.build(nodes)
+                                           .withConfig(config ->
+                                                       config.set("commitlog_segment_size_in_mb", (columnSize * 3) >> 20)
+                                                             .set("internode_application_send_queue_reserve_endpoint_capacity_in_bytes", columnSize * 2)
+                                                             .set("internode_application_send_queue_reserve_global_capacity_in_bytes", columnSize * 3)
+                                                             .set("write_request_timeout_in_ms", SECONDS.toMillis(30L))
+                                                             .set("read_request_timeout_in_ms", SECONDS.toMillis(30L))
+                                                             .set("memtable_heap_space_in_mb", 1024)
+                                           )
+                                           .start()))
+        {
+            cluster.schemaChange(String.format("CREATE TABLE %s.cf (k int, c text, PRIMARY KEY (k))", KEYSPACE));
+
+            for (int i = 0 ; i < rowCount ; ++i)
+                cluster.coordinator(1).execute(String.format("INSERT INTO %s.cf (k, c) VALUES (?, ?);", KEYSPACE), ConsistencyLevel.ALL, i, str(columnSize, random, seed | i));
+
+            for (int i = 0 ; i < rowCount ; ++i)
+            {
+                Object[][] results = cluster.coordinator(1).execute(String.format("SELECT k, c FROM %s.cf WHERE k = ?;", KEYSPACE), ConsistencyLevel.ALL, i);
+                Assert.assertTrue(str(columnSize, random, seed | i).equals(results[0][1]));
+            }
+        }
+    }
+

@@ -1,0 +1,59 @@
+    /**
+     * Respond a limited number of times with the message created by the provided function that will be called with
+     * each intercepted outbound message.
+     * @param fnResponse    function to call for creating response based on intercepted message and target address
+     */
+    public <T, S> MockMessagingSpy respondN(BiFunction<Message<T>, InetAddressAndPort, Message<S>> fnResponse, int limit)
+    {
+        limitCounter.set(limit);
+
+        assert sink == null: "destroy() must be called first to register new response";
+
+        sink = new BiPredicate<Message<?>, InetAddressAndPort>()
+        {
+            public boolean test(Message message, InetAddressAndPort to)
+            {
+                // prevent outgoing message from being send in case matcher indicates a match
+                // and instead send the mocked response
+                if (matcher.matches(message, to))
+                {
+                    spy.matchingMessage(message);
+
+                    if (limitCounter.decrementAndGet() < 0)
+                        return false;
+
+                    synchronized (sendResponses)
+                    {
+                        if (message.hasId())
+                        {
+                            assert !sendResponses.get(message.id()).contains(to) : "ID re-use for outgoing message";
+                            sendResponses.put(message.id(), to);
+                        }
+                    }
+
+                    // create response asynchronously to match request/response communication execution behavior
+                    new Thread(() ->
+                    {
+                        Message<?> response = fnResponse.apply(message, to);
+                        if (response != null)
+                        {
+                            RequestCallbacks.CallbackInfo cb = MessagingService.instance().callbacks.get(message.id(), to);
+                            if (cb != null)
+                                cb.callback.onResponse(response);
+                            else
+                                processResponse(response);
+
+                            spy.matchingResponse(response);
+                        }
+                    }).start();
+
+                    return false;
+                }
+                return true;
+            }
+        };
+        MessagingService.instance().outboundSink.add(sink);
+
+        return spy;
+    }
+

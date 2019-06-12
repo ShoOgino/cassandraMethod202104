@@ -1,0 +1,38 @@
+        @Override
+        public void initChannel(SocketChannel channel) throws Exception
+        {
+            channelGroup.add(channel);
+
+            channel.config().setOption(ChannelOption.ALLOCATOR, GlobalBufferPoolAllocator.instance);
+            channel.config().setOption(ChannelOption.SO_KEEPALIVE, true);
+            channel.config().setOption(ChannelOption.SO_REUSEADDR, true);
+            channel.config().setOption(ChannelOption.TCP_NODELAY, true); // we only send handshake messages; no point ever delaying
+
+            ChannelPipeline pipeline = channel.pipeline();
+
+            pipelineInjector.accept(pipeline);
+
+            // order of handlers: ssl -> logger -> handshakeHandler
+            if (settings.encryption.enabled)
+            {
+                if (settings.encryption.optional)
+                {
+                    pipeline.addFirst("ssl", new OptionalSslHandler(settings.encryption));
+                }
+                else
+                {
+                    SslContext sslContext = SSLFactory.getOrCreateSslContext(settings.encryption, true, SSLFactory.SocketType.SERVER);
+                    InetSocketAddress peer = settings.encryption.require_endpoint_verification ? channel.remoteAddress() : null;
+                    SslHandler sslHandler = newSslHandler(channel, sslContext, peer);
+                    logger.trace("creating inbound netty SslContext: context={}, engine={}", sslContext.getClass().getName(), sslHandler.engine().getClass().getName());
+                    pipeline.addFirst("ssl", sslHandler);
+                }
+            }
+
+            if (WIRETRACE)
+                pipeline.addLast("logger", new LoggingHandler(LogLevel.INFO));
+
+            channel.pipeline().addLast("handshake", new Handler(settings));
+
+        }
+

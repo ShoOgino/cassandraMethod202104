@@ -1,0 +1,46 @@
+    /**
+     * Provide a lambda that can request a buffer of suitable size, then fill the buffer and have
+     * that buffer written and flushed to the underlying channel, without having to handle buffer
+     * allocation, lifetime or cleanup, including in case of exceptions.
+     * <p>
+     * Any exception thrown by the Write will be propagated to the caller, after any buffer is cleaned up.
+     */
+    public int writeToChannel(Write write, StreamRateLimiter limiter) throws IOException
+    {
+        doFlush(0);
+        class Holder
+        {
+            ChannelPromise promise;
+            ByteBuffer buffer;
+        }
+        Holder holder = new Holder();
+
+        try
+        {
+            write.write(size -> {
+                if (holder.buffer != null)
+                    throw new IllegalStateException("Can only allocate one ByteBuffer");
+                limiter.acquire(size);
+                holder.promise = beginFlush(size, defaultLowWaterMark, defaultHighWaterMark);
+                holder.buffer = BufferPool.get(size);
+                return holder.buffer;
+            });
+        }
+        catch (Throwable t)
+        {
+            // we don't currently support cancelling the flush, but at this point we are recoverable if we want
+            if (holder.buffer != null)
+                BufferPool.put(holder.buffer);
+            if (holder.promise != null)
+                holder.promise.tryFailure(t);
+            throw t;
+        }
+
+        ByteBuffer buffer = holder.buffer;
+        BufferPool.putUnusedPortion(buffer);
+
+        int length = buffer.limit();
+        channel.writeAndFlush(GlobalBufferPoolAllocator.wrap(buffer), holder.promise);
+        return length;
+    }
+

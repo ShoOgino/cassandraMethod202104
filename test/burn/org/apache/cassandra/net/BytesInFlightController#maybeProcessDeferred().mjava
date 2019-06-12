@@ -1,0 +1,36 @@
+    private void maybeProcessDeferred()
+    {
+        while (true)
+        {
+            long sent = sentBytes;
+            long received = receivedBytes;
+            if (sent - received <= minimumInFlightBytes)
+                break;
+
+            Pair<Integer, IntConsumer> next = deferredBytes.poll();
+            if (next == null)
+                break;
+
+            int receive = next.left;
+            IntConsumer callbacks = next.right;
+            while (true)
+            {
+                long newReceived = received + receive;
+                if (receivedBytesUpdater.compareAndSet(this, received, newReceived))
+                {
+                    callbacks.accept(receive);
+                    wakeupSenders();
+                    break;
+                }
+
+                sent = sentBytes;
+                received = receivedBytes;
+                if (sent - received <= minimumInFlightBytes)
+                {
+                    deferredBytes.add(next);
+                    break; // continues with outer loop to maybe process it if minimumInFlightBytes has changed meanwhile
+                }
+            }
+        }
+    }
+

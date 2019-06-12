@@ -1,0 +1,31 @@
+    void sendOne() throws InterruptedException
+    {
+        long id = nextSendId.getAndUpdate(i -> i == maxId ? minId : i + 1);
+        try
+        {
+            Destiny destiny = Destiny.SUCCEED;
+            byte realDestiny = 0;
+            Message<?> msg;
+            synchronized (sendGenerator)
+            {
+                if (0 == sendGenerator.uniformInt(1 << 10))
+                {
+                    // abnormal destiny
+                    realDestiny = (byte) (1 + sendGenerator.uniformInt(6));
+                    destiny = realDestiny <= 3 ? Destiny.FAIL_TO_SERIALIZE : Destiny.FAIL_TO_DESERIALIZE;
+                }
+                msg = sendGenerator.generate(id, realDestiny);
+            }
+
+            controller.send(msg.serializedSize(current_version));
+            Verifier.EnqueueMessageEvent e = verifier.onEnqueue(msg, destiny);
+            outbound.enqueue(msg);
+            e.complete(verifier);
+        }
+        catch (ClosedChannelException e)
+        {
+            // TODO: make this a tested, not illegal, state
+            throw new IllegalStateException(e);
+        }
+    }
+

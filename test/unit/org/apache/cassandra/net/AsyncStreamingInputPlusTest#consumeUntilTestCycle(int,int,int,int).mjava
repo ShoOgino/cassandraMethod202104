@@ -1,0 +1,34 @@
+    private void consumeUntilTestCycle(int nBuffs, int buffSize, int startOffset, int len) throws IOException
+    {
+        inputPlus = new AsyncStreamingInputPlus(channel);
+
+        byte[] expectedBytes = new byte[len];
+        int count = 0;
+        for (int j=0; j < nBuffs; j++)
+        {
+            ByteBuf buf = channel.alloc().buffer(buffSize);
+            for (int i = 0; i < buf.capacity(); i++)
+            {
+                buf.writeByte(j);
+                if (count >= startOffset && (count - startOffset) < len)
+                    expectedBytes[count - startOffset] = (byte)j;
+                count++;
+            }
+
+            inputPlus.append(buf);
+        }
+        inputPlus.requestClosure();
+
+        TestableWritableByteChannel wbc = new TestableWritableByteChannel(len);
+
+        inputPlus.skipBytesFully(startOffset);
+        BufferedDataOutputStreamPlus writer = new BufferedDataOutputStreamPlus(wbc);
+        inputPlus.consume(buffer -> { writer.write(buffer); return buffer.remaining(); }, len);
+        writer.close();
+
+        Assert.assertEquals(String.format("Test with %d buffers starting at %d consuming %d bytes", nBuffs, startOffset, len),
+                            len, wbc.writtenBytes.readableBytes());
+
+        Assert.assertArrayEquals(expectedBytes, wbc.writtenBytes.array());
+    }
+

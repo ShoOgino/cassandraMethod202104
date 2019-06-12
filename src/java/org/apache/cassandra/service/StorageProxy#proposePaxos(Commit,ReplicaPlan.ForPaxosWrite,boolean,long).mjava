@@ -2,34 +2,26 @@
     throws WriteTimeoutException
     {
         ProposeCallback callback = new ProposeCallback(replicaPlan.contacts().size(), replicaPlan.requiredParticipants(), !timeoutIfPartial, replicaPlan.consistencyLevel(), queryStartNanoTime);
-        MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_PROPOSE, proposal, Commit.serializer);
+        Message<Commit> message = Message.out(PAXOS_PROPOSE_REQ, proposal);
         for (Replica replica : replicaPlan.contacts())
         {
             if (replica.isSelf())
             {
-                StageManager.getStage(MessagingService.verbStages.get(MessagingService.Verb.PAXOS_PROPOSE)).execute(new Runnable()
-                {
-                    public void run()
+                StageManager.getStage(PAXOS_PROPOSE_REQ.stage).execute(() -> {
+                    try
                     {
-                        try
-                        {
-                            MessageIn<Boolean> message = MessageIn.create(FBUtilities.getBroadcastAddressAndPort(),
-                                    ProposeVerbHandler.doPropose(proposal),
-                                    Collections.emptyMap(),
-                                    MessagingService.Verb.INTERNAL_RESPONSE,
-                                    MessagingService.current_version);
-                            callback.response(message);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.error("Failed paxos propose locally", ex);
-                        }
+                        Message<Boolean> response = message.responseWith(doPropose(proposal));
+                        callback.onResponse(response);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.error("Failed paxos propose locally", ex);
                     }
                 });
             }
             else
             {
-                MessagingService.instance().sendRR(message, replica.endpoint(), callback);
+                MessagingService.instance().sendWithCallback(message, replica.endpoint(), callback);
             }
         }
         callback.await();

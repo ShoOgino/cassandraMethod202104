@@ -1,0 +1,30 @@
+    /**
+     * Remove the provided Message from the queue, if present.
+     *
+     * WARNING: This is a blocking call.
+     */
+    boolean remove(Message<?> remove)
+    {
+        if (remove == null)
+            throw new NullPointerException();
+        
+        RemoveRunner runner;
+        while (true)
+        {
+            runner = removeRunner;
+            if (runner != null && runner.undo(remove))
+                break;
+
+            if (runner == null && removeRunnerUpdater.compareAndSet(this, null, runner = new RemoveRunner()))
+            {
+                runner.undo(remove);
+                runEventually(runner);
+                break;
+            }
+        }
+
+        //noinspection UnstableApiUsage
+        Uninterruptibles.awaitUninterruptibly(runner.done);
+        return runner.removed.contains(remove);
+    }
+

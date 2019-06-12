@@ -1,0 +1,27 @@
+        private ShareableBytes decompressFrame(ShareableBytes bytes, int begin, int end, Header header) throws CorruptLZ4Frame
+        {
+            ByteBuffer buf = bytes.get();
+
+            if (header.uncompressedLength == 0)
+                return bytes.slice(begin + HEADER_LENGTH, end);
+
+            if (!header.isCompressed())
+            {
+                validateChecksum(buf, begin + HEADER_LENGTH, header);
+                return bytes.slice(begin + HEADER_LENGTH, end);
+            }
+
+            ByteBuffer out = allocator.get(header.uncompressedLength);
+            try
+            {
+                decompressor.decompress(buf, begin + HEADER_LENGTH, out, 0, header.uncompressedLength);
+                validateChecksum(out, 0, header);
+                return ShareableBytes.wrap(out);
+            }
+            catch (Throwable t)
+            {
+                BufferPool.put(out);
+                throw t;
+            }
+        }
+

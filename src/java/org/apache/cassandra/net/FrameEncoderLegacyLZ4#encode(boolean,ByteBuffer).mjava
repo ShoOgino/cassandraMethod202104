@@ -1,0 +1,36 @@
+    @Override
+    ByteBuf encode(boolean isSelfContained, ByteBuffer payload)
+    {
+        ByteBuffer frame = null;
+        try
+        {
+            frame = BufferPool.getAtLeast(calculateMaxFrameLength(payload), BufferType.OFF_HEAP);
+
+            int   frameOffset = 0;
+            int payloadOffset = 0;
+
+            int payloadLength = payload.remaining();
+            while (payloadOffset < payloadLength)
+            {
+                int blockLength = min(DEFAULT_BLOCK_LENGTH, payloadLength - payloadOffset);
+                frameOffset += compressBlock(frame, frameOffset, payload, payloadOffset, blockLength);
+                payloadOffset += blockLength;
+            }
+
+            frame.limit(frameOffset);
+            BufferPool.putUnusedPortion(frame);
+
+            return GlobalBufferPoolAllocator.wrap(frame);
+        }
+        catch (Throwable t)
+        {
+            if (null != frame)
+                BufferPool.put(frame);
+            throw t;
+        }
+        finally
+        {
+            BufferPool.put(payload);
+        }
+    }
+

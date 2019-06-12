@@ -1,0 +1,148 @@
+    /**
+     * Permanently close this connection.
+     *
+     * Immediately prevent any new messages from being enqueued - these will throw ClosedChannelException.
+     * The close itself happens asynchronously on the eventLoop, so a Future is returned to help callers
+     * wait for its completion.
+     *
+     * The flushQueue parameter indicates if any outstanding messages should be delivered before closing the connection.
+     *
+     *  - If false, any already flushed or in-progress messages are completed, and the remaining messages are cleared
+     *    before the connection is promptly torn down.
+     *
+     * - If true, we attempt delivery of all queued messages.  If necessary, we will continue to open new connections
+     *    to the remote host until they have been delivered.  Only if we continue to fail to open a connection for
+     *    an extended period of time will we drop any outstanding messages and close the connection.
+     */
+    public Future<Void> close(boolean flushQueue)
+    {
+        // ensure only one close attempt can be in flight
+        Promise<Void> closing = AsyncPromise.uncancellable(eventLoop);
+        if (!closingUpdater.compareAndSet(this, null, closing))
+            return this.closing;
+
+        /*
+         * Now define a cleanup closure, that will be deferred until it is safe to do so.
+         * Once run it:
+         *   - immediately _logically_ closes the channel by updating this object's fields, but defers actually closing
+         *   - cancels any in-flight connection attempts
+         *   - cancels any maintenance work that might be scheduled
+         *   - clears any waiting messages on the queue
+         *   - terminates the delivery thread
+         *   - finally, schedules any open channel's closure, and propagates its completion to the close promise
+         */
+        Runnable eventLoopCleanup = () -> {
+            Runnable onceNotConnecting = () -> {
+                // start by setting ourselves to definitionally closed
+                State state = this.state;
+                this.state = State.CLOSED;
+
+                try
+                {
+                    // note that we never clear the queue, to ensure that an enqueue has the opportunity to remove itself
+                    // if it raced with close, to potentially requeue the message on a replacement connection
+
+                    // we terminate delivery here, to ensure that any listener to {@link connecting} do not schedule more work
+                    delivery.terminate();
+
+                    // stop periodic cleanup
+                    if (state.isDisconnected())
+                    {
+                        state.disconnected().maintenance.cancel(true);
+                        closing.setSuccess(null);
+                    }
+                    else
+                    {
+                        assert state.isEstablished();
+                        state.established().channel.close()
+                                                   .addListener(new PromiseNotifier<>(closing));
+                    }
+                }
+                catch (Throwable t)
+                {
+                    // in case of unexpected exception, signal completion and try to close the channel
+                    closing.trySuccess(null);
+                    try
+                    {
+                        if (state.isEstablished())
+                            state.established().channel.close();
+                    }
+                    catch (Throwable t2)
+                    {
+                        t.addSuppressed(t2);
+                        logger.error("Failed to close connection cleanly:", t);
+                    }
+                    throw t;
+                }
+            };
+
+            if (state.isConnecting())
+            {
+                // stop any in-flight connection attempts; these should be running on the eventLoop, so we should
+                // be able to cleanly cancel them, but executing on a listener guarantees correct semantics either way
+                Connecting connecting = state.connecting();
+                connecting.cancel();
+                connecting.attempt.addListener(future -> onceNotConnecting.run());
+            }
+            else
+            {
+                onceNotConnecting.run();
+            }
+        };
+
+        /*
+         * If we want to shutdown gracefully, flushing any outstanding messages, we have to do it very carefully.
+         * Things to note:
+         *
+         *  - It is possible flushing messages will require establishing a new connection
+         *    (However, if a connection cannot be established, we do not want to keep trying)
+         *  - We have to negotiate with a separate thread, so we must be sure it is not in-progress before we stop (like channel close)
+         *  - Cleanup must still happen on the eventLoop
+         *
+         *  To achieve all of this, we schedule a recurring operation on the delivery thread, executing while delivery
+         *  is between messages, that checks if the queue is empty; if it is, it schedules cleanup on the eventLoop.
+         */
+
+        Runnable clearQueue = () ->
+        {
+            CountDownLatch done = new CountDownLatch(1);
+            queue.runEventually(withLock -> {
+                withLock.consume(this::onClosed);
+                done.countDown();
+            });
+            //noinspection UnstableApiUsage
+            Uninterruptibles.awaitUninterruptibly(done);
+        };
+
+        if (flushQueue)
+        {
+            // just keep scheduling on delivery executor a check to see if we're done; there should always be one
+            // delivery attempt between each invocation, unless there is a wider problem with delivery scheduling
+            class FinishDelivery implements Runnable
+            {
+                public void run()
+                {
+                    if (!hasPending())
+                        delivery.stopAndRunOnEventLoop(eventLoopCleanup);
+                    else
+                        delivery.stopAndRun(() -> {
+                            if (state.isConnecting() && state.connecting().isFailingToConnect)
+                                clearQueue.run();
+                            run();
+                        });
+                }
+            }
+
+            delivery.stopAndRun(new FinishDelivery());
+        }
+        else
+        {
+            delivery.stopAndRunOnEventLoop(() -> {
+                clearQueue.run();
+                eventLoopCleanup.run();
+            });
+        }
+
+        return closing;
+    }
+

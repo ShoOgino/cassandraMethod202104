@@ -1,0 +1,42 @@
+    /**
+     * {@inheritDoc}
+     *
+     * Release open buffers and poll the {@link #queue} for more data.
+     * <p>
+     * This is best, and more or less expected, to be invoked on a consuming thread (not the event loop)
+     * becasue if we block on the queue we can't fill it on the event loop (as that's where the buffers are coming from).
+     *
+     * @throws EOFException when no further reading from this instance should occur. Implies this instance is closed.
+     * @throws InputTimeoutException when no new buffers arrive for reading before
+     * the {@link #rebufferTimeoutNanos} elapses while blocking. It's then not safe to reuse this instance again.
+     */
+    @Override
+    protected void reBuffer() throws EOFException, InputTimeoutException
+    {
+        if (queue.isEmpty())
+            channel.read();
+
+        currentBuf.release();
+        currentBuf = null;
+        buffer = null;
+
+        ByteBuf next = null;
+        try
+        {
+            next = queue.poll(rebufferTimeoutNanos, TimeUnit.NANOSECONDS);
+        }
+        catch (InterruptedException ie)
+        {
+            // nop
+        }
+
+        if (null == next)
+            throw new InputTimeoutException();
+
+        if (next == Unpooled.EMPTY_BUFFER) // Unpooled.EMPTY_BUFFER is the indicator that the input is closed
+            throw new EOFException();
+
+        currentBuf = next;
+        buffer = next.nioBuffer();
+    }
+

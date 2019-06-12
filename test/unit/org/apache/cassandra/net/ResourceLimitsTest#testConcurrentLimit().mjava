@@ -1,0 +1,33 @@
+    @Test
+    public void testConcurrentLimit() throws Exception
+    {
+        int numThreads = 4;
+        int numPermitsPerThread = 1_000_000;
+        int numPermits = numThreads * numPermitsPerThread;
+
+        CountDownLatch latch = new CountDownLatch(numThreads);
+        Limit limit = new Concurrent(numPermits);
+
+        class Worker implements Runnable
+        {
+            public void run()
+            {
+                for (int i = 0; i < numPermitsPerThread; i += 10)
+                    assertTrue(limit.tryAllocate(10));
+
+                for (int i = 0; i < numPermitsPerThread; i += 10)
+                    limit.release(10);
+
+                latch.countDown();
+            }
+        }
+
+        Executor executor = Executors.newFixedThreadPool(numThreads);
+        for (int i = 0; i < numThreads; i++)
+            executor.execute(new Worker());
+        latch.await(10, TimeUnit.SECONDS);
+
+        assertEquals(0,          limit.using());
+        assertEquals(numPermits, limit.remaining());
+    }
+

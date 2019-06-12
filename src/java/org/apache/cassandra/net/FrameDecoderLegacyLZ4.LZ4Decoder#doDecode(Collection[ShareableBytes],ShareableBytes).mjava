@@ -1,0 +1,58 @@
+        private void doDecode(Collection<ShareableBytes> into, ShareableBytes newBytes) throws CorruptLZ4Frame
+        {
+            ByteBuffer in = newBytes.get();
+
+            if (null != stash)
+            {
+                if (!copyToSize(in, stash, HEADER_LENGTH))
+                    return;
+
+                header.read(stash, 0);
+                header.validate();
+
+                int frameLength = header.frameLength();
+                stash = ensureCapacity(stash, frameLength);
+
+                if (!copyToSize(in, stash, frameLength))
+                    return;
+
+                stash.flip();
+                ShareableBytes stashed = ShareableBytes.wrap(stash);
+                stash = null;
+
+                try
+                {
+                    into.add(decompressFrame(stashed, 0, frameLength, header));
+                }
+                finally
+                {
+                    stashed.release();
+                }
+            }
+
+            int begin = in.position();
+            int limit = in.limit();
+            while (begin < limit)
+            {
+                int remaining = limit - begin;
+                if (remaining < HEADER_LENGTH)
+                {
+                    stash(newBytes, HEADER_LENGTH, begin, remaining);
+                    return;
+                }
+
+                header.read(in, begin);
+                header.validate();
+
+                int frameLength = header.frameLength();
+                if (remaining < frameLength)
+                {
+                    stash(newBytes, frameLength, begin, remaining);
+                    return;
+                }
+
+                into.add(decompressFrame(newBytes, begin, begin + frameLength, header));
+                begin += frameLength;
+            }
+        }
+

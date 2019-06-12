@@ -1,0 +1,37 @@
+        private void schedule()
+        {
+            Map<EventLoop, ReactivateHandlers> tasks = null;
+
+            long currentTimeNanos = approxTime.now();
+
+            Ticket t;
+            while ((t = queue.peek()) != null)
+            {
+                if (!t.call()) // invalidated
+                {
+                    queue.remove();
+                    continue;
+                }
+
+                boolean isLive = t.isLive(currentTimeNanos);
+                if (isLive && !reserveCapacity.tryAllocate(t.bytesRequested))
+                {
+                    if (!t.reset()) // the ticket was invalidated after being called but before now
+                    {
+                        queue.remove();
+                        continue;
+                    }
+                    break; // TODO: traverse the entire queue to unblock handlers that have expired or invalidated tickets
+                }
+
+                if (null == tasks)
+                    tasks = new IdentityHashMap<>();
+
+                queue.remove();
+                tasks.computeIfAbsent(t.handler.eventLoop(), e -> new ReactivateHandlers()).add(t, isLive);
+            }
+
+            if (null != tasks)
+                tasks.forEach(EventLoop::execute);
+        }
+

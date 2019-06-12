@@ -1,0 +1,32 @@
+    /**
+     * Record any tracing data, if enabled on this message.
+     */
+    public void traceOutgoingMessage(Message<?> message, InetAddressAndPort sendTo)
+    {
+        try
+        {
+            final UUID sessionId = message.traceSession();
+            if (sessionId == null)
+                return;
+
+            String logMessage = String.format("Sending %s message to %s", message.verb(), sendTo);
+
+            TraceState state = get(sessionId);
+            if (state == null) // session may have already finished; see CASSANDRA-5668
+            {
+                TraceType traceType = message.traceType();
+                trace(ByteBuffer.wrap(UUIDGen.decompose(sessionId)), logMessage, traceType.getTTL());
+            }
+            else
+            {
+                state.trace(logMessage);
+                if (message.verb().isResponse())
+                    doneWithNonLocalSession(state);
+            }
+        }
+        catch (Exception e)
+        {
+            logger.warn("failed to capture the tracing info for an outbound message to {}, ignoring", sendTo, e);
+        }
+    }
+

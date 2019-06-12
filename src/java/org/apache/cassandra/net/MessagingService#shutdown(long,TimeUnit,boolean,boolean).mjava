@@ -1,0 +1,45 @@
+    public void shutdown(long timeout, TimeUnit units, boolean shutdownGracefully, boolean shutdownExecutors)
+    {
+        isShuttingDown = true;
+        logger.info("Waiting for messaging service to quiesce");
+        // We may need to schedule hints on the mutation stage, so it's erroneous to shut down the mutation stage first
+        assert !StageManager.getStage(MUTATION).isShutdown();
+
+        if (shutdownGracefully)
+        {
+            callbacks.shutdownGracefully();
+            List<Future<Void>> closing = new ArrayList<>();
+            for (OutboundConnections pool : channelManagers.values())
+                closing.add(pool.close(true));
+
+            long deadline = System.nanoTime() + units.toNanos(timeout);
+            maybeFail(() -> new FutureCombiner(closing).get(timeout, units),
+                      () -> inboundSockets.close().get(),
+                      () -> {
+                          if (shutdownExecutors)
+                              shutdownExecutors(deadline);
+                      },
+                      () -> callbacks.awaitTerminationUntil(deadline),
+                      inboundSink::clear,
+                      outboundSink::clear);
+        }
+        else
+        {
+            callbacks.shutdownNow(false);
+            List<Future<Void>> closing = new ArrayList<>();
+            closing.add(inboundSockets.close());
+            for (OutboundConnections pool : channelManagers.values())
+                closing.add(pool.close(false));
+
+            long deadline = System.nanoTime() + units.toNanos(timeout);
+            maybeFail(() -> new FutureCombiner(closing).get(timeout, units),
+                      () -> {
+                          if (shutdownExecutors)
+                              shutdownExecutors(deadline);
+                      },
+                      () -> callbacks.awaitTerminationUntil(deadline),
+                      inboundSink::clear,
+                      outboundSink::clear);
+        }
+    }
+

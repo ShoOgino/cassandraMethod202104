@@ -1,0 +1,45 @@
+    public static void inspectThrowable(Throwable t, boolean propagateOutOfMemory) throws OutOfMemoryError
+    {
+        boolean isUnstable = false;
+        if (t instanceof OutOfMemoryError)
+        {
+            if (Boolean.getBoolean("cassandra.printHeapHistogramOnOutOfMemoryError"))
+            {
+                // We want to avoid printing multiple time the heap histogram if multiple OOM errors happen in a short
+                // time span.
+                synchronized(lock)
+                {
+                    if (printingHeapHistogram)
+                        return;
+                    printingHeapHistogram = true;
+                }
+                HeapUtils.logHeapHistogram();
+            }
+
+            logger.error("OutOfMemory error letting the JVM handle the error:", t);
+
+            StorageService.instance.removeShutdownHook();
+            // We let the JVM handle the error. The startup checks should have warned the user if it did not configure
+            // the JVM behavior in case of OOM (CASSANDRA-13006).
+            if (!propagateOutOfMemory)
+                return;
+
+            throw (OutOfMemoryError) t;
+        }
+
+        if (DatabaseDescriptor.getDiskFailurePolicy() == Config.DiskFailurePolicy.die)
+            if (t instanceof FSError || t instanceof CorruptSSTableException)
+            isUnstable = true;
+
+        // Check for file handle exhaustion
+        if (t instanceof FileNotFoundException || t instanceof SocketException)
+            if (t.getMessage().contains("Too many open files"))
+                isUnstable = true;
+
+        if (isUnstable)
+            killer.killCurrentJVM(t);
+
+        if (t.getCause() != null)
+            inspectThrowable(t.getCause());
+    }
+

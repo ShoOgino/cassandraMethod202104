@@ -1,0 +1,44 @@
+        /**
+         * Actually handle the message. Runs on the appropriate {@link Stage} for the {@link Verb}.
+         *
+         * Small messages will come pre-deserialized. Large messages will be deserialized on the stage,
+         * just in time, and only then processed.
+         */
+        public void run()
+        {
+            Header header = header();
+            long currentTimeNanos = approxTime.now();
+            boolean expired = approxTime.isAfter(currentTimeNanos, header.expiresAtNanos);
+
+            boolean processed = false;
+            try
+            {
+                callbacks.onExecuting(size(), header, currentTimeNanos - header.createdAtNanos, NANOSECONDS);
+
+                if (expired)
+                {
+                    callbacks.onExpired(size(), header, currentTimeNanos - header.createdAtNanos, NANOSECONDS);
+                    return;
+                }
+
+                Message message = provideMessage();
+                if (null != message)
+                {
+                    consumer.accept(message);
+                    processed = true;
+                    callbacks.onProcessed(size(), header);
+                }
+            }
+            finally
+            {
+                if (processed)
+                    releaseProcessedCapacity(size(), header);
+                else
+                    releaseCapacity(size());
+
+                releaseResources();
+
+                callbacks.onExecuted(size(), header, approxTime.now() - currentTimeNanos, NANOSECONDS);
+            }
+        }
+

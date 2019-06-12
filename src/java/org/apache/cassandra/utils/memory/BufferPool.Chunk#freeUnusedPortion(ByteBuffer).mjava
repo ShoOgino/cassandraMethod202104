@@ -1,0 +1,29 @@
+        void freeUnusedPortion(ByteBuffer buffer)
+        {
+            int size = roundUp(buffer.limit());
+            int capacity = roundUp(buffer.capacity());
+            if (size == capacity)
+                return;
+
+            long address = MemoryUtil.getAddress(buffer);
+            assert (address >= baseAddress) & (address + size <= baseAddress + capacity());
+
+            // free any spare slots above the size we are using
+            int position = ((int)(address + size - baseAddress)) >> shift;
+            int slotCount = (capacity - size) >> shift;
+
+            long slotBits = 0xffffffffffffffffL >>> (64 - slotCount);
+            long shiftedSlotBits = (slotBits << position);
+
+            long next;
+            while (true)
+            {
+                long cur = freeSlots;
+                next = cur | shiftedSlotBits;
+                assert next == (cur ^ shiftedSlotBits); // ensure no double free
+                if (freeSlotsUpdater.compareAndSet(this, cur, next))
+                    break;
+            }
+            MemoryUtil.setByteBufferCapacity(buffer, size);
+        }
+

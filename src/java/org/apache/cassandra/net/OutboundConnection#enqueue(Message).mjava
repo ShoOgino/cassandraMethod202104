@@ -1,0 +1,39 @@
+    /**
+     * This is the main entry point for enqueuing a message to be sent to the remote peer.
+     */
+    public void enqueue(Message message) throws ClosedChannelException
+    {
+        if (isClosing())
+            throw new ClosedChannelException();
+
+        final int canonicalSize = canonicalSize(message);
+        if (canonicalSize > DatabaseDescriptor.getInternodeMaxMessageSizeInBytes())
+            throw new Message.OversizedMessageException(canonicalSize);
+
+        submittedUpdater.incrementAndGet(this);
+        switch (acquireCapacity(canonicalSize))
+        {
+            case INSUFFICIENT_ENDPOINT:
+                // if we're overloaded to one endpoint, we may be accumulating expirable messages, so
+                // attempt an expiry to see if this makes room for our newer message.
+                // this is an optimisation only; messages will be expired on ~100ms cycle, and by Delivery when it runs
+                if (queue.maybePruneExpired() && SUCCESS == acquireCapacity(canonicalSize))
+                    break;
+            case INSUFFICIENT_GLOBAL:
+                onOverloaded(message);
+                return;
+        }
+
+        queue.add(message);
+        delivery.execute();
+
+        // we might race with the channel closing; if this happens, to ensure this message eventually arrives
+        // we need to remove ourselves from the queue and throw a ClosedChannelException, so that another channel
+        // can be opened in our place to try and send on.
+        if (isClosing() && queue.remove(message))
+        {
+            releaseCapacity(1, canonicalSize);
+            throw new ClosedChannelException();
+        }
+    }
+

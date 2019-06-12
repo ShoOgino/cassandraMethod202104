@@ -1,0 +1,27 @@
+    /**
+     * The channel is already known to be invalid, so there's no point waiting for a clean break in delivery.
+     *
+     * Delivery will be executed again as soon as we have logically closed the channel; we do not wait
+     * for the channel to actually be closed.
+     *
+     * The Future returned _does_ wait for the channel to be completely closed, so that callers can wait to be sure
+     * all writes have been completed either successfully or not.
+     */
+    private Future<?> disconnectNow(Established closeIfIs)
+    {
+        return runOnEventLoop(() -> {
+            if (state == closeIfIs)
+            {
+                // no need to wait until the channel is closed to set ourselves as disconnected (and potentially open a new channel)
+                setDisconnected();
+                if (hasPending())
+                    delivery.execute();
+                closeIfIs.channel.close()
+                                 .addListener(future -> {
+                                     if (!future.isSuccess())
+                                         logger.info("Problem closing channel {}", closeIfIs, future.cause());
+                                 });
+            }
+        });
+    }
+

@@ -1,0 +1,66 @@
+    @Test
+    public void testSerializeError() throws Throwable
+    {
+        test((inbound, outbound, endpoint) -> {
+            int version = outbound.settings().acceptVersions.max;
+            int count = 100;
+
+            CountDownLatch deliveryDone = new CountDownLatch(1);
+            CountDownLatch receiveDone = new CountDownLatch(90);
+
+            AtomicInteger serialized = new AtomicInteger();
+            Message<?> message = Message.builder(Verb._TEST_1, new Object())
+                                        .withExpiresAt(System.nanoTime() + SECONDS.toNanos(30L))
+                                        .build();
+            unsafeSetSerializer(Verb._TEST_1, () -> new IVersionedSerializer<Object>()
+            {
+                public void serialize(Object o, DataOutputPlus out, int version) throws IOException
+                {
+                    int i = serialized.incrementAndGet();
+                    if (0 == (i & 15))
+                    {
+                        if (0 == (i & 16))
+                            out.writeByte(i);
+                        throw new IOException();
+                    }
+
+                    if (1 != (i & 31))
+                        out.writeByte(i);
+                }
+
+                public Object deserialize(DataInputPlus in, int version) throws IOException
+                {
+                    in.readByte();
+                    return null;
+                }
+
+                public long serializedSize(Object o, int version)
+                {
+                    return 1;
+                }
+            });
+
+            unsafeSetHandler(Verb._TEST_1, () -> msg -> receiveDone.countDown());
+            for (int i = 0 ; i < count ; ++i)
+                outbound.enqueue(message);
+
+            Assert.assertTrue(receiveDone.await(1, MINUTES));
+            outbound.unsafeRunOnDelivery(deliveryDone::countDown);
+            Assert.assertTrue(deliveryDone.await(10, SECONDS));
+
+            check(outbound).submitted(100)
+                           .sent     ( 90, 90 * message.serializedSize(version))
+                           .pending  (  0,  0)
+                           .overload (  0,  0)
+                           .expired  (  0,  0)
+                           .error    ( 10, 10 * message.serializedSize(version))
+                           .check();
+            check(inbound) .received ( 90, 90 * message.serializedSize(version))
+                           .processed( 90, 90 * message.serializedSize(version))
+                           .pending  (  0,  0)
+                           .expired  (  0,  0)
+                           .error    (  0,  0)
+                           .check();
+        });
+    }
+

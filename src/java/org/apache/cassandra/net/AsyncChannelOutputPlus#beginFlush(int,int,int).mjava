@@ -1,0 +1,36 @@
+    /**
+     * Create a ChannelPromise for a flush of the given size.
+     * <p>
+     * This method will not return until the write is permitted by the provided watermarks and in flight bytes,
+     * and on its completion will mark the requested bytes flushed.
+     * <p>
+     * If this method returns normally, the ChannelPromise MUST be writtenAndFlushed, or else completed exceptionally.
+     */
+    protected ChannelPromise beginFlush(int byteCount, int lowWaterMark, int highWaterMark) throws IOException
+    {
+        waitForSpace(byteCount, lowWaterMark, highWaterMark);
+
+        return AsyncChannelPromise.withListener(channel, future -> {
+            if (future.isSuccess() && null == flushFailed)
+            {
+                flushedToNetwork += byteCount;
+                releaseSpace(byteCount);
+            }
+            else if (null == flushFailed)
+            {
+                Throwable cause = future.cause();
+                if (cause == null)
+                {
+                    cause = new FlushException("Flush failed for unknown reason");
+                    cause.fillInStackTrace();
+                }
+                flushFailed = cause;
+                releaseSpace(flushing - flushed);
+            }
+            else
+            {
+                assert flushing == flushed;
+            }
+        });
+    }
+

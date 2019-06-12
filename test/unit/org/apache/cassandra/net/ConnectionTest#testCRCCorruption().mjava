@@ -1,0 +1,46 @@
+    @Test
+    public void testCRCCorruption() throws Throwable
+    {
+        test((inbound, outbound, endpoint) -> {
+            int version = outbound.settings().acceptVersions.max;
+            if (version < VERSION_40)
+                return;
+
+            unsafeSetSerializer(Verb._TEST_1, () -> new IVersionedSerializer<Object>()
+            {
+                public void serialize(Object o, DataOutputPlus out, int version) throws IOException
+                {
+                    out.writeInt((Integer) o);
+                }
+
+                public Object deserialize(DataInputPlus in, int version) throws IOException
+                {
+                    return in.readInt();
+                }
+
+                public long serializedSize(Object o, int version)
+                {
+                    return Integer.BYTES;
+                }
+            });
+
+            connect(outbound);
+
+            outbound.unsafeGetChannel().pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+                public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                    ByteBuf bb = (ByteBuf) msg;
+                    bb.setByte(0, 0xAB);
+                    ctx.write(msg, promise);
+                }
+            });
+            outbound.enqueue(Message.out(Verb._TEST_1, 0xffffffff));
+            CompletableFuture.runAsync(() -> {
+                while (outbound.isConnected() && !Thread.interrupted()) {}
+            }).get(10, SECONDS);
+            Assert.assertFalse(outbound.isConnected());
+            // TODO: count corruptions
+
+            connect(outbound);
+        });
+    }
+

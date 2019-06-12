@@ -1,0 +1,26 @@
+    void sync(Runnable onCompletion)
+    {
+        managementLock.lock();
+        try
+        {
+            assert onSync == null;
+            assert isSending.get() >= 0;
+            isSending.updateAndGet(i -> -2 -i);
+            long previousMin = controller.minimumInFlightBytes();
+            long previousMax = controller.maximumInFlightBytes();
+            controller.setInFlightByteBounds(0, Long.MAX_VALUE);
+            onSync = () -> {
+                long inFlight = controller.inFlight();
+                if (inFlight != 0)
+                    verifier.logFailure("%s has %d bytes in flight, but connection is idle", linkId, inFlight);
+                controller.setInFlightByteBounds(previousMin, previousMax);
+                onCompletion.run();
+            };
+            unregisterSender();
+        }
+        finally
+        {
+            managementLock.unlock();
+        }
+    }
+

@@ -1,0 +1,76 @@
+    <V> void testOneFailure(Promise<V> promise, boolean setUncancellable, boolean tryOrSet, Throwable cause, V otherValue)
+    {
+        List<Throwable> results = new ArrayList<>();
+        List<Integer> order = new ArrayList<>();
+        Async async = new Async();
+        class ListenerFactory
+        {
+            int count = 0;
+
+            public GenericFutureListener<Future<V>> get()
+            {
+                int id = count++;
+                return p -> { results.add(p.cause()); order.add(id); };
+            }
+            public GenericFutureListener<Future<V>> getRecursive()
+            {
+                int id = count++;
+                return p -> { promise.addListener(get()); results.add(p.cause()); order.add(id); };
+            }
+        }
+        ListenerFactory listeners = new ListenerFactory();
+        promise.addListener(listeners.get());
+        promise.addListeners(listeners.getRecursive(), listeners.get());
+        promise.addListener(listeners.getRecursive());
+        success(promise, Promise::isSuccess, false);
+        success(promise, Promise::isDone, false);
+        success(promise, Promise::isCancelled, false);
+        success(promise, Promise::isCancellable, true);
+        if (setUncancellable)
+        {
+            success(promise, Promise::setUncancellable, true);
+            success(promise, Promise::setUncancellable, true);
+            success(promise, p -> p.cancel(true), false);
+            success(promise, p -> p.cancel(false), false);
+        }
+        success(promise, Promise::isCancellable, !setUncancellable);
+        success(promise, Promise::getNow, null);
+        success(promise, Promise::cause, null);
+        async.failure(promise, Promise::get, ExecutionException.class);
+        async.failure(promise, p -> p.get(1L, TimeUnit.SECONDS), ExecutionException.class);
+        async.success(promise, Promise::await, promise);
+        async.success(promise, Promise::awaitUninterruptibly, promise);
+        async.success(promise, p -> p.await(1L, TimeUnit.SECONDS), true);
+        async.success(promise, p -> p.await(1000L), true);
+        async.success(promise, p -> p.awaitUninterruptibly(1L, TimeUnit.SECONDS), true);
+        async.success(promise, p -> p.awaitUninterruptibly(1000L), true);
+        async.failure(promise, Promise::sync, cause);
+        async.failure(promise, Promise::syncUninterruptibly, cause);
+        if (tryOrSet) promise.tryFailure(cause);
+        else promise.setFailure(cause);
+        success(promise, p -> p.cancel(true), false);
+        success(promise, p -> p.cancel(false), false);
+        failure(promise, p -> p.setSuccess(null), IllegalStateException.class);
+        failure(promise, p -> p.setFailure(new NullPointerException()), IllegalStateException.class);
+        success(promise, Promise::cause, cause);
+        success(promise, Promise::getNow, null);
+        success(promise, p -> p.trySuccess(otherValue), false);
+        success(promise, p -> p.tryFailure(new NullPointerException()), false);
+        success(promise, Promise::getNow, null);
+        success(promise, Promise::cause, cause);
+        promise.addListener(listeners.get());
+        promise.addListeners(listeners.getRecursive(), listeners.get());
+        promise.addListener(listeners.getRecursive());
+        success(promise, Promise::isSuccess, false);
+        success(promise, Promise::isDone, true);
+        success(promise, Promise::isCancelled, false);
+        success(promise, Promise::isCancellable, false);
+        async.verify();
+        Assert.assertEquals(listeners.count, results.size());
+        Assert.assertEquals(listeners.count, order.size());
+        for (Throwable result : results)
+            Assert.assertEquals(cause, result);
+        for (int i = 0 ; i < order.size() ; ++i)
+            Assert.assertEquals(i, order.get(i).intValue());
+    }
+

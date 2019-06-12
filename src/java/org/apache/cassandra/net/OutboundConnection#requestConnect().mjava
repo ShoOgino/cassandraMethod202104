@@ -1,0 +1,47 @@
+    /**
+     * Returns a future that completes when we are _maybe_ reconnected.
+     *
+     * The connection attempt is guaranteed to have completed (successfully or not) by the time any listeners are invoked,
+     * so if a reconnection attempt is needed, it is already scheduled.
+     */
+    private Future<?> requestConnect()
+    {
+        // we may race with updates to this variable, but this is fine, since we only guarantee that we see a value
+        // that did at some point represent an active connection attempt - if it is stale, it will have been completed
+        // and the caller can retry (or utilise the successfully established connection)
+        {
+            State state = this.state;
+            if (state.isConnecting())
+                return state.connecting().attempt;
+        }
+
+        Promise<Object> promise = AsyncPromise.uncancellable(eventLoop);
+        runOnEventLoop(() -> {
+            if (isClosed()) // never going to connect
+            {
+                promise.tryFailure(new ClosedChannelException());
+            }
+            else if (state.isEstablished() && state.established().isConnected())  // already connected
+            {
+                promise.trySuccess(null);
+            }
+            else
+            {
+                if (state.isEstablished())
+                    setDisconnected();
+
+                if (!state.isConnecting())
+                {
+                    assert eventLoop.inEventLoop();
+                    assert !isConnected();
+                    initiate().addListener(new PromiseNotifier<>(promise));
+                }
+                else
+                {
+                    state.connecting().attempt.addListener(new PromiseNotifier<>(promise));
+                }
+            }
+        });
+        return promise;
+    }
+

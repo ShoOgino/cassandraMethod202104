@@ -1,0 +1,40 @@
+        private void closeUnusedSinceLastRun()
+        {
+            ObjectObjectOpenHashMap<InetAddressAndPort, Counts> curEndpointToCounts = new ObjectObjectOpenHashMap<>();
+            for (OutboundConnections connections : messagingService.channelManagers.values())
+            {
+                Counts cur = new Counts(
+                    connections.small.submittedCount(),
+                    connections.large.submittedCount(),
+                    connections.urgent.submittedCount()
+                );
+                curEndpointToCounts.put(connections.template.to, cur);
+
+                Counts prev = prevEndpointToCounts.get(connections.template.to);
+                if (prev == null)
+                    continue;
+
+                if (cur.small != prev.small && cur.large != prev.large && cur.urgent != prev.urgent)
+                    continue;
+
+                if (cur.small == prev.small && cur.large == prev.large && cur.urgent == prev.urgent
+                    && !Gossiper.instance.isKnownEndpoint(connections.template.to))
+                {
+                    // close entirely if no traffic and the endpoint is unknown
+                    messagingService.closeOutboundNow(connections);
+                    continue;
+                }
+
+                if (cur.small == prev.small)
+                    connections.small.interrupt();
+
+                if (cur.large == prev.large)
+                    connections.large.interrupt();
+
+                if (cur.urgent == prev.urgent)
+                    connections.urgent.interrupt();
+            }
+
+            prevEndpointToCounts = curEndpointToCounts;
+        }
+

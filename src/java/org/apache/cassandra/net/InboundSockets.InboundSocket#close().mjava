@@ -1,0 +1,41 @@
+        /**
+         * Close this socket and any connections created on it. Once closed, this socket may not be re-opened.
+         *
+         * This may not execute synchronously, so a Future is returned encapsulating its result.
+         */
+        private Future<Void> close()
+        {
+            AsyncPromise<Void> done = AsyncPromise.uncancellable(GlobalEventExecutor.INSTANCE);
+
+            Runnable close = () -> {
+                List<Future<Void>> closing = new ArrayList<>();
+                if (listen != null)
+                    closing.add(listen.close());
+                closing.add(connections.close());
+                new FutureCombiner(closing)
+                       .addListener(future -> executor.shutdownGracefully())
+                       .addListener(new PromiseNotifier<>(done));
+            };
+
+            synchronized (this)
+            {
+                if (listen == null && binding == null)
+                {
+                    closedWithoutOpening = true;
+                    return new SucceededFuture<>(GlobalEventExecutor.INSTANCE, null);
+                }
+
+                if (listen != null)
+                {
+                    close.run();
+                }
+                else
+                {
+                    binding.cancel(true);
+                    binding.addListener(future -> close.run());
+                }
+
+                return done;
+            }
+        }
+

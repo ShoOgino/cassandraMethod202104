@@ -1,0 +1,35 @@
+    @Test
+    public void testSendSmall() throws Throwable
+    {
+        test((inbound, outbound, endpoint) -> {
+            int version = outbound.settings().acceptVersions.max;
+            int count = 10;
+
+            CountDownLatch deliveryDone = new CountDownLatch(1);
+            CountDownLatch receiveDone = new CountDownLatch(count);
+
+            unsafeSetHandler(Verb._TEST_1, () -> msg -> receiveDone.countDown());
+            Message<?> message = Message.out(Verb._TEST_1, noPayload);
+            for (int i = 0 ; i < count ; ++i)
+                outbound.enqueue(message);
+
+            Assert.assertTrue(receiveDone.await(10, SECONDS));
+            outbound.unsafeRunOnDelivery(deliveryDone::countDown);
+            Assert.assertTrue(deliveryDone.await(10, SECONDS));
+
+            check(outbound).submitted(10)
+                           .sent     (10, 10 * message.serializedSize(version))
+                           .pending  ( 0,  0)
+                           .overload ( 0,  0)
+                           .expired  ( 0,  0)
+                           .error    ( 0,  0)
+                           .check();
+            check(inbound) .received (10, 10 * message.serializedSize(version))
+                           .processed(10, 10 * message.serializedSize(version))
+                           .pending  ( 0,  0)
+                           .expired  ( 0,  0)
+                           .error    ( 0,  0)
+                           .check();
+        });
+    }
+

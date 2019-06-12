@@ -1,0 +1,45 @@
+    /**
+     * Sequentially read bytes from the file and write them to the output stream
+     *
+     * @param proxy The file reader to read from
+     * @param validator validator to verify data integrity
+     * @param start The readd offset from the beginning of the {@code proxy} file.
+     * @param transferOffset number of bytes to skip transfer, but include for validation.
+     * @param toTransfer The number of bytes to be transferred.
+     *
+     * @return Number of bytes transferred.
+     *
+     * @throws java.io.IOException on any I/O error
+     */
+    protected long write(ChannelProxy proxy, ChecksumValidator validator, AsyncStreamingOutputPlus output, long start, int transferOffset, int toTransfer, int bufferSize) throws IOException
+    {
+        // the count of bytes to read off disk
+        int minReadable = (int) Math.min(bufferSize, proxy.size() - start);
+
+        // this buffer will hold the data from disk. as it will be compressed on the fly by
+        // AsyncChannelCompressedStreamWriter.write(ByteBuffer), we can release this buffer as soon as we can.
+        ByteBuffer buffer = BufferPool.get(minReadable, BufferType.OFF_HEAP);
+        try
+        {
+            int readCount = proxy.read(buffer, start);
+            assert readCount == minReadable : String.format("could not read required number of bytes from file to be streamed: read %d bytes, wanted %d bytes", readCount, minReadable);
+            buffer.flip();
+
+            if (validator != null)
+            {
+                validator.validate(buffer);
+                buffer.flip();
+            }
+
+            buffer.position(transferOffset);
+            buffer.limit(transferOffset + (toTransfer - transferOffset));
+            output.writeToChannel(StreamCompressionSerializer.serialize(compressor, buffer, current_version), limiter);
+        }
+        finally
+        {
+            BufferPool.put(buffer);
+        }
+
+        return toTransfer;
+    }
+

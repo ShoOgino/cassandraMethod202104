@@ -1,0 +1,23 @@
+        private static long calculateCreationTimeNanos(int messageTimestampMillis, MonotonicClockTranslation timeSnapshot, long currentTimeNanos)
+        {
+            long currentTimeMillis = timeSnapshot.toMillisSinceEpoch(currentTimeNanos);
+            // Reconstruct the message construction time sent by the remote host (we sent only the lower 4 bytes, assuming the
+            // higher 4 bytes wouldn't change between the sender and receiver)
+            long highBits = currentTimeMillis & 0xFFFFFFFF00000000L;
+
+            long sentLowBits = messageTimestampMillis & 0x00000000FFFFFFFFL;
+            long currentLowBits =   currentTimeMillis & 0x00000000FFFFFFFFL;
+
+            // if our sent bits occur within a grace period of a wrap around event,
+            // and our current bits are no more than the same grace period after a wrap around event,
+            // assume a wrap around has occurred, and deduct one highBit
+            if (      sentLowBits > TIMESTAMP_WRAPAROUND_GRACE_PERIOD_START
+                      && currentLowBits < TIMESTAMP_WRAPAROUND_GRACE_PERIOD_END)
+            {
+                highBits -= 0x0000000100000000L;
+            }
+
+            long sentTimeMillis = (highBits | sentLowBits);
+            return timeSnapshot.fromMillisSinceEpoch(sentTimeMillis);
+        }
+

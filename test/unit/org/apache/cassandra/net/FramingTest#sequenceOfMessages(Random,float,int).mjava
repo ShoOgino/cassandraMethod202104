@@ -1,0 +1,34 @@
+    private static SequenceOfFrames sequenceOfMessages(Random random, float largeRatio, int messagingVersion)
+    {
+        int messageCount = 1 + random.nextInt(63);
+        List<byte[]> messages = new ArrayList<>();
+        int[] cumulativeLength = new int[messageCount];
+        for (int i = 0 ; i < messageCount ; ++i)
+        {
+            byte[] payload;
+            if (random.nextFloat() < largeRatio) payload = randomishBytes(random, 1 << 16, 1 << 17);
+            else payload = randomishBytes(random, 1, 1 << 16);
+            Message<byte[]> messageObj = Message.out(Verb._TEST_1, payload);
+
+            byte[] message;
+            try (DataOutputBuffer out = new DataOutputBuffer(messageObj.serializedSize(messagingVersion)))
+            {
+                Message.serializer.serialize(messageObj, out, messagingVersion);
+                message = out.toByteArray();
+            }
+            catch (IOException e)
+            {
+                throw new IllegalStateException(e);
+            }
+            messages.add(message);
+
+            cumulativeLength[i] = (i == 0 ? 0 : cumulativeLength[i - 1]) + message.length;
+        }
+
+        ByteBuffer frames = BufferPool.getAtLeast(cumulativeLength[messageCount - 1], BufferType.OFF_HEAP);
+        for (byte[] buffer : messages)
+            frames.put(buffer);
+        frames.flip();
+        return new SequenceOfFrames(messages, cumulativeLength, frames);
+    }
+

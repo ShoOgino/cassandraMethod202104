@@ -5,33 +5,22 @@
     private void sendPingMessages(Set<InetAddressAndPort> peers, Map<String, CountDownLatch> dcToRemainingPeers,
                                   AckMap acks, Function<InetAddressAndPort, String> getDatacenter)
     {
-        IAsyncCallback responseHandler = new IAsyncCallback()
-        {
-            public boolean isLatencyForSnitch()
+        RequestCallback responseHandler = msg -> {
+            if (acks.incrementAndCheck(msg.from()))
             {
-                return false;
-            }
-
-            public void response(MessageIn msg)
-            {
-                if (acks.incrementAndCheck(msg.from))
-                {
-                    String datacenter = getDatacenter.apply(msg.from);
-                    // We have to check because we might only have the local DC in the map
-                    if (dcToRemainingPeers.containsKey(datacenter))
-                        dcToRemainingPeers.get(datacenter).countDown();
-                }
+                String datacenter = getDatacenter.apply(msg.from());
+                // We have to check because we might only have the local DC in the map
+                if (dcToRemainingPeers.containsKey(datacenter))
+                    dcToRemainingPeers.get(datacenter).countDown();
             }
         };
 
-        MessageOut<PingMessage> smallChannelMessageOut = new MessageOut<>(PING, PingMessage.smallChannelMessage,
-                                                                          PingMessage.serializer, SMALL_MESSAGE);
-        MessageOut<PingMessage> largeChannelMessageOut = new MessageOut<>(PING, PingMessage.largeChannelMessage,
-                                                                          PingMessage.serializer, LARGE_MESSAGE);
+        Message<PingRequest> small = Message.out(PING_REQ, PingRequest.forSmall);
+        Message<PingRequest> large = Message.out(PING_REQ, PingRequest.forLarge);
         for (InetAddressAndPort peer : peers)
         {
-            MessagingService.instance().sendRR(smallChannelMessageOut, peer, responseHandler);
-            MessagingService.instance().sendRR(largeChannelMessageOut, peer, responseHandler);
+            MessagingService.instance().sendWithCallback(small, peer, responseHandler, SMALL_MESSAGES);
+            MessagingService.instance().sendWithCallback(large, peer, responseHandler, LARGE_MESSAGES);
         }
     }
 

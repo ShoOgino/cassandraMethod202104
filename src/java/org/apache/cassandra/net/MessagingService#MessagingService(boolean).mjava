@@ -1,66 +1,7 @@
-    private MessagingService(boolean testOnly)
+    @VisibleForTesting
+    MessagingService(boolean testOnly)
     {
-        for (Verb verb : DROPPABLE_VERBS)
-            droppedMessagesMap.put(verb, new DroppedMessages(verb));
-
-        listenGate = new SimpleCondition();
-        verbHandlers = new EnumMap<>(Verb.class);
-        if (!testOnly)
-        {
-            Runnable logDropped = new Runnable()
-            {
-                public void run()
-                {
-                    logDroppedMessages();
-                }
-            };
-            ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(logDropped, LOG_DROPPED_INTERVAL_IN_MS, LOG_DROPPED_INTERVAL_IN_MS, TimeUnit.MILLISECONDS);
-        }
-
-        Function<Pair<Integer, ExpiringMap.CacheableObject<CallbackInfo>>, ?> timeoutReporter = new Function<Pair<Integer, ExpiringMap.CacheableObject<CallbackInfo>>, Object>()
-        {
-            public Object apply(Pair<Integer, ExpiringMap.CacheableObject<CallbackInfo>> pair)
-            {
-                final CallbackInfo expiredCallbackInfo = pair.right.value;
-
-                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, pair.right.timeout);
-
-                ConnectionMetrics.totalTimeouts.mark();
-                markTimeout(expiredCallbackInfo.target);
-
-                if (expiredCallbackInfo.callback.supportsBackPressure())
-                {
-                    updateBackPressureOnReceive(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
-                }
-
-                if (expiredCallbackInfo.isFailureCallback())
-                {
-                    StageManager.getStage(Stage.INTERNAL_RESPONSE).submit(new Runnable()
-                    {
-                        @Override
-                        public void run()
-                        {
-                            ((IAsyncCallbackWithFailure)expiredCallbackInfo.callback).onFailure(expiredCallbackInfo.target, RequestFailureReason.UNKNOWN);
-                        }
-                    });
-                }
-
-                if (expiredCallbackInfo.shouldHint())
-                {
-                    WriteCallbackInfo writeCallbackInfo = ((WriteCallbackInfo) expiredCallbackInfo);
-                    Mutation mutation = writeCallbackInfo.mutation();
-                    return StorageProxy.submitHint(mutation, writeCallbackInfo.getReplica(), null);
-                }
-
-                return null;
-            }
-        };
-
-        callbacks = new ExpiringMap<>(DatabaseDescriptor.getMinRpcTimeout(), timeoutReporter);
-
-        if (!testOnly)
-        {
-            MBeanWrapper.instance.registerMBean(this, MBEAN_NAME);
-        }
+        super(testOnly);
+        OutboundConnections.scheduleUnusedConnectionMonitoring(this, ScheduledExecutors.scheduledTasks, 1L, TimeUnit.HOURS);
     }
 

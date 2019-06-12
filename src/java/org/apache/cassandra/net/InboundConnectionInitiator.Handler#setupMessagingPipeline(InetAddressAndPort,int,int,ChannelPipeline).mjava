@@ -1,0 +1,63 @@
+        @VisibleForTesting
+        void setupMessagingPipeline(InetAddressAndPort from, int useMessagingVersion, int maxMessagingVersion, ChannelPipeline pipeline)
+        {
+            handshakeTimeout.cancel(true);
+            // record the "true" endpoint, i.e. the one the peer is identified with, as opposed to the socket it connected over
+            instance().versions.set(from, maxMessagingVersion);
+
+            BufferPool.setRecycleWhenFreeForCurrentThread(false);
+            BufferPoolAllocator allocator = GlobalBufferPoolAllocator.instance;
+            if (initiate.type == ConnectionType.LARGE_MESSAGES)
+            {
+                // for large messages, swap the global pool allocator for a local one, to optimise utilisation of chunks
+                allocator = new LocalBufferPoolAllocator(pipeline.channel().eventLoop());
+                pipeline.channel().config().setAllocator(allocator);
+            }
+
+            FrameDecoder frameDecoder;
+            switch (initiate.framing)
+            {
+                case LZ4:
+                {
+                    if (useMessagingVersion >= VERSION_40)
+                        frameDecoder = FrameDecoderLZ4.fast(allocator);
+                    else
+                        frameDecoder = new FrameDecoderLegacyLZ4(allocator, useMessagingVersion);
+                    break;
+                }
+                case CRC:
+                {
+                    if (useMessagingVersion >= VERSION_40)
+                    {
+                        frameDecoder = FrameDecoderCrc.create(allocator);
+                        break;
+                    }
+                }
+                case UNPROTECTED:
+                {
+                    if (useMessagingVersion >= VERSION_40)
+                        frameDecoder = new FrameDecoderUnprotected(allocator);
+                    else
+                        frameDecoder = new FrameDecoderLegacy(allocator, useMessagingVersion);
+                    break;
+                }
+                default:
+                    throw new AssertionError();
+            }
+
+            frameDecoder.addLastTo(pipeline);
+
+            InboundMessageHandler handler =
+                settings.handlers.apply(from).createHandler(frameDecoder, initiate.type, pipeline.channel(), useMessagingVersion);
+
+            logger.info("{} connection established, version = {}, framing = {}, encryption = {}",
+                        handler.id(true),
+                        useMessagingVersion,
+                        initiate.framing,
+                        pipeline.get("ssl") != null ? encryptionLogStatement(settings.encryption) : "disabled");
+
+            pipeline.addLast("deserialize", handler);
+
+            pipeline.remove(this);
+        }
+

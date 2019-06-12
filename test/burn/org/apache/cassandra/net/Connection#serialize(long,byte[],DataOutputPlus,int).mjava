@@ -1,0 +1,44 @@
+    void serialize(long id, byte[] payload, DataOutputPlus out, int messagingVersion) throws IOException
+    {
+        verifier.onSerialize(id, messagingVersion);
+        int firstWrite = payload.length, remainder = 0;
+        boolean willFail = false;
+        if (outbound.type() != ConnectionType.LARGE_MESSAGES || messagingVersion >= VERSION_40)
+        {
+            // We cannot (with Netty) know how many bytes make it to the network as any partially written block
+            // will be failed despite having partially succeeded.  So to support this behaviour here, we would
+            // need to accept either outcome, in which case what is the point?
+            // TODO: it would be nice to fix this, still
+            willFail = outbound.type() != ConnectionType.LARGE_MESSAGES;
+            byte info = MessageGenerator.getInfo(payload);
+            switch (info)
+            {
+                case 1:
+                    switch ((int) (id & 1))
+                    {
+                        case 0: throw new IntentionalIOException();
+                        case 1: throw new IntentionalRuntimeException();
+                    }
+                    break;
+                case 2:
+                    willFail = true;
+                    firstWrite -= (int)id % payload.length;
+                    break;
+                case 3:
+                    willFail = true;
+                    remainder = (int)id & 65535;
+                    break;
+            }
+        }
+
+        MessageGenerator.writeLength(payload, out, messagingVersion);
+        out.write(payload, 0, firstWrite);
+        while (remainder > 0)
+        {
+            out.write(payload, 0, Math.min(remainder, payload.length));
+            remainder -= payload.length;
+        }
+        if (!willFail)
+            verifier.onFinishSerializeLarge(id);
+    }
+

@@ -1,0 +1,33 @@
+        private Test(int simulateEndpoints, MessageGenerators messageGenerators, GlobalInboundSettings inboundSettings, OutboundConnectionSettings outboundTemplate, long runForNanos)
+        {
+            this.endpoints = endpoints(simulateEndpoints);
+            this.inbound = new Inbound(endpoints, inboundSettings, this);
+            this.connections = new Connection[endpoints.size() * endpoints.size() * 3];
+            this.connectionMessageIds = new long[connections.length];
+            this.version = outboundTemplate.acceptVersions == null ? current_version : outboundTemplate.acceptVersions.max;
+            this.runForNanos = runForNanos;
+
+            int i = 0;
+            long minId = 0, maxId = messageIdsPerConnection - 1;
+            for (InetAddressAndPort recipient : endpoints)
+            {
+                for (InetAddressAndPort sender : endpoints)
+                {
+                    InboundMessageHandlers inboundHandlers = inbound.handlersByRecipientThenSender.get(recipient).get(sender);
+                    OutboundConnectionSettings template = outboundTemplate.withDefaultReserveLimits();
+                    ResourceLimits.Limit reserveEndpointCapacityInBytes = new ResourceLimits.Concurrent(template.applicationSendQueueReserveEndpointCapacityInBytes);
+                    ResourceLimits.EndpointAndGlobal reserveCapacityInBytes = new ResourceLimits.EndpointAndGlobal(reserveEndpointCapacityInBytes, template.applicationSendQueueReserveGlobalCapacityInBytes);
+                    for (ConnectionType type : ConnectionType.MESSAGING_TYPES)
+                    {
+                        Connection connection = new Connection(sender, recipient, type, inboundHandlers, template, reserveCapacityInBytes, messageGenerators.get(type), minId, maxId);
+                        this.connections[i] = connection;
+                        this.connectionMessageIds[i] = minId;
+                        connectionLookup.put(new ConnectionKey(sender, recipient, type), connection);
+                        minId = maxId + 1;
+                        maxId += messageIdsPerConnection;
+                        ++i;
+                    }
+                }
+            }
+        }
+

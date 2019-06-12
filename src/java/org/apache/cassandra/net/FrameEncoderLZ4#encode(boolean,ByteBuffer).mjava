@@ -1,0 +1,52 @@
+    public ByteBuf encode(boolean isSelfContained, ByteBuffer in)
+    {
+        ByteBuffer frame = null;
+        try
+        {
+            int uncompressedLength = in.remaining();
+            if (uncompressedLength >= 1 << 17)
+                throw new IllegalArgumentException("Maximum uncompressed payload size is 128KiB");
+
+            int maxOutputLength = compressor.maxCompressedLength(uncompressedLength);
+            frame = BufferPool.getAtLeast(HEADER_AND_TRAILER_LENGTH + maxOutputLength, BufferType.OFF_HEAP);
+
+            int compressedLength = compressor.compress(in, in.position(), uncompressedLength, frame, HEADER_LENGTH, maxOutputLength);
+
+            if (compressedLength >= uncompressedLength)
+            {
+                ByteBufferUtil.copyBytes(in, in.position(), frame, HEADER_LENGTH, uncompressedLength);
+                compressedLength = uncompressedLength;
+                uncompressedLength = 0;
+            }
+
+            writeHeader(frame, isSelfContained, compressedLength, uncompressedLength);
+
+            CRC32 crc = crc32();
+            frame.position(HEADER_LENGTH);
+            frame.limit(compressedLength + HEADER_LENGTH);
+            crc.update(frame);
+
+            int frameCrc = (int) crc.getValue();
+            if (frame.order() == ByteOrder.BIG_ENDIAN)
+                frameCrc = Integer.reverseBytes(frameCrc);
+            int frameLength = compressedLength + HEADER_AND_TRAILER_LENGTH;
+
+            frame.limit(frameLength);
+            frame.putInt(frameCrc);
+            frame.position(0);
+
+            BufferPool.putUnusedPortion(frame);
+            return GlobalBufferPoolAllocator.wrap(frame);
+        }
+        catch (Throwable t)
+        {
+            if (frame != null)
+                BufferPool.put(frame);
+            throw t;
+        }
+        finally
+        {
+            BufferPool.put(in);
+        }
+    }
+

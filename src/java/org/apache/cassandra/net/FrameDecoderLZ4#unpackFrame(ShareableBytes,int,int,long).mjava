@@ -1,0 +1,38 @@
+    final Frame unpackFrame(ShareableBytes bytes, int begin, int end, long header8b)
+    {
+        ByteBuffer input = bytes.get();
+
+        boolean isSelfContained = isSelfContained(header8b);
+        int uncompressedLength = uncompressedLength(header8b);
+
+        CRC32 crc = crc32();
+        int readFullCrc = input.getInt(end - TRAILER_LENGTH);
+        if (input.order() == ByteOrder.BIG_ENDIAN)
+            readFullCrc = Integer.reverseBytes(readFullCrc);
+
+        updateCrc32(crc, input, begin + HEADER_LENGTH, end - TRAILER_LENGTH);
+        int computeFullCrc = (int) crc.getValue();
+
+        if (readFullCrc != computeFullCrc)
+            return CorruptFrame.recoverable(isSelfContained, uncompressedLength, readFullCrc, computeFullCrc);
+
+        if (uncompressedLength == 0)
+        {
+            return new IntactFrame(isSelfContained, bytes.slice(begin + HEADER_LENGTH, end - TRAILER_LENGTH));
+        }
+        else
+        {
+            ByteBuffer out = allocator.get(uncompressedLength);
+            try
+            {
+                decompressor.decompress(input, begin + HEADER_LENGTH, out, 0, uncompressedLength);
+                return new IntactFrame(isSelfContained, ShareableBytes.wrap(out));
+            }
+            catch (Throwable t)
+            {
+                allocator.put(out);
+                throw t;
+            }
+        }
+    }
+

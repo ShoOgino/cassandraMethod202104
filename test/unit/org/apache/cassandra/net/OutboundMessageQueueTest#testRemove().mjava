@@ -1,0 +1,48 @@
+    @Test
+    public void testRemove() throws InterruptedException
+    {
+        final Message<?> m1 = Message.out(Verb._TEST_1, noPayload);
+        final Message<?> m2 = Message.out(Verb._TEST_1, noPayload);
+        final Message<?> m3 = Message.out(Verb._TEST_1, noPayload);
+
+        final OutboundMessageQueue queue = new OutboundMessageQueue(message -> true);
+        queue.add(m1);
+        queue.add(m2);
+        queue.add(m3);
+
+        Assert.assertTrue(queue.remove(m1));
+        Assert.assertFalse(queue.remove(m1));
+
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch lockUntil = new CountDownLatch(1);
+        new Thread(() -> {
+            try (OutboundMessageQueue.WithLock lock = queue.lockOrCallback(0, () -> {}))
+            {
+                locked.countDown();
+                Uninterruptibles.awaitUninterruptibly(lockUntil);
+            }
+        }).start();
+        Uninterruptibles.awaitUninterruptibly(locked);
+
+        CountDownLatch start = new CountDownLatch(2);
+        CountDownLatch finish = new CountDownLatch(2);
+        new Thread(() -> {
+            start.countDown();
+            Assert.assertTrue(queue.remove(m2));
+            finish.countDown();
+        }).start();
+        new Thread(() -> {
+            start.countDown();
+            Assert.assertTrue(queue.remove(m3));
+            finish.countDown();
+        }).start();
+        Uninterruptibles.awaitUninterruptibly(start);
+        lockUntil.countDown();
+        Uninterruptibles.awaitUninterruptibly(finish);
+
+        try (OutboundMessageQueue.WithLock lock = queue.lockOrCallback(0, () -> {}))
+        {
+            Assert.assertNull(lock.peek());
+        }
+    }
+

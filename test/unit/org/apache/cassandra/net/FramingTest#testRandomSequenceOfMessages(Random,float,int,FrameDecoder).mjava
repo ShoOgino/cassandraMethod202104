@@ -1,0 +1,111 @@
+    private void testRandomSequenceOfMessages(Random random, float largeRatio, int messagingVersion, FrameDecoder decoder)
+    {
+        SequenceOfFrames sequenceOfMessages = sequenceOfMessages(random, largeRatio, messagingVersion);
+
+        List<byte[]> messages = sequenceOfMessages.original;
+        ShareableBytes stream = sequenceOfMessages.frames;
+
+        int end = stream.get().limit();
+        List<FrameDecoder.Frame> out = new ArrayList<>();
+
+        int messageStart = 0;
+        int messageIndex = 0;
+        for (int i = 0 ; i < end ; )
+        {
+            int limit = i + random.nextInt(1 + end - i);
+            decoder.decode(out, stream.slice(i, limit));
+
+            int outIndex = 0;
+            byte[] message = messages.get(messageIndex);
+            if (i > messageStart)
+            {
+                int start;
+                if (message.length <= LARGE_MESSAGE_THRESHOLD)
+                {
+                    start = 0;
+                }
+                else  if (!lengthIsReadable(message, i - messageStart, messagingVersion))
+                {
+                    // we should have an initial frame containing only some prefix of the message (probably 64 bytes)
+                    // that was stashed only to decide how big the message was
+                    FrameDecoder.IntactFrame frame = (FrameDecoder.IntactFrame) out.get(outIndex++);
+                    Assert.assertEquals(false, frame.isSelfContained);
+                    start = frame.contents.remaining();
+                    verify(message, 0, frame.contents.remaining(), frame.contents);
+                }
+                else
+                {
+                    start = i - messageStart;
+                }
+
+                if (limit >= message.length + messageStart)
+                {
+                    FrameDecoder.IntactFrame frame = (FrameDecoder.IntactFrame) out.get(outIndex++);
+                    Assert.assertEquals(start == 0, frame.isSelfContained);
+                    // verify remainder of a large message, or a single fully stashed small message
+                    verify(message, start, message.length, frame.contents);
+
+                    messageStart += message.length;
+                    if (++messageIndex < messages.size())
+                        message = messages.get(messageIndex);
+                }
+                else if (message.length > LARGE_MESSAGE_THRESHOLD)
+                {
+                    FrameDecoder.IntactFrame frame = (FrameDecoder.IntactFrame) out.get(outIndex++);
+                    Assert.assertFalse(frame.isSelfContained);
+                    // verify next portion of a large message
+                    verify(message, start, limit - messageStart, frame.contents);
+
+                    Assert.assertEquals(outIndex, out.size());
+                    for (FrameDecoder.Frame f : out)
+                        f.release();
+                    out.clear();
+                    i = limit;
+                    continue;
+                }
+            }
+
+            // message is fresh
+            int beginFrame = messageStart;
+            int beginFrameIndex = messageIndex;
+            while (messageStart + message.length <= limit)
+            {
+                messageStart += message.length;
+                if (++messageIndex < messages.size())
+                    message = messages.get(messageIndex);
+            }
+
+            if (beginFrameIndex < messageIndex)
+            {
+                FrameDecoder.IntactFrame frame = (FrameDecoder.IntactFrame) out.get(outIndex++);
+                Assert.assertTrue(frame.isSelfContained);
+                while (beginFrameIndex < messageIndex)
+                {
+                    byte[] m = messages.get(beginFrameIndex);
+                    verify(m, frame.contents.sliceAndConsume(m.length));
+                    ++beginFrameIndex;
+                }
+                Assert.assertFalse(frame.contents.hasRemaining());
+            }
+
+            if (limit > messageStart
+                && message.length > LARGE_MESSAGE_THRESHOLD
+                && lengthIsReadable(message, limit - messageStart, messagingVersion))
+            {
+                FrameDecoder.IntactFrame frame = (FrameDecoder.IntactFrame) out.get(outIndex++);
+                Assert.assertFalse(frame.isSelfContained);
+                verify(message, 0, limit - messageStart, frame.contents);
+            }
+
+            Assert.assertEquals(outIndex, out.size());
+            for (FrameDecoder.Frame frame : out)
+                frame.release();
+            out.clear();
+
+            i = limit;
+        }
+        stream.release();
+        Assert.assertEquals(null, decoder.stash);
+        Assert.assertTrue(decoder.frames.isEmpty());
+    }
+

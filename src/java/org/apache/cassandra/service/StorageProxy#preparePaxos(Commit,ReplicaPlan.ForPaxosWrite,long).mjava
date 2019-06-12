@@ -2,34 +2,25 @@
     throws WriteTimeoutException
     {
         PrepareCallback callback = new PrepareCallback(toPrepare.update.partitionKey(), toPrepare.update.metadata(), replicaPlan.requiredParticipants(), replicaPlan.consistencyLevel(), queryStartNanoTime);
-        MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_PREPARE, toPrepare, Commit.serializer);
+        Message<Commit> message = Message.out(PAXOS_PREPARE_REQ, toPrepare);
         for (Replica replica: replicaPlan.contacts())
         {
             if (replica.isSelf())
             {
-                StageManager.getStage(MessagingService.verbStages.get(MessagingService.Verb.PAXOS_PREPARE)).execute(new Runnable()
-                {
-                    public void run()
+                StageManager.getStage(PAXOS_PREPARE_REQ.stage).execute(() -> {
+                    try
                     {
-                        try
-                        {
-                            MessageIn<PrepareResponse> message = MessageIn.create(FBUtilities.getBroadcastAddressAndPort(),
-                                    PrepareVerbHandler.doPrepare(toPrepare),
-                                    Collections.emptyMap(),
-                                    MessagingService.Verb.INTERNAL_RESPONSE,
-                                    MessagingService.current_version);
-                            callback.response(message);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.error("Failed paxos prepare locally", ex);
-                        }
+                        callback.onResponse(message.responseWith(doPrepare(toPrepare)));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.error("Failed paxos prepare locally", ex);
                     }
                 });
             }
             else
             {
-                MessagingService.instance().sendRR(message, replica.endpoint(), callback);
+                MessagingService.instance().sendWithCallback(message, replica.endpoint(), callback);
             }
         }
         callback.await();

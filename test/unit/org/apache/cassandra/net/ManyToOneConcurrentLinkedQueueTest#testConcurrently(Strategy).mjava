@@ -1,0 +1,52 @@
+    private void testConcurrently(Strategy strategy)
+    {
+        int numThreads = 4;
+        int numItems = 1_000_000 * numThreads;
+
+        class Producer implements Runnable
+        {
+            private final int start, step, limit;
+
+            private Producer(int start, int step, int limit)
+            {
+                this.start = start;
+                this.step = step;
+                this.limit = limit;
+            }
+
+            public void run()
+            {
+                for (int i = start; i < limit; i += step)
+                    queue.offer(i);
+            }
+        }
+
+        Executor executor = Executors.newFixedThreadPool(numThreads);
+        for (int i = 0; i < numThreads; i++)
+            executor.execute(new Producer(i, numThreads, numItems));
+
+        BitSet itemsPolled = new BitSet(numItems);
+        for (int i = 0; i < numItems; i++)
+        {
+            Integer item;
+            switch (strategy)
+            {
+                case PEEK_AND_REMOVE:
+                    //noinspection StatementWithEmptyBody
+                    while ((item = queue.peek()) == null) ;
+                    assertFalse(queue.relaxedIsEmpty());
+                    assertEquals(item, queue.remove());
+                    itemsPolled.set(item);
+                    break;
+                case POLL:
+                    //noinspection StatementWithEmptyBody
+                    while ((item = queue.poll()) == null) ;
+                    itemsPolled.set(item);
+                    break;
+            }
+        }
+
+        assertEquals(numItems, itemsPolled.cardinality());
+        assertTrue(queue.relaxedIsEmpty());
+    }
+

@@ -1,0 +1,49 @@
+        /**
+         * Perform some delivery work.
+         *
+         * Must never be invoked directly, only via {@link #execute()}
+         */
+        public void run()
+        {
+            /* do/while handling setup for {@link #doRun()}, and repeat invocations thereof */
+            while (true)
+            {
+                if (terminated)
+                    return;
+
+                if (null != stopAndRun.get())
+                {
+                    // if we have an external request to perform, attempt it - if no async delivery is in progress
+
+                    if (inProgress)
+                    {
+                        // if we are in progress, we cannot do anything;
+                        // so, exit and rely on setInProgress(false) executing us
+                        // (which must happen later, since it must happen on this thread)
+                        promiseToExecuteLater();
+                        break;
+                    }
+
+                    stopAndRun.getAndSet(null).run();
+                }
+
+                State state = OutboundConnection.this.state;
+                if (!state.isEstablished() || !state.established().isConnected())
+                {
+                    // if we have messages yet to deliver, or a task to run, we need to reconnect and try again
+                    // we try to reconnect before running another stopAndRun so that we do not infinite loop in close
+                    if (hasPending() || null != stopAndRun.get())
+                    {
+                        promiseToExecuteLater();
+                        requestConnect().addListener(f -> executeAgain());
+                    }
+                    break;
+                }
+
+                if (!doRun(state.established()))
+                    break;
+            }
+
+            maybeExecuteAgain();
+        }
+
