@@ -1,0 +1,50 @@
+    @Test
+    public void testExpireSomeFromBatch() throws Throwable
+    {
+        DatabaseDescriptor.setCrossNodeTimeout(true);
+        testManual((settings, inbound, outbound, endpoint, handler) -> {
+            unsafeSetSerializer(Verb._TEST_1, FakePayloadSerializer::new);
+            connect(outbound);
+
+            Message msg = Message.out(Verb._TEST_1, 1L);
+            int messageSize = msg.serializedSize(MessagingService.current_version);
+            DatabaseDescriptor.setInternodeMaxMessageSizeInBytes(messageSize * 40);
+
+            AtomicInteger counter = new AtomicInteger();
+            unsafeSetHandler(Verb._TEST_1, () -> v -> {
+                counter.incrementAndGet();
+            });
+
+            unsafeSetExpiration(Verb._TEST_1, unit -> unit.convert(200, MILLISECONDS));
+            handler.withLatency(100, MILLISECONDS);
+
+            int expireMessages = 20;
+            long nanoTime = approxTime.now();
+            CountDownLatch enqueueDone = new CountDownLatch(1);
+            outbound.unsafeRunOnDelivery(() -> Uninterruptibles.awaitUninterruptibly(enqueueDone, 10, SECONDS));
+            for (int i = 0; i < expireMessages; i++)
+            {
+                boolean expire = i % 2 == 0;
+                Message.Builder builder = Message.builder(Verb._TEST_1, 1L);
+
+                if (settings.right.acceptVersions == ConnectionTest.legacy)
+                {
+                    // backdate messages; leave 50 milliseconds to leave outbound path
+                    builder.withCreatedAt(nanoTime - (expire ? 0 : MILLISECONDS.toNanos(150)));
+                }
+                else
+                {
+                    // Give messages 50 milliseconds to leave outbound path
+                    builder.withCreatedAt(nanoTime)
+                           .withExpiresAt(nanoTime + (expire ? MILLISECONDS.toNanos(50) : MILLISECONDS.toNanos(1000)));
+                }
+                outbound.enqueue(builder.build());
+            }
+            enqueueDone.countDown();
+
+            InboundMessageHandlers handlers = MessagingService.instance().getInbound(endpoint);
+            waitForCondition(() -> handlers.expiredCount() == 10 && counter.get() == 10,
+                             () -> String.format("Expired: %d, Arrived: %d", handlers.expiredCount(), counter.get()));
+        });
+    }
+

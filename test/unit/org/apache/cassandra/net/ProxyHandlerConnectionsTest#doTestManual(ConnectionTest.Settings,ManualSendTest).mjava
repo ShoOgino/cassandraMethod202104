@@ -1,0 +1,35 @@
+    private void doTestManual(ConnectionTest.Settings settings, ManualSendTest test) throws Throwable
+    {
+        InetAddressAndPort endpoint = FBUtilities.getBroadcastAddressAndPort();
+
+        InboundConnectionSettings inboundSettings = settings.inbound.apply(new InboundConnectionSettings())
+                                                                    .withBindAddress(endpoint)
+                                                                    .withSocketFactory(factory);
+
+        InboundSockets inbound = new InboundSockets(Collections.singletonList(inboundSettings));
+
+        OutboundConnectionSettings outboundSettings = settings.outbound.apply(new OutboundConnectionSettings(endpoint))
+                                                                       .withConnectTo(endpoint)
+                                                                       .withDefaultReserveLimits()
+                                                                       .withSocketFactory(factory);
+
+        ResourceLimits.EndpointAndGlobal reserveCapacityInBytes = new ResourceLimits.EndpointAndGlobal(new ResourceLimits.Concurrent(outboundSettings.applicationSendQueueReserveEndpointCapacityInBytes), outboundSettings.applicationSendQueueReserveGlobalCapacityInBytes);
+        OutboundConnection outbound = new OutboundConnection(settings.type, outboundSettings, reserveCapacityInBytes);
+        try
+        {
+            InboundProxyHandler.Controller controller = new InboundProxyHandler.Controller();
+            inbound.open(pipeline -> {
+                InboundProxyHandler handler = new InboundProxyHandler(controller);
+                pipeline.addLast(handler);
+            }).sync();
+            test.accept(Pair.create(inboundSettings, outboundSettings), inbound, outbound, endpoint, controller);
+        }
+        finally
+        {
+            outbound.close(false);
+            inbound.close().get(30L, SECONDS);
+            outbound.close(false).get(30L, SECONDS);
+            MessagingService.instance().messageHandlers.clear();
+        }
+    }
+

@@ -1,0 +1,30 @@
+    @Test
+    public void testCorruptionOnHandshake() throws Throwable
+    {
+        testManual((settings, inbound, outbound, endpoint, handler) -> {
+            unsafeSetSerializer(Verb._TEST_1, FakePayloadSerializer::new);
+            // Invalid CRC
+            handler.withPayloadTransform(msg -> {
+                ByteBuf bb = (ByteBuf) msg;
+                bb.setByte(bb.readableBytes() / 2, 0xffff);
+                return msg;
+            });
+            tryConnect(outbound, 1, SECONDS, false);
+            Assert.assertTrue(!outbound.isConnected());
+
+            // Invalid protocol magic
+            handler.withPayloadTransform(msg -> {
+                ByteBuf bb = (ByteBuf) msg;
+                bb.setByte(0, 0xffff);
+                return msg;
+            });
+            tryConnect(outbound, 1, SECONDS, false);
+            Assert.assertTrue(!outbound.isConnected());
+            if (settings.right.framing == CRC)
+            {
+                Assert.assertEquals(2, outbound.connectionAttempts());
+                Assert.assertEquals(0, outbound.successfulConnections());
+            }
+        });
+    }
+

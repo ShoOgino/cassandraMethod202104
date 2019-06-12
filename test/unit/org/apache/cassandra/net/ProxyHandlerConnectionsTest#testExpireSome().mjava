@@ -1,0 +1,34 @@
+    @Test
+    public void testExpireSome() throws Throwable
+    {
+        DatabaseDescriptor.setCrossNodeTimeout(true);
+        testOneManual((settings, inbound, outbound, endpoint, handler) -> {
+            unsafeSetSerializer(Verb._TEST_1, FakePayloadSerializer::new);
+            connect(outbound);
+
+            AtomicInteger counter = new AtomicInteger();
+            unsafeSetHandler(Verb._TEST_1, () -> v -> {
+                counter.incrementAndGet();
+            });
+
+            int expireMessages = 10;
+            for (int i = 0; i < expireMessages; i++)
+                outbound.enqueue(Message.out(Verb._TEST_1, 1L));
+            waitForCondition(() -> counter.get() == 10);
+
+            unsafeSetExpiration(Verb._TEST_1, unit -> unit.convert(50, MILLISECONDS));
+            handler.withLatency(100, MILLISECONDS);
+
+            InboundMessageHandlers handlers = MessagingService.instance().getInbound(endpoint);
+            for (int i = 0; i < expireMessages; i++)
+                outbound.enqueue(Message.out(Verb._TEST_1, 1L));
+            waitForCondition(() -> handlers.expiredCount() == 10);
+
+            handler.withLatency(2, MILLISECONDS);
+
+            for (int i = 0; i < expireMessages; i++)
+                outbound.enqueue(Message.out(Verb._TEST_1, 1L));
+            waitForCondition(() -> counter.get() == 20);
+        });
+    }
+

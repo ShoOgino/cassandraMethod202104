@@ -1,0 +1,36 @@
+    @Test
+    public void testLatency() throws Throwable
+    {
+        test((proxyHandler, testHandler, channel) -> {
+            int count = 1;
+            long latency = 100;
+            CountDownLatch latch = new CountDownLatch(count);
+            long start = System.currentTimeMillis();
+            testHandler.onRead = new Consumer<Object>()
+            {
+                int last = -1;
+                public void accept(Object o)
+                {
+                    // Make sure that order is preserved
+                    Assert.assertEquals(last + 1, o);
+                    last = (int) o;
+
+                    long elapsed = System.currentTimeMillis() - start;
+                    Assert.assertTrue("Latency was:" + elapsed, elapsed > latency);
+                    latch.countDown();
+                }
+            };
+
+            proxyHandler.withLatency(latency, TimeUnit.MILLISECONDS);
+
+            for (int i = 0; i < count; i++)
+            {
+                ByteBuf bb = Unpooled.buffer(Integer.BYTES);
+                bb.writeInt(i);
+                channel.writeAndFlush(i);
+            }
+
+            Assert.assertTrue(latch.await(10, TimeUnit.SECONDS));
+        });
+    }
+

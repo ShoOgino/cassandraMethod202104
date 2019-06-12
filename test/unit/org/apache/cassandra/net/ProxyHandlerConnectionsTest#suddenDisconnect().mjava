@@ -1,0 +1,23 @@
+    @Test
+    public void suddenDisconnect() throws Throwable
+    {
+        testManual((settings, inbound, outbound, endpoint, handler) -> {
+            handler.onDisconnect(() -> handler.reset());
+
+            unsafeSetSerializer(Verb._TEST_1, FakePayloadSerializer::new);
+            connect(outbound);
+
+            CountDownLatch closeLatch = new CountDownLatch(1);
+            handler.withCloseAfterRead(closeLatch::countDown);
+            AtomicInteger counter = new AtomicInteger();
+            unsafeSetHandler(Verb._TEST_1, () -> v -> counter.incrementAndGet());
+
+            outbound.enqueue(Message.out(Verb._TEST_1, 1L));
+            waitForCondition(() -> !outbound.isConnected());
+
+            connect(outbound);
+            Assert.assertTrue(outbound.isConnected());
+            Assert.assertEquals(0, counter.get());
+        });
+    }
+

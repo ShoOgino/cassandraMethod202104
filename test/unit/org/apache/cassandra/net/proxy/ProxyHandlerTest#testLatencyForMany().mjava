@@ -1,0 +1,53 @@
+    @Test
+    public void testLatencyForMany() throws Throwable
+    {
+        class Event {
+            private final long latency;
+            private final long start;
+            private final int idx;
+
+            Event(long latency, int idx)
+            {
+                this.latency = latency;
+                this.start = System.currentTimeMillis();
+                this.idx = idx;
+            }
+        }
+
+        test((proxyHandler, testHandler, channel) -> {
+            int count = 150;
+            CountDownLatch latch = new CountDownLatch(count);
+            AtomicInteger counter = new AtomicInteger();
+            testHandler.onRead = new Consumer<Object>()
+            {
+                int lastSeen = -1;
+                public void accept(Object o)
+                {
+                    Event e = (Event) o;
+                    Assert.assertEquals(lastSeen + 1, e.idx);
+                    lastSeen = e.idx;
+                    long elapsed = System.currentTimeMillis() - e.start;
+                    Assert.assertTrue(elapsed >= e.latency);
+                    counter.incrementAndGet();
+                    latch.countDown();
+                }
+            };
+
+            int idx = 0;
+            for (int i = 0; i < count / 3; i++)
+            {
+                for (long latency : new long[]{ 100, 200, 0 })
+                {
+                    proxyHandler.withLatency(latency, TimeUnit.MILLISECONDS);
+                    CountDownLatch read = new CountDownLatch(1);
+                    proxyHandler.onRead(read::countDown);
+                    channel.writeAndFlush(new Event(latency, idx++));
+                    Assert.assertTrue(read.await(10, TimeUnit.SECONDS));
+                }
+            }
+
+            Assert.assertTrue(latch.await(10, TimeUnit.SECONDS));
+            Assert.assertEquals(counter.get(), count);
+        });
+    }
+
