@@ -1,39 +1,39 @@
+    /**
+     * It's possible to receive a V3 paging state on a V4 client session, and vice versa - so we cannot
+     * blindly rely on the protocol version provided. We must verify first that the buffer indeed contains
+     * a paging state that adheres to the protocol version provided, or, if not - see if it is in a different
+     * version, in which case we try the other format.
+     */
     public static PagingState deserialize(ByteBuffer bytes, ProtocolVersion protocolVersion)
     {
         if (bytes == null)
             return null;
 
-        try (DataInputBuffer in = new DataInputBuffer(bytes, true))
+        try
         {
-            ByteBuffer pk;
-            RowMark mark;
-            int remaining, remainingInPartition;
-            if (protocolVersion.isSmallerOrEqualTo(ProtocolVersion.V3))
+            /*
+             * We can't just attempt to deser twice, as we risk to misinterpet short/vint
+             * lengths and allocate huge byte arrays for readWithVIntLength() or,
+             * to a lesser extent, readWithShortLength()
+             */
+
+            if (protocolVersion.isGreaterThan(ProtocolVersion.V3))
             {
-                pk = ByteBufferUtil.readWithShortLength(in);
-                mark = new RowMark(ByteBufferUtil.readWithShortLength(in), protocolVersion);
-                remaining = in.readInt();
-                // Note that while 'in.available()' is theoretically an estimate of how many bytes are available
-                // without blocking, we know that since we're reading a ByteBuffer it will be exactly how many
-                // bytes remain to be read. And the reason we want to condition this is for backward compatility
-                // as we used to not set this.
-                remainingInPartition = in.available() > 0 ? in.readInt() : Integer.MAX_VALUE;
+                if (isModernSerialized(bytes)) return modernDeserialize(bytes, protocolVersion);
+                if (isLegacySerialized(bytes)) return legacyDeserialize(bytes, ProtocolVersion.V3);
             }
-            else
+
+            if (protocolVersion.isSmallerThan(ProtocolVersion.V4))
             {
-                pk = ByteBufferUtil.readWithVIntLength(in);
-                mark = new RowMark(ByteBufferUtil.readWithVIntLength(in), protocolVersion);
-                remaining = (int)in.readUnsignedVInt();
-                remainingInPartition = (int)in.readUnsignedVInt();
+                if (isLegacySerialized(bytes)) return legacyDeserialize(bytes, protocolVersion);
+                if (isModernSerialized(bytes)) return modernDeserialize(bytes, ProtocolVersion.V4);
             }
-            return new PagingState(pk.hasRemaining() ? pk : null,
-                                   mark.mark.hasRemaining() ? mark : null,
-                                   remaining,
-                                   remainingInPartition);
         }
         catch (IOException e)
         {
             throw new ProtocolException("Invalid value for the paging state");
         }
+
+        throw new ProtocolException("Invalid value for the paging state");
     }
 
