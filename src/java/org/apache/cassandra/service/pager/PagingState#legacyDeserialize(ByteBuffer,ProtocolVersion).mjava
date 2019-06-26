@@ -1,0 +1,23 @@
+    @SuppressWarnings({ "resource", "RedundantSuppression" })
+    private static PagingState legacyDeserialize(ByteBuffer bytes, ProtocolVersion protocolVersion) throws IOException
+    {
+        if (protocolVersion.isGreaterThan(ProtocolVersion.V3))
+            throw new IllegalArgumentException();
+
+        DataInputBuffer in = new DataInputBuffer(bytes, false);
+
+        ByteBuffer partitionKey = readWithShortLength(in);
+        ByteBuffer rawMark = readWithShortLength(in);
+        int remaining = in.readInt();
+        /*
+         * 2.1/2.2 implementations of V3 protocol did not write remainingInPartition, but C* 3.0+ does, so we need
+         * to handle both variants of V3 serialization for compatibility.
+         */
+        int remainingInPartition = in.available() > 0 ? in.readInt() : Integer.MAX_VALUE;
+
+        return new PagingState(partitionKey.hasRemaining() ? partitionKey : null,
+                               rawMark.hasRemaining() ? new RowMark(rawMark, protocolVersion) : null,
+                               remaining,
+                               remainingInPartition);
+    }
+
