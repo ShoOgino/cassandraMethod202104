@@ -1,0 +1,32 @@
+    @Test
+    public void testNonCompactUpdateWithPrimaryKeyColumnName() throws Throwable
+    {
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+        String table = createTable(KEYSPACE, "CREATE TABLE %s (k int, c1 int,  c2 int, v int, PRIMARY KEY (k, c1, c2))");
+
+        // A cell name which represents a primary key column
+        ByteBuffer badCellName = CompositeType.build(ByteBufferUtil.bytes(0), ByteBufferUtil.bytes(0), ByteBufferUtil.bytes("c1"));
+        // A cell name which represents a regular column
+        ByteBuffer goodCellName = CompositeType.build(ByteBufferUtil.bytes(0), ByteBufferUtil.bytes(0), ByteBufferUtil.bytes("v"));
+
+        ColumnParent parent = new ColumnParent(table);
+        ByteBuffer key = ByteBufferUtil.bytes(0);
+        Column column = new Column();
+        column.setName(badCellName);
+        column.setValue(ByteBufferUtil.bytes(999));
+        column.setTimestamp(System.currentTimeMillis());
+
+        try
+        {
+            client.insert(key, parent, column, ONE);
+            fail("Expected exception");
+        } catch (InvalidRequestException e) {
+            assertEquals("Cannot add primary key column c1 to partition update", e.getWhy());
+        }
+
+        column.setName(goodCellName);
+        client.insert(key, parent, column, ONE);
+        assertRows(execute("SELECT v from %s WHERE k = 0"), row(999));
+    }
+

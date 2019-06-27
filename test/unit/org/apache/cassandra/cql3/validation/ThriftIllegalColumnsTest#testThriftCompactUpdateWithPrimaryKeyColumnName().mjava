@@ -1,0 +1,27 @@
+    @Test
+    public void testThriftCompactUpdateWithPrimaryKeyColumnName() throws Throwable
+    {
+        Cassandra.Client client = getClient();
+        client.set_keyspace(KEYSPACE);
+        String table = createTable(KEYSPACE, "CREATE TABLE %s (k int, v int, PRIMARY KEY (k)) WITH COMPACT STORAGE");
+
+        // A cell name which represents a primary key column
+        ByteBuffer badCellName = ByteBufferUtil.bytes("k");
+        // A cell name which represents a regular column
+        ByteBuffer goodCellName = ByteBufferUtil.bytes("v");
+
+        ColumnParent parent = new ColumnParent(table);
+        ByteBuffer key = ByteBufferUtil.bytes(0);
+        Column column = new Column();
+        column.setName(badCellName);
+        column.setValue(ByteBufferUtil.bytes(999));
+        column.setTimestamp(System.currentTimeMillis());
+        // if the table is compact, a cell name which appears to reference a primary
+        // key column is treated as a dynamic column and so the update is allowed
+        client.insert(key, parent, column, ONE);
+
+        column.setName(goodCellName);
+        client.insert(key, parent, column, ONE);
+        assertRows(execute("SELECT v from %s where k=0"), row(999));
+    }
+
