@@ -1,0 +1,39 @@
+    private void testConnection(com.datastax.driver.core.ProtocolVersion requestedVersion,
+                                com.datastax.driver.core.ProtocolVersion expectedVersion)
+    {
+        long start = System.nanoTime();
+        boolean expectError = requestedVersion != null && requestedVersion != expectedVersion;
+        Cluster.Builder builder = Cluster.builder()
+                                         .addContactPoints(nativeAddr)
+                                         .withClusterName("Test Cluster" + clusterId++)
+                                         .withPort(nativePort);
+
+        if (requestedVersion != null)
+            builder = builder.withProtocolVersion(requestedVersion) ;
+
+        Cluster cluster = builder.build();
+        logger.info("Setting up cluster took {}ms", TimeUnit.MILLISECONDS.convert(System.nanoTime() - start, TimeUnit.NANOSECONDS));
+        start = System.nanoTime();
+        try {
+            cluster.connect();
+            if (expectError)
+                fail("Expected a protocol exception");
+        }
+        catch (Exception e)
+        {
+            if (!expectError)
+            {
+                e.printStackTrace();
+                fail("Did not expect any exception");
+            }
+
+            assertTrue(e.getMessage().contains(String.format("Host does not support protocol version %s but %s", requestedVersion, expectedVersion)));
+        } finally {
+            logger.info("Testing connection took {}ms", TimeUnit.MILLISECONDS.convert(System.nanoTime() - start, TimeUnit.NANOSECONDS));
+            start = System.nanoTime();
+            cluster.closeAsync();
+            logger.info("Tearing down cluster connection took {}ms", TimeUnit.MILLISECONDS.convert(System.nanoTime() - start, TimeUnit.NANOSECONDS));
+
+        }
+    }
+
