@@ -1,0 +1,46 @@
+    @Test
+    public void changingMaxWorkersMeetsConcurrencyGoalsTest() throws InterruptedException
+    {
+        final int numBusyWorkers = 2; // Number of busy worker threads to run and gum things up
+        SharedExecutorPool sharedPool = new SharedExecutorPool("ChangingMaxWorkersMeetsConcurrencyGoalsTest");
+        final AtomicInteger notifiedMaxPoolSize = new AtomicInteger();
+
+        LocalAwareExecutorService executor = sharedPool.newExecutor(0, notifiedMaxPoolSize::set, 4, "internal", "resizetest");
+
+        AtomicBoolean stayBusy = new AtomicBoolean(true);
+        for (int i = 0; i < numBusyWorkers; i++)
+        {
+            executor.execute(new BusyWork(executor, stayBusy));
+        }
+
+        final int previousConcurrency = executor.getMaximumPoolSize();
+        try
+        {
+            assertMaxTaskConcurrency(executor, 1);
+            Assert.assertEquals(1, notifiedMaxPoolSize.get());
+
+            assertMaxTaskConcurrency(executor, 2);
+            Assert.assertEquals(2, notifiedMaxPoolSize.get());
+
+            assertMaxTaskConcurrency(executor, 1);
+            Assert.assertEquals(1, notifiedMaxPoolSize.get());
+
+            assertMaxTaskConcurrency(executor, 3);
+            Assert.assertEquals(3, notifiedMaxPoolSize.get());
+
+            executor.setMaximumPoolSize(0);
+            Assert.assertEquals(0, notifiedMaxPoolSize.get());
+
+            assertMaxTaskConcurrency(executor, 4);
+            Assert.assertEquals(4, notifiedMaxPoolSize.get());
+        }
+        finally
+        {
+            stayBusy.set(false);
+            executor.setMaximumPoolSize(previousConcurrency);
+            executor.shutdownNow();
+            Assert.assertTrue(executor.isShutdown());
+            Assert.assertTrue(executor.awaitTermination(1L, TimeUnit.MINUTES));
+        }
+    }
+

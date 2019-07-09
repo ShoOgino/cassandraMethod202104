@@ -1,0 +1,35 @@
+    // takes permission to perform a task, if any are available; once taken it is guaranteed
+    // that a proceeding call to tasks.poll() will return some work
+    TakeTaskPermitResult takeTaskPermit(boolean checkForWorkPermitOvercommit)
+    {
+        TakeTaskPermitResult result;
+        while (true)
+        {
+            long current = permits.get();
+            long updated;
+            int workPermits = workPermits(current);
+            int taskPermits = taskPermits(current);
+            if (workPermits < 0 && checkForWorkPermitOvercommit)
+            {
+                // Work permits are negative when the pool is reducing in size.  Atomically
+                // adjust the number of work permits so there is no race of multiple SEPWorkers
+                // exiting.  On conflicting update, recheck.
+                result = TakeTaskPermitResult.RETURNED_WORK_PERMIT;
+                updated = updateWorkPermits(current, workPermits + 1);
+            }
+            else
+            {
+                if (taskPermits == 0)
+                    return TakeTaskPermitResult.NONE_AVAILABLE;
+                result = TakeTaskPermitResult.TOOK_PERMIT;
+                updated = updateTaskPermits(current, taskPermits - 1);
+            }
+            if (permits.compareAndSet(current, updated))
+            {
+                if (taskPermits == maxTasksQueued && hasRoom.hasWaiters())
+                    hasRoom.signalAll();
+                return result;
+            }
+        }
+    }
+
