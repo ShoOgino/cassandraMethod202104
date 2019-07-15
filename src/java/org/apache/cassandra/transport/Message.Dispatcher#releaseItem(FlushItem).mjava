@@ -1,0 +1,28 @@
+        /**
+         * Note: this method will be used in the {@link Flusher#run()}, which executes on the netty event loop
+         * ({@link Dispatcher#flusherLookup}). Thus, we assume the semantics and visibility of variables
+         * of being on the event loop.
+         */
+        private void releaseItem(FlushItem item)
+        {
+            long itemSize = item.sourceFrame.header.bodySizeInBytes;
+            item.sourceFrame.release();
+
+            // since the request has been processed, decrement inflight payload at channel, endpoint and global levels
+            channelPayloadBytesInFlight -= itemSize;
+            ResourceLimits.Outcome endpointGlobalReleaseOutcome = endpointPayloadTracker.endpointAndGlobalPayloadsInFlight.release(itemSize);
+
+            // now check to see if we need to reenable the channel's autoRead.
+            // If the current payload side is zero, we must reenable autoread as
+            // 1) we allow no other thread/channel to do it, and
+            // 2) there's no other events following this one (becuase we're at zero bytes in flight),
+            // so no successive to trigger the other clause in this if-block
+            ChannelConfig config = item.ctx.channel().config();
+            if (paused && (channelPayloadBytesInFlight == 0 || endpointGlobalReleaseOutcome == ResourceLimits.Outcome.BELOW_LIMIT))
+            {
+                paused = false;
+                ClientMetrics.instance.unpauseConnection();
+                config.setAutoRead(true);
+            }
+        }
+

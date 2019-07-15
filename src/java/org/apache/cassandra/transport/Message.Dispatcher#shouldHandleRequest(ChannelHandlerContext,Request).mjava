@@ -1,0 +1,44 @@
+        /** This check for inflight payload to potentially discard the request should have been ideally in one of the
+         * first handlers in the pipeline (Frame::decode()). However, incase of any exception thrown between that
+         * handler (where inflight payload is incremented) and this handler (Dispatcher::channelRead0) (where inflight
+         * payload in decremented), inflight payload becomes erroneous. ExceptionHandler is not sufficient for this
+         * purpose since it does not have the frame associated with the exception.
+         *
+         * Note: this method should execute on the netty event loop.
+         */
+        private boolean shouldHandleRequest(ChannelHandlerContext ctx, Request request)
+        {
+            long frameSize = request.getSourceFrame().header.bodySizeInBytes;
+
+            ResourceLimits.EndpointAndGlobal endpointAndGlobalPayloadsInFlight = endpointPayloadTracker.endpointAndGlobalPayloadsInFlight;
+
+            // check for overloaded state by trying to allocate framesize to inflight payload trackers
+            if (endpointAndGlobalPayloadsInFlight.tryAllocate(frameSize) != ResourceLimits.Outcome.SUCCESS)
+            {
+                if (request.connection.isThrowOnOverload())
+                {
+                    // discard the request and throw an exception
+                    ClientMetrics.instance.markRequestDiscarded();
+                    logger.trace("Discarded request of size: {}. InflightChannelRequestPayload: {}, InflightEndpointRequestPayload: {}, InflightOverallRequestPayload: {}, Request: {}",
+                                 frameSize,
+                                 channelPayloadBytesInFlight,
+                                 endpointAndGlobalPayloadsInFlight.endpoint().using(),
+                                 endpointAndGlobalPayloadsInFlight.global().using(),
+                                 request);
+                    throw ErrorMessage.wrap(new OverloadedException("Server is in overloaded state. Cannot accept more requests at this point"),
+                                            request.getSourceFrame().header.streamId);
+                }
+                else
+                {
+                    // set backpressure on the channel, and handle the request
+                    endpointAndGlobalPayloadsInFlight.allocate(frameSize);
+                    ctx.channel().config().setAutoRead(false);
+                    ClientMetrics.instance.pauseConnection();
+                    paused = true;
+                }
+            }
+
+            channelPayloadBytesInFlight += frameSize;
+            return true;
+        }
+
