@@ -1,0 +1,41 @@
+    @Test
+    public void movingTokenReadRepairTest() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(4), 3))
+        {
+            List<Token> tokens = cluster.tokens();
+
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH read_repair='blocking'");
+
+            int i = 0;
+            while (true)
+            {
+                Token t = Murmur3Partitioner.instance.getToken(Int32Type.instance.decompose(i));
+                if (t.compareTo(tokens.get(2 - 1)) < 0 && t.compareTo(tokens.get(1 - 1)) > 0)
+                    break;
+                ++i;
+            }
+
+            // write only to #4
+            cluster.get(4).executeInternal("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (?, 1, 1)", i);
+            // mark #2 as leaving in #4
+            cluster.get(4).acceptsOnInstance((InetAddressAndPort endpoint) -> {
+                StorageService.instance.getTokenMetadata().addLeavingEndpoint(endpoint);
+                PendingRangeCalculatorService.instance.update();
+                PendingRangeCalculatorService.instance.blockUntilFinished();
+            }).accept(cluster.get(2).broadcastAddressAndPort());
+
+            // prevent #4 from reading or writing to #3, so our QUORUM must contain #2 and #4
+            // since #1 is taking over the range, this means any read-repair must make it to #1 as well
+            cluster.filters().verbs(READ_REQ.ordinal()).from(4).to(3).drop();
+            cluster.filters().verbs(READ_REPAIR_REQ.ordinal()).from(4).to(3).drop();
+            assertRows(cluster.coordinator(4).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = ?",
+                                                      ConsistencyLevel.ALL, i),
+                       row(i, 1, 1));
+
+            // verify that #1 receives the write
+            assertRows(cluster.get(1).executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = ?", i),
+                       row(i, 1, 1));
+        }
+    }
+

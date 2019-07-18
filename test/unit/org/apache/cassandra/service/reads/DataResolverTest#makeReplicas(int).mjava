@@ -1,11 +1,34 @@
-    private static EndpointsForRange makeReplicas(int num)
+    private EndpointsForRange makeReplicas(int num)
     {
+        StorageService.instance.getTokenMetadata().clearUnsafe();
+
+        switch (num)
+        {
+            case 2:
+                ks = AbstractReadResponseTest.ks;
+                cfs = AbstractReadResponseTest.cfs;
+                break;
+            case 4:
+                ks = AbstractReadResponseTest.ks3;
+                cfs = AbstractReadResponseTest.cfs3;
+                break;
+            default:
+                throw new IllegalStateException("This test needs refactoring to cleanly support different replication factors");
+        }
+
+        command = Util.cmd(cfs, dk).withNowInSeconds(nowInSec).build();
+        command.trackRepairedStatus();
+        readRepair = new TestableReadRepair(command);
+        Token token = Murmur3Partitioner.instance.getMinimumToken();
         EndpointsForRange.Builder replicas = EndpointsForRange.builder(ReplicaUtils.FULL_RANGE, num);
         for (int i = 0; i < num; i++)
         {
             try
             {
-                replicas.add(ReplicaUtils.full(InetAddressAndPort.getByAddress(new byte[]{ 127, 0, 0, (byte) (i + 1) })));
+                InetAddressAndPort endpoint = InetAddressAndPort.getByAddress(new byte[]{ 127, 0, 0, (byte) (i + 1) });
+                replicas.add(ReplicaUtils.full(endpoint));
+                StorageService.instance.getTokenMetadata().updateNormalToken(token = token.increaseSlightly(), endpoint);
+                Gossiper.instance.initializeNodeUnsafe(endpoint, UUID.randomUUID(), 1);
             }
             catch (UnknownHostException e)
             {

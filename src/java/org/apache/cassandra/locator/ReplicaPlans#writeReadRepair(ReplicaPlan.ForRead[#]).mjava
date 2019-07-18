@@ -1,0 +1,56 @@
+    /**
+     * TODO: Transient Replication C-14404/C-14665
+     * TODO: We employ this even when there is no monotonicity to guarantee,
+     *          e.g. in case of CL.TWO, CL.ONE with speculation, etc.
+     *
+     * Construct a read-repair write plan to provide monotonicity guarantees on any data we return as part of a read.
+     *
+     * Since this is not a regular write, this is just to guarantee future reads will read this data, we select only
+     * the minimal number of nodes to meet the consistency level, and prefer nodes we contacted on read to minimise
+     * data transfer.
+     */
+    public static Selector writeReadRepair(ReplicaPlan.ForRead<?> readPlan)
+    {
+        return new Selector()
+        {
+            @Override
+            public <E extends Endpoints<E>, L extends ReplicaLayout.ForWrite<E>>
+            E select(Keyspace keyspace, ConsistencyLevel consistencyLevel, L liveAndDown, L live)
+            {
+                assert !any(liveAndDown.all(), Replica::isTransient);
+
+                ReplicaCollection.Builder<E> contacts = live.all().newBuilder(live.all().size());
+                // add all live nodes we might write to that we have already contacted on read
+                contacts.addAll(filter(live.all(), r -> readPlan.contacts().endpoints().contains(r.endpoint())));
+
+                // finally, add sufficient nodes to achieve our consistency level
+                if (consistencyLevel != EACH_QUORUM)
+                {
+                    int add = consistencyLevel.blockForWrite(keyspace, liveAndDown.pending()) - contacts.size();
+                    if (add > 0)
+                    {
+                        for (Replica replica : filter(live.all(), r -> !contacts.contains(r)))
+                        {
+                            contacts.add(replica);
+                            if (--add == 0)
+                                break;
+                        }
+                    }
+                }
+                else
+                {
+                    ObjectIntOpenHashMap<String> requiredPerDc = eachQuorumForWrite(keyspace, liveAndDown.pending());
+                    addToCountPerDc(requiredPerDc, contacts.snapshot(), -1);
+                    IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+                    for (Replica replica : filter(live.all(), r -> !contacts.contains(r)))
+                    {
+                        String dc = snitch.getDatacenter(replica);
+                        if (requiredPerDc.addTo(dc, -1) >= 0)
+                            contacts.add(replica);
+                    }
+                }
+                return contacts.build();
+            }
+        };
+    }
+

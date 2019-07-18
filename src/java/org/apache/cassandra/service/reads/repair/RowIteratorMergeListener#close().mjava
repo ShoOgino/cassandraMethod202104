@@ -1,27 +1,36 @@
     public void close()
     {
-        Map<Replica, Mutation> mutations = null;
-        Endpoints<?> sources = replicaPlan.contacts();
-        for (int i = 0; i < repairs.length; i++)
+        boolean hasRepairs = false;
+        for (int i = 0 ; !hasRepairs && i < repairs.length ; ++i)
+            hasRepairs = repairs[i] != null;
+        if (!hasRepairs)
+            return;
+
+        PartitionUpdate fullDiffRepair = null;
+        if (buildFullDiff && repairs[repairs.length - 1] != null)
+            fullDiffRepair = repairs[repairs.length - 1].build();
+
+        Map<Replica, Mutation> mutations = Maps.newHashMapWithExpectedSize(writePlan.contacts().size());
+        ObjectIntOpenHashMap<InetAddressAndPort> sourceIds = new ObjectIntOpenHashMap<>(((repairs.length + 1) * 4) / 3);
+        for (int i = 0 ; i < readPlan.contacts().size() ; ++i)
+            sourceIds.put(readPlan.contacts().get(i).endpoint(), 1 + i);
+
+        for (Replica replica : writePlan.contacts())
         {
-            if (repairs[i] == null)
-                continue;
+            PartitionUpdate update = null;
+            int i = -1 + sourceIds.get(replica.endpoint());
+            if (i < 0)
+                update = fullDiffRepair;
+            else if (repairs[i] != null)
+                update = repairs[i].build();
 
-            Replica source = sources.get(i);
-
-            Mutation mutation = BlockingReadRepairs.createRepairMutation(repairs[i].build(), replicaPlan.consistencyLevel(), source.endpoint(), false);
+            Mutation mutation = BlockingReadRepairs.createRepairMutation(update, readPlan.consistencyLevel(), replica.endpoint(), false);
             if (mutation == null)
                 continue;
 
-            if (mutations == null)
-                mutations = Maps.newHashMapWithExpectedSize(sources.size());
-
-            mutations.put(source, mutation);
+            mutations.put(replica, mutation);
         }
 
-        if (mutations != null)
-        {
-            readRepair.repairPartition(partitionKey, mutations, replicaPlan);
-        }
+        readRepair.repairPartition(partitionKey, mutations, writePlan);
     }
 

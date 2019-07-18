@@ -1,24 +1,27 @@
     @Override
     public void awaitWrites()
     {
-        boolean timedOut = false;
-        for (BlockingPartitionRepair repair: repairs)
+        BlockingPartitionRepair timedOut = null;
+        for (BlockingPartitionRepair repair : repairs)
         {
             if (!repair.awaitRepairsUntil(DatabaseDescriptor.getReadRpcTimeout(NANOSECONDS) + queryStartNanoTime, NANOSECONDS))
             {
-                timedOut = true;
+                timedOut = repair;
+                break;
             }
         }
-        if (timedOut)
+        if (timedOut != null)
         {
-            // We got all responses, but timed out while repairing
-            int blockFor = replicaPlan().blockFor();
+            // We got all responses, but timed out while repairing;
+            // pick one of the repairs to throw, as this is better than completely manufacturing the error message
+            int blockFor = timedOut.blockFor();
+            int received = Math.min(blockFor - timedOut.waitingOn(), blockFor - 1);
             if (Tracing.isTracing())
                 Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
             else
                 logger.debug("Timeout while read-repairing after receiving all {} data and digest responses", blockFor);
 
-            throw new ReadTimeoutException(replicaPlan().consistencyLevel(), blockFor - 1, blockFor, true);
+            throw new ReadTimeoutException(replicaPlan().consistencyLevel(), received, blockFor, true);
         }
     }
 
