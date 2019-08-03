@@ -3,38 +3,24 @@
         // Raw day value in unsigned int form, epoch @ 2^31
         if (rawPattern.matcher(source).matches())
         {
-            try
-            {
-                long result = Long.parseLong(source);
-
-                if (result < 0 || result > maxSupportedDays)
-                    throw new NumberFormatException("Input out of bounds: " + source);
-
-                // Shift > epoch days into negative portion of Integer result for byte order comparability
-                if (result >= Integer.MAX_VALUE)
-                    result -= byteOrderShift;
-
-                return (int) result;
-            }
-            catch (NumberFormatException e)
-            {
-                throw new MarshalException(String.format("Unable to make unsigned int (for date) from: '%s'", source), e);
-            }
+            return parseRaw(source);
         }
 
         // Attempt to parse as date string
         try
         {
-            DateTime parsed = formatter.parseDateTime(source);
-            long millis = parsed.getMillis();
+            LocalDate parsed = formatter.parse(source, LocalDate::from);
+            long millis = parsed.atStartOfDay(UTC).toInstant().toEpochMilli();
             if (millis < minSupportedDateMillis)
-                throw new MarshalException(String.format("Input date %s is less than min supported date %s", source, new LocalDate(minSupportedDateMillis).toString()));
+                throw new MarshalException(String.format("Input date %s is less than min supported date %s", source,
+                        ZonedDateTime.ofInstant(Instant.ofEpochMilli(minSupportedDateMillis), UTC).toString()));
             if (millis > maxSupportedDateMillis)
-                throw new MarshalException(String.format("Input date %s is greater than max supported date %s", source, new LocalDate(maxSupportedDateMillis).toString()));
+                throw new MarshalException(String.format("Input date %s is greater than max supported date %s", source,
+                        ZonedDateTime.ofInstant(Instant.ofEpochMilli(maxSupportedDateMillis), UTC).toString()));
 
             return timeInMillisToDay(millis);
         }
-        catch (IllegalArgumentException e1)
+        catch (DateTimeParseException| ArithmeticException e1)
         {
             throw new MarshalException(String.format("Unable to coerce '%s' to a formatted date (long)", source), e1);
         }
