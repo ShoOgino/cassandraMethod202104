@@ -1,0 +1,37 @@
+    @Test
+    public void testCleanupSkippingSSTables() throws UnknownHostException, ExecutionException, InterruptedException
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE3);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD3);
+        cfs.disableAutoCompaction();
+        TokenMetadata tmd = StorageService.instance.getTokenMetadata();
+        tmd.clearUnsafe();
+        tmd.updateNormalToken(token(new byte[]{ 50 }), InetAddressAndPort.getByName("127.0.0.1"));
+
+        for (byte i = 0; i < 100; i++)
+        {
+            new RowUpdateBuilder(cfs.metadata(), System.currentTimeMillis(), ByteBuffer.wrap(new byte[]{ i }))
+            .clustering(COLUMN)
+            .add("val", VALUE)
+            .build()
+            .applyUnsafe();
+            cfs.forceBlockingFlush();
+        }
+
+        Set<SSTableReader> beforeFirstCleanup = Sets.newHashSet(cfs.getLiveSSTables());
+        // single token - 127.0.0.1 owns everything, cleanup should be noop
+        cfs.forceCleanup(2);
+        assertEquals(beforeFirstCleanup, cfs.getLiveSSTables());
+        tmd.updateNormalToken(token(new byte[]{ 120 }), InetAddressAndPort.getByName("127.0.0.2"));
+
+        cfs.forceCleanup(2);
+        for (SSTableReader sstable : cfs.getLiveSSTables())
+        {
+            assertEquals(sstable.first, sstable.last); // single-token sstables
+            assertTrue(sstable.first.getToken().compareTo(token(new byte[]{ 50 })) <= 0);
+            // with single-token sstables they should all either be skipped or dropped:
+            assertTrue(beforeFirstCleanup.contains(sstable));
+        }
+
+    }
+
