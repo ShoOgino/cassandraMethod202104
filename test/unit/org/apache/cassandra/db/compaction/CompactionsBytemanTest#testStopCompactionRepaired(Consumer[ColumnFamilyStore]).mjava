@@ -1,0 +1,43 @@
+    public void testStopCompactionRepaired(Consumer<ColumnFamilyStore> compactionRunner) throws Throwable
+    {
+        String table = createTable("CREATE TABLE %s (k INT, c INT, v INT, PRIMARY KEY (k, c))");
+        ColumnFamilyStore cfs = Keyspace.open(CQLTester.KEYSPACE).getColumnFamilyStore(table);
+        cfs.disableAutoCompaction();
+        for (int i = 0; i < 5; i++)
+        {
+            for (int j = 0; j < 10; j++)
+            {
+                execute("insert into %s (k, c, v) values (?, ?, ?)", i, j, i*j);
+            }
+            cfs.forceBlockingFlush();
+        }
+        cfs.getCompactionStrategyManager().mutateRepaired(cfs.getLiveSSTables(), System.currentTimeMillis(), null, false);
+        for (int i = 0; i < 5; i++)
+        {
+            for (int j = 0; j < 10; j++)
+            {
+                execute("insert into %s (k, c, v) values (?, ?, ?)", i, j, i*j);
+            }
+            cfs.forceBlockingFlush();
+        }
+
+        assertTrue(cfs.getTracker().getCompacting().isEmpty());
+        assertTrue(CompactionManager.instance.active.getCompactions().stream().noneMatch(h -> h.getCompactionInfo().getTableMetadata().equals(cfs.metadata)));
+
+        try
+        {
+            compactionRunner.accept(cfs);
+            fail("compaction should fail");
+        }
+        catch (RuntimeException t)
+        {
+            if (!(t.getCause().getCause() instanceof CompactionInterruptedException))
+                throw t;
+            //expected
+        }
+
+        assertTrue(cfs.getTracker().getCompacting().isEmpty());
+        assertTrue(CompactionManager.instance.active.getCompactions().stream().noneMatch(h -> h.getCompactionInfo().getTableMetadata().equals(cfs.metadata)));
+
+    }
+
