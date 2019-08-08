@@ -1,0 +1,40 @@
+    /**
+     *  Identify the type of Metric it is (gauge, counter etc) abd create the TableMetadata. The column name
+     *  and type for a counter/gauge is formatted differently based on the units (bytes/time) so allowed to
+     *  be set.
+     */
+    private static TableMetadata buildMetadata(String keyspace, String table, Function<TableMetrics, ? extends Metric> func,
+                                              String colName, AbstractType colType, String suffix)
+    {
+        TableMetadata.Builder metadata = TableMetadata.builder(keyspace, table)
+                                                      .kind(TableMetadata.Kind.VIRTUAL)
+                                                      .addPartitionKeyColumn(KEYSPACE_NAME, UTF8Type.instance)
+                                                      .addPartitionKeyColumn(TABLE_NAME, UTF8Type.instance)
+                                                      .partitioner(PARTITIONER);
+
+        // get a table from system keyspace and get metric from it for determining type of metric
+        Keyspace system = Keyspace.system().iterator().next();
+        Metric test = func.apply(system.getColumnFamilyStores().iterator().next().metric);
+
+        if (test instanceof Counting)
+        {
+            metadata.addRegularColumn(colName, colType);
+            // if it has a Histogram include some information about distribution
+            if (test instanceof Sampling)
+            {
+                metadata.addRegularColumn(P50 + suffix, DoubleType.instance)
+                        .addRegularColumn(P99 + suffix, DoubleType.instance)
+                        .addRegularColumn(MAX + suffix, DoubleType.instance);
+            }
+            if (test instanceof Metered)
+            {
+                metadata.addRegularColumn(RATE, DoubleType.instance);
+            }
+        }
+        else if (test instanceof Gauge)
+        {
+            metadata.addRegularColumn(colName, colType);
+        }
+        return metadata.build();
+    }
+
