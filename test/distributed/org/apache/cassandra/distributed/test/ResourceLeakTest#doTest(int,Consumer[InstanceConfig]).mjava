@@ -1,0 +1,33 @@
+    void doTest(int numClusterNodes, Consumer<InstanceConfig> updater) throws Throwable
+    {
+        for (int loop = 0; loop < numTestLoops; loop++)
+        {
+            try (Cluster cluster = Cluster.build(numClusterNodes).withConfig(updater).start())
+            {
+                if (cluster.get(1).config().has(GOSSIP)) // Wait for gossip to settle on the seed node
+                    cluster.get(1).runOnInstance(() -> CassandraDaemon.waitForGossipToSettle());
+
+                init(cluster);
+                String tableName = "tbl" + loop;
+                cluster.schemaChange("CREATE TABLE " + KEYSPACE + "." + tableName + " (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + "." + tableName + "(pk,ck,v) VALUES (0,0,0)", ConsistencyLevel.ALL);
+                cluster.get(1).callOnInstance(() -> FBUtilities.waitOnFutures(Keyspace.open(KEYSPACE).flush()));
+                if (dumpEveryLoop)
+                {
+                    dumpResources(String.format("loop%03d", loop));
+                }
+            }
+            catch (Throwable tr)
+            {
+                System.out.println("Dumping resources for exception: " + tr.getMessage());
+                tr.printStackTrace();
+                dumpResources("exception");
+            }
+            if (forceCollection)
+            {
+                System.runFinalization();
+                System.gc();
+            }
+        }
+    }
+

@@ -1,0 +1,45 @@
+    public Future<Void> shutdown(boolean graceful)
+    {
+        Future<?> future = async((ExecutorService executor) -> {
+            Throwable error = null;
+
+            if (config.has(GOSSIP) || config.has(NETWORK))
+            {
+                StorageService.instance.shutdownServer();
+
+                error = parallelRun(error, executor,
+                    () -> NanoTimeToCurrentTimeMillis.shutdown(MINUTES.toMillis(1L))
+                );
+            }
+
+            error = parallelRun(error, executor,
+                                () -> Gossiper.instance.stopShutdownAndWait(1L, MINUTES),
+                                CompactionManager.instance::forceShutdown,
+                                () -> BatchlogManager.shutdownAndWait(1L, MINUTES),
+                                () -> HintedHandOffManager.instance.shutdownAndWait(1L, MINUTES),
+                                () -> StreamCoordinator.shutdownAndWait(1L, MINUTES),
+                                () -> IndexSummaryManager.instance.shutdownAndWait(1L, MINUTES),
+                                () -> ColumnFamilyStore.shutdownExecutorsAndWait(1L, MINUTES),
+                                () -> PendingRangeCalculatorService.instance.shutdownExecutor(1L, MINUTES),
+                                () -> StorageService.instance.shutdownBGMonitorAndWait(1L, MINUTES),
+                                () -> Ref.shutdownReferenceReaper(1L, MINUTES),
+                                () -> Memtable.MEMORY_POOL.shutdownAndWait(1L, MINUTES),
+                                () -> SSTableReader.shutdownBlocking(1L, MINUTES),
+                                () -> ScheduledExecutors.shutdownAndWait(1L, MINUTES)
+            );
+            error = parallelRun(error, executor,
+                                CommitLog.instance::shutdownBlocking,
+                                MessagingService.instance()::shutdown
+            );
+            error = parallelRun(error, executor,
+                                () -> StageManager.shutdownAndWait(1L, MINUTES),
+                                () -> SharedExecutorPool.SHARED.shutdownAndWait(1L, MINUTES)
+            );
+
+            Throwables.maybeFail(error);
+        }).apply(isolatedExecutor);
+
+        return CompletableFuture.runAsync(ThrowingRunnable.toRunnable(future::get), isolatedExecutor)
+                                .thenRun(super::shutdown);
+    }
+
