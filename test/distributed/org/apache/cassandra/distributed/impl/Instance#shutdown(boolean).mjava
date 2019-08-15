@@ -1,0 +1,49 @@
+    @Override
+    public Future<Void> shutdown(boolean graceful)
+    {
+        Future<?> future = async((ExecutorService executor) -> {
+            Throwable error = null;
+
+            if (config.has(GOSSIP))
+            {
+                StorageService.instance.shutdownServer();
+            }
+
+            error = parallelRun(error, executor,
+                                () -> Gossiper.instance.stopShutdownAndWait(1L, MINUTES),
+                                CompactionManager.instance::forceShutdown,
+                                () -> BatchlogManager.instance.shutdownAndWait(1L, MINUTES),
+                                HintsService.instance::shutdownBlocking,
+                                StreamingInboundHandler::shutdown,
+                                () -> StreamReceiveTask.shutdownAndWait(1L, MINUTES),
+                                () -> StreamTransferTask.shutdownAndWait(1L, MINUTES),
+                                () -> SecondaryIndexManager.shutdownAndWait(1L, MINUTES),
+                                () -> IndexSummaryManager.instance.shutdownAndWait(1L, MINUTES),
+                                () -> ColumnFamilyStore.shutdownExecutorsAndWait(1L, MINUTES),
+                                () -> PendingRangeCalculatorService.instance.shutdownAndWait(1L, MINUTES),
+                                () -> BufferPool.shutdownLocalCleaner(1L, MINUTES),
+                                () -> Ref.shutdownReferenceReaper(1L, MINUTES),
+                                () -> Memtable.MEMORY_POOL.shutdownAndWait(1L, MINUTES),
+                                () -> ScheduledExecutors.shutdownAndWait(1L, MINUTES),
+                                () -> SSTableReader.shutdownBlocking(1L, MINUTES),
+                                () -> shutdownAndWait(Collections.singletonList(ActiveRepairService.repairCommandExecutor)),
+                                () -> ScheduledExecutors.shutdownAndWait(1L, MINUTES)
+            );
+
+            error = parallelRun(error, executor,
+                                CommitLog.instance::shutdownBlocking,
+                                () -> MessagingService.instance().shutdown(1L, MINUTES, false, true)
+            );
+            error = parallelRun(error, executor,
+                                () -> GlobalEventExecutor.INSTANCE.awaitInactivity(1l, MINUTES),
+                                () -> StageManager.shutdownAndWait(1L, MINUTES),
+                                () -> SharedExecutorPool.SHARED.shutdownAndWait(1L, MINUTES)
+            );
+
+            Throwables.maybeFail(error);
+        }).apply(isolatedExecutor);
+
+        return CompletableFuture.runAsync(ThrowingRunnable.toRunnable(future::get), isolatedExecutor)
+                                .thenRun(super::shutdown);
+    }
+
