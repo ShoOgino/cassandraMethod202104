@@ -1,0 +1,76 @@
+    @Override
+    public void startup(ICluster cluster)
+    {
+        sync(() -> {
+            try
+            {
+                mkdirs();
+
+                DatabaseDescriptor.setDaemonInitialized();
+                DatabaseDescriptor.createAllDirectories();
+
+                // We need to  persist this as soon as possible after startup checks.
+                // This should be the first write to SystemKeyspace (CASSANDRA-11742)
+                SystemKeyspace.persistLocalMetadata();
+                LegacySchemaMigrator.migrate();
+
+                try
+                {
+                    // load schema from disk
+                    Schema.instance.loadFromDisk();
+                }
+                catch (Exception e)
+                {
+                    throw e;
+                }
+
+                Keyspace.setInitialized();
+
+                // Replay any CommitLogSegments found on disk
+                try
+                {
+                    CommitLog.instance.recover();
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+                if (config.has(NETWORK))
+                {
+                    registerFilter(cluster);
+                    MessagingService.instance().listen();
+                }
+                else
+                {
+                    // Even though we don't use MessagingService, access the static SocketFactory
+                    // instance here so that we start the static event loop state
+//                    -- not sure what that means?  SocketFactory.instance.getClass();
+                    registerMockMessaging(cluster);
+                }
+
+                // TODO: this is more than just gossip
+                if (config.has(GOSSIP))
+                {
+                    StorageService.instance.initServer();
+                }
+                else
+                {
+                    initializeRing(cluster);
+                }
+
+                SystemKeyspace.finishStartup();
+
+                if (!FBUtilities.getBroadcastAddress().equals(broadcastAddressAndPort().address))
+                    throw new IllegalStateException();
+                if (DatabaseDescriptor.getStoragePort() != broadcastAddressAndPort().port)
+                    throw new IllegalStateException();
+            }
+            catch (Throwable t)
+            {
+                if (t instanceof RuntimeException)
+                    throw (RuntimeException) t;
+                throw new RuntimeException(t);
+            }
+        }).run();
+    }
+
