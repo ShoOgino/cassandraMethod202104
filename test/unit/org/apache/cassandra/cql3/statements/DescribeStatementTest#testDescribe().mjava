@@ -1,0 +1,120 @@
+    @Test
+    public void testDescribe() throws Throwable
+    {
+        try
+        {
+            execute("CREATE KEYSPACE test WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};");
+            execute("CREATE TABLE test.users ( userid text PRIMARY KEY, firstname text, lastname text, age int);");
+            execute("CREATE INDEX myindex ON test.users (age);");
+            execute("CREATE TABLE test.\"Test\" (id int, col int, val text, PRIMARY KEY(id, col));");
+            execute("CREATE INDEX ON test.\"Test\" (col);");
+            execute("CREATE INDEX ON test.\"Test\" (val)");
+            execute("CREATE TABLE test.users_mv (username varchar, password varchar, gender varchar, session_token varchar, " +
+                    "state varchar, birth_year bigint, PRIMARY KEY (username));");
+            execute("CREATE MATERIALIZED VIEW test.users_by_state AS SELECT * FROM test.users_mv " +
+                    "WHERE STATE IS NOT NULL AND username IS NOT NULL PRIMARY KEY (state, username)");
+            execute(allTypesTable());
+
+            // Test describe schema
+
+            Object[][] testSchemaOutput = rows(
+                          row(KEYSPACE, "keyspace", KEYSPACE,
+                              "CREATE KEYSPACE " + KEYSPACE +
+                                  " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}" +
+                                  "  AND durable_writes = true;"),
+                          row(KEYSPACE_PER_TEST, "keyspace", KEYSPACE_PER_TEST,
+                              "CREATE KEYSPACE " + KEYSPACE_PER_TEST +
+                                  " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}" +
+                                  "  AND durable_writes = true;"),
+                          row("test", "keyspace", "test", keyspaceOutput()),
+                          row("test", "table", "has_all_types", allTypesTable()),
+                          row("test", "table", "\"Test\"", testTableOutput()),
+                          row("test", "index", "\"Test_col_idx\"", indexOutput("\"Test_col_idx\"", "\"Test\"", "col")),
+                          row("test", "index", "\"Test_val_idx\"", indexOutput("\"Test_val_idx\"", "\"Test\"", "val")),
+                          row("test", "table", "users", userTableOutput()),
+                          row("test", "index", "myindex", indexOutput("myindex", "users", "age")),
+                          row("test", "table", "users_mv", usersMvTableOutput()),
+                          row("test", "materialized_view", "users_by_state", usersByStateMvOutput()));
+
+            assertRowsNet(executeDescribeNet("DESCRIBE SCHEMA"), testSchemaOutput);
+            assertRowsNet(executeDescribeNet("DESC SCHEMA"), testSchemaOutput);
+
+            // Test describe keyspaces/keyspace
+
+            Object[][] testKeyspacesOutput = rows(row(KEYSPACE, "keyspace", KEYSPACE),
+                                                  row(KEYSPACE_PER_TEST, "keyspace", KEYSPACE_PER_TEST),
+                                                  row(SYSTEM_KEYSPACE_NAME, "keyspace", SYSTEM_KEYSPACE_NAME),
+                                                  row(AUTH_KEYSPACE_NAME, "keyspace", AUTH_KEYSPACE_NAME),
+                                                  row(DISTRIBUTED_KEYSPACE_NAME, "keyspace", DISTRIBUTED_KEYSPACE_NAME),
+                                                  row(SCHEMA_KEYSPACE_NAME, "keyspace", SCHEMA_KEYSPACE_NAME),
+                                                  row(TRACE_KEYSPACE_NAME, "keyspace", TRACE_KEYSPACE_NAME),
+                                                  row(VIRTUAL_SCHEMA, "keyspace", VIRTUAL_SCHEMA),
+                                                  row("test", "keyspace", "test"));
+
+            for (String describeKeyword : new String[]{"DESCRIBE", "DESC"})
+            {
+                assertRowsNet(executeDescribeNet(describeKeyword + " KEYSPACES"), testKeyspacesOutput);
+                assertRowsNet(executeDescribeNet("test", describeKeyword + " KEYSPACES"), testKeyspacesOutput);
+
+                assertRowsNet(executeDescribeNet(describeKeyword + " ONLY KEYSPACE test"),
+                              row("test", "keyspace", "test", keyspaceOutput()));
+            }
+
+            Object[][] testKeyspaceOutput = rows(row("test", "keyspace", "test", keyspaceOutput()),
+                                                 row("test", "table", "has_all_types", allTypesTable()),
+                                                 row("test", "table", "\"Test\"", testTableOutput()),
+                                                 row("test", "index", "\"Test_col_idx\"", indexOutput("\"Test_col_idx\"", "\"Test\"", "col")),
+                                                 row("test", "index", "\"Test_val_idx\"", indexOutput("\"Test_val_idx\"", "\"Test\"", "val")),
+                                                 row("test", "table", "users", userTableOutput()),
+                                                 row("test", "index", "myindex", indexOutput("myindex", "users", "age")),
+                                                 row("test", "table", "users_mv", usersMvTableOutput()),
+                                                 row("test", "materialized_view", "users_by_state", usersByStateMvOutput()));
+
+            for (String describeKeyword : new String[]{"DESCRIBE", "DESC"})
+            {
+                assertRowsNet(executeDescribeNet(describeKeyword + " KEYSPACE test"), testKeyspaceOutput);
+                assertRowsNet(executeDescribeNet(describeKeyword + " test"), testKeyspaceOutput);
+
+                describeError(describeKeyword + " test2", "'test2' not found in keyspaces");
+            }
+
+            // Test describe tables/table
+            for (String cmd : new String[]{"describe TABLES", "DESC tables"})
+                assertRowsNet(executeDescribeNet("test", cmd),
+                              row("test", "table", "has_all_types"),
+                              row("test", "table", "\"Test\""),
+                              row("test", "table", "users"),
+                              row("test", "table", "users_mv"));
+
+            testDescribeTable("test", "has_all_types", row("test", "table", "has_all_types", allTypesTable()));
+
+            testDescribeTable("test", "\"Test\"",
+                              row("test", "table", "\"Test\"", testTableOutput()),
+                              row("test", "index", "\"Test_col_idx\"", indexOutput("\"Test_col_idx\"", "\"Test\"", "col")),
+                              row("test", "index", "\"Test_val_idx\"", indexOutput("\"Test_val_idx\"", "\"Test\"", "val")));
+
+            testDescribeTable("test", "users", row("test", "table", "users", userTableOutput()),
+                                               row("test", "index", "myindex", indexOutput("myindex", "users", "age")));
+
+            describeError("test", "DESCRIBE users2", "'users2' not found in keyspace 'test'");
+            describeError("DESCRIBE test.users2", "'users2' not found in keyspace 'test'");
+
+            // Test describe index
+
+            testDescribeIndex("test", "myindex", row("test", "index", "myindex", indexOutput("myindex", "users", "age")));
+            testDescribeIndex("test", "\"Test_col_idx\"", row("test", "index", "\"Test_col_idx\"", indexOutput("\"Test_col_idx\"", "\"Test\"", "col")));
+            testDescribeIndex("test", "\"Test_val_idx\"", row("test", "index", "\"Test_val_idx\"", indexOutput("\"Test_val_idx\"", "\"Test\"", "val")));
+
+            describeError("DESCRIBE test.myindex2", "'myindex2' not found in keyspace 'test'");
+            describeError("test", "DESCRIBE myindex2", "'myindex2' not found in keyspace 'test'");
+
+            // Test describe materialized view
+
+            testDescribeMaterializedView("test", "users_by_state", row("test", "materialized_view", "users_by_state", usersByStateMvOutput()));
+        }
+        finally
+        {
+            execute("DROP KEYSPACE IF EXISTS test");
+        }
+    }
+

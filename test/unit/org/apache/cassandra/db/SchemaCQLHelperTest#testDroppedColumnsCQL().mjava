@@ -1,0 +1,52 @@
+    @Test
+    public void testDroppedColumnsCQL()
+    {
+        String keyspace = "cql_test_keyspace_dropped_columns";
+        String table = "test_table_dropped_columns";
+
+        TableMetadata.Builder builder =
+        TableMetadata.builder(keyspace, table)
+                     .addPartitionKeyColumn("pk1", IntegerType.instance)
+                     .addClusteringColumn("ck1", IntegerType.instance)
+                     .addStaticColumn("st1", IntegerType.instance)
+                     .addRegularColumn("reg1", IntegerType.instance)
+                     .addRegularColumn("reg2", IntegerType.instance)
+                     .addRegularColumn("reg3", IntegerType.instance);
+
+        ColumnMetadata st1 = builder.getColumn(ByteBufferUtil.bytes("st1"));
+        ColumnMetadata reg1 = builder.getColumn(ByteBufferUtil.bytes("reg1"));
+        ColumnMetadata reg2 = builder.getColumn(ByteBufferUtil.bytes("reg2"));
+        ColumnMetadata reg3 = builder.getColumn(ByteBufferUtil.bytes("reg3"));
+
+        builder.removeRegularOrStaticColumn(st1.name)
+               .removeRegularOrStaticColumn(reg1.name)
+               .removeRegularOrStaticColumn(reg2.name)
+               .removeRegularOrStaticColumn(reg3.name);
+
+        builder.recordColumnDrop(st1, 5000)
+               .recordColumnDrop(reg1, 10000)
+               .recordColumnDrop(reg2, 20000)
+               .recordColumnDrop(reg3, 30000);
+
+        SchemaLoader.createKeyspace(keyspace, KeyspaceParams.simple(1), builder);
+
+        ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
+
+        String expected = "CREATE TABLE IF NOT EXISTS cql_test_keyspace_dropped_columns.test_table_dropped_columns (\n" +
+                          "    pk1 varint,\n" +
+                          "    ck1 varint,\n" +
+                          "    reg1 varint,\n" +
+                          "    reg3 varint,\n" +
+                          "    reg2 varint,\n" +
+                          "    st1 varint static,\n" +
+                          "    PRIMARY KEY (pk1, ck1)\n) WITH ID =";
+        String actual = SchemaCQLHelper.getTableMetadataAsCQL(cfs.metadata(), true, true, true);
+
+        assertThat(actual,
+                   allOf(startsWith(expected),
+                         containsString("ALTER TABLE cql_test_keyspace_dropped_columns.test_table_dropped_columns DROP reg1 USING TIMESTAMP 10000;"),
+                         containsString("ALTER TABLE cql_test_keyspace_dropped_columns.test_table_dropped_columns DROP reg3 USING TIMESTAMP 30000;"),
+                         containsString("ALTER TABLE cql_test_keyspace_dropped_columns.test_table_dropped_columns DROP reg2 USING TIMESTAMP 20000;"),
+                         containsString("ALTER TABLE cql_test_keyspace_dropped_columns.test_table_dropped_columns DROP st1 USING TIMESTAMP 5000;")));
+    }
+

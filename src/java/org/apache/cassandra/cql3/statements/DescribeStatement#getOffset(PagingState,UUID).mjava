@@ -1,0 +1,29 @@
+    private long getOffset(PagingState pagingState, UUID schemaVersion)
+    {
+        if (pagingState == null)
+            return 0L;
+
+        try (DataInputBuffer in = new DataInputBuffer(pagingState.partitionKey, false))
+        {
+            checkTrue(in.readShort() == PAGING_STATE_VERSION, "Incompatible paging state");
+
+            final String pagingStateServerVersion = in.readUTF();
+            final String releaseVersion = FBUtilities.getReleaseVersionString();
+            checkTrue(pagingStateServerVersion.equals(releaseVersion),
+                      "The server version of the paging state %s is different from the one of the server %s",
+                      pagingStateServerVersion,
+                      releaseVersion);
+
+            byte[] bytes = new byte[UUIDGen.UUID_LEN];
+            in.read(bytes);
+            UUID version = UUIDGen.getUUID(ByteBuffer.wrap(bytes));
+            checkTrue(schemaVersion.equals(version), SCHEMA_CHANGED_WHILE_PAGING_MESSAGE);
+
+            return in.readLong();
+        }
+        catch (IOException e)
+        {
+            throw new InvalidRequestException("Invalid paging state.", e);
+        }
+    }
+

@@ -1,0 +1,51 @@
+    @Override
+    public ResultMessage executeLocally(QueryState state, QueryOptions options)
+    {
+        Keyspaces keyspaces = Schema.instance.snapshot();
+        UUID schemaVersion = Schema.instance.getVersion();
+
+        keyspaces = Keyspaces.builder()
+                             .add(keyspaces)
+                             .add(VirtualKeyspaceRegistry.instance.virtualKeyspacesMetadata())
+                             .build();
+
+        PagingState pagingState = options.getPagingState();
+
+        // The paging implemented here uses some arbitray row number as the partition-key for paging,
+        // which is used to skip/limit the result from the Java Stream. This works good enough for
+        // reasonably sized schemas. Even a 'DESCRIBE SCHEMA' for an abnormally schema with 10000 tables
+        // completes within a few seconds. This seems good enough for now. Once Cassandra actually supports
+        // more than a few hundred tables, the implementation here should be reconsidered.
+        //
+        // Paging is only supported on row-level.
+        //
+        // The "partition key" in the paging-state contains a serialized object:
+        //   (short) version, currently 0x0001
+        //   (long) row offset
+        //   (vint bytes) serialized schema hash (currently the result of Keyspaces.hashCode())
+        //
+
+        long offset = getOffset(pagingState, schemaVersion);
+        int pageSize = options.getPageSize();
+
+        Stream<? extends T> stream = describe(state.getClientState(), keyspaces);
+
+        if (offset > 0L)
+            stream = stream.skip(offset);
+        if (pageSize > 0)
+            stream = stream.limit(pageSize);
+
+        List<List<ByteBuffer>> rows = stream.map(e -> toRow(e, includeInternalDetails))
+                                            .collect(Collectors.toList());
+
+        ResultSet.ResultMetadata resultMetadata = new ResultSet.ResultMetadata(metadata(state.getClientState()));
+        ResultSet result = new ResultSet(resultMetadata, rows);
+
+        if (pageSize > 0 && rows.size() == pageSize)
+        {
+            result.metadata.setHasMorePages(getPagingState(offset + pageSize, schemaVersion));
+        }
+
+        return new ResultMessage.Rows(result);
+    }
+

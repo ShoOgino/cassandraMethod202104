@@ -1,0 +1,31 @@
+    /**
+     * Tests for the error reported in CASSANDRA-9064 by:
+     *
+     * - creating the table described in the bug report, using LCS,
+     * - DESCRIBE-ing that table via cqlsh, then DROPping it,
+     * - running the output of the DESCRIBE statement as a CREATE TABLE statement, and
+     * - inserting a value into the table.
+     *
+     * The final two steps of the test should not fall down. If one does, that
+     * indicates the output of DESCRIBE is not a correct CREATE TABLE statement.
+     */
+    @Test
+    public void testDescribeRoundtrip() throws Throwable
+    {
+        for (String withInternals : new String[]{"", " WITH INTERNALS"})
+        {
+            String table = createTable("CREATE TABLE %s (key int PRIMARY KEY) WITH compaction = {'class': 'LeveledCompactionStrategy'}");
+
+            String output = executeDescribeNet(KEYSPACE, "DESCRIBE TABLE " + table + withInternals).all().get(0).getString("create_statement");
+
+            execute("DROP TABLE %s");
+
+            executeNet(output);
+
+            String output2 = executeDescribeNet(KEYSPACE, "DESCRIBE TABLE " + table + withInternals).all().get(0).getString("create_statement");
+            assertEquals(output, output2);
+
+            execute("INSERT INTO %s (key) VALUES (1)");
+        }
+    }
+

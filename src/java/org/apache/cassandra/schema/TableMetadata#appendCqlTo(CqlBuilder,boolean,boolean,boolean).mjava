@@ -1,0 +1,66 @@
+    public void appendCqlTo(CqlBuilder builder,
+                            boolean includeDroppedColumns,
+                            boolean internals,
+                            boolean ifNotExists)
+    {
+        assert !isView();
+
+        String createKeyword = "CREATE";
+        if (!isCQLTable())
+        {
+            builder.append("/*")
+                   .newLine()
+                   .append("Warning: Table ")
+                   .append(toString())
+                   .append(" omitted because it has constructs not compatible with CQL (was created via legacy API).")
+                   .newLine()
+                   .append("Approximate structure, for reference:")
+                   .newLine()
+                   .append("(this should not be used to reproduce this schema)")
+                   .newLine()
+                   .newLine();
+        }
+        else if (isVirtual())
+        {
+            builder.append(String.format("/*\n" +
+                    "Warning: Table %s is a virtual table and cannot be recreated with CQL.\n" +
+                    "Structure, for reference:\n",
+                                         toString()));
+            createKeyword = "VIRTUAL";
+        }
+
+        builder.append(createKeyword)
+               .append(" TABLE ");
+
+        if (ifNotExists)
+            builder.append("IF NOT EXISTS ");
+
+        builder.append(toString())
+               .append(" (")
+               .newLine()
+               .increaseIndent();
+
+        boolean hasSingleColumnPrimaryKey = partitionKeyColumns.size() == 1 && clusteringColumns.isEmpty();
+
+        appendColumnDefinitions(builder, includeDroppedColumns, hasSingleColumnPrimaryKey);
+
+        if (!hasSingleColumnPrimaryKey)
+            appendPrimaryKey(builder);
+
+        builder.decreaseIndent()
+               .append(')');
+
+        appendTableOptions(builder, internals);
+
+        builder.decreaseIndent();
+
+        if (!isCQLTable() || isVirtual())
+        {
+            builder.newLine()
+                   .append("*/");
+        }
+
+        if (includeDroppedColumns)
+            appendDropColumns(builder);
+    }
+

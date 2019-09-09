@@ -1,0 +1,63 @@
+    /**
+     * Creates a {@link DescribeStatement} for the generic {@code DESCRIBE ...}.
+     */
+    public static DescribeStatement<SchemaElement> generic(String keyspace, String name)
+    {
+        return new DescribeStatement<SchemaElement>()
+        {
+            private DescribeStatement<SchemaElement> delegate;
+
+            private DescribeStatement<SchemaElement> resolve(ClientState state, Keyspaces keyspaces)
+            {
+                String ks = keyspace;
+
+                // from cqlsh help: "keyspace or a table or an index or a materialized view (in this order)."
+                if (keyspace == null)
+                {
+                    if (keyspaces.containsKeyspace(name))
+                        return keyspace(name, false);
+
+                    String rawKeyspace = state.getRawKeyspace();
+                    ks = rawKeyspace == null ? name : rawKeyspace;
+                }
+
+                KeyspaceMetadata keyspaceMetadata = validateKeyspace(ks, keyspaces);
+
+                if (keyspaceMetadata.tables.getNullable(name) != null)
+                    return table(ks, name);
+
+                Optional<TableMetadata> indexed = keyspaceMetadata.findIndexedTable(name);
+                if (indexed.isPresent())
+                {
+                    Optional<IndexMetadata> index = indexed.get().indexes.get(name);
+                    if (index.isPresent())
+                        return index(ks, name);
+                }
+
+                if (keyspaceMetadata.views.getNullable(name) != null)
+                    return view(ks, name);
+
+                throw invalidRequest("'%s' not found in keyspace '%s'", name, ks);
+            }
+
+            @Override
+            protected Stream<? extends SchemaElement> describe(ClientState state, Keyspaces keyspaces)
+            {
+                delegate = resolve(state, keyspaces);
+                return delegate.describe(state, keyspaces);
+            }
+
+            @Override
+            protected List<ColumnSpecification> metadata(ClientState state)
+            {
+                return delegate.metadata(state);
+            }
+
+            @Override
+            protected List<ByteBuffer> toRow(SchemaElement element, boolean withInternals)
+            {
+                return delegate.toRow(element, withInternals);
+            }
+        };
+    }
+
