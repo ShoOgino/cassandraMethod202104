@@ -5,8 +5,17 @@
 
             if (root == null)
                 root = Files.createTempDirectory("dtests").toFile();
+
             if (version == null)
                 version = Versions.CURRENT;
+
+            if (nodeCount <= 0)
+                throw new IllegalStateException("Cluster must have at least one node");
+
+            if (nodeIdTopology == null)
+                nodeIdTopology = IntStream.rangeClosed(1, nodeCount).boxed()
+                                          .collect(Collectors.toMap(nodeId -> nodeId,
+                                                                    nodeId -> Pair.create(dcName(0), rackName(0))));
 
             root.mkdirs();
             setupLogging(root);
@@ -15,16 +24,22 @@
 
             List<InstanceConfig> configs = new ArrayList<>();
             long token = Long.MIN_VALUE + 1, increment = 2 * (Long.MAX_VALUE / nodeCount);
-            for (int i = 0; i < nodeCount; ++i)
+
+            String ipPrefix = "127.0." + subnet + ".";
+
+            NetworkTopology networkTopology = NetworkTopology.build(ipPrefix, 7012, nodeIdTopology);
+
+            for (int i = 0 ; i < nodeCount ; ++i)
             {
-                InstanceConfig config = InstanceConfig.generate(i + 1, subnet, root, String.valueOf(token));
+                int nodeNum = i + 1;
+                String ipAddress = ipPrefix + nodeNum;
+                InstanceConfig config = InstanceConfig.generate(i + 1, ipAddress, networkTopology, root, String.valueOf(token));
                 if (configUpdater != null)
                     configUpdater.accept(config);
                 configs.add(config);
                 token += increment;
             }
 
-            C cluster = factory.newCluster(root, version, configs, sharedClassLoader);
-            return cluster;
+            return factory.newCluster(root, version, configs, sharedClassLoader);
         }
 

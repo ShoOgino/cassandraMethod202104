@@ -5,7 +5,12 @@
             try (DataInputBuffer in = new DataInputBuffer(message.bytes()))
             {
                 Message<?> messageIn = Message.serializer.deserialize(in, message.from(), message.version());
-                messageIn.verb().handler().doVerb((Message<Object>) messageIn);
+                Message.Header header = messageIn.header;
+                TraceState state = Tracing.instance.initializeFromMessage(header);
+                if (state != null) state.trace("{} message received from {}", header.verb, header.from);
+                StageManager.getStage(header.verb.stage).execute(
+                    ThrowingRunnable.toRunnable(() -> messageIn.verb().handler().doVerb((Message<Object>) messageIn)),
+                    ExecutorLocals.create(state));
             }
             catch (Throwable t)
             {
