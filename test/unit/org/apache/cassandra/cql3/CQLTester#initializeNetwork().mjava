@@ -1,0 +1,31 @@
+    private static void initializeNetwork()
+    {
+        protocolVersionLimit = ConfiguredLimit.newLimit();
+        server = new Server.Builder().withHost(nativeAddr)
+                                     .withPort(nativePort)
+                                     .withProtocolVersionLimit(protocolVersionLimit)
+                                     .build();
+        ClientMetrics.instance.init(Collections.singleton(server));
+        server.start();
+
+        for (ProtocolVersion version : PROTOCOL_VERSIONS)
+        {
+            if (clusters.containsKey(version))
+                continue;
+
+            if (version.isGreaterThan(protocolVersionLimit.getMaxVersion()))
+                continue;
+
+            Cluster cluster = Cluster.builder()
+                                     .addContactPoints(nativeAddr)
+                                     .withClusterName("Test Cluster-" + version.name())
+                                     .withPort(nativePort)
+                                     .withProtocolVersion(com.datastax.driver.core.ProtocolVersion.fromInt(version.asInt()))
+                                     .build();
+            clusters.put(version, cluster);
+            sessions.put(version, cluster.connect());
+
+            logger.info("Started Java Driver instance for protocol version {}", version);
+        }
+    }
+
