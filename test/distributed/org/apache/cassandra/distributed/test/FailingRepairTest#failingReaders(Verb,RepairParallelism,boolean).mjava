@@ -1,0 +1,22 @@
+    private static SerializableRunnable failingReaders(Verb type, RepairParallelism parallelism, boolean withTracing)
+    {
+        return () -> {
+            String cfName = getCfName(type, parallelism, withTracing);
+            ColumnFamilyStore cf = Keyspace.open(KEYSPACE).getColumnFamilyStore(cfName);
+            cf.forceBlockingFlush();
+            Set<SSTableReader> remove = cf.getLiveSSTables();
+            Set<SSTableReader> replace = new HashSet<>();
+            if (type == Verb.VALIDATION_REQ)
+            {
+                for (SSTableReader r : remove)
+                    replace.add(new FailingSSTableReader(r));
+            }
+            else
+            {
+                throw new UnsupportedOperationException("verb: " + type);
+            }
+            cf.getTracker().removeUnsafe(remove);
+            cf.addSSTables(replace);
+        };
+    }
+
