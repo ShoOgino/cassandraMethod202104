@@ -1,0 +1,81 @@
+    private static void measure(Workload workload) throws Throwable
+    {
+        workload.setup();
+
+        Measurement readSampler = createMeasurement();
+        Measurement compactionSampler = createMeasurement();
+
+        String readSummary = "SKIPPED";
+        if (!PROFILING_COMPACTION)
+        {
+            List<Runnable> reads = workload.getReads();
+            readSampler.start();
+            if (PROFILING_READS && !workload.name().equals("warmup"))
+            {
+                logger.info(">>> Start profiling");
+                Thread.sleep(10000);
+            }
+            for (int i=0; i<reads.size(); i++)
+                reads.get(i).run();
+            Thread.sleep(1000);
+            if (PROFILING_READS && !workload.name().equals("warmup"))
+            {
+                logger.info(">>> Stop profiling");
+                Thread.sleep(10000);
+            }
+            readSampler.stop();
+
+            readSummary = String.format("%s bytes, %s /read, %s cpu", readSampler.bytes(), readSampler.bytes()/reads.size(), readSampler.cpu());
+            readSummaries.put(workload.name(), new ReadSummary(readSampler, reads.size()));
+        }
+
+        ColumnFamilyStore cfs = workload.getCfs();
+        ActiveCompactions active = new ActiveCompactions();
+        Set<SSTableReader> sstables = cfs.getLiveSSTables();
+
+        CompactionTasks tasks = cfs.getCompactionStrategyManager()
+                                   .getUserDefinedTasks(sstables, FBUtilities.nowInSeconds());
+        Assert.assertFalse(tasks.isEmpty());
+
+        String compactionSummary = "SKIPPED";
+        if (!PROFILING_READS)
+        {
+            compactionSampler.start();
+            if (PROFILING_COMPACTION && !workload.name().equals("warmup"))
+            {
+                logger.info(">>> Start profiling");
+                Thread.sleep(10000);
+            }
+            for (AbstractCompactionTask task : tasks)
+                task.execute(active);
+            Thread.sleep(1000);
+            if (PROFILING_COMPACTION && !workload.name().equals("warmup"))
+            {
+                logger.info(">>> Stop profiling");
+                Thread.sleep(10000);
+            }
+            compactionSampler.stop();
+
+            Assert.assertEquals(1, cfs.getLiveSSTables().size());
+            int numPartitions = Ints.checkedCast(Iterables.getOnlyElement(cfs.getLiveSSTables()).getSSTableMetadata().estimatedPartitionSize.count());
+            int numRows = Ints.checkedCast(Iterables.getOnlyElement(cfs.getLiveSSTables()).getSSTableMetadata().totalRows);
+
+            compactionSummary = String.format("%s bytes, %s /partition, %s /row, %s cpu", compactionSampler.bytes(), compactionSampler.bytes()/numPartitions, compactionSampler.bytes()/numRows, compactionSampler.cpu());
+            compactionSummaries.put(workload.name(), new CompactionSummary(compactionSampler, numPartitions, numRows));
+        }
+
+        cfs.truncateBlocking();
+
+        logger.info("***");
+        logger.info("*** {} reads summary", workload.name());
+        logger.info(readSummary);
+        logger.info("*** {} compaction summary", workload.name());
+        logger.info(compactionSummary);
+        if (!workload.name().equals("warmup"))
+        {
+            summaries.add(workload.name() + " reads summary: " + readSummary);
+            summaries.add(workload.name() + " compaction summary: " + compactionSummary);
+        }
+        Thread.sleep(1000); // avoid losing report when running in IDE
+    }
+

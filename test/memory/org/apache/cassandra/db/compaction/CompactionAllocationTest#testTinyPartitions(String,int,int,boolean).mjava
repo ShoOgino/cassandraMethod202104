@@ -1,0 +1,57 @@
+    private static void testTinyPartitions(String name, int numSSTable, int sstablePartitions, boolean overlap) throws Throwable
+    {
+        String ksname = "ks_" + name.toLowerCase();
+
+        SchemaLoader.createKeyspace(ksname, KeyspaceParams.simple(1),
+                                    CreateTableStatement.parse("CREATE TABLE tbl (k INT PRIMARY KEY, v INT)", ksname).build());
+
+        ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(Schema.instance.getTableMetadata(ksname, "tbl").id);
+        Assert.assertNotNull(cfs);
+        cfs.disableAutoCompaction();
+        List<Runnable> reads = new ArrayList<>(numSSTable * (overlap ? 1 : sstablePartitions));
+
+        measure(new Workload()
+        {
+            public void setup()
+            {
+                cfs.disableAutoCompaction();
+                String insert = String.format("INSERT INTO %s.%s (k, v) VALUES (?,?)", ksname, "tbl");
+                String read = String.format("SELECT * FROM %s.%s WHERE k = ?", ksname, "tbl");
+                SelectStatement select = (SelectStatement) QueryProcessor.parseStatement(read).prepare(ClientState.forInternalCalls());
+                QueryState queryState = QueryState.forInternalCalls();
+                for (int f=0; f<numSSTable; f++)
+                {
+                    for (int p = 0; p < sstablePartitions; p++)
+                    {
+                        int key = overlap ? p : (f * sstablePartitions) + p;
+                        QueryProcessor.executeInternal(insert, key, key);
+                        if (!overlap || f == 0)
+                        {
+                            QueryOptions options = QueryProcessor.makeInternalOptions(select, new Object[]{f});
+                            ReadQuery query = select.getQuery(options, queryState.getNowInSeconds());
+                            reads.add(() -> runQuery(query, cfs.metadata.get()));
+                        }
+                    }
+                    cfs.forceBlockingFlush();
+                }
+
+                Assert.assertEquals(numSSTable, cfs.getLiveSSTables().size());
+            }
+
+            public List<Runnable> getReads()
+            {
+                return reads;
+            }
+
+            public ColumnFamilyStore getCfs()
+            {
+                return cfs;
+            }
+
+            public String name()
+            {
+                return name;
+            }
+        });
+    }
+
