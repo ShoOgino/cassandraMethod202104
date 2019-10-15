@@ -1,0 +1,37 @@
+    public <I> Map<K, V> deserializeForNativeProtocol(I input, ValueAccessor<I> accessor, ProtocolVersion version)
+    {
+        try
+        {
+            int n = readCollectionSize(input, accessor, version);
+            int offset = sizeOfCollectionSize(n, version);
+
+            if (n < 0)
+                throw new MarshalException("The data cannot be deserialized as a map");
+
+            // If the received bytes are not corresponding to a map, n might be a huge number.
+            // In such a case we do not want to initialize the map with that initialCapacity as it can result
+            // in an OOM when put is called (see CASSANDRA-12618). On the other hand we do not want to have to resize
+            // the map if we can avoid it, so we put a reasonable limit on the initialCapacity.
+            Map<K, V> m = new LinkedHashMap<K, V>(Math.min(n, 256));
+            for (int i = 0; i < n; i++)
+            {
+                I key = readValue(input, accessor, offset, version);
+                offset += sizeOfValue(key, accessor, version);
+                keys.validate(key, accessor);
+
+                I value = readValue(input, accessor, offset, version);
+                offset += sizeOfValue(value, accessor, version);
+                values.validate(value, accessor);
+
+                m.put(keys.deserialize(key, accessor), values.deserialize(value, accessor));
+            }
+            if (!accessor.isEmptyFromOffset(input, offset))
+                throw new MarshalException("Unexpected extraneous bytes after map value");
+            return m;
+        }
+        catch (BufferUnderflowException | IndexOutOfBoundsException e)
+        {
+            throw new MarshalException("Not enough bytes to read a map");
+        }
+    }
+
