@@ -1,0 +1,21 @@
+        public Mutation deserialize(DataInputPlus in, int version, DeserializationHelper.Flag flag) throws IOException
+        {
+            int size = (int)in.readUnsignedVInt();
+            assert size > 0;
+
+            PartitionUpdate update = PartitionUpdate.serializer.deserialize(in, version, flag);
+            if (size == 1)
+                return new Mutation(update);
+
+            ImmutableMap.Builder<TableId, PartitionUpdate> modifications = new ImmutableMap.Builder<>();
+            DecoratedKey dk = update.partitionKey();
+
+            modifications.put(update.metadata().id, update);
+            for (int i = 1; i < size; ++i)
+            {
+                update = PartitionUpdate.serializer.deserialize(in, version, flag);
+                modifications.put(update.metadata().id, update);
+            }
+            return new Mutation(update.metadata().keyspace, dk, modifications.build(), approxTime.now());
+        }
+

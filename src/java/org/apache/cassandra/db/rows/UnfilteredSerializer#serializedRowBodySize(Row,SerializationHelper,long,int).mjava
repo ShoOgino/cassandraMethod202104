@@ -1,0 +1,40 @@
+    private long serializedRowBodySize(Row row, SerializationHelper helper, long previousUnfilteredSize, int version)
+    {
+        long size = 0;
+
+        SerializationHeader header = helper.header;
+        if (header.isForSSTable())
+            size += TypeSizes.sizeofUnsignedVInt(previousUnfilteredSize);
+
+        boolean isStatic = row.isStatic();
+        Columns headerColumns = header.columns(isStatic);
+        LivenessInfo pkLiveness = row.primaryKeyLivenessInfo();
+        Row.Deletion deletion = row.deletion();
+        boolean hasComplexDeletion = row.hasComplexDeletion();
+        boolean hasAllColumns = (row.columnCount() == headerColumns.size());
+
+        if (!pkLiveness.isEmpty())
+            size += header.timestampSerializedSize(pkLiveness.timestamp());
+        if (pkLiveness.isExpiring())
+        {
+            size += header.ttlSerializedSize(pkLiveness.ttl());
+            size += header.localDeletionTimeSerializedSize(pkLiveness.localExpirationTime());
+        }
+        if (!deletion.isLive())
+            size += header.deletionTimeSerializedSize(deletion.time());
+
+        if (!hasAllColumns)
+            size += Columns.serializer.serializedSubsetSize(row.columns(), header.columns(isStatic));
+
+        SearchIterator<ColumnMetadata, ColumnMetadata> si = helper.iterator(isStatic);
+        return row.accumulate((data, v) -> {
+            ColumnMetadata column = si.next(data.column());
+            assert column != null;
+
+            if (data.column.isSimple())
+                return v + Cell.serializer.serializedSize((Cell) data, column, pkLiveness, header);
+            else
+                return v + sizeOfComplexColumn((ComplexColumnData) data, column, hasComplexDeletion, pkLiveness, header);
+        }, size);
+    }
+
