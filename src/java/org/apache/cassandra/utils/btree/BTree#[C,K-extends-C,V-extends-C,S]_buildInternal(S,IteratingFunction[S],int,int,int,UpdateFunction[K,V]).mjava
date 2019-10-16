@@ -1,15 +1,15 @@
-    private static <C, K extends C, V extends C> Object[] buildInternal(Iterator<K> it, int size, int level, UpdateFunction<K, V> updateF)
+    private static <C, K extends C, V extends C, S> Object[] buildInternal(S source, IteratingFunction<S> iterFunc, int size, int level, int startIdx, UpdateFunction<K, V> updateF)
     {
         assert size > 0;
         assert level >= 0;
         if (level == 0)
-            return buildLeaf(it, size, updateF);
+            return buildLeaf(source, iterFunc, size, startIdx, updateF);
 
         // calcuate child num: (size - (childNum - 1)) / maxChildSize <= childNum
         int childNum = size / (TREE_SIZE[level - 1] + 1) + 1;
 
         V[] values = (V[]) new Object[childNum * 2];
-        if (updateF != UpdateFunction.noOp())
+        if (updateF != UpdateFunction.<K>noOp())
             updateF.allocated(ObjectSizes.sizeOfArray(values));
 
         int[] indexOffsets = new int[childNum];
@@ -22,16 +22,16 @@
             // The performance could be improved by pre-compute the childSize (see #9989 comments).
             int childSize = (size - index) / (childNum - i);
             // Build the tree with inorder traversal
-            values[childPos + i] = (V) buildInternal(it, childSize, level - 1, updateF);
+            values[childPos + i] = (V) buildInternal(source, iterFunc, childSize, level - 1, startIdx + index, updateF);
             index += childSize;
             indexOffsets[i] = index;
 
-            K k = it.next();
+            K k = iterFunc.nextAt(source, startIdx + index);
             values[i] = updateF.apply(k);
             index++;
         }
 
-        values[childPos + childNum - 1] = (V) buildInternal(it, size - index, level - 1, updateF);
+        values[childPos + childNum - 1] = (V) buildInternal(source, iterFunc, size - index, level - 1, startIdx + index, updateF);
         indexOffsets[childNum - 1] = size;
 
         values[childPos + childNum] = (V) indexOffsets;
