@@ -1,0 +1,31 @@
+    @VisibleForTesting
+    CommitLog(CommitLogArchiver archiver, Function<CommitLog, AbstractCommitLogSegmentManager> segmentManagerProvider)
+    {
+        this.configuration = new Configuration(DatabaseDescriptor.getCommitLogCompression(),
+                                               DatabaseDescriptor.getEncryptionContext());
+        DatabaseDescriptor.createAllDirectories();
+
+        this.archiver = archiver;
+        metrics = new CommitLogMetrics();
+
+        switch (DatabaseDescriptor.getCommitLogSync())
+        {
+            case periodic:
+                executor = new PeriodicCommitLogService(this);
+                break;
+            case batch:
+                executor = new BatchCommitLogService(this);
+                break;
+            case group:
+                executor = new GroupCommitLogService(this);
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown commitlog service type: " + DatabaseDescriptor.getCommitLogSync());
+        }
+
+        segmentManager = segmentManagerProvider.apply(this);
+
+        // register metrics
+        metrics.attach(executor, segmentManager);
+    }
+

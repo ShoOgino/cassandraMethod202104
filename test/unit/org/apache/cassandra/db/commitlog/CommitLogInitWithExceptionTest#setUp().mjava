@@ -1,0 +1,30 @@
+    @BeforeClass
+    public static void setUp()
+    {
+        DatabaseDescriptor.daemonInitialization();
+
+        if (DatabaseDescriptor.getDiskFailurePolicy() == Config.DiskFailurePolicy.die ||
+            DatabaseDescriptor.getDiskFailurePolicy() == Config.DiskFailurePolicy.ignore)
+        {
+            DatabaseDescriptor.setDiskFailurePolicy(Config.DiskFailurePolicy.stop);
+        }
+
+        DatabaseDescriptor.setCommitLogSegmentMgrProvider(c -> new MockCommitLogSegmentMgr(c, DatabaseDescriptor.getCommitLogLocation()));
+
+        JVMStabilityInspector.killerHook = (t) -> {
+            Assert.assertEquals("MOCK EXCEPTION: createSegment", t.getMessage());
+
+            try
+            {
+                // Avoid JVM exit. The JVM still needs to run other junit tests.
+                return false;
+            }
+            finally
+            {
+                Assert.assertNotNull(initThread);
+                // We have to manually stop init thread because the JVM does not exit actually.
+                initThread.stop();
+            }
+        };
+    }
+
