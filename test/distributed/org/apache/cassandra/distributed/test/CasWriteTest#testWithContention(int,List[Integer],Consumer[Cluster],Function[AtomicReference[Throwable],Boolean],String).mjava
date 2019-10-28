@@ -1,0 +1,43 @@
+    private void testWithContention(int testUid,
+                                    List<Integer> contendingNodes,
+                                    Consumer<Cluster> setupForEachRound,
+                                    Function<AtomicReference<Throwable>, Boolean> expectedException,
+                                    String assertHintMessage) throws InterruptedException
+    {
+        assert contendingNodes.size() == 2;
+        AtomicInteger curPk = new AtomicInteger(1);
+        ExecutorService es = Executors.newFixedThreadPool(3);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Supplier<Boolean> hasExpectedException = () -> expectedException.apply(failure);
+        while (!hasExpectedException.get())
+        {
+            failure.set(null);
+            setupForEachRound.accept(cluster);
+
+            List<Future<?>> futures = new ArrayList<>();
+            CountDownLatch latch = new CountDownLatch(3);
+            contendingNodes.forEach(nodeId -> {
+                String query = mkCasInsertQuery((a) -> curPk.get(), testUid, nodeId);
+                futures.add(es.submit(() -> {
+                    try
+                    {
+                        latch.countDown();
+                        latch.await(1, TimeUnit.SECONDS); // help threads start at approximately same time
+                        cluster.coordinator(nodeId).execute(query, ConsistencyLevel.QUORUM);
+                    }
+                    catch (Throwable t)
+                    {
+                        failure.set(t);
+                    }
+                }));
+            });
+
+            FBUtilities.waitOnFutures(futures);
+            curPk.incrementAndGet();
+        }
+
+        es.shutdownNow();
+        es.awaitTermination(1, TimeUnit.MINUTES);
+        Assert.assertTrue(assertHintMessage, hasExpectedException.get());
+    }
+

@@ -48,7 +48,7 @@
                                   ClientState state,
                                   int nowInSeconds,
                                   long queryStartNanoTime)
-    throws UnavailableException, IsBootstrappingException, RequestFailureException, RequestTimeoutException, InvalidRequestException
+    throws UnavailableException, IsBootstrappingException, RequestFailureException, RequestTimeoutException, InvalidRequestException, CasWriteUnknownResultException
     {
         final long startTimeForMetrics = System.nanoTime();
         TableMetadata metadata = Schema.instance.getTableMetadata(keyspaceName, cfName);
@@ -121,7 +121,18 @@
 
             throw new WriteTimeoutException(WriteType.CAS, consistencyForPaxos, 0, consistencyForPaxos.blockFor(Keyspace.open(keyspaceName)));
         }
-        catch (WriteTimeoutException|ReadTimeoutException e)
+        catch (CasWriteUnknownResultException e)
+        {
+            casWriteMetrics.unknownResult.mark();
+            throw e;
+        }
+        catch (WriteTimeoutException wte)
+        {
+            casWriteMetrics.timeouts.mark();
+            writeMetricsMap.get(consistencyForPaxos).timeouts.mark();
+            throw new CasWriteTimeoutException(wte.writeType, wte.consistency, wte.received, wte.blockFor, contentions);
+        }
+        catch (ReadTimeoutException e)
         {
             casWriteMetrics.timeouts.mark();
             writeMetricsMap.get(consistencyForPaxos).timeouts.mark();
@@ -133,7 +144,7 @@
             writeMetricsMap.get(consistencyForPaxos).failures.mark();
             throw e;
         }
-        catch(UnavailableException e)
+        catch (UnavailableException e)
         {
             casWriteMetrics.unavailables.mark();
             writeMetricsMap.get(consistencyForPaxos).unavailables.mark();

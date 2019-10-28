@@ -1,0 +1,27 @@
+    @Test
+    public void testWriteUnknownResult()
+    {
+        while (true)
+        {
+            cluster.filters().reset();
+            int pk = pkGen.getAndIncrement();
+            cluster.filters().verbs(Verb.PAXOS_PROPOSE_REQ.id).from(1).to(3).messagesMatching((from, to, msg) -> {
+                // Inject a single CAS request in-between prepare and propose phases
+                cluster.coordinator(2).execute(mkCasInsertQuery((a) -> pk, 1, 2),
+                                               ConsistencyLevel.QUORUM);
+                return false;
+            }).drop();
+
+            try
+            {
+                cluster.coordinator(1).execute(mkCasInsertQuery((a) -> pk, 1, 1), ConsistencyLevel.QUORUM);
+            }
+            catch (Throwable t)
+            {
+                Assert.assertTrue("Expecting cause to be CasWriteUncertainException",
+                                  t.getMessage().contains(CasWriteUnknownResultException.class.getCanonicalName()));
+                return;
+            }
+        }
+    }
+
