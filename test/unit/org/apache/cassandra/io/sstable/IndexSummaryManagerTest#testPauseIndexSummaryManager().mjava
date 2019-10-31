@@ -1,0 +1,37 @@
+    @Test
+    public void testPauseIndexSummaryManager() throws Exception
+    {
+        String ksname = KEYSPACE1;
+        String cfname = CF_STANDARDLOWiINTERVAL; // index interval of 8, no key caching
+        Keyspace keyspace = Keyspace.open(ksname);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfname);
+        int numSSTables = 4;
+        int numRows = 256;
+        createSSTables(ksname, cfname, numSSTables, numRows);
+
+        List<SSTableReader> sstables = new ArrayList<>(cfs.getLiveSSTables());
+        for (SSTableReader sstable : sstables)
+            sstable.overrideReadMeter(new RestorableMeter(100.0, 100.0));
+
+        long singleSummaryOffHeapSpace = sstables.get(0).getIndexSummaryOffHeapSize();
+
+        // everything should get cut in half
+        assert sstables.size() == numSSTables;
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.UNKNOWN))
+        {
+            try (AutoCloseable toresume = CompactionManager.instance.pauseGlobalCompaction())
+            {
+                sstables = redistributeSummaries(Collections.emptyList(), of(cfs.metadata().id, txn), (singleSummaryOffHeapSpace * (numSSTables / 2)));
+                fail("The redistribution should fail - we got paused before adding to active compactions, but after marking compacting");
+            }
+        }
+        catch (CompactionInterruptedException e)
+        {
+            // expected
+        }
+        for (SSTableReader sstable : sstables)
+            assertEquals(BASE_SAMPLING_LEVEL, sstable.getIndexSummarySamplingLevel());
+        validateData(cfs, numRows);
+        assertOnDiskState(cfs, numSSTables);
+    }
+
