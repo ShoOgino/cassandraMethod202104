@@ -1,0 +1,23 @@
+    @Test
+    public void useNoCompressorOnFlushTest() throws Throwable
+    {
+        DatabaseDescriptor.setFlushCompression(Config.FlushCompression.none);
+        createTable("CREATE TABLE %s (k text PRIMARY KEY, v text) WITH compression = {'sstable_compression': 'LZ4Compressor'};");
+        ColumnFamilyStore store = flushTwice();
+
+        // Should flush as Noop compressor
+        Set<SSTableReader> sstables = store.getLiveSSTables();
+        sstables.forEach(sstable -> {
+            assertTrue(sstable.getCompressionMetadata().parameters.getSstableCompressor() instanceof NoopCompressor);
+        });
+
+        // Should compact to LZ4
+        compact();
+
+        sstables = store.getLiveSSTables();
+        assertEquals(sstables.size(), 1);
+        store.getLiveSSTables().forEach(sstable -> {
+            assertTrue(sstable.getCompressionMetadata().parameters.getSstableCompressor() instanceof LZ4Compressor);
+        });
+    }
+

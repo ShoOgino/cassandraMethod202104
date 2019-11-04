@@ -1,0 +1,25 @@
+    @Test
+    public void lz4hcFlushTest() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k text PRIMARY KEY, v text) WITH compression = " +
+                    "{'sstable_compression': 'LZ4Compressor', 'lz4_compressor_type': 'high'};");
+        ColumnFamilyStore store = flushTwice();
+
+        // Should flush as LZ4 "fast" mode
+        Set<SSTableReader> sstables = store.getLiveSSTables();
+        sstables.forEach(sstable -> {
+            LZ4Compressor compressor = (LZ4Compressor) sstable.getCompressionMetadata().parameters.getSstableCompressor();
+            assertEquals(LZ4Compressor.LZ4_FAST_COMPRESSOR, compressor.compressorType);
+        });
+
+        // Should compact to LZ4 "high" mode
+        compact();
+
+        sstables = store.getLiveSSTables();
+        assertEquals(sstables.size(), 1);
+        store.getLiveSSTables().forEach(sstable -> {
+            LZ4Compressor compressor = (LZ4Compressor) sstable.getCompressionMetadata().parameters.getSstableCompressor();
+            assertEquals(LZ4Compressor.LZ4_HIGH_COMPRESSOR, compressor.compressorType);
+        });
+    }
+
