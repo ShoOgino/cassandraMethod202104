@@ -1,5 +1,23 @@
     public void startup()
     {
-        forEach(I::startup);
+        try (AllMembersAliveMonitor monitor = new AllMembersAliveMonitor())
+        {
+            // Start any instances with auto_bootstrap enabled first, and in series to avoid issues
+            // with multiple nodes bootstrapping with consistent range movement enabled,
+            // and then start any instances with it disabled in parallel.
+            List<I> startSequentially = new ArrayList<>();
+            List<I> startParallel = new ArrayList<>();
+            for (I instance : instances)
+            {
+                if ((boolean) instance.config().get("auto_bootstrap"))
+                    startSequentially.add(instance);
+                else
+                    startParallel.add(instance);
+            }
+
+            forEach(startSequentially, I::startup);
+            parallelForEach(startParallel, I::startup, 0, null);
+            monitor.waitForCompletion();
+        }
     }
 
