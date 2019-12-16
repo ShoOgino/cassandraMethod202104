@@ -1,0 +1,48 @@
+    /**
+     * Reads the next chunk, decompresses if necessary, and probabilistically verifies the checksum/CRC.
+     *
+     * Doesn't adjust uncompressedChunkPosition - it's up to the caller to do so.
+     */
+    private void loadNextChunk() throws IOException
+    {
+        if (!compressedChunks.hasNext())
+            throw new EOFException();
+
+        int chunkLength = compressedChunks.next().length;
+        chunkBytesRead += (chunkLength + 4); // chunk length + checksum or CRC length
+
+        /*
+         * uncompress if the buffer size is less than the max chunk size; else, if the buffer size is greater than
+         * or equal to the maxCompressedLength, we assume the buffer is not compressed (see CASSANDRA-10520)
+         */
+        if (chunkLength < compressionParams.maxCompressedLength())
+        {
+            if (compressedChunk.capacity() < chunkLength)
+            {
+                // with poorly compressible data, it's possible for a compressed chunk to be larger than
+                // configured uncompressed chunk size - depending on data, min_compress_ratio, and compressor;
+                // we may need to resize the compressed buffer.
+                FileUtils.clean(compressedChunk);
+                compressedChunk = ByteBuffer.allocateDirect(max((int) (compressedChunk.capacity() * GROWTH_FACTOR), chunkLength));
+            }
+
+            compressedChunk.position(0).limit(chunkLength);
+            readChunk(compressedChunk);
+            compressedChunk.position(0);
+
+            maybeValidateChecksum(compressedChunk, input.readInt());
+
+            buffer.clear();
+            compressionParams.getSstableCompressor().uncompress(compressedChunk, buffer);
+            buffer.flip();
+        }
+        else
+        {
+            buffer.position(0).limit(chunkLength);
+            readChunk(buffer);
+            buffer.position(0);
+
+            maybeValidateChecksum(buffer, input.readInt());
+        }
+    }
+

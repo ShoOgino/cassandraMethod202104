@@ -8,16 +8,17 @@
         try (ChannelProxy fc = sstable.getDataChannel().sharedCopy())
         {
             long progress = 0L;
-            // calculate chunks to transfer. we want to send continuous chunks altogether.
-            List<SSTableReader.PartitionPositionBounds> sections = getTransferSections(compressionInfo.chunks);
+
+            // we want to send continuous chunks together to minimise reads from disk and network writes
+            List<Section> sections = fuseAdjacentChunks(compressionInfo.chunks);
 
             int sectionIdx = 0;
 
             // stream each of the required sections of the file
-            for (final SSTableReader.PartitionPositionBounds section : sections)
+            for (Section section : sections)
             {
                 // length of the section to stream
-                long length = section.upperPosition - section.lowerPosition;
+                long length = section.end - section.start;
 
                 logger.debug("[Stream #{}] Writing section {} with length {} to stream.", session.planId(), sectionIdx++, length);
 
@@ -26,7 +27,7 @@
                 while (bytesTransferred < length)
                 {
                     int toTransfer = (int) Math.min(CHUNK_SIZE, length - bytesTransferred);
-                    long position = section.lowerPosition + bytesTransferred;
+                    long position = section.start + bytesTransferred;
 
                     out.writeToChannel(bufferSupplier -> {
                         ByteBuffer outBuffer = bufferSupplier.get(toTransfer);
