@@ -1,0 +1,40 @@
+    /**
+     * Writes a single partition containing only a single row deletion and reads with either a range or
+     * partition query. Before the row deletion is eligible for purging, it should appear in the query
+     * results and cause a non-empty repaired data digest to be generated. Repeating the query after
+     * the row deletion is eligible for purging, both the result set and the repaired data digest should
+     * be empty.
+     */
+    private void fullyPurgedPartitionCreatesEmptyDigest(ColumnFamilyStore cfs, ReadCommand command) throws Exception
+    {
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+        setGCGrace(cfs, 600);
+
+        // Partition with a single, fully deleted row
+        RowUpdateBuilder.deleteRow(cfs.metadata(), 0, ByteBufferUtil.bytes("key"), "cc").apply();
+        cfs.forceBlockingFlush();
+        cfs.getLiveSSTables().forEach(sstable -> mutateRepaired(cfs, sstable, 111, null));
+
+        command.trackRepairedStatus();
+        List<ImmutableBTreePartition> partitions = Util.getAllUnfiltered(command);
+        assertEquals(1, partitions.size());
+        ByteBuffer digestWithTombstones = command.getRepairedDataDigest();
+        assertTrue(ByteBufferUtil.compareUnsigned(EMPTY_BYTE_BUFFER, digestWithTombstones) != 0);
+
+        // Make tombstones eligible for purging and re-run cmd with an incremented nowInSec
+        setGCGrace(cfs, 0);
+
+        AbstractReadCommandBuilder builder = command instanceof PartitionRangeReadCommand
+                                             ? Util.cmd(cfs)
+                                             : Util.cmd(cfs, Util.dk("key"));
+        builder.withNowInSeconds(command.nowInSec() + 60);
+        command = builder.build();
+        command.trackRepairedStatus();
+
+        partitions = Util.getAllUnfiltered(command);
+        assertTrue(partitions.isEmpty());
+        ByteBuffer digestWithoutTombstones = command.getRepairedDataDigest();
+        assertEquals(0, ByteBufferUtil.compareUnsigned(EMPTY_BYTE_BUFFER, digestWithoutTombstones));
+    }
+

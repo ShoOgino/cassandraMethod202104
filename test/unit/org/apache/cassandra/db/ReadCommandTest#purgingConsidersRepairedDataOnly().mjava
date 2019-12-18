@@ -1,0 +1,38 @@
+    @Test
+    public void purgingConsidersRepairedDataOnly() throws Exception
+    {
+        // 2 sstables, first is repaired and contains data that is all purgeable
+        // the second is unrepaired and contains non-purgable data. Even though
+        // the partition itself is not fully purged, the repaired data digest
+        // should be empty as there was no non-purgeable, repaired data read.
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(CF6);
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+        setGCGrace(cfs, 0);
+
+        // Partition with a single, fully deleted row which will be fully purged
+        DecoratedKey key = Util.dk("key");
+        RowUpdateBuilder.deleteRow(cfs.metadata(), 0, key, "cc").apply();
+        cfs.forceBlockingFlush();
+        cfs.getLiveSSTables().forEach(sstable -> mutateRepaired(cfs, sstable, 111, null));
+
+        new RowUpdateBuilder(cfs.metadata(), 1, key).clustering("cc").add("a", ByteBufferUtil.bytes("a")).build().apply();
+        cfs.forceBlockingFlush();
+
+        int nowInSec = FBUtilities.nowInSeconds() + 10;
+        ReadCommand cmd = Util.cmd(cfs, key).withNowInSeconds(nowInSec).build();
+        cmd.trackRepairedStatus();
+        Partition partition = Util.getOnlyPartitionUnfiltered(cmd);
+        assertFalse(partition.isEmpty());
+        // check that
+        try (UnfilteredRowIterator rows = partition.unfilteredIterator())
+        {
+            assertFalse(rows.isEmpty());
+            Unfiltered unfiltered = rows.next();
+            assertFalse(rows.hasNext());
+            assertTrue(unfiltered.isRow());
+            assertFalse(((Row) unfiltered).hasDeletion(nowInSec));
+        }
+        assertEquals(EMPTY_BYTE_BUFFER, cmd.getRepairedDataDigest());
+    }
+
