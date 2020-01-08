@@ -1,0 +1,42 @@
+    @Test
+    public void testExceedRecordLimitWithMultiplePartitions() throws Exception
+    {
+        CommitLog.instance.resetUnsafe(true);
+        List<Mutation> mutations = new ArrayList<>();
+        Keyspace ks = Keyspace.open(KEYSPACE1);
+        char[] keyChars = new char[MutationExceededMaxSizeException.PARTITION_MESSAGE_LIMIT];
+        Arrays.fill(keyChars, 'k');
+        String key = new String(keyChars);
+
+        // large mutation
+        mutations.add(new RowUpdateBuilder(ks.getColumnFamilyStore(STANDARD1).metadata(), 0, key)
+                      .clustering("bytes")
+                      .add("val", ByteBuffer.allocate(1 + getMaxRecordDataSize()))
+                      .build());
+
+        // smaller mutation
+        mutations.add(new RowUpdateBuilder(ks.getColumnFamilyStore(STANDARD2).metadata(), 0, key)
+                      .clustering("bytes")
+                      .add("val", ByteBuffer.allocate(1 + getMaxRecordDataSize() - 1024))
+                      .build());
+
+        Mutation mutation = Mutation.merge(mutations);
+        try
+        {
+            CommitLog.instance.add(Mutation.merge(mutations));
+            throw new AssertionError("mutation larger than limit was accepted");
+        }
+        catch (MutationExceededMaxSizeException exception)
+        {
+            String message = exception.getMessage();
+
+            long mutationSize = mutation.serializedSize(MessagingService.current_version) + ENTRY_OVERHEAD_SIZE;
+            final String expectedMessagePrefix = String.format("Encountered an oversized mutation (%d/%d) for keyspace: %s.",
+                                                               mutationSize,
+                                                               DatabaseDescriptor.getMaxMutationSize(),
+                                                               KEYSPACE1);
+            assertTrue(message.startsWith(expectedMessagePrefix));
+            assertTrue(message.contains(String.format("%s.%s and 1 more.", STANDARD1, key)));
+        }
+    }
+

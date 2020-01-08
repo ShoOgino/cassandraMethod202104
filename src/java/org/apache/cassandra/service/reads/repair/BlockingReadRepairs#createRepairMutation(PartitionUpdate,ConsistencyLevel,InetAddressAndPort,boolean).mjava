@@ -9,43 +9,42 @@
 
         DecoratedKey key = update.partitionKey();
         Mutation mutation = new Mutation(update);
-        Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
-        TableMetadata metadata = update.metadata();
-
         int messagingVersion = MessagingService.instance().versions.get(destination);
 
-        int    mutationSize = (int) Mutation.serializer.serializedSize(mutation, messagingVersion);
-        int maxMutationSize = DatabaseDescriptor.getMaxMutationSize();
-
-
-        if (mutationSize <= maxMutationSize)
+        try
         {
+            mutation.validateSize(messagingVersion, 0);
             return mutation;
         }
-        else if (DROP_OVERSIZED_READ_REPAIR_MUTATIONS)
+        catch (MutationExceededMaxSizeException e)
         {
-            logger.debug("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
-                         mutationSize,
-                         maxMutationSize,
-                         metadata,
-                         metadata.partitionKeyType.getString(key.getKey()),
-                         destination);
-            return null;
-        }
-        else
-        {
-            logger.warn("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
-                        mutationSize,
-                        maxMutationSize,
-                        metadata,
-                        metadata.partitionKeyType.getString(key.getKey()),
-                        destination);
+            Keyspace keyspace = Keyspace.open(mutation.getKeyspaceName());
+            TableMetadata metadata = update.metadata();
 
-            if (!suppressException)
+            if (DROP_OVERSIZED_READ_REPAIR_MUTATIONS)
             {
-                int blockFor = consistency.blockFor(keyspace);
-                Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
-                throw new ReadTimeoutException(consistency, blockFor - 1, blockFor, true);
+                logger.debug("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                             e.mutationSize,
+                             MAX_MUTATION_SIZE,
+                             metadata,
+                             metadata.partitionKeyType.getString(key.getKey()),
+                             destination);
+            }
+            else
+            {
+                logger.warn("Encountered an oversized ({}/{}) read repair mutation for table {}, key {}, node {}",
+                            e.mutationSize,
+                            MAX_MUTATION_SIZE,
+                            metadata,
+                            metadata.partitionKeyType.getString(key.getKey()),
+                            destination);
+
+                if (!suppressException)
+                {
+                    int blockFor = consistency.blockFor(keyspace);
+                    Tracing.trace("Timed out while read-repairing after receiving all {} data and digest responses", blockFor);
+                    throw new ReadTimeoutException(consistency, blockFor - 1, blockFor, true);
+                }
             }
             return null;
         }
