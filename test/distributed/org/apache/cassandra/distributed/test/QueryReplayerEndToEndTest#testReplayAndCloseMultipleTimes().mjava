@@ -1,0 +1,24 @@
+    @Test
+    public void testReplayAndCloseMultipleTimes() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(3, conf -> conf.with(Feature.NATIVE_PROTOCOL, Feature.GOSSIP, Feature.NETWORK))))
+        {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+            List<String> hosts = cluster.stream()
+                                        .map(i -> i.config().broadcastAddressAndPort().address.getHostAddress())
+                                        .collect(Collectors.toList());
+
+            final int queriesCount = 3;
+            // replay for the first time, it should pass
+            replayAndClose(Collections.singletonList(makeFQLQueries(queriesCount)), hosts);
+            // replay for the second time, it should pass too
+            // however, if the cached sessions are not released, the second replay will reused the closed sessions from previous replay and fail to insert
+            replayAndClose(Collections.singletonList(makeFQLQueries(queriesCount)), hosts);
+            Object[][] result = cluster.coordinator(1)
+                                       .execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = ?",
+                                                ConsistencyLevel.QUORUM, 1);
+            Assert.assertEquals(String.format("Expecting to see %d rows since it replayed twice and each with %d queries", queriesCount * 2, queriesCount),
+                                queriesCount * 2, result.length);
+        }
+    }
+
