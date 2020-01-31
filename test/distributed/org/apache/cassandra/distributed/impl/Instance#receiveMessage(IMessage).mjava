@@ -2,33 +2,17 @@
     {
         sync(() -> {
             // Based on org.apache.cassandra.net.IncomingTcpConnection.receiveMessage
-            try (DataInputBuffer input = new DataInputBuffer(imessage.bytes()))
+            try
             {
-                int version = imessage.version();
-                if (version > MessagingService.current_version)
-                {
-                    throw new IllegalStateException(String.format("Node%d received message version %d but current version is %d",
-                                                                  this.config.num(),
-                                                                  version,
-                                                                  MessagingService.current_version));
-                }
-
-                MessagingService.validateMagic(input.readInt());
-                int id;
-                if (version < MessagingService.VERSION_20)
-                    id = Integer.parseInt(input.readUTF());
-                else
-                    id = input.readInt();
-                long currentTime = ApproximateTime.currentTimeMillis();
-                MessageIn message = MessageIn.read(input, version, id, MessageIn.readConstructionTime(imessage.from().address, input, currentTime));
+                MessageIn message = deserializeMessage(imessage);
                 if (message == null)
                 {
                     // callback expired; nothing to do
                     return;
                 }
-                if (version <= MessagingService.current_version)
+                if (message.version <= MessagingService.current_version)
                 {
-                    MessagingService.instance().receive(message, id);
+                    MessagingService.instance().receive(message, imessage.id());
                 }
                 // else ignore message
             }

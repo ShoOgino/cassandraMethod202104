@@ -1,0 +1,28 @@
+    public static MessageIn<Object> deserializeMessage(IMessage imessage)
+    {
+        // Based on org.apache.cassandra.net.IncomingTcpConnection.receiveMessage
+        try (DataInputBuffer input = new DataInputBuffer(imessage.bytes()))
+        {
+            int version = imessage.version();
+            if (version > MessagingService.current_version)
+            {
+                throw new IllegalStateException(String.format("Received message version %d but current version is %d",
+                                                              version,
+                                                              MessagingService.current_version));
+            }
+
+            MessagingService.validateMagic(input.readInt());
+            int id;
+            if (version < MessagingService.VERSION_20)
+                id = Integer.parseInt(input.readUTF());
+            else
+                id = input.readInt();
+            long currentTime = ApproximateTime.currentTimeMillis();
+            return MessageIn.read(input, version, id, MessageIn.readConstructionTime(imessage.from().address, input, currentTime));
+        }
+        catch (Throwable t)
+        {
+            throw new RuntimeException(t);
+        }
+    }
+
