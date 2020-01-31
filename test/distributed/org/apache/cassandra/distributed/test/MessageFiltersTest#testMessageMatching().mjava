@@ -1,0 +1,45 @@
+    @Test
+    public void testMessageMatching() throws Throwable
+    {
+        String read = "SELECT * FROM " + KEYSPACE + ".tbl";
+        String write = "INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (1, 1, 1)";
+
+        try (Cluster cluster = Cluster.create(2))
+        {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': " + cluster.size() + "};");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+
+            AtomicInteger counter = new AtomicInteger();
+
+            Set<Integer> verbs = Sets.newHashSet(Arrays.asList(MessagingService.Verb.RANGE_SLICE.ordinal(),
+                                                               MessagingService.Verb.MUTATION.ordinal()));
+
+            // Reads and writes are going to time out in both directions
+            IMessageFilters.Filter filter = cluster.filters()
+                                                   .allVerbs()
+                                                   .from(1)
+                                                   .to(2)
+                                                   .messagesMatching((from, to, msg) -> {
+                                                       // Decode and verify message on instance; return the result back here
+                                                       Integer id = cluster.get(1).callsOnInstance((IIsolatedExecutor.SerializableCallable<Integer>) () -> {
+                                                           MessageIn decoded = Instance.deserializeMessage(msg).left;
+                                                           if (decoded != null)
+                                                               return (Integer) decoded.verb.ordinal();
+                                                           return -1;
+                                                       }).call();
+                                                       if (id > 0)
+                                                           Assert.assertTrue(verbs.contains(id));
+                                                       counter.incrementAndGet();
+                                                       return false;
+                                                   }).drop();
+
+            for (int i : new int[]{ 1, 2 })
+                cluster.coordinator(i).execute(read, ConsistencyLevel.ALL);
+            for (int i : new int[]{ 1, 2 })
+                cluster.coordinator(i).execute(write, ConsistencyLevel.ALL);
+
+            filter.off();
+            Assert.assertEquals(4, counter.get());
+        }
+    }
+

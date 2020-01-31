@@ -1,0 +1,33 @@
+    public static Pair<MessageIn<Object>, Integer> deserializeMessage(IMessage imessage)
+    {
+        // Based on org.apache.cassandra.net.IncomingTcpConnection.receiveMessage
+        try (DataInputBuffer input = new DataInputBuffer(imessage.bytes()))
+        {
+            int version = imessage.version();
+            if (version > MessagingService.current_version)
+            {
+                throw new IllegalStateException(String.format("Received message version %d but current version is %d",
+                                                              version,
+                                                              MessagingService.current_version));
+            }
+
+            MessagingService.validateMagic(input.readInt());
+            int id;
+            if (version < MessagingService.VERSION_20)
+                id = Integer.parseInt(input.readUTF());
+            else
+                id = input.readInt();
+            if (imessage.id() != id)
+                throw new IllegalStateException(String.format("Message id mismatch: %d != %d", imessage.id(), id));
+
+            // make sure to readInt, even if cross_node_to is not enabled
+            int partial = input.readInt();
+
+            return Pair.create(MessageIn.read(input, version, id), partial);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException();
+        }
+    }
+

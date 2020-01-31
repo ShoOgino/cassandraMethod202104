@@ -1,51 +1,37 @@
     public void receiveMessage(IMessage imessage)
     {
         sync(() -> {
-            // Based on org.apache.cassandra.net.IncomingTcpConnection.receiveMessage
-            try (DataInputBuffer input = new DataInputBuffer(imessage.bytes()))
+            Pair<MessageIn<Object>, Integer> deserialized = null;
+            try
             {
-                int version = imessage.version();
-                if (version > MessagingService.current_version)
-                {
-                    throw new IllegalStateException(String.format("Node%d received message version %d but current version is %d",
-                                                                  this.config.num(),
-                                                                  version,
-                                                                  MessagingService.current_version));
-                }
-
-                MessagingService.validateMagic(input.readInt());
-                int id;
-                if (version < MessagingService.VERSION_20)
-                    id = Integer.parseInt(input.readUTF());
-                else
-                    id = input.readInt();
-
-                long timestamp = System.currentTimeMillis();
-                boolean isCrossNodeTimestamp = false;
-                // make sure to readInt, even if cross_node_to is not enabled
-                int partial = input.readInt();
-                if (DatabaseDescriptor.hasCrossNodeTimeout())
-                {
-                    long crossNodeTimestamp = (timestamp & 0xFFFFFFFF00000000L) | (((partial & 0xFFFFFFFFL) << 2) >> 2);
-                    isCrossNodeTimestamp = (timestamp != crossNodeTimestamp);
-                    timestamp = crossNodeTimestamp;
-                }
-
-                MessageIn message = MessageIn.read(input, version, id);
-                if (message == null)
-                {
-                    // callback expired; nothing to do
-                    return;
-                }
-                if (version <= MessagingService.current_version)
-                {
-                    MessagingService.instance().receive(message, id, timestamp, isCrossNodeTimestamp);
-                }
-                // else ignore message
+                deserialized = deserializeMessage(imessage);
             }
             catch (Throwable t)
             {
                 throw new RuntimeException("Exception occurred on node " + broadcastAddressAndPort(), t);
+            }
+
+            MessageIn<Object> message = deserialized.left;
+            int partial = deserialized.right;
+
+            long timestamp = System.currentTimeMillis();
+            boolean isCrossNodeTimestamp = false;
+
+            if (DatabaseDescriptor.hasCrossNodeTimeout())
+            {
+                long crossNodeTimestamp = (timestamp & 0xFFFFFFFF00000000L) | (((partial & 0xFFFFFFFFL) << 2) >> 2);
+                isCrossNodeTimestamp = (timestamp != crossNodeTimestamp);
+                timestamp = crossNodeTimestamp;
+            }
+
+            if (message == null)
+            {
+                // callback expired; nothing to do
+                return;
+            }
+            if (message.version <= MessagingService.current_version)
+            {
+                MessagingService.instance().receive(message, imessage.id(), timestamp, isCrossNodeTimestamp);
             }
         }).run();
     }
