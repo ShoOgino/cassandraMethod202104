@@ -1,0 +1,30 @@
+    @Test
+    public void testFilters() throws Throwable
+    {
+        String read = "SELECT * FROM " + KEYSPACE + ".tbl";
+        String write = "INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (1, 1, 1)";
+
+        try (Cluster cluster = Cluster.create(2))
+        {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': " + cluster.size() + "};");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+
+            // Reads and writes are going to time out in both directions
+            cluster.filters().allVerbs().from(1).to(2).drop();
+            for (int i : new int[]{ 1, 2 })
+                assertTimeOut(() -> cluster.coordinator(i).execute(read, ConsistencyLevel.ALL));
+            for (int i : new int[]{ 1, 2 })
+                assertTimeOut(() -> cluster.coordinator(i).execute(write, ConsistencyLevel.ALL));
+
+            cluster.filters().reset();
+            // Reads are going to timeout only when 1 serves as a coordinator
+            cluster.filters().verbs(Verb.RANGE_REQ.id).from(1).to(2).drop();
+            assertTimeOut(() -> cluster.coordinator(1).execute(read, ConsistencyLevel.ALL));
+            cluster.coordinator(2).execute(read, ConsistencyLevel.ALL);
+
+            // Writes work in both directions
+            for (int i : new int[]{ 1, 2 })
+                cluster.coordinator(i).execute(write, ConsistencyLevel.ALL);
+        }
+    }
+

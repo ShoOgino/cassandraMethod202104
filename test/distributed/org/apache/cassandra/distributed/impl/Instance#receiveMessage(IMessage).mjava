@@ -2,28 +2,20 @@
     public void receiveMessage(IMessage message)
     {
         sync(() -> {
-            try (DataInputBuffer in = new DataInputBuffer(message.bytes()))
+            if (message.version() > MessagingService.current_version)
             {
-                if (message.version() > MessagingService.current_version)
-                {
-                    throw new IllegalStateException(String.format("Node%d received message version %d but current version is %d",
-                                                                  this.config.num(),
-                                                                  message.version(),
-                                                                  MessagingService.current_version));
-                }
+                throw new IllegalStateException(String.format("Node%d received message version %d but current version is %d",
+                                                              this.config.num(),
+                                                              message.version(),
+                                                              MessagingService.current_version));
+            }
 
-                Message<?> messageIn = Message.serializer.deserialize(in, message.from(), message.version());
-                Message.Header header = messageIn.header;
-                TraceState state = Tracing.instance.initializeFromMessage(header);
-                if (state != null) state.trace("{} message received from {}", header.verb, header.from);
-                header.verb.stage.execute(
-                ThrowingRunnable.toRunnable(() -> messageIn.verb().handler().doVerb((Message<Object>) messageIn)),
-                ExecutorLocals.create(state));
-            }
-            catch (Throwable t)
-            {
-                throw new RuntimeException("Exception occurred on node " + broadcastAddressAndPort(), t);
-            }
+            Message<?> messageIn = deserializeMessage(message);
+            Message.Header header = messageIn.header;
+            TraceState state = Tracing.instance.initializeFromMessage(header);
+            if (state != null) state.trace("{} message received from {}", header.verb, header.from);
+            header.verb.stage.execute(ThrowingRunnable.toRunnable(() -> messageIn.verb().handler().doVerb((Message<Object>) messageIn)),
+                                      ExecutorLocals.create(state));
         }).run();
     }
 
