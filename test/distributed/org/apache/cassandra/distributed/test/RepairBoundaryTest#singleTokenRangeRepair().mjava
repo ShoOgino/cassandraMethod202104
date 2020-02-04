@@ -1,0 +1,30 @@
+    @Test
+    public void singleTokenRangeRepair()
+    {
+        populate();
+        verify();
+
+        delete(cluster.get(1), 999, 1000);
+        delete(cluster.get(3), 1001);
+
+        cluster.get(2).runOnInstance(() -> {
+            try
+            {
+                Map<String, String> options = new HashMap<>();
+                options.put("ranges", "999:1000");
+                options.put("incremental", "false");
+                SimpleCondition await = new SimpleCondition();
+                StorageService.instance.repair(KEYSPACE, options, ImmutableList.of((tag, event) -> {
+                    if (event.getType() == ProgressEventType.COMPLETE)
+                        await.signalAll();
+                })).right.get();
+                await.await(1L, MINUTES);
+            }
+            catch (Exception e)
+            {
+            }
+        });
+
+        assertRows(c2Row(999, 1001, 1999, 2000, 3001), cluster.get(2).executeInternal(ALL));
+    }
+
