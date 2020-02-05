@@ -1,0 +1,17 @@
+        public boolean apply(SSTableReader sstable)
+        {
+            // grab the metadata before checking pendingRepair since this can be nulled out at any time
+            StatsMetadata sstableMetadata = sstable.getSSTableMetadata();
+            if (sstableMetadata.pendingRepair != null)
+            {
+                LocalSession session = ActiveRepairService.instance.consistent.local.getSession(sstableMetadata.pendingRepair);
+                if (session == null)
+                    return false;
+                else if (session.getState() == ConsistentSession.State.FINALIZED)
+                    return true;
+                else if (session.getState() != ConsistentSession.State.FAILED)
+                    throw new IllegalStateException(String.format("SSTable %s is marked pending for non-finalized incremental repair session %s, failing preview repair", sstable, sstableMetadata.pendingRepair));
+            }
+            return sstableMetadata.repairedAt != ActiveRepairService.UNREPAIRED_SSTABLE;
+        }
+

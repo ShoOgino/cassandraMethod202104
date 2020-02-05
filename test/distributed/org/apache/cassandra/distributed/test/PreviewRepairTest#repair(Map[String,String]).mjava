@@ -1,0 +1,34 @@
+    /**
+     * returns a pair with [repair success, was inconsistent]
+     */
+    private static IIsolatedExecutor.SerializableCallable<Pair<Boolean, Boolean>> repair(Map<String, String> options)
+    {
+        return () -> {
+            SimpleCondition await = new SimpleCondition();
+            AtomicBoolean success = new AtomicBoolean(true);
+            AtomicBoolean wasInconsistent = new AtomicBoolean(false);
+            StorageService.instance.repair(KEYSPACE, options, ImmutableList.of((tag, event) -> {
+                if (event.getType() == ProgressEventType.ERROR)
+                {
+                    success.set(false);
+                    await.signalAll();
+                }
+                else if (event.getType() == ProgressEventType.NOTIFICATION && event.getMessage().contains("Repaired data is inconsistent"))
+                {
+                    wasInconsistent.set(true);
+                }
+                else if (event.getType() == ProgressEventType.COMPLETE)
+                    await.signalAll();
+            }));
+            try
+            {
+                await.await(1, TimeUnit.MINUTES);
+            }
+            catch (InterruptedException e)
+            {
+                throw new RuntimeException(e);
+            }
+            return Pair.create(success.get(), wasInconsistent.get());
+        };
+    }
+
