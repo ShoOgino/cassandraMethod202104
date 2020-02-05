@@ -1,0 +1,23 @@
+    @Test
+    public void testExpireEndpoint() throws UnknownHostException
+    {
+        InetAddress hostAddress = InetAddress.getByName("127.0.0.2");
+        UUID hostId = UUID.randomUUID();
+        long expireTime = System.currentTimeMillis() - 1;
+
+        Gossiper.instance.initializeNodeUnsafe(hostAddress, hostId, 1);
+
+        EndpointState endpointState = Gossiper.instance.getEndpointStateForEndpoint(hostAddress);
+        Gossiper.runInGossipStageBlocking(() -> Gossiper.instance.markDead(hostAddress, endpointState));
+        endpointState.addApplicationState(ApplicationState.STATUS, StorageService.instance.valueFactory.removedNonlocal(hostId, expireTime));
+        Gossiper.instance.addExpireTimeForEndpoint(hostAddress, expireTime);
+
+        assertTrue("Expiring endpoint not unreachable before status check", Gossiper.instance.getUnreachableMembers().contains(hostAddress));
+
+        Gossiper.instance.doStatusCheck();
+
+        assertFalse("Expired endpoint still part of live members", Gossiper.instance.getLiveMembers().contains(hostAddress));
+        assertFalse("Expired endpoint still part of unreachable members", Gossiper.instance.getUnreachableMembers().contains(hostAddress));
+        assertNull("Expired endpoint still contain endpoint state", Gossiper.instance.getEndpointStateForEndpoint(hostAddress));
+    }
+
