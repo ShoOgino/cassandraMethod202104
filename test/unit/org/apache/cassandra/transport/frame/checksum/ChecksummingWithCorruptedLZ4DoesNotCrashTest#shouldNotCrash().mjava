@@ -1,0 +1,28 @@
+    @Test
+    public void shouldNotCrash() throws IOException
+    {
+        // We found lz4 caused the JVM to crash, so used the input (bytes and byteToCorrupt) to the test which crashed
+        // to reproduce.
+        // It was found that the same input does not cause lz4 to crash by it self but needed repeated calls with this
+        // input produce such a failure.
+        String failureHex;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream("test/data/CASSANDRA-15313/lz4-jvm-crash-failure.txt"), StandardCharsets.UTF_8))) {
+            failureHex = reader.readLine().trim();
+        }
+        byte[] failure = ByteBufUtil.decodeHexDump(failureHex);
+        ReusableBuffer buffer = new ReusableBuffer(failure);
+        int byteToCorrupt = 52997;
+        // corrupting these values causes the exception.
+        byte[] corruptionValues = new byte[] { 21, 57, 79, (byte) 179 };
+        // 5k was chosen as the largest number of iterations seen needed to crash.
+        for (int i = 0; i < 5_000 ; i++) {
+            for (byte corruptionValue : corruptionValues) {
+                try {
+                    ChecksummingTransformerTest.roundTripWithCorruption(Pair.create(buffer, byteToCorrupt), corruptionValue, LZ4Compressor.INSTANCE, ChecksumType.ADLER32);
+                } catch (AssertionError e) {
+                    // ignore
+                }
+            }
+        }
+    }
+
