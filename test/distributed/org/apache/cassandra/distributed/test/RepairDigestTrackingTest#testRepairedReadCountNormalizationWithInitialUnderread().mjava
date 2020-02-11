@@ -1,0 +1,65 @@
+    @Test
+    public void testRepairedReadCountNormalizationWithInitialUnderread() throws Throwable
+    {
+        // Asserts that the amount of repaired data read for digest generation is consistent
+        // across replicas where one has to read less repaired data to satisfy the original
+        // limits of the read request.
+        try (Cluster cluster = init(Cluster.create(2)))
+        {
+
+            cluster.get(1).runOnInstance(() -> {
+                StorageProxy.instance.enableRepairedDataTrackingForRangeReads();
+                StorageProxy.instance.enableRepairedDataTrackingForPartitionReads();
+            });
+
+            cluster.schemaChange("CREATE TABLE " + KS_TABLE + " (k INT, c INT, v1 INT, PRIMARY KEY (k,c)) " +
+                                 "WITH CLUSTERING ORDER BY (c DESC)");
+
+            // insert data on both nodes and flush
+            for (int i=0; i<20; i++)
+            {
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (0, ?, ?) USING TIMESTAMP 0",
+                                               ConsistencyLevel.ALL, i, i);
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?) USING TIMESTAMP 1",
+                                               ConsistencyLevel.ALL, i, i);
+            }
+            cluster.forEach(c -> c.flush(KEYSPACE));
+            // nothing is repaired yet
+            cluster.forEach(i -> i.runOnInstance(assertNotRepaired()));
+            // mark everything repaired
+            cluster.forEach(i -> i.runOnInstance(markAllRepaired()));
+            cluster.forEach(i -> i.runOnInstance(assertRepaired()));
+
+            // Add some unrepaired data to both nodes
+            for (int i=20; i<30; i++)
+            {
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?) USING TIMESTAMP 1",
+                                               ConsistencyLevel.ALL, i, i);
+            }
+            // And some more unrepaired data to node2 only. This causes node2 to read less repaired data than node1
+            // when satisfying the limits of the read. So node2 needs to overread more repaired data than node1 when
+            // calculating the repaired data digest.
+            cluster.get(2).executeInternal("INSERT INTO "  + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?) USING TIMESTAMP 1", 30, 30);
+
+            // Verify single partition read
+            long ccBefore = getConfirmedInconsistencies(cluster.get(1));
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KS_TABLE + " WHERE k=1 LIMIT 20", ConsistencyLevel.ALL),
+                       rows(1, 30, 11));
+            long ccAfterPartitionRead = getConfirmedInconsistencies(cluster.get(1));
+
+            // Recreate a mismatch in unrepaired data and verify partition range read
+            cluster.get(2).executeInternal("INSERT INTO "  + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?)", 31, 31);
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KS_TABLE + " LIMIT 30", ConsistencyLevel.ALL),
+                       rows(1, 31, 2));
+            long ccAfterRangeRead = getConfirmedInconsistencies(cluster.get(1));
+
+            if (ccAfterPartitionRead != ccAfterRangeRead)
+                if (ccAfterPartitionRead != ccBefore)
+                    fail("Both range and partition reads reported data inconsistencies but none were expected");
+                else
+                    fail("Reported inconsistency during range read but none were expected");
+            else if (ccAfterPartitionRead != ccBefore)
+                fail("Reported inconsistency during partition read but none were expected");
+        }
+    }
+

@@ -1,0 +1,72 @@
+    @Test
+    public void testRepairedReadCountNormalizationWithInitialOverread() throws Throwable
+    {
+        // Asserts that the amount of repaired data read for digest generation is consistent
+        // across replicas where one has to read more repaired data to satisfy the original
+        // limits of the read request.
+        try (Cluster cluster = init(Cluster.create(2)))
+        {
+
+            cluster.get(1).runOnInstance(() -> {
+                StorageProxy.instance.enableRepairedDataTrackingForRangeReads();
+                StorageProxy.instance.enableRepairedDataTrackingForPartitionReads();
+            });
+
+            cluster.schemaChange("CREATE TABLE " + KS_TABLE + " (k INT, c INT, v1 INT, PRIMARY KEY (k,c)) " +
+                                 "WITH CLUSTERING ORDER BY (c DESC)");
+
+            // insert data on both nodes and flush
+            for (int i=0; i<10; i++)
+            {
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (0, ?, ?) USING TIMESTAMP 0",
+                                               ConsistencyLevel.ALL, i, i);
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?) USING TIMESTAMP 1",
+                                               ConsistencyLevel.ALL, i, i);
+            }
+            cluster.forEach(c -> c.flush(KEYSPACE));
+            // nothing is repaired yet
+            cluster.forEach(i -> i.runOnInstance(assertNotRepaired()));
+            // mark everything repaired
+            cluster.forEach(i -> i.runOnInstance(markAllRepaired()));
+            cluster.forEach(i -> i.runOnInstance(assertRepaired()));
+
+            // Add some unrepaired data to both nodes
+            for (int i=10; i<13; i++)
+            {
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (0, ?, ?) USING TIMESTAMP 1",
+                                               ConsistencyLevel.ALL, i, i);
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v1) VALUES (1, ?, ?) USING TIMESTAMP 1",
+                                               ConsistencyLevel.ALL, i, i);
+            }
+            cluster.forEach(c -> c.flush(KEYSPACE));
+            // And some row deletions on node2 only which cover data in the repaired set
+            // This will cause node2 to read more repaired data in satisfying the limit of the read request
+            // so it should overread less than node1 (in fact, it should not overread at all) in order to
+            // calculate the repaired data digest.
+            for (int i=7; i<10; i++)
+            {
+                cluster.get(2).executeInternal("DELETE FROM " + KS_TABLE + " USING TIMESTAMP 2 WHERE k = 0 AND c = ?", i);
+                cluster.get(2).executeInternal("DELETE FROM " + KS_TABLE + " USING TIMESTAMP 2 WHERE k = 1 AND c = ?", i);
+            }
+
+            // Verify single partition read
+            long ccBefore = getConfirmedInconsistencies(cluster.get(1));
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KS_TABLE + " WHERE k=0 LIMIT 5", ConsistencyLevel.ALL),
+                       rows(rows(0, 12, 10), rows(0, 6, 5)));
+            long ccAfterPartitionRead = getConfirmedInconsistencies(cluster.get(1));
+
+            // Verify partition range read
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KS_TABLE + " LIMIT 11", ConsistencyLevel.ALL),
+                       rows(rows(1, 12, 10), rows(1, 6, 0), rows(0, 12, 12)));
+            long ccAfterRangeRead = getConfirmedInconsistencies(cluster.get(1));
+
+            if (ccAfterPartitionRead != ccAfterRangeRead)
+                if (ccAfterPartitionRead != ccBefore)
+                    fail("Both range and partition reads reported data inconsistencies but none were expected");
+                else
+                    fail("Reported inconsistency during range read but none were expected");
+            else if (ccAfterPartitionRead != ccBefore)
+                fail("Reported inconsistency during partition read but none were expected");
+        }
+    }
+

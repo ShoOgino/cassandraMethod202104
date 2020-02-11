@@ -1,0 +1,59 @@
+    @Test
+    public void testRepairedDataOverreadMetrics()
+    {
+        ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore(CF9);
+        cfs.truncateBlocking();
+        cfs.disableAutoCompaction();
+        cfs.metadata().withSwapped(cfs.metadata().params.unbuild()
+                                                        .caching(CachingParams.CACHE_NOTHING)
+                                                        .build());
+        // Insert and repair
+        insert(cfs, IntStream.range(0, 10), () -> IntStream.range(0, 10));
+        cfs.forceBlockingFlush();
+        cfs.getLiveSSTables().forEach(sstable -> mutateRepaired(cfs, sstable, 111, null));
+        // Insert and leave unrepaired
+        insert(cfs, IntStream.range(0, 10), () -> IntStream.range(10, 20));
+
+        // Single partition reads
+        int limit = 5;
+        ReadCommand cmd = Util.cmd(cfs, ByteBufferUtil.bytes(0)).withLimit(limit).build();
+        assertEquals(0, getAndResetOverreadCount(cfs));
+
+        // No overreads if not tracking
+        readAndCheckRowCount(Collections.singletonList(Util.getOnlyPartition(cmd)), limit);
+        assertEquals(0, getAndResetOverreadCount(cfs));
+
+        // Overread up to (limit - 1) if tracking is enabled
+        cmd = cmd.copy();
+        cmd.trackRepairedStatus();
+        readAndCheckRowCount(Collections.singletonList(Util.getOnlyPartition(cmd)), limit);
+        // overread count is always < limit as the first read is counted during merging (and so is expected)
+        assertEquals(limit - 1, getAndResetOverreadCount(cfs));
+
+        // if limit already requires reading all repaired data, no overreads should be recorded
+        limit = 20;
+        cmd = Util.cmd(cfs, ByteBufferUtil.bytes(0)).withLimit(limit).build();
+        readAndCheckRowCount(Collections.singletonList(Util.getOnlyPartition(cmd)), limit);
+        assertEquals(0, getAndResetOverreadCount(cfs));
+
+        // Range reads
+        limit = 5;
+        cmd = Util.cmd(cfs).withLimit(limit).build();
+        assertEquals(0, getAndResetOverreadCount(cfs));
+        // No overreads if not tracking
+        readAndCheckRowCount(Util.getAll(cmd), limit);
+        assertEquals(0, getAndResetOverreadCount(cfs));
+
+        // Overread up to (limit - 1) if tracking is enabled
+        cmd = cmd.copy();
+        cmd.trackRepairedStatus();
+        readAndCheckRowCount(Util.getAll(cmd), limit);
+        assertEquals(limit - 1, getAndResetOverreadCount(cfs));
+
+        // if limit already requires reading all repaired data, no overreads should be recorded
+        limit = 100;
+        cmd = Util.cmd(cfs).withLimit(limit).build();
+        readAndCheckRowCount(Util.getAll(cmd), limit);
+        assertEquals(0, getAndResetOverreadCount(cfs));
+    }
+
