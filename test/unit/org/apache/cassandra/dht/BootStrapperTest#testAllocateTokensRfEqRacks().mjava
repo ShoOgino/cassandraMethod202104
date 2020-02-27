@@ -1,0 +1,48 @@
+    @Test
+    public void testAllocateTokensRfEqRacks() throws UnknownHostException
+    {
+        IEndpointSnitch oldSnitch = DatabaseDescriptor.getEndpointSnitch();
+        try
+        {
+            DatabaseDescriptor.setEndpointSnitch(new RackInferringSnitch());
+            int vn = 8;
+            int replicas = 3;
+            int rackCount = replicas;
+            String ks = "BootStrapperTestNTSKeyspaceRfEqRacks";
+            String dc = "1";
+
+            TokenMetadata metadata = StorageService.instance.getTokenMetadata();
+            metadata.clearUnsafe();
+            metadata.updateHostId(UUID.randomUUID(), InetAddressAndPort.getByName("127.1.0.99"));
+            metadata.updateHostId(UUID.randomUUID(), InetAddressAndPort.getByName("127.15.0.99"));
+
+            SchemaLoader.createKeyspace(ks, KeyspaceParams.nts(dc, replicas, "15", 15), SchemaLoader.standardCFMD(ks, "Standard1"));
+            int base = 5;
+            for (int i = 0; i < rackCount; ++i)
+                generateFakeEndpoints(metadata, base << i, vn, dc, Integer.toString(i));     // unbalanced racks
+
+            int cnt = 5;
+            for (int i = 0; i < cnt; ++i)
+                allocateTokensForNode(vn, ks, metadata, InetAddressAndPort.getByName("127." + dc + ".0." + (99 + i)));
+
+            double target = 1.0 / (base + cnt);
+            double permittedOver = 1.0 / (2 * vn + 1) + 0.01;
+
+            Map<InetAddress, Float> ownership = StorageService.instance.effectiveOwnership(ks);
+            boolean failed = false;
+            for (Map.Entry<InetAddress, Float> o : ownership.entrySet())
+            {
+                int rack = o.getKey().getAddress()[2];
+                if (rack != 0)
+                    continue;
+
+                System.out.format("Node %s owns %f ratio to optimal %.2f\n", o.getKey(), o.getValue(), o.getValue() / target);
+                if (o.getValue()/target > 1 + permittedOver)
+                    failed = true;
+            }
+            Assert.assertFalse(String.format("One of the nodes in the rack has over %.2f%% overutilization.", permittedOver * 100), failed);
+        } finally {
+            DatabaseDescriptor.setEndpointSnitch(oldSnitch);
+        }
+    }
+
