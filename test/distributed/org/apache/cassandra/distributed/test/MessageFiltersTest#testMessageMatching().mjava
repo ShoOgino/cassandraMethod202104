@@ -16,29 +16,34 @@
                                                                Verb.MUTATION_REQ.id,
                                                                Verb.MUTATION_RSP.id));
 
-            // Reads and writes are going to time out in both directions
-            IMessageFilters.Filter filter = cluster.filters()
-                                                   .allVerbs()
-                                                   .from(1)
-                                                   .to(2)
-                                                   .messagesMatching((from, to, msg) -> {
-                                                       // Decode and verify message on instance; return the result back here
-                                                       Integer id = cluster.get(1).callsOnInstance((IIsolatedExecutor.SerializableCallable<Integer>) () -> {
-                                                           Message decoded = Instance.deserializeMessage(msg);
-                                                           return (Integer) decoded.verb().id;
-                                                       }).call();
-                                                       Assert.assertTrue(verbs.contains(id));
-                                                       counter.incrementAndGet();
-                                                       return false;
-                                                   }).drop();
+            for (boolean inbound : Arrays.asList(true, false))
+            {
+                counter.set(0);
+                // Reads and writes are going to time out in both directions
+                IMessageFilters.Filter filter = cluster.filters()
+                                                       .allVerbs()
+                                                       .inbound(inbound)
+                                                       .from(1)
+                                                       .to(2)
+                                                       .messagesMatching((from, to, msg) -> {
+                                                           // Decode and verify message on instance; return the result back here
+                                                           Integer id = cluster.get(1).callsOnInstance((IIsolatedExecutor.SerializableCallable<Integer>) () -> {
+                                                               Message decoded = Instance.deserializeMessage(msg);
+                                                               return (Integer) decoded.verb().id;
+                                                           }).call();
+                                                           Assert.assertTrue(verbs.contains(id));
+                                                           counter.incrementAndGet();
+                                                           return false;
+                                                       }).drop();
 
-            for (int i : new int[]{ 1, 2 })
-                cluster.coordinator(i).execute(read, ConsistencyLevel.ALL);
-            for (int i : new int[]{ 1, 2 })
-                cluster.coordinator(i).execute(write, ConsistencyLevel.ALL);
+                for (int i : new int[]{ 1, 2 })
+                    cluster.coordinator(i).execute(read, ConsistencyLevel.ALL);
+                for (int i : new int[]{ 1, 2 })
+                    cluster.coordinator(i).execute(write, ConsistencyLevel.ALL);
 
-            filter.off();
-            Assert.assertEquals(4, counter.get());
+                filter.off();
+                Assert.assertEquals(4, counter.get());
+            }
         }
     }
 

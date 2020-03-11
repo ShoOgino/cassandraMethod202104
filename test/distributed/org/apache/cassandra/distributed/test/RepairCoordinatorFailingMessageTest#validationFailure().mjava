@@ -1,0 +1,23 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void validationFailure()
+    {
+        String table = tableName("validationfailure");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.VALIDATION_REQ).messagesMatching(of(m -> {
+            throw new RuntimeException("validation fail");
+        })).drop();
+        try
+        {
+            NodeToolResult result = repair(1, KEYSPACE, table);
+            result.asserts()
+                  .failure()
+                  .errorContains("Some repair failed")
+                  .notificationContains(NodeToolResult.ProgressEventType.ERROR, "Some repair failed")
+                  .notificationContains(NodeToolResult.ProgressEventType.COMPLETE, "finished with error");
+        }
+        finally
+        {
+            filter.off();
+        }
+    }
+

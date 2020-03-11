@@ -1,0 +1,37 @@
+    @Test
+    public void outboundBeforeInbound() throws Throwable
+    {
+        try (Cluster cluster = Cluster.create(2))
+        {
+            InetAddressAndPort other = cluster.get(2).broadcastAddressAndPort();
+            CountDownLatch waitForIt = new CountDownLatch(1);
+            Set<Integer> outboundMessagesSeen = new HashSet<>();
+            Set<Integer> inboundMessagesSeen = new HashSet<>();
+            AtomicBoolean outboundAfterInbound = new AtomicBoolean(false);
+            cluster.filters().outbound().verbs(Verb.ECHO_REQ.id, Verb.ECHO_RSP.id).messagesMatching((from, to, msg) -> {
+                outboundMessagesSeen.add(msg.verb());
+                if (inboundMessagesSeen.contains(msg.verb()))
+                    outboundAfterInbound.set(true);
+                return false;
+            }).drop(); // drop is confusing since I am not dropping, im just listening...
+            cluster.filters().inbound().verbs(Verb.ECHO_REQ.id, Verb.ECHO_RSP.id).messagesMatching((from, to, msg) -> {
+                inboundMessagesSeen.add(msg.verb());
+                return false;
+            }).drop(); // drop is confusing since I am not dropping, im just listening...
+            cluster.filters().inbound().verbs(Verb.ECHO_RSP.id).messagesMatching((from, to, msg) -> {
+                waitForIt.countDown();
+                return false;
+            }).drop(); // drop is confusing since I am not dropping, im just listening...
+            cluster.get(1).runOnInstance(() -> {
+                MessagingService.instance().send(Message.out(Verb.ECHO_REQ, NoPayload.noPayload), other);
+            });
+
+            waitForIt.await();
+
+            Assert.assertEquals(outboundMessagesSeen, inboundMessagesSeen);
+            // since both are equal, only need to confirm the size of one
+            Assert.assertEquals(2, outboundMessagesSeen.size());
+            Assert.assertFalse("outbound message saw after inbound", outboundAfterInbound.get());
+        }
+    }
+

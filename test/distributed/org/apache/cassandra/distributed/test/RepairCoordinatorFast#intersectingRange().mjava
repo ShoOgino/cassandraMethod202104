@@ -1,0 +1,41 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void intersectingRange()
+    {
+        // this test exists to show that this case will cause repair to finish; success or failure isn't imporant
+        // if repair is enhanced to allow intersecting ranges w/ local then this test will fail saying that we expected
+        // repair to fail but it didn't, this would be fine and this test should be updated to reflect the new
+        // semantic
+        String table = tableName("intersectingrange");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+
+        //TODO dtest api for this?
+        LongTokenRange tokenRange = CLUSTER.get(2).callOnInstance(() -> {
+            Set<Range<Token>> ranges = StorageService.instance.getLocalReplicas(KEYSPACE).ranges();
+            Range<Token> range = Iterables.getFirst(ranges, null);
+            long left = (long) range.left.getTokenValue();
+            long right = (long) range.right.getTokenValue();
+            return new LongTokenRange(left, right);
+        });
+        LongTokenRange intersectingRange = new LongTokenRange(tokenRange.maxInclusive - 7, tokenRange.maxInclusive + 7);
+
+        long repairExceptions = getRepairExceptions(CLUSTER, 2);
+        NodeToolResult result = repair(2, KEYSPACE, table,
+                                       "--start-token", Long.toString(intersectingRange.minExclusive),
+                                       "--end-token", Long.toString(intersectingRange.maxInclusive));
+        result.asserts()
+              .failure()
+              .errorContains("Requested range " + intersectingRange + " intersects a local range (" + tokenRange + ") but is not fully contained in one");
+        if (withNotifications)
+        {
+            result.asserts()
+                  .notificationContains(ProgressEventType.START, "Starting repair command")
+                  .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                  .notificationContains(ProgressEventType.ERROR, "Requested range " + intersectingRange + " intersects a local range (" + tokenRange + ") but is not fully contained in one")
+                  .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+        }
+
+        assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+
+        Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 2));
+    }
+

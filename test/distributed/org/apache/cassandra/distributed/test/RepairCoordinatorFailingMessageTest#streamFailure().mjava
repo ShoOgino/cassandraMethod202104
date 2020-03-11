@@ -1,0 +1,25 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void streamFailure()
+    {
+        String table = tableName("streamfailure");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+        // there needs to be a difference to cause streaming to happen, so add to one node
+        CLUSTER.get(2).executeInternal(format("INSERT INTO %s.%s (key) VALUES (?)", KEYSPACE, table), "some data");
+        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.SYNC_REQ).messagesMatching(of(m -> {
+            throw new RuntimeException("stream fail");
+        })).drop();
+        try
+        {
+            NodeToolResult result = repair(1, KEYSPACE, table);
+            result.asserts()
+                  .failure()
+                  .errorContains("Some repair failed")
+                  .notificationContains(NodeToolResult.ProgressEventType.ERROR, "Some repair failed")
+                  .notificationContains(NodeToolResult.ProgressEventType.COMPLETE, "finished with error");
+        }
+        finally
+        {
+            filter.off();
+        }
+    }
+

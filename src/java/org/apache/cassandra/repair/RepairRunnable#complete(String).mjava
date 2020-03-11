@@ -1,0 +1,31 @@
+    private void complete(String msg)
+    {
+        long durationMillis = System.currentTimeMillis() - creationTimeMillis;
+        if (msg == null)
+        {
+            String duration = DurationFormatUtils.formatDurationWords(durationMillis, true, true);
+            msg = String.format("Repair command #%d finished in %s", cmd, duration);
+        }
+
+        fireProgressEvent(new ProgressEvent(ProgressEventType.COMPLETE, progressCounter.get(), totalProgress, msg));
+        logger.info(msg);
+
+        ActiveRepairService.instance.removeParentRepairSession(parentSession);
+        TraceState localState = traceState;
+        if (options.isTraced() && localState != null)
+        {
+            for (ProgressListener listener : listeners)
+                localState.removeProgressListener(listener);
+            // Because DebuggableThreadPoolExecutor#afterExecute and this callback
+            // run in a nondeterministic order (within the same thread), the
+            // TraceState may have been nulled out at this point. The TraceState
+            // should be traceState, so just set it without bothering to check if it
+            // actually was nulled out.
+            Tracing.instance.set(localState);
+            Tracing.traceRepair(msg);
+            Tracing.instance.stopSession();
+        }
+
+        Keyspace.open(keyspace).metric.repairTime.update(durationMillis, TimeUnit.MILLISECONDS);
+    }
+

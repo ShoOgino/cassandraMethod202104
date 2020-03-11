@@ -1,0 +1,28 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void onlyCoordinator()
+    {
+        // this is very similar to ::desiredHostNotCoordinator but has the difference that the only host to do repair
+        // is the coordinator
+        String table = tableName("onlycoordinator");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+
+        long repairExceptions = getRepairExceptions(CLUSTER, 2);
+        NodeToolResult result = repair(1, KEYSPACE, table, "--in-hosts", "localhost");
+        result.asserts()
+              .failure()
+              .errorContains("Specified hosts [localhost] do not share range");
+        if (withNotifications)
+        {
+            result.asserts()
+                  .notificationContains(ProgressEventType.START, "Starting repair command")
+                  .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                  .notificationContains(ProgressEventType.ERROR, "Specified hosts [localhost] do not share range")
+                  .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+        }
+
+        assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+
+        //TODO should this be marked as fail to match others?  Should they not be marked?
+        Assert.assertEquals(repairExceptions, getRepairExceptions(CLUSTER, 2));
+    }
+

@@ -1,0 +1,25 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void unknownHost()
+    {
+        String table = tableName("unknownhost");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+
+        long repairExceptions = getRepairExceptions(CLUSTER, 2);
+        NodeToolResult result = repair(2, KEYSPACE, table, "--in-hosts", "thisreally.should.not.exist.apache.org");
+        result.asserts()
+              .failure()
+              .errorContains("Unknown host specified thisreally.should.not.exist.apache.org");
+        if (withNotifications)
+        {
+            result.asserts()
+                  .notificationContains(ProgressEventType.START, "Starting repair command")
+                  .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                  .notificationContains(ProgressEventType.ERROR, "Unknown host specified thisreally.should.not.exist.apache.org")
+                  .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+        }
+
+        assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+
+        Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 2));
+    }
+

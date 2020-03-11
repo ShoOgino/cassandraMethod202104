@@ -1,0 +1,53 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void snapshotFailure()
+    {
+        Assume.assumeFalse("incremental does not do snapshot", repairType == RepairType.INCREMENTAL);
+        Assume.assumeFalse("Parallel repair does not perform snapshots", parallelism == RepairParallelism.PARALLEL);
+
+        String table = tableName("snapshotfailure");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.SNAPSHOT_MSG).messagesMatching(of(m -> {
+            throw new RuntimeException("snapshot fail");
+        })).drop();
+        try
+        {
+            long repairExceptions = getRepairExceptions(CLUSTER, 1);
+            NodeToolResult result = repair(1, KEYSPACE, table);
+            result.asserts()
+                  .failure();
+            if (withNotifications)
+            {
+                result.asserts()
+                      .errorContains("Could not create snapshot")
+                      .notificationContains(ProgressEventType.START, "Starting repair command")
+                      .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                      .notificationContains(ProgressEventType.ERROR, "Could not create snapshot ")
+                      .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+            }
+            else
+            {
+                // Right now coordination doesn't propgate the first exception, so we only know "there exists a issue".
+                // With notifications on nodetool will see the error then complete, so the cmd state (what nodetool
+                // polls on) is ignored.  With notifications off, the poll await fails and queries cmd state, and that
+                // will have the below error.
+                // NOTE: this isn't desireable, would be good to propgate
+                result.asserts()
+                      .errorContains("Some repair failed");
+            }
+
+            Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 1));
+            if (repairType != RepairType.PREVIEW)
+            {
+                assertParentRepairFailedWithMessageContains(CLUSTER, KEYSPACE, table, "Could not create snapshot");
+            }
+            else
+            {
+                assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+            }
+        }
+        finally
+        {
+            filter.off();
+        }
+    }
+

@@ -1,0 +1,21 @@
+    private TraceState maybeCreateTraceState(Iterable<ColumnFamilyStore> columnFamilyStores)
+    {
+        if (!options.isTraced())
+            return null;
+
+        StringBuilder cfsb = new StringBuilder();
+        for (ColumnFamilyStore cfs : columnFamilyStores)
+            cfsb.append(", ").append(cfs.keyspace.getName()).append(".").append(cfs.name);
+
+        UUID sessionId = Tracing.instance.newSession(Tracing.TraceType.REPAIR);
+        TraceState traceState = Tracing.instance.begin("repair", ImmutableMap.of("keyspace", keyspace, "columnFamilies",
+                                                                                 cfsb.substring(2)));
+        traceState.enableActivityNotification(tag);
+        for (ProgressListener listener : listeners)
+            traceState.addProgressListener(listener);
+        Thread queryThread = createQueryThread(cmd, sessionId);
+        queryThread.setName("RepairTracePolling");
+        queryThread.start();
+        return traceState;
+    }
+

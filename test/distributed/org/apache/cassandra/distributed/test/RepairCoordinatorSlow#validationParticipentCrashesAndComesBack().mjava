@@ -1,0 +1,79 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void validationParticipentCrashesAndComesBack()
+    {
+        // Test what happens when a participant restarts in the middle of validation
+        // Currently this isn't recoverable but could be.
+        // TODO since this is a real restart, how would I test "long pause"? Can't send SIGSTOP since same procress
+        String table = tableName("validationparticipentcrashesandcomesback");
+        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+        AtomicReference<Future<Void>> participantShutdown = new AtomicReference<>();
+        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.VALIDATION_REQ).to(2).messagesMatching(of(m -> {
+            // the nice thing about this is that this lambda is "capturing" and not "transfer", what this means is that
+            // this lambda isn't serialized and any object held isn't copied.
+            participantShutdown.set(CLUSTER.get(2).shutdown());
+            return true; // drop it so this node doesn't reply before shutdown.
+        })).drop();
+        try
+        {
+            // since nodetool is blocking, need to handle participantShutdown in the background
+            CompletableFuture<Void> recovered = CompletableFuture.runAsync(() -> {
+                try {
+                    while (participantShutdown.get() == null) {
+                        // event not happened, wait for it
+                        TimeUnit.MILLISECONDS.sleep(100);
+                    }
+                    Future<Void> f = participantShutdown.get();
+                    f.get(); // wait for shutdown to complete
+                    CLUSTER.get(2).startup();
+                } catch (Exception e) {
+                    if (e instanceof RuntimeException) {
+                        throw (RuntimeException) e;
+                    }
+                    throw new RuntimeException(e);
+                }
+            });
+
+            long repairExceptions = getRepairExceptions(CLUSTER, 1);
+            NodeToolResult result = repair(1, KEYSPACE, table);
+            recovered.join(); // if recovery didn't happen then the results are not what are being tested, so block here first
+            result.asserts()
+                  .failure();
+            if (withNotifications)
+            {
+                result.asserts()
+                      .errorContains("Endpoint 127.0.0.2:7012 died")
+                      .notificationContains(NodeToolResult.ProgressEventType.ERROR, "Endpoint 127.0.0.2:7012 died")
+                      .notificationContains(NodeToolResult.ProgressEventType.COMPLETE, "finished with error");
+            }
+            else
+            {
+                // Right now coordination doesn't propgate the first exception, so we only know "there exists a issue".
+                // With notifications on nodetool will see the error then complete, so the cmd state (what nodetool
+                // polls on) is ignored.  With notifications off, the poll await fails and queries cmd state, and that
+                // will have the below error.
+                // NOTE: this isn't desireable, would be good to propgate
+                result.asserts()
+                      .errorContains("Some repair failed");
+            }
+
+            Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 1));
+            if (repairType != RepairType.PREVIEW)
+            {
+                assertParentRepairFailedWithMessageContains(CLUSTER, KEYSPACE, table, "Endpoint 127.0.0.2:7012 died");
+            }
+            else
+            {
+                assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+            }
+        }
+        finally
+        {
+            filter.off();
+            try {
+                CLUSTER.get(2).startup();
+            } catch (Exception e) {
+                // if you call startup twice it is allowed to fail, so ignore it... hope this didn't brike the other tests =x
+            }
+        }
+    }
+

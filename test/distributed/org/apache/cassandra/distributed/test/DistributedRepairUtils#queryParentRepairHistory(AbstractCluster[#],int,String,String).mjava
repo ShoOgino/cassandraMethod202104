@@ -1,0 +1,14 @@
+    public static QueryResult queryParentRepairHistory(AbstractCluster<?> cluster, int coordinator, String ks, String table)
+    {
+        // This is kinda brittle since the caller never gets the ID and can't ask for the ID; it needs to infer the id
+        // this logic makes the assumption the ks/table pairs are unique (should be or else create should fail) so any
+        // repair for that pair will be the repair id
+        Set<String> tableNames = table == null? Collections.emptySet() : ImmutableSet.of(table);
+
+        QueryResult rs = retryWithBackoffBlocking(10, () -> cluster.coordinator(coordinator)
+                                                                   .executeWithResult("SELECT * FROM system_distributed.parent_repair_history", ConsistencyLevel.QUORUM)
+                                                                   .filter(row -> ks.equals(row.getString("keyspace_name")))
+                                                                   .filter(row -> tableNames.equals(row.getSet("columnfamily_names"))));
+        return rs;
+    }
+

@@ -1,0 +1,26 @@
+    @Test(timeout = 1 * 60 * 1000)
+    public void prepareIrFailure()
+    {
+        Assume.assumeTrue("The Verb.PREPARE_CONSISTENT_REQ is only for incremental, so disable in non-incremental", repairType == RepairType.INCREMENTAL);
+        // Wait, isn't this copy paste of RepairCoordinatorTest::prepareFailure?  NO!
+        // Incremental repair sends the PREPARE message the same way full does, but then after it does it sends
+        // a consistent prepare message... and that one doesn't handle errors...
+        CLUSTER.schemaChange("CREATE TABLE " + KEYSPACE + ".prepareirfailure (key text, value text, PRIMARY KEY (key))");
+        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.PREPARE_CONSISTENT_REQ).messagesMatching(of(m -> {
+            throw new RuntimeException("prepare fail");
+        })).drop();
+        try
+        {
+            NodeToolResult result = repair(1, KEYSPACE, "prepareirfailure");
+            result.asserts()
+                  .failure()
+                  .errorContains("error prepare fail")
+                  .notificationContains(NodeToolResult.ProgressEventType.ERROR, "error prepare fail")
+                  .notificationContains(NodeToolResult.ProgressEventType.COMPLETE, "finished with error");
+        }
+        finally
+        {
+            filter.off();
+        }
+    }
+
