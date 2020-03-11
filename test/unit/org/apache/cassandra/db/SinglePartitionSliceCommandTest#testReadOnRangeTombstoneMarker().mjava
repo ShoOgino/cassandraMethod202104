@@ -1,0 +1,35 @@
+    /**
+     * Make sure point read on range tombstone returns the same physical data structure regardless
+     * data is in memtable or sstable, so that we can produce the same digest.
+     */
+    @Test
+    public void testReadOnRangeTombstoneMarker()
+    {
+        QueryProcessor.executeOnceInternal("CREATE TABLE IF NOT EXISTS ks.test_read_rt (k int, c1 int, c2 int, c3 int, v int, primary key (k, c1, c2, c3))");
+        TableMetadata metadata = Schema.instance.getTableMetadata("ks", "test_read_rt");
+        ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(metadata.id);
+
+        String template = "SELECT * FROM ks.test_read_rt %s";
+        String pointRead = "WHERE k=1 and c1=1 and c2=1 and c3=1";
+        String sliceReadC1C2 = "WHERE k=1 and c1=1 and c2=1";
+        String sliceReadC1 = "WHERE k=1 and c1=1";
+        String partitionRead = "WHERE k=1";
+
+        for (String postfix : Arrays.asList(pointRead, sliceReadC1C2, sliceReadC1, partitionRead))
+        {
+            String query = String.format(template, postfix);
+            cfs.truncateBlocking();
+            QueryProcessor.executeOnceInternal("DELETE FROM ks.test_read_rt USING TIMESTAMP 10 WHERE k=1 AND c1=1");
+
+            List<Unfiltered> memtableUnfiltereds = assertQueryReturnsSingleRT(query);
+            cfs.forceBlockingFlush();
+            List<Unfiltered> sstableUnfiltereds = assertQueryReturnsSingleRT(query);
+
+            String errorMessage = String.format("Expected %s but got %s with postfix '%s'",
+                                                toString(memtableUnfiltereds, metadata),
+                                                toString(sstableUnfiltereds, metadata),
+                                                postfix);
+            assertEquals(errorMessage, memtableUnfiltereds, sstableUnfiltereds);
+        }
+    }
+

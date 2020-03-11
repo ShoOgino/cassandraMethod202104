@@ -1,0 +1,27 @@
+    private void testClusteringsIterator(NavigableSet<Clusterable> sortedContent, Partition partition, ColumnFilter cf, boolean reversed)
+    {
+        Function<? super Clusterable, ? extends Clusterable> colFilter = x -> x instanceof Row ? ((Row) x).filter(cf, metadata) : x;
+        NavigableSet<Clustering<?>> clusteringsInQueryOrder = makeClusterings(reversed);
+
+        // fetch each clustering in turn
+        for (Clustering clustering : clusteringsInQueryOrder)
+        {
+            NavigableSet<Clustering<?>> single = new TreeSet<>(metadata.comparator);
+            single.add(clustering);
+            try (UnfilteredRowIterator slicedIter = partition.unfilteredIterator(cf, single, reversed))
+            {
+                assertIteratorsEqual(streamOf(directed(slice(sortedContent, Slice.make(clustering)), reversed)).map(colFilter).iterator(),
+                                     slicedIter);
+            }
+        }
+
+        // Fetch all slices at once
+        try (UnfilteredRowIterator slicedIter = partition.unfilteredIterator(cf, clusteringsInQueryOrder, reversed))
+        {
+            List<Iterator<? extends Clusterable>> clusterableIterators = new ArrayList<>();
+            clusteringsInQueryOrder.forEach(clustering -> clusterableIterators.add(directed(slice(sortedContent, Slice.make(clustering)), reversed)));
+
+            assertIteratorsEqual(Iterators.concat(clusterableIterators.toArray(new Iterator[0])), slicedIter);
+        }
+    }
+

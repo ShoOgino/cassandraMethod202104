@@ -1,0 +1,54 @@
+    /**
+     * Partition deletion should remove row deletion when tie
+     */
+    @Test
+    public void testPartitionDeletionRowDeletionTie()
+    {
+        QueryProcessor.executeOnceInternal("CREATE TABLE ks.partition_row_deletion (k int, c int, v int, primary key (k, c))");
+        TableMetadata metadata = Schema.instance.getTableMetadata("ks", "partition_row_deletion");
+        ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(metadata.id);
+        cfs.disableAutoCompaction();
+
+        BiFunction<Boolean, Boolean, List<Unfiltered>> tester = (flush, multiSSTable)->
+        {
+            cfs.truncateBlocking();
+            QueryProcessor.executeOnceInternal("DELETE FROM ks.partition_row_deletion USING TIMESTAMP 10 WHERE k=1");
+            if (flush && multiSSTable)
+                cfs.forceBlockingFlush();
+            QueryProcessor.executeOnceInternal("DELETE FROM ks.partition_row_deletion USING TIMESTAMP 10 WHERE k=1 and c=1");
+            if (flush)
+                cfs.forceBlockingFlush();
+
+            QueryProcessor.executeOnceInternal("INSERT INTO ks.partition_row_deletion(k,c,v) VALUES(1,1,1) using timestamp 11");
+            if (flush)
+            {
+                cfs.forceBlockingFlush();
+                try
+                {
+                    cfs.forceMajorCompaction();
+                }
+                catch (Throwable e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            try (UnfilteredRowIterator partition = getIteratorFromSinglePartition("SELECT * FROM ks.partition_row_deletion where k=1 and c=1"))
+            {
+                assertEquals(10, partition.partitionLevelDeletion().markedForDeleteAt());
+                return toUnfiltereds(partition);
+            }
+        };
+
+        List<Unfiltered> memtableUnfiltereds = tester.apply(false, false);
+        List<Unfiltered> singleSSTableUnfiltereds = tester.apply(true, false);
+        List<Unfiltered> multiSSTableUnfiltereds = tester.apply(true, true);
+
+        assertEquals(1, singleSSTableUnfiltereds.size());
+        String errorMessage = String.format("Expected %s but got %s", toString(memtableUnfiltereds, metadata), toString(singleSSTableUnfiltereds, metadata));
+        assertEquals(errorMessage, memtableUnfiltereds, singleSSTableUnfiltereds);
+        errorMessage = String.format("Expected %s but got %s", toString(singleSSTableUnfiltereds, metadata), toString(multiSSTableUnfiltereds, metadata));
+        assertEquals(errorMessage, singleSSTableUnfiltereds, multiSSTableUnfiltereds);
+        memtableUnfiltereds.forEach(u -> assertTrue("Expected no row deletion, but got " + u.toString(metadata, true), ((Row) u).deletion().isLive()));
+    }
+

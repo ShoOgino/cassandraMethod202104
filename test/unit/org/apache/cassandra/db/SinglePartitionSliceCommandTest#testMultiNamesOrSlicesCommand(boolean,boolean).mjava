@@ -1,6 +1,5 @@
     private void testMultiNamesOrSlicesCommand(boolean flush, boolean isSlice)
     {
-        boolean isTombstone = flush || isSlice;
         int deletionTime = 5;
         int ck1 = 1;
         int uniqueCk1 = 2;
@@ -32,41 +31,23 @@
         while (partition.hasNext())
         {
             Unfiltered unfiltered = partition.next();
-            if (isTombstone)
-            {
-                assertTrue(unfiltered.isRangeTombstoneMarker());
-                RangeTombstoneMarker marker = (RangeTombstoneMarker) unfiltered;
 
-                // check if it's open-close pair
-                assertTrue(marker.isOpen(false) == open);
-                // check deletion time same as Range Deletion
-                if (open)
-                    assertEquals(deletionTime, marker.openDeletionTime(false).markedForDeleteAt());
-                else
-                    assertEquals(deletionTime, marker.closeDeletionTime(false).markedForDeleteAt());
+            assertTrue(unfiltered.isRangeTombstoneMarker());
+            RangeTombstoneMarker marker = (RangeTombstoneMarker) unfiltered;
 
-                // check clustering values
-                Clustering<?> clustering = Util.clustering(CFM_SLICES.comparator, ck1, count / 2);
-                for (int i = 0; i < CFM_SLICES.comparator.size(); i++)
-                {
-                    int cmp = CFM_SLICES.comparator.compareComponent(i, clustering, marker.clustering());
-                    assertEquals(0, cmp);
-                }
-                open = !open;
-            }
-            else
-            {
-                // deleted row
-                assertTrue(unfiltered.isRow());
-                Row row = (Row) unfiltered;
-                assertEquals(deletionTime, row.deletion().time().markedForDeleteAt());
-                assertEquals(0, row.columnCount()); // no btree
-            }
+            // check if it's open-close pair
+            assertEquals(open, marker.isOpen(false));
+            // check deletion time same as Range Deletion
+            DeletionTime delete = (open ? marker.openDeletionTime(false) : marker.closeDeletionTime(false));;
+            assertEquals(deletionTime, delete.markedForDeleteAt());
+
+            // check clustering values
+            Clustering<?> clustering = Util.clustering(CFM_SLICES.comparator, ck1, count / 2);
+            assertArrayEquals(clustering.getRawValues(), marker.clustering().getBufferArray());
+
+            open = !open;
             count++;
         }
-        if (isTombstone)
-            assertEquals(uniqueCk2 * 2, count); // open and close range tombstones
-        else
-            assertEquals(uniqueCk2, count);
+        assertEquals(uniqueCk2 * 2, count); // open and close range tombstones
     }
 

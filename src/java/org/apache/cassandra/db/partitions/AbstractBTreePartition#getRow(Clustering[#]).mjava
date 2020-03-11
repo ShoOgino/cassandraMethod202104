@@ -1,8 +1,33 @@
     public Row getRow(Clustering<?> clustering)
     {
-        Row row = searchIterator(ColumnFilter.selection(columns()), false).next(clustering);
-        // Note that for statics, this will never return null, this will return an empty row. However,
-        // it's more consistent for this method to return null if we don't really have a static row.
-        return row == null || (clustering == Clustering.STATIC_CLUSTERING && row.isEmpty()) ? null : row;
+        ColumnFilter columns = ColumnFilter.selection(columns());
+        Holder holder = holder();
+
+        if (clustering == Clustering.STATIC_CLUSTERING)
+        {
+            // Note that for statics, this will never return null, this will return an empty row. However,
+            // it's more consistent for this method to return null if we don't really have a static row.
+            Row staticRow = staticRow(holder, columns, true);
+            return staticRow.isEmpty() ? null : staticRow;
+        }
+
+        final Row row = (Row) BTree.find(holder.tree, metadata().comparator, clustering);
+        DeletionTime activeDeletion = holder.deletionInfo.getPartitionDeletion();
+        RangeTombstone rt = holder.deletionInfo.rangeCovering(clustering);
+
+        if (rt != null && rt.deletionTime().supersedes(activeDeletion))
+            activeDeletion = rt.deletionTime();
+
+
+        if (row == null)
+        {
+            // this means our partition level deletion supersedes all other deletions and we don't have to keep the row deletions
+            if (activeDeletion == holder.deletionInfo.getPartitionDeletion())
+                return null;
+            // no need to check activeDeletion.isLive here - if anything superseedes the partitionDeletion
+            // it must be non-live
+            return BTreeRow.emptyDeletedRow(clustering, Row.Deletion.regular(activeDeletion));
+        }
+        return row.filter(columns, activeDeletion, true, metadata());
     }
 
