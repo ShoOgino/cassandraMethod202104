@@ -1,0 +1,28 @@
+    private static ResultSet queryTableEstimates(Session session, Host host, String keyspace, String table, TokenRange tokenRange)
+    {
+        try
+        {
+            String query = String.format("SELECT mean_partition_size, partitions_count " +
+                                         "FROM %s.%s " +
+                                         "WHERE keyspace_name = ? AND table_name = ? AND range_type = '%s' AND range_start = ? AND range_end = ?",
+                                         SchemaConstants.SYSTEM_KEYSPACE_NAME,
+                                         SystemKeyspace.TABLE_ESTIMATES,
+                                         SystemKeyspace.TABLE_ESTIMATES_TYPE_LOCAL_PRIMARY);
+            Statement stmt = new SimpleStatement(query, keyspace, table, tokenRange.getStart().toString(), tokenRange.getEnd().toString()).setHost(host);
+            return session.execute(stmt);
+        }
+        catch (InvalidQueryException e)
+        {
+            // if the table doesn't exist, fall back to old table.  This is likely to return no records in a multi
+            // DC setup, but should work fine in a single DC setup.
+            String query = String.format("SELECT mean_partition_size, partitions_count " +
+                                         "FROM %s.%s " +
+                                         "WHERE keyspace_name = ? AND table_name = ? AND range_start = ? AND range_end = ?",
+                                         SchemaConstants.SYSTEM_KEYSPACE_NAME,
+                                         SystemKeyspace.LEGACY_SIZE_ESTIMATES);
+
+            Statement stmt = new SimpleStatement(query, keyspace, table, tokenRange.getStart().toString(), tokenRange.getEnd().toString()).setHost(host);
+            return session.execute(stmt);
+        }
+    }
+

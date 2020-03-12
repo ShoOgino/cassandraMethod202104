@@ -13,10 +13,15 @@
         ExecutorService executor = new ThreadPoolExecutor(0, 128, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
         List<org.apache.hadoop.mapreduce.InputSplit> splits = new ArrayList<>();
 
-        try (Cluster cluster = CqlConfigHelper.getInputCluster(ConfigHelper.getInputInitialAddress(conf).split(","), conf);
+        String[] inputInitialAddress = ConfigHelper.getInputInitialAddress(conf).split(",");
+        try (Cluster cluster = CqlConfigHelper.getInputCluster(inputInitialAddress, conf);
              Session session = cluster.connect())
         {
-            List<Future<List<org.apache.hadoop.mapreduce.InputSplit>>> splitfutures = new ArrayList<>();
+            List<SplitFuture> splitfutures = new ArrayList<>();
+            //TODO if the job range is defined and does perfectly match tokens, then the logic will be unable to get estimates since they are pre-computed
+            // tokens: [0, 10, 20]
+            // job range: [0, 10) - able to get estimate
+            // job range: [5, 15) - unable to get estimate
             Pair<String, String> jobKeyRange = ConfigHelper.getInputKeyRange(conf);
             Range<Token> jobRange = null;
             if (jobKeyRange != null)
@@ -28,14 +33,18 @@
             Metadata metadata = cluster.getMetadata();
 
             // canonical ranges and nodes holding replicas
-            Map<TokenRange, Set<Host>> masterRangeNodes = getRangeMap(keyspace, metadata);
-
+            Map<TokenRange, List<Host>> masterRangeNodes = getRangeMap(keyspace, metadata, getTargetDC(metadata, inputInitialAddress));
             for (TokenRange range : masterRangeNodes.keySet())
             {
                 if (jobRange == null)
                 {
-                    // for each tokenRange, pick a live owner and ask it to compute bite-sized splits
-                    splitfutures.add(executor.submit(new SplitCallable(range, masterRangeNodes.get(range), conf, session)));
+                    for (TokenRange unwrapped : range.unwrap())
+                    {
+                        // for each tokenRange, pick a live owner and ask it for the byte-sized splits
+                        SplitFuture task = new SplitFuture(new SplitCallable(unwrapped, masterRangeNodes.get(range), conf, session));
+                        executor.submit(task);
+                        splitfutures.add(task);
+                    }
                 }
                 else
                 {
@@ -44,24 +53,61 @@
                     {
                         for (TokenRange intersection: range.intersectWith(jobTokenRange))
                         {
-                            // for each tokenRange, pick a live owner and ask it to compute bite-sized splits
-                            splitfutures.add(executor.submit(new SplitCallable(intersection,  masterRangeNodes.get(range), conf, session)));
+                            for (TokenRange unwrapped : intersection.unwrap())
+                            {
+                                // for each tokenRange, pick a live owner and ask it for the byte-sized splits
+                                SplitFuture task = new SplitFuture(new SplitCallable(unwrapped,  masterRangeNodes.get(range), conf, session));
+                                executor.submit(task);
+                                splitfutures.add(task);
+                            }
                         }
                     }
                 }
             }
 
             // wait until we have all the results back
-            for (Future<List<org.apache.hadoop.mapreduce.InputSplit>> futureInputSplits : splitfutures)
+            List<SplitFuture> failedTasks = new ArrayList<>();
+            int maxSplits = 0;
+            long expectedPartionsForFailedRanges = 0;
+            for (SplitFuture task : splitfutures)
             {
                 try
                 {
-                    splits.addAll(futureInputSplits.get());
+                    List<ColumnFamilySplit> tokenRangeSplits = task.get();
+                    if (tokenRangeSplits.size() > maxSplits)
+                    {
+                        maxSplits = tokenRangeSplits.size();
+                        expectedPartionsForFailedRanges = tokenRangeSplits.get(0).getLength();
+                    }
                 }
                 catch (Exception e)
                 {
-                    throw new IOException("Could not get input splits", e);
+                    failedTasks.add(task);
                 }
+            }
+            // The estimate is only stored on a single host, if that host is down then can not get the estimate
+            // its more than likely that a single host could be "too large" for one split but there is no way of
+            // knowning!
+            // This logic attempts to guess the estimate from all the successful ranges
+            if (!failedTasks.isEmpty())
+            {
+                // if every split failed this will be 0
+                if (maxSplits == 0)
+                    throwAllSplitsFailed(failedTasks);
+                for (SplitFuture task : failedTasks)
+                {
+                    try
+                    {
+                        // the task failed, so this should throw
+                        task.get();
+                    }
+                    catch (Exception cause)
+                    {
+                        logger.warn("Unable to get estimate for {}, the host {} had a exception; falling back to default estimate", task.splitCallable.tokenRange, task.splitCallable.hosts.get(0), cause);
+                    }
+                }
+                for (SplitFuture task : failedTasks)
+                    splits.addAll(toSplit(task.splitCallable.hosts, splitTokenRange(task.splitCallable.tokenRange, maxSplits, expectedPartionsForFailedRanges)));
             }
         }
         finally

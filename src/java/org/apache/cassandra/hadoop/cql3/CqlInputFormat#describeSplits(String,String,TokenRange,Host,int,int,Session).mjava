@@ -1,0 +1,41 @@
+    private Map<TokenRange, Long> describeSplits(String keyspace, String table, TokenRange tokenRange, Host host, int splitSize, int splitSizeMb, Session session)
+    {
+        // In 2.1 the host list was walked in-order (only move to next if IOException) and calls
+        // org.apache.cassandra.service.StorageService.getSplits(java.lang.String, java.lang.String, org.apache.cassandra.dht.Range<org.apache.cassandra.dht.Token>, int)
+        // that call computes totalRowCountEstimate (used to compute #splits) then splits the ring based off those estimates
+        //
+        // The main difference is that the estimates in 2.1 were computed based off the data, so replicas could answer the estimates
+        // In 3.0 we rely on the below CQL query which is local and only computes estimates for the primary range; this
+        // puts us in a sticky spot to answer, if the node fails what do we do?  3.0 behavior only matches 2.1 IFF all
+        // nodes are up and healthy
+        ResultSet resultSet = queryTableEstimates(session, host, keyspace, table, tokenRange);
+
+        Row row = resultSet.one();
+
+        long meanPartitionSize = 0;
+        long partitionCount = 0;
+        int splitCount = 0;
+
+        if (row != null)
+        {
+            meanPartitionSize = row.getLong("mean_partition_size");
+            partitionCount = row.getLong("partitions_count");
+
+            splitCount = splitSizeMb > 0
+                ? (int)(meanPartitionSize * partitionCount / splitSizeMb / 1024 / 1024)
+                : (int)(partitionCount / splitSize);
+        }
+
+        // If we have no data on this split or the size estimate is 0,
+        // return the full split i.e., do not sub-split
+        // Assume smallest granularity of partition count available from CASSANDRA-7688
+        if (splitCount == 0)
+        {
+            Map<TokenRange, Long> wrappedTokenRange = new HashMap<>();
+            wrappedTokenRange.put(tokenRange, partitionCount == 0 ? 128L : partitionCount);
+            return wrappedTokenRange;
+        }
+
+        return splitTokenRange(tokenRange, splitCount, partitionCount / splitCount);
+    }
+
