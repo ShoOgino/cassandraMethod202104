@@ -12,20 +12,23 @@
             // Introduce schema disagreement
             cluster.schemaChange("ALTER TABLE " + KEYSPACE + ".tbl ADD v2 int", 1);
 
-            Exception thrown = null;
             try
             {
-                assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = 1",
-                                                         ConsistencyLevel.ALL),
-                           row(1, 1, 1, null));
+                cluster.coordinator(1).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = 1", ConsistencyLevel.ALL);
+                fail("Should have failed because of schema disagreement.");
             }
             catch (Exception e)
             {
-                thrown = e;
+                Assert.assertTrue(e instanceof RuntimeException);
+                RuntimeException re = ((RuntimeException) e);
+                // for some reason, we get weird errors when trying to check class directly
+                // I suppose it has to do with some classloader manipulation going on
+                Assert.assertTrue(re.getCause().getClass().toString().contains("ReadFailureException"));
+                // we may see 1 or 2 failures in here, because of the fail-fast behavior of ReadCallback
+                Assert.assertTrue(re.getMessage().contains("INCOMPATIBLE_SCHEMA from 127.0.0.2")
+                                  || re.getMessage().contains("INCOMPATIBLE_SCHEMA from 127.0.0.3"));
             }
 
-            Assert.assertTrue(thrown.getMessage().contains("INCOMPATIBLE_SCHEMA from 127.0.0.2"));
-            Assert.assertTrue(thrown.getMessage().contains("INCOMPATIBLE_SCHEMA from 127.0.0.3"));
         }
     }
 
