@@ -4,9 +4,10 @@
             if (!acquirePermit(SEMAPHORE_UNAVAILABLE_LOG_INTERVAL))
                 return;
 
+            Channel channel = null;
             try
             {
-                Channel channel = getOrCreateChannel();
+                channel = getOrCreateChannel();
                 if (!channel.attr(TRANSFERRING_FILE_ATTR).compareAndSet(false, true))
                     throw new IllegalStateException("channel's transferring state is currently set to true. refusing to start new stream");
 
@@ -23,6 +24,19 @@
             catch (Exception e)
             {
                 session.onError(e);
+            }
+            catch (Throwable t)
+            {
+                if (closed && Throwables.getRootCause(t) instanceof ClosedByInterruptException && fileTransferExecutor.isShutdown())
+                {
+                    logger.debug("{} Streaming channel was closed due to the executor pool being shutdown", createLogTag(session, channel));
+                }
+                else
+                {
+                    JVMStabilityInspector.inspectThrowable(t);
+                    if (!session.state().isFinalState())
+                        session.onError(t);
+                }
             }
             finally
             {

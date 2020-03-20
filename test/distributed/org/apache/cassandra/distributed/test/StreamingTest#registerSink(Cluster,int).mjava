@@ -1,0 +1,28 @@
+    public static void registerSink(Cluster cluster, int initiatorNodeId)
+    {
+        IInvokableInstance initiatorNode = cluster.get(initiatorNodeId);
+        InetSocketAddress initiator = initiatorNode.broadcastAddress();
+        MessageStateSinkImpl initiatorSink = new MessageStateSinkImpl();
+
+        for (int node = 1; node <= cluster.size(); node++)
+        {
+            if (initiatorNodeId == node)
+                continue;
+
+            IInvokableInstance followerNode = cluster.get(node);
+            InetSocketAddress follower = followerNode.broadcastAddress();
+
+            // verify on initiator's stream session
+            initiatorSink.messages(follower, Arrays.asList(PREPARE_SYNACK, STREAM, StreamMessage.Type.COMPLETE));
+            initiatorSink.states(follower, Arrays.asList(PREPARING, STREAMING, WAIT_COMPLETE, StreamSession.State.COMPLETE));
+
+            // verify on follower's stream session
+            MessageStateSinkImpl followerSink = new MessageStateSinkImpl();
+            followerSink.messages(initiator, Arrays.asList(STREAM_INIT, PREPARE_SYN, PREPARE_ACK, RECEIVED));
+            followerSink.states(initiator,  Arrays.asList(PREPARING, STREAMING, StreamSession.State.COMPLETE));
+            followerNode.runOnInstance(() -> StreamSession.sink = followerSink);
+        }
+
+        cluster.get(initiatorNodeId).runOnInstance(() -> StreamSession.sink = initiatorSink);
+    }
+

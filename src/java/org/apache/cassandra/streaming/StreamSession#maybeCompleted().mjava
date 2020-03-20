@@ -1,25 +1,29 @@
-    private boolean maybeCompleted()
+    /**
+     * Synchronize both {@link #complete()} and {@link #maybeCompleted()} to avoid racing
+     */
+    private synchronized boolean maybeCompleted()
     {
-        boolean completed = receivers.isEmpty() && transfers.isEmpty();
-        if (completed)
+        if (!(receivers.isEmpty() && transfers.isEmpty()))
+            return false;
+
+        // if already executed once, skip it
+        if (maybeCompleted)
+            return true;
+
+        maybeCompleted = true;
+        if (!isFollower)
         {
             if (state == State.WAIT_COMPLETE)
-            {
-                if (!completeSent)
-                {
-                    messageSender.sendMessage(new CompleteMessage());
-                    completeSent = true;
-                }
                 closeSession(State.COMPLETE);
-            }
             else
-            {
-                // notify peer that this session is completed
-                messageSender.sendMessage(new CompleteMessage());
-                completeSent = true;
                 state(State.WAIT_COMPLETE);
-            }
         }
-        return completed;
+        else
+        {
+            messageSender.sendMessage(new CompleteMessage());
+            closeSession(State.COMPLETE);
+        }
+
+        return true;
     }
 
