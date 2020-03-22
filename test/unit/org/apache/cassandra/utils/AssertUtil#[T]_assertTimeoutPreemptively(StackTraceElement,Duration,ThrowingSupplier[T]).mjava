@@ -1,0 +1,62 @@
+    private static <T> T assertTimeoutPreemptively(StackTraceElement caller, Duration timeout, ThrowingSupplier<T> supplier)
+    {
+
+        String[] split = caller.getClassName().split("\\.");
+        String simpleClassName = split[split.length - 1];
+        ExecutorService executorService = Executors.newSingleThreadExecutor(new NamedThreadFactory("TimeoutTest-" + simpleClassName + "#" + caller.getMethodName()));
+        try
+        {
+            Future<T> future = executorService.submit(() -> {
+                try {
+                    return supplier.get();
+                }
+                catch (Throwable throwable) {
+                    throw Throwables.throwAsUncheckedException(throwable);
+                }
+            });
+
+            long timeoutInNanos = timeout.toNanos();
+            try
+            {
+                return future.get(timeoutInNanos, TimeUnit.NANOSECONDS);
+            }
+            catch (TimeoutException ex)
+            {
+                future.cancel(true);
+                Map<Thread, StackTraceElement[]> threadDump = Thread.getAllStackTraces();
+                StringBuilder sb = new StringBuilder("execution timed out after ").append(TimeUnit.NANOSECONDS.toMillis(timeoutInNanos)).append(" ms\n");
+                Multimap<List<StackTraceElement>, Thread> groupCommonThreads = HashMultimap.create();
+                for (Map.Entry<Thread, StackTraceElement[]> e : threadDump.entrySet())
+                    groupCommonThreads.put(Arrays.asList(e.getValue()), e.getKey());
+
+                for (Map.Entry<List<StackTraceElement>, Collection<Thread>> e : groupCommonThreads.asMap().entrySet())
+                {
+                    sb.append("Threads: ");
+                    Joiner.on(", ").appendTo(sb, e.getValue().stream().map(Thread::getName).iterator());
+                    sb.append("\n");
+                    for (StackTraceElement elem : e.getKey())
+                        sb.append("\t").append(elem.getClassName()).append(".").append(elem.getMethodName()).append("[").append(elem.getLineNumber()).append("]\n");
+                    sb.append("\n");
+                }
+                throw new AssertionError(sb.toString());
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                throw Throwables.throwAsUncheckedException(e);
+            }
+            catch (ExecutionException ex)
+            {
+                throw Throwables.throwAsUncheckedException(ex.getCause());
+            }
+            catch (Throwable ex)
+            {
+                throw Throwables.throwAsUncheckedException(ex);
+            }
+        }
+        finally
+        {
+            executorService.shutdownNow();
+        }
+    }
+

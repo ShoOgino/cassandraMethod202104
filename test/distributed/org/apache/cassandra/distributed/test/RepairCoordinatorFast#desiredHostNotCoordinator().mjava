@@ -1,27 +1,29 @@
-    @Test(timeout = 1 * 60 * 1000)
+    @Test
     public void desiredHostNotCoordinator()
     {
         // current limitation is that the coordinator must be apart of the repair, so as long as that exists this test
         // verifies that the validation logic will termniate the repair properly
         String table = tableName("desiredhostnotcoordinator");
-        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+        assertTimeoutPreemptively(Duration.ofMinutes(1), () -> {
+            CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
 
-        long repairExceptions = getRepairExceptions(CLUSTER, 2);
-        NodeToolResult result = repair(2, KEYSPACE, table, "--in-hosts", "localhost");
-        result.asserts()
-              .failure()
-              .errorContains("The current host must be part of the repair");
-        if (withNotifications)
-        {
+            long repairExceptions = getRepairExceptions(CLUSTER, 2);
+            NodeToolResult result = repair(2, KEYSPACE, table, "--in-hosts", "localhost");
             result.asserts()
-                  .notificationContains(ProgressEventType.START, "Starting repair command")
-                  .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
-                  .notificationContains(ProgressEventType.ERROR, "The current host must be part of the repair")
-                  .notificationContains(ProgressEventType.COMPLETE, "finished with error");
-        }
+                  .failure()
+                  .errorContains("The current host must be part of the repair");
+            if (withNotifications)
+            {
+                result.asserts()
+                      .notificationContains(ProgressEventType.START, "Starting repair command")
+                      .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                      .notificationContains(ProgressEventType.ERROR, "The current host must be part of the repair")
+                      .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+            }
 
-        assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+            assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
 
-        Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 2));
+            Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 2));
+        });
     }
 

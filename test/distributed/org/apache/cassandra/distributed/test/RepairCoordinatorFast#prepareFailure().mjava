@@ -1,40 +1,42 @@
-    @Test(timeout = 1 * 60 * 1000)
+    @Test
     public void prepareFailure()
     {
         String table = tableName("preparefailure");
-        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
-        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.PREPARE_MSG).messagesMatching(of(m -> {
-            throw new RuntimeException("prepare fail");
-        })).drop();
-        try
-        {
-            long repairExceptions = getRepairExceptions(CLUSTER, 1);
-            NodeToolResult result = repair(1, KEYSPACE, table);
-            result.asserts()
-                  .failure()
-                  .errorContains("Got negative replies from endpoints");
-            if (withNotifications)
+        assertTimeoutPreemptively(Duration.ofMinutes(1), () -> {
+            CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+            IMessageFilters.Filter filter = CLUSTER.verbs(Verb.PREPARE_MSG).messagesMatching(of(m -> {
+                throw new RuntimeException("prepare fail");
+            })).drop();
+            try
             {
+                long repairExceptions = getRepairExceptions(CLUSTER, 1);
+                NodeToolResult result = repair(1, KEYSPACE, table);
                 result.asserts()
-                      .notificationContains(ProgressEventType.START, "Starting repair command")
-                      .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
-                      .notificationContains(ProgressEventType.ERROR, "Got negative replies from endpoints")
-                      .notificationContains(ProgressEventType.COMPLETE, "finished with error");
-            }
+                      .failure()
+                      .errorContains("Got negative replies from endpoints");
+                if (withNotifications)
+                {
+                    result.asserts()
+                          .notificationContains(ProgressEventType.START, "Starting repair command")
+                          .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                          .notificationContains(ProgressEventType.ERROR, "Got negative replies from endpoints")
+                          .notificationContains(ProgressEventType.COMPLETE, "finished with error");
+                }
 
-            Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 1));
-            if (repairType != RepairType.PREVIEW)
-            {
-                assertParentRepairFailedWithMessageContains(CLUSTER, KEYSPACE, table, "Got negative replies from endpoints");
+                Assert.assertEquals(repairExceptions + 1, getRepairExceptions(CLUSTER, 1));
+                if (repairType != RepairType.PREVIEW)
+                {
+                    assertParentRepairFailedWithMessageContains(CLUSTER, KEYSPACE, table, "Got negative replies from endpoints");
+                }
+                else
+                {
+                    assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+                }
             }
-            else
+            finally
             {
-                assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+                filter.off();
             }
-        }
-        finally
-        {
-            filter.off();
-        }
+        });
     }
 

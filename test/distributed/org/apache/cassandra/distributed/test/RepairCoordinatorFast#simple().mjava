@@ -1,30 +1,32 @@
-    @Test(timeout = 1 * 60 * 1000)
+    @Test
     public void simple() {
         String table = tableName("simple");
-        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, PRIMARY KEY (key))", KEYSPACE, table));
-        CLUSTER.coordinator(1).execute(format("INSERT INTO %s.%s (key) VALUES (?)", KEYSPACE, table), ConsistencyLevel.ANY, "some text");
+        assertTimeoutPreemptively(Duration.ofMinutes(1), () -> {
+            CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, PRIMARY KEY (key))", KEYSPACE, table));
+            CLUSTER.coordinator(1).execute(format("INSERT INTO %s.%s (key) VALUES (?)", KEYSPACE, table), ConsistencyLevel.ANY, "some text");
 
-        long repairExceptions = getRepairExceptions(CLUSTER, 2);
-        NodeToolResult result = repair(2, KEYSPACE, table);
-        result.asserts().success();
-        if (withNotifications)
-        {
-            result.asserts()
-                  .notificationContains(ProgressEventType.START, "Starting repair command")
-                  .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
-                  .notificationContains(ProgressEventType.SUCCESS, repairType != RepairType.PREVIEW ? "Repair completed successfully": "Repair preview completed successfully")
-                  .notificationContains(ProgressEventType.COMPLETE, "finished");
-        }
+            long repairExceptions = getRepairExceptions(CLUSTER, 2);
+            NodeToolResult result = repair(2, KEYSPACE, table);
+            result.asserts().success();
+            if (withNotifications)
+            {
+                result.asserts()
+                      .notificationContains(ProgressEventType.START, "Starting repair command")
+                      .notificationContains(ProgressEventType.START, "repairing keyspace " + KEYSPACE + " with repair options")
+                      .notificationContains(ProgressEventType.SUCCESS, repairType != RepairType.PREVIEW ? "Repair completed successfully": "Repair preview completed successfully")
+                      .notificationContains(ProgressEventType.COMPLETE, "finished");
+            }
 
-        if (repairType != RepairType.PREVIEW)
-        {
-            assertParentRepairSuccess(CLUSTER, KEYSPACE, table);
-        }
-        else
-        {
-            assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
-        }
+            if (repairType != RepairType.PREVIEW)
+            {
+                assertParentRepairSuccess(CLUSTER, KEYSPACE, table);
+            }
+            else
+            {
+                assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
+            }
 
-        Assert.assertEquals(repairExceptions, getRepairExceptions(CLUSTER, 2));
+            Assert.assertEquals(repairExceptions, getRepairExceptions(CLUSTER, 2));
+        });
     }
 

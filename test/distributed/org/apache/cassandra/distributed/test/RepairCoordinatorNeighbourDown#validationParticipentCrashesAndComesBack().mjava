@@ -1,20 +1,19 @@
-    @Test(timeout = 1 * 60 * 1000)
+    @Test
     public void validationParticipentCrashesAndComesBack()
     {
         // Test what happens when a participant restarts in the middle of validation
         // Currently this isn't recoverable but could be.
         // TODO since this is a real restart, how would I test "long pause"? Can't send SIGSTOP since same procress
         String table = tableName("validationparticipentcrashesandcomesback");
-        CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
-        AtomicReference<Future<Void>> participantShutdown = new AtomicReference<>();
-        IMessageFilters.Filter filter = CLUSTER.verbs(Verb.VALIDATION_REQ).to(2).messagesMatching(of(m -> {
-            // the nice thing about this is that this lambda is "capturing" and not "transfer", what this means is that
-            // this lambda isn't serialized and any object held isn't copied.
-            participantShutdown.set(CLUSTER.get(2).shutdown());
-            return true; // drop it so this node doesn't reply before shutdown.
-        })).drop();
-        try
-        {
+        assertTimeoutPreemptively(Duration.ofMinutes(1), () -> {
+            CLUSTER.schemaChange(format("CREATE TABLE %s.%s (key text, value text, PRIMARY KEY (key))", KEYSPACE, table));
+            AtomicReference<Future<Void>> participantShutdown = new AtomicReference<>();
+            CLUSTER.verbs(Verb.VALIDATION_REQ).to(2).messagesMatching(of(m -> {
+                // the nice thing about this is that this lambda is "capturing" and not "transfer", what this means is that
+                // this lambda isn't serialized and any object held isn't copied.
+                participantShutdown.set(CLUSTER.get(2).shutdown());
+                return true; // drop it so this node doesn't reply before shutdown.
+            })).drop();
             // since nodetool is blocking, need to handle participantShutdown in the background
             CompletableFuture<Void> recovered = CompletableFuture.runAsync(() -> {
                 try {
@@ -65,15 +64,6 @@
             {
                 assertParentRepairNotExist(CLUSTER, KEYSPACE, table);
             }
-        }
-        finally
-        {
-            filter.off();
-            try {
-                CLUSTER.get(2).startup();
-            } catch (Exception e) {
-                // if you call startup twice it is allowed to fail, so ignore it... hope this didn't brike the other tests =x
-            }
-        }
+        });
     }
 
