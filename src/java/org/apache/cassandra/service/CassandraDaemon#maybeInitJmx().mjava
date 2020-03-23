@@ -19,23 +19,18 @@
                 try
                 {
                     RMIServerSocketFactory serverFactory = new RMIServerSocketFactoryImpl();
-                    LocateRegistry.createRegistry(Integer.valueOf(jmxPort), null, serverFactory);
+                    Map<String, ?> env = Collections.singletonMap(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE, serverFactory);
 
-                    StringBuffer url = new StringBuffer();
-                    url.append("service:jmx:");
-                    url.append("rmi://localhost/jndi/");
-                    url.append("rmi://localhost:").append(jmxPort).append("/jmxrmi");
-
-                    Map env = new HashMap();
-                    env.put(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE, serverFactory);
-
-                    jmxServer = new RMIConnectorServer(
-                            new JMXServiceURL(url.toString()),
-                            env,
-                            ManagementFactory.getPlatformMBeanServer()
-                    );
-
+                    Registry registry = new JmxRegistry(Integer.valueOf(jmxPort), null, serverFactory, "jmxrmi");
+                    JMXServiceURL url = new JMXServiceURL(String.format("service:jmx:rmi://localhost/jndi/rmi://localhost:%s/jmxrmi", jmxPort));
+                    @SuppressWarnings("resource")
+                    RMIJRMPServerImpl server = new RMIJRMPServerImpl(Integer.valueOf(jmxPort),
+                                                                     null,
+                                                                     (RMIServerSocketFactory) env.get(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE),
+                                                                     env);
+                    jmxServer = new RMIConnectorServer(url, env, server, ManagementFactory.getPlatformMBeanServer());
                     jmxServer.start();
+                    ((JmxRegistry)registry).setRemoteServerStub(server.toStub());
                 }
                 catch (IOException e)
                 {
