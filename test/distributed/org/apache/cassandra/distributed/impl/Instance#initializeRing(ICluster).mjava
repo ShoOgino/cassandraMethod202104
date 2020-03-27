@@ -3,13 +3,13 @@
         // This should be done outside instance in order to avoid serializing config
         String partitionerName = config.getString("partitioner");
         List<String> initialTokens = new ArrayList<>();
-        List<InetAddressAndPort> hosts = new ArrayList<>();
+        List<InetSocketAddress> hosts = new ArrayList<>();
         List<UUID> hostIds = new ArrayList<>();
         for (int i = 1 ; i <= cluster.size() ; ++i)
         {
             IInstanceConfig config = cluster.get(i).config();
             initialTokens.add(config.getString("initial_token"));
-            hosts.add(config.broadcastAddressAndPort());
+            hosts.add(config.broadcastAddress());
             hostIds.add(config.hostId());
         }
 
@@ -23,29 +23,29 @@
 
             for (int i = 0; i < tokens.size(); i++)
             {
-                InetAddressAndPort ep = hosts.get(i);
+                InetSocketAddress ep = hosts.get(i);
                 UUID hostId = hostIds.get(i);
                 Token token = tokens.get(i);
                 Gossiper.runInGossipStageBlocking(() -> {
-                    Gossiper.instance.initializeNodeUnsafe(ep.address, hostId, 1);
-                    Gossiper.instance.injectApplicationState(ep.address,
+                    Gossiper.instance.initializeNodeUnsafe(ep.getAddress(), hostId, 1);
+                    Gossiper.instance.injectApplicationState(ep.getAddress(),
                                                              ApplicationState.TOKENS,
                                                              new VersionedValue.VersionedValueFactory(partitioner).tokens(Collections.singleton(token)));
-                    storageService.onChange(ep.address,
+                    storageService.onChange(ep.getAddress(),
                                             ApplicationState.STATUS,
                                             new VersionedValue.VersionedValueFactory(partitioner).normal(Collections.singleton(token)));
-                    Gossiper.instance.realMarkAlive(ep.address, Gossiper.instance.getEndpointStateForEndpoint(ep.address));
+                    Gossiper.instance.realMarkAlive(ep.getAddress(), Gossiper.instance.getEndpointStateForEndpoint(ep.getAddress()));
                 });
 
                 int messagingVersion = cluster.get(ep).isShutdown()
                                        ? MessagingService.current_version
                                        : Math.min(MessagingService.current_version, cluster.get(ep).getMessagingVersion());
-                MessagingService.instance().setVersion(ep.address, messagingVersion);
+                MessagingService.instance().setVersion(ep.getAddress(), messagingVersion);
             }
 
             // check that all nodes are in token metadata
             for (int i = 0; i < tokens.size(); ++i)
-                assert storageService.getTokenMetadata().isMember(hosts.get(i).address);
+                assert storageService.getTokenMetadata().isMember(hosts.get(i).getAddress());
         }
         catch (Throwable e) // UnknownHostException
         {
