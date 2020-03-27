@@ -3,24 +3,22 @@
     {
         int originalNodeCount = 2;
         int expandedNodeCount = originalNodeCount + 1;
-        Cluster.Builder<IInvokableInstance, Cluster> builder = Cluster.build(originalNodeCount)
-                                                                      .withTokenSupplier(Cluster.evenlyDistributedTokens(expandedNodeCount))
-                                                                      .withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(originalNodeCount, "dc0", "rack0"))
-                                                                      .withConfig(config -> config.with(NETWORK, GOSSIP));
+        Builder<IInstance, ICluster> builder = builder().withNodes(originalNodeCount)
+                                                        .withTokenSupplier(TokenSupplier.evenlyDistributedTokens(expandedNodeCount))
+                                                        .withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(originalNodeCount, "dc0", "rack0"))
+                                                        .withConfig(config -> config.with(NETWORK, GOSSIP));
 
         Map<Integer, Long> withBootstrap = null;
         Map<Integer, Long> naturally = null;
-
-        try (Cluster cluster = builder.start())
+        try (ICluster<IInvokableInstance> cluster = builder.withNodes(originalNodeCount).start())
         {
             populate(cluster);
 
-            InstanceConfig config = builder.withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(expandedNodeCount, "dc0", "rack0"))
-                                           .newInstanceConfig(cluster);
+            IInstanceConfig config = builder.withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(expandedNodeCount, "dc0", "rack0"))
+                                            .newInstanceConfig(cluster);
             config.set("auto_bootstrap", true);
 
-            IInstance newInstance = cluster.bootstrap(config);
-            newInstance.startup();
+            cluster.bootstrap(config).startup();
 
             cluster.stream().forEach(instance -> {
                 instance.nodetool("cleanup", KEYSPACE, "tbl");
@@ -29,16 +27,17 @@
             withBootstrap = count(cluster);
         }
 
-        builder = Cluster.build(expandedNodeCount)
-                         .withTokenSupplier(Cluster.evenlyDistributedTokens(expandedNodeCount))
+        builder = builder.withNodes(expandedNodeCount)
+                         .withTokenSupplier(TokenSupplier.evenlyDistributedTokens(expandedNodeCount))
                          .withConfig(config -> config.with(NETWORK, GOSSIP));
 
-        try (Cluster cluster = builder.start())
+        try (ICluster cluster = builder.start())
         {
             populate(cluster);
             naturally = count(cluster);
         }
 
-        Assert.assertEquals(withBootstrap, naturally);
+        for (Map.Entry<Integer, Long> e : withBootstrap.entrySet())
+            Assert.assertTrue(e.getValue() >= naturally.get(e.getKey()));
     }
 

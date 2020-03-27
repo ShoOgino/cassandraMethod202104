@@ -1,0 +1,34 @@
+    private QueryResult executeInternal(String query, ConsistencyLevel consistencyLevelOrigin, Object[] boundValues)
+    {
+        ClientState clientState = makeFakeClientState();
+        CQLStatement prepared = QueryProcessor.getStatement(query, clientState);
+        List<ByteBuffer> boundBBValues = new ArrayList<>();
+        ConsistencyLevel consistencyLevel = ConsistencyLevel.valueOf(consistencyLevelOrigin.name());
+        for (Object boundValue : boundValues)
+            boundBBValues.add(ByteBufferUtil.objectToBytes(boundValue));
+
+        prepared.validate(QueryState.forInternalCalls().getClientState());
+        ResultMessage res = prepared.execute(QueryState.forInternalCalls(),
+                                             QueryOptions.create(toCassandraCL(consistencyLevel),
+                                                                 boundBBValues,
+                                                                 false,
+                                                                 Integer.MAX_VALUE,
+                                                                 null,
+                                                                 null,
+                                                                 ProtocolVersion.V4,
+                                                                 null),
+                                             System.nanoTime());
+
+        if (res != null && res.kind == ResultMessage.Kind.ROWS)
+        {
+            ResultMessage.Rows rows = (ResultMessage.Rows) res;
+            String[] names = rows.result.metadata.names.stream().map(c -> c.name.toString()).toArray(String[]::new);
+            Object[][] results = RowUtil.toObjects(rows);
+            return new QueryResult(names, results);
+        }
+        else
+        {
+            return QueryResult.EMPTY;
+        }
+    }
+
