@@ -1,0 +1,50 @@
+    public static IMessage serializeMessage(MessageIn<?> messageIn, int id, InetSocketAddress from, InetSocketAddress to)
+    {
+        try (DataOutputBuffer out = new DataOutputBuffer(1024))
+        {
+            // Serialize header
+            int version = MessagingService.instance().getVersion(to.getAddress());
+
+            out.writeInt(MessagingService.PROTOCOL_MAGIC);
+            out.writeInt(id);
+            long timestamp = System.currentTimeMillis();
+            out.writeInt((int) timestamp);
+
+            // Serialize the message itself
+            IVersionedSerializer serializer = MessagingService.instance().verbSerializers.get(messageIn.verb);
+            CompactEndpointSerializationHelper.serialize(from.getAddress(), out);
+
+            out.writeInt(MessagingService.Verb.convertForMessagingServiceVersion(messageIn.verb, version).ordinal());
+            out.writeInt(messageIn.parameters.size());
+            for (Map.Entry<String, byte[]> entry : messageIn.parameters.entrySet())
+            {
+                out.writeUTF(entry.getKey());
+                out.writeInt(entry.getValue().length);
+                out.write(entry.getValue());
+            }
+
+            if (messageIn.payload != null && serializer != MessagingService.CallbackDeterminedSerializer.instance)
+            {
+                try (DataOutputBuffer dob = new DataOutputBuffer())
+                {
+                    serializer.serialize(messageIn.payload, dob, version);
+
+                    int size = dob.getLength();
+                    out.writeInt(size);
+                    out.write(dob.getData(), 0, size);
+                }
+            }
+            else
+            {
+                out.writeInt(0);
+            }
+
+
+            return new MessageImpl(messageIn.verb.ordinal(), out.toByteArray(), id, version, from);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

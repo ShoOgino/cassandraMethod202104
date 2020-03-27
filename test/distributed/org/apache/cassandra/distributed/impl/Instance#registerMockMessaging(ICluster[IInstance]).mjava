@@ -1,0 +1,26 @@
+    private void registerMockMessaging(ICluster<IInstance> cluster)
+    {
+        BiConsumer<InetSocketAddress, IMessage> deliverToInstance = (to, message) -> cluster.get(to).receiveMessage(message);
+        BiConsumer<InetSocketAddress, IMessage> deliverToInstanceIfNotFiltered = (to, message) -> {
+            int fromNum = config().num();
+            int toNum = cluster.get(to).config().num();
+
+            if (cluster.filters().permitOutbound(fromNum, toNum, message)
+                && cluster.filters().permitInbound(fromNum, toNum, message))
+                deliverToInstance.accept(to, message);
+        };
+
+        Map<InetAddress, InetSocketAddress> addressAndPortMap = new HashMap<>();
+        cluster.stream().forEach(instance -> {
+            InetSocketAddress addressAndPort = instance.broadcastAddress();
+            if (!addressAndPort.equals(instance.config().broadcastAddress()))
+                throw new IllegalStateException("addressAndPort mismatch: " + addressAndPort + " vs " + instance.config().broadcastAddress());
+            InetSocketAddress prev = addressAndPortMap.put(addressAndPort.getAddress(),
+                                                                        addressAndPort);
+            if (null != prev)
+                throw new IllegalStateException("This version of Cassandra does not support multiple nodes with the same InetAddress: " + addressAndPort + " vs " + prev);
+        });
+
+        MessagingService.instance().addMessageSink(new MessageDeliverySink(deliverToInstanceIfNotFiltered, addressAndPortMap::get));
+    }
+

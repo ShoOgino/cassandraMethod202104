@@ -1,9 +1,7 @@
         public boolean allowOutgoingMessage(MessageOut messageOut, int id, InetAddress to)
         {
-            InetAddressAndPort from = broadcastAddressAndPort();
+            InetSocketAddress from = broadcastAddress();
             assert from.equals(lookupAddressAndPort.apply(messageOut.from));
-            InetAddressAndPort toFull = lookupAddressAndPort.apply(to);
-            IMessage message = serializeMessage(messageOut, id, from, toFull);
 
             // Tracing logic - similar to org.apache.cassandra.net.OutboundTcpConnection.writeConnected
             byte[] sessionBytes = (byte[]) messageOut.parameters.get(Tracing.TRACE_HEADER);
@@ -11,7 +9,7 @@
             {
                 UUID sessionId = UUIDGen.getUUID(ByteBuffer.wrap(sessionBytes));
                 TraceState state = Tracing.instance.get(sessionId);
-                String traceMessage = String.format("Sending %s message to %s", messageOut.verb, toFull.address);
+                String traceMessage = String.format("Sending %s message to %s", messageOut.verb, to);
                 // session may have already finished; see CASSANDRA-5668
                 if (state == null)
                 {
@@ -27,7 +25,10 @@
                 }
             }
 
-            deliver.accept(toFull, message);
+            InetSocketAddress toFull = lookupAddressAndPort.apply(to);
+            deliver.accept(toFull,
+                           serializeMessage(messageOut, id, broadcastAddress(), toFull));
+
             return false;
         }
 
