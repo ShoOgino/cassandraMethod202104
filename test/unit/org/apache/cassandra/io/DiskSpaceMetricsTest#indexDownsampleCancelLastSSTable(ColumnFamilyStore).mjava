@@ -1,0 +1,39 @@
+    private static void indexDownsampleCancelLastSSTable(ColumnFamilyStore cfs)
+    {
+        List<SSTableReader> sstables = Lists.newArrayList(cfs.getSSTables(SSTableSet.CANONICAL));
+        LifecycleTransaction txn = cfs.getTracker().tryModify(sstables, OperationType.UNKNOWN);
+        Map<UUID, LifecycleTransaction> txns = ImmutableMap.of(cfs.metadata.cfId, txn);
+        // fail on the last file (* 3 because we call isStopRequested 3 times for each sstable, and we should fail on the last)
+        AtomicInteger countdown = new AtomicInteger(3 * sstables.size() - 1);
+        IndexSummaryRedistribution redistribution = new IndexSummaryRedistribution(Collections.emptyList(), txns, 0) {
+            public boolean isStopRequested()
+            {
+                return countdown.decrementAndGet() == 0;
+            }
+        };
+        try
+        {
+            IndexSummaryManager.redistributeSummaries(redistribution);
+            Assert.fail("Should throw CompactionInterruptedException");
+        }
+        catch (CompactionInterruptedException e)
+        {
+            // trying to get this to happen
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            try
+            {
+                FBUtilities.closeAll(txns.values());
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
