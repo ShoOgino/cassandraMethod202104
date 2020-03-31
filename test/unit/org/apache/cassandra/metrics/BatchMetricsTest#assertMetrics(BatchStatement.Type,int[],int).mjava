@@ -1,0 +1,46 @@
+    private void assertMetrics(BatchStatement.Type batchTypeTested, int[] rounds, int distinctPartitions)
+    {
+        // reset the histogram between runs
+        clearHistogram();
+
+        // roundsOfStatementsPerPartition - array length is the number of rounds to executeLoggerBatch() and each
+        // value in the array represents the number of statements to execute per partition on that round
+        for (int ix = 0; ix < rounds.length; ix++)
+        {
+            long partitionsPerLoggedBatchCountPre = metrics.partitionsPerLoggedBatch.getCount();
+            long expectedPartitionsPerLoggedBatchCount = partitionsPerLoggedBatchCountPre + (batchTypeTested == BatchStatement.Type.LOGGED ? 1 : 0);
+            long partitionsPerUnloggedBatchCountPre = metrics.partitionsPerUnloggedBatch.getCount();
+            long expectedPartitionsPerUnloggedBatchCount = partitionsPerUnloggedBatchCountPre + (batchTypeTested == BatchStatement.Type.UNLOGGED ? 1 : 0);
+            long partitionsPerCounterBatchCountPre = metrics.partitionsPerCounterBatch.getCount();
+            long expectedPartitionsPerCounterBatchCount = partitionsPerCounterBatchCountPre + (batchTypeTested == BatchStatement.Type.COUNTER ? 1 : 0);
+
+            executeLoggerBatch(batchTypeTested, distinctPartitions, rounds[ix]);
+
+            assertEquals(expectedPartitionsPerUnloggedBatchCount, metrics.partitionsPerUnloggedBatch.getCount());
+            assertEquals(expectedPartitionsPerLoggedBatchCount, metrics.partitionsPerLoggedBatch.getCount());
+            assertEquals(expectedPartitionsPerCounterBatchCount, metrics.partitionsPerCounterBatch.getCount());
+
+            EstimatedHistogramReservoirSnapshot partitionsPerLoggedBatchSnapshot = (EstimatedHistogramReservoirSnapshot) metrics.partitionsPerLoggedBatch.getSnapshot();
+            EstimatedHistogramReservoirSnapshot partitionsPerUnloggedBatchSnapshot = (EstimatedHistogramReservoirSnapshot) metrics.partitionsPerUnloggedBatch.getSnapshot();
+            EstimatedHistogramReservoirSnapshot partitionsPerCounterBatchSnapshot = (EstimatedHistogramReservoirSnapshot) metrics.partitionsPerCounterBatch.getSnapshot();
+
+            // BatchMetrics uses DecayingEstimatedHistogramReservoir which notes that the return of getMax()
+            // may be more than the actual max value recorded in the reservoir with similar but reverse properties
+            // for getMin(). uses getBucketingForValue() on the snapshot to identify the exact max. since the
+            // distinctPartitions doesn't change per test round these values shouldn't change.
+            Range expectedPartitionsPerLoggedBatchMinMax = batchTypeTested == BatchStatement.Type.LOGGED ?
+                                                           determineExpectedMinMax(partitionsPerLoggedBatchSnapshot, distinctPartitions) :
+                                                           new Range(0L, 0L);
+            Range expectedPartitionsPerUnloggedBatchMinMax = batchTypeTested == BatchStatement.Type.UNLOGGED ?
+                                                             determineExpectedMinMax(partitionsPerUnloggedBatchSnapshot, distinctPartitions) :
+                                                             new Range(0L, 0L);
+            Range expectedPartitionsPerCounterBatchMinMax = batchTypeTested == BatchStatement.Type.COUNTER ?
+                                                            determineExpectedMinMax(partitionsPerCounterBatchSnapshot, distinctPartitions) :
+                                                            new Range(0L, 0L);
+
+            assertEquals(expectedPartitionsPerLoggedBatchMinMax, new Range(partitionsPerLoggedBatchSnapshot.getMin(), partitionsPerLoggedBatchSnapshot.getMax()));
+            assertEquals(expectedPartitionsPerUnloggedBatchMinMax, new Range(partitionsPerUnloggedBatchSnapshot.getMin(), partitionsPerUnloggedBatchSnapshot.getMax()));
+            assertEquals(expectedPartitionsPerCounterBatchMinMax, new Range(partitionsPerCounterBatchSnapshot.getMin(), partitionsPerCounterBatchSnapshot.getMax()));
+        }
+    }
+
