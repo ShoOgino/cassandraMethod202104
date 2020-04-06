@@ -1,0 +1,38 @@
+    @BeforeClass
+    public static void defineSchemaAndPrepareSSTable()
+    {
+        SchemaLoader.prepareServer();
+        SchemaLoader.createKeyspace(KEYSPACE,
+                                    KeyspaceParams.simple(1),
+                                    SchemaLoader.standardCFMD(KEYSPACE, CF_STANDARD)
+                                                // LeveledCompactionStrategy is important here,
+                                                // streaming of entire SSTables works currently only with this strategy
+                                                .compaction(CompactionParams.lcs(Collections.emptyMap()))
+                                                .partitioner(ByteOrderedPartitioner.instance));
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        store = keyspace.getColumnFamilyStore(CF_STANDARD);
+
+        // insert data and compact to a single sstable
+        CompactionManager.instance.disableAutoCompaction();
+
+        for (int j = 0; j < 10; j++)
+        {
+            new RowUpdateBuilder(store.metadata(), j, String.valueOf(j))
+            .clustering("0")
+            .add("val", ByteBufferUtil.EMPTY_BYTE_BUFFER)
+            .build()
+            .applyUnsafe();
+        }
+
+        store.forceBlockingFlush();
+        CompactionManager.instance.performMaximal(store, false);
+
+        sstable = store.getLiveSSTables().iterator().next();
+
+        Token start = ByteOrderedPartitioner.instance.getTokenFactory().fromString(Long.toHexString(0));
+        Token end = ByteOrderedPartitioner.instance.getTokenFactory().fromString(Long.toHexString(100));
+
+        rangesAtEndpoint = RangesAtEndpoint.toDummyList(Collections.singleton(new Range<>(start, end)));
+    }
+
