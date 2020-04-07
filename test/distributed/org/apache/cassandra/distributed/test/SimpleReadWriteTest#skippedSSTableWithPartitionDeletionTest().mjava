@@ -1,0 +1,31 @@
+    @Test
+    public void skippedSSTableWithPartitionDeletionTest() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(2)))
+        {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY(pk, ck))");
+            // insert a partition tombstone on node 1, the deletion timestamp should end up being the sstable's minTimestamp
+            cluster.get(1).executeInternal("DELETE FROM " + KEYSPACE + ".tbl USING TIMESTAMP 1 WHERE pk = 0");
+            // and a row from a different partition, to provide the sstable's min/max clustering
+            cluster.get(1).executeInternal("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (1, 1, 1) USING TIMESTAMP 2");
+            cluster.get(1).flush(KEYSPACE);
+            // expect a single sstable, where minTimestamp equals the timestamp of the partition delete
+            cluster.get(1).runOnInstance(() -> {
+                Set<SSTableReader> sstables = Keyspace.open(KEYSPACE)
+                                                      .getColumnFamilyStore("tbl")
+                                                      .getLiveSSTables();
+                assertEquals(1, sstables.size());
+                assertEquals(1, sstables.iterator().next().getMinTimestamp());
+            });
+
+            // on node 2, add a row for the deleted partition with an older timestamp than the deletion so it should be shadowed
+            cluster.get(2).executeInternal("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (0, 10, 10) USING TIMESTAMP 0");
+
+
+            Object[][] rows = cluster.coordinator(1)
+                                     .execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk=0 AND ck > 5",
+                                              ConsistencyLevel.ALL);
+            assertEquals(0, rows.length);
+        }
+    }
+
