@@ -1,7 +1,28 @@
     @Before
-    public void clearTokenMetadata()
+    public void clearTokenMetadata() throws InterruptedException
     {
+        // we expect to have a single endpoint before running each test method,
+        // so we have to wait for the GossipStage thread to evict stale endpoints
+        // from membership before moving on, otherwise it may break other tests as
+        // things change in the background
+        final int endpointCount = Gossiper.instance.getEndpointCount() - 1;
+        final CountDownLatch latch = new CountDownLatch(endpointCount);
+        Consumer onEndpointEvicted = event -> latch.countDown();
+        DiagnosticEventService.instance().subscribe(GossiperEvent.class,
+                                                    GossiperEvent.GossiperEventType.EVICTED_FROM_MEMBERSHIP,
+                                                    onEndpointEvicted);
+
         PendingRangeCalculatorService.instance.blockUntilFinished();
         StorageService.instance.getTokenMetadata().clearUnsafe();
+
+        try
+        {
+            if (!latch.await(1, TimeUnit.MINUTES))
+                throw new RuntimeException("Took too long to evict stale endpoints.");
+        }
+        finally
+        {
+            DiagnosticEventService.instance().unsubscribe(onEndpointEvicted);
+        }
     }
 
