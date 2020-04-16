@@ -8,64 +8,35 @@
                 StorageProxy.instance.enableRepairedDataTrackingForRangeReads();
             });
 
-            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (k INT, c INT, v INT, PRIMARY KEY (k,c)) with read_repair='NONE'");
+            cluster.schemaChange("CREATE TABLE " + KS_TABLE+ " (k INT, c INT, v INT, PRIMARY KEY (k,c)) with read_repair='NONE'");
             for (int i = 0; i < 10; i++)
             {
-                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (k, c, v) VALUES (?, ?, ?)",
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v) VALUES (?, ?, ?)",
                                                ConsistencyLevel.ALL,
                                                i, i, i);
             }
-
-            cluster.get(1).runOnInstance(() ->
-               Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").forceBlockingFlush()
-            );
-            cluster.get(2).runOnInstance(() ->
-               Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").forceBlockingFlush()
-            );
+            cluster.forEach(i -> i.flush(KEYSPACE));
 
             for (int i = 10; i < 20; i++)
             {
-                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (k, c, v) VALUES (?, ?, ?)",
+                cluster.coordinator(1).execute("INSERT INTO " + KS_TABLE + " (k, c, v) VALUES (?, ?, ?)",
                                                ConsistencyLevel.ALL,
                                                i, i, i);
             }
+            cluster.forEach(i -> i.flush(KEYSPACE));
+            cluster.forEach(i -> assertNotRepaired());
 
-            cluster.get(1).runOnInstance(() ->
-                                         Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").forceBlockingFlush()
-            );
-            cluster.get(2).runOnInstance(() ->
-                                         Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").forceBlockingFlush()
-            );
+            // mark everything on node 2 repaired
+            cluster.get(2).runOnInstance(markAllRepaired());
+            cluster.get(2).runOnInstance(assertRepaired());
 
-            cluster.get(1).runOnInstance(() ->
-                Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").getLiveSSTables().forEach(this::assertNotRepaired)
-            );
-            cluster.get(2).runOnInstance(() ->
-                Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").getLiveSSTables().forEach(this::assertNotRepaired)
-            );
+            // insert more data on node1 to generate an initial mismatch
+            cluster.get(1).executeInternal("INSERT INTO " + KS_TABLE + " (k, c, v) VALUES (?, ?, ?)", 5, 5, 55);
+            cluster.get(1).runOnInstance(assertNotRepaired());
 
-            cluster.get(2).runOnInstance(() ->
-                Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").getLiveSSTables().forEach(this::markRepaired)
-            );
-
-
-            cluster.get(1).executeInternal("INSERT INTO " + KEYSPACE + ".tbl (k, c, v) VALUES (?, ?, ?)", 5, 5, 55);
-            cluster.get(1).runOnInstance(() ->
-              Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").getLiveSSTables().forEach(this::assertNotRepaired)
-            );
-            cluster.get(2).runOnInstance(() ->
-              Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").getLiveSSTables().forEach(this::assertRepaired)
-            );
-
-            long ccBefore = cluster.get(1).callOnInstance(() ->
-                Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").metric.confirmedRepairedInconsistencies.table.getCount()
-            );
-
-            cluster.coordinator(1).execute("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
-            long ccAfter = cluster.get(1).callOnInstance(() ->
-                Keyspace.open(KEYSPACE).getColumnFamilyStore("tbl").metric.confirmedRepairedInconsistencies.table.getCount()
-            );
-
+            long ccBefore = getConfirmedInconsistencies(cluster.get(1));
+            cluster.coordinator(1).execute("SELECT * FROM " + KS_TABLE, ConsistencyLevel.ALL);
+            long ccAfter = getConfirmedInconsistencies(cluster.get(1));
             Assert.assertEquals("confirmed count should differ by 1 after range read", ccBefore + 1, ccAfter);
         }
     }

@@ -1,0 +1,44 @@
+    @Test
+    public void snapshotTest() throws IOException, InterruptedException
+    {
+        try(Cluster cluster = init(Cluster.build(3).withConfig(config ->
+                                                               config.set("snapshot_on_repaired_data_mismatch", true)
+                                                                     .with(GOSSIP)
+                                                                     .with(NETWORK))
+                                          .start()))
+        {
+            cluster.schemaChange("create table " + KEYSPACE + ".tbl (id int primary key, t int)");
+            cluster.schemaChange("create table " + KEYSPACE + ".tbl2 (id int primary key, t int)");
+            Thread.sleep(1000);
+
+            // populate 2 tables
+            insert(cluster.coordinator(1), 0, 100, "tbl");
+            insert(cluster.coordinator(1), 0, 100, "tbl2");
+            cluster.forEach((n) -> n.flush(KEYSPACE));
+
+            // make sure everything is marked repaired
+            cluster.get(1).callOnInstance(repair(options(false)));
+            waitMarkedRepaired(cluster);
+            // make node2 mismatch
+            unmarkRepaired(cluster.get(2), "tbl");
+            verifySnapshots(cluster, "tbl", true);
+            verifySnapshots(cluster, "tbl2", true);
+
+            AtomicInteger snapshotMessageCounter = new AtomicInteger();
+            cluster.filters().verbs(Verb.SNAPSHOT_REQ.id).messagesMatching((from, to, message) -> {
+                snapshotMessageCounter.incrementAndGet();
+                return false;
+            }).drop();
+            cluster.get(1).callOnInstance(repair(options(true)));
+            verifySnapshots(cluster, "tbl", false);
+            // tbl2 should not have a mismatch, so the snapshots should be empty here
+            verifySnapshots(cluster, "tbl2", true);
+            assertEquals(3, snapshotMessageCounter.get());
+
+            // and make sure that we don't try to snapshot again
+            snapshotMessageCounter.set(0);
+            cluster.get(3).callOnInstance(repair(options(true)));
+            assertEquals(0, snapshotMessageCounter.get());
+        }
+    }
+
