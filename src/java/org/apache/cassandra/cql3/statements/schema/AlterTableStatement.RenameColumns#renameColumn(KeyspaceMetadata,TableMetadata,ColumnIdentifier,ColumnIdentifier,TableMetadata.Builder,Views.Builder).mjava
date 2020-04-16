@@ -1,0 +1,42 @@
+        private void renameColumn(KeyspaceMetadata keyspace,
+                                  TableMetadata table,
+                                  ColumnIdentifier oldName,
+                                  ColumnIdentifier newName,
+                                  TableMetadata.Builder tableBuilder,
+                                  Views.Builder viewsBuilder)
+        {
+            ColumnMetadata column = table.getColumn(oldName);
+            if (null == column)
+                throw ire("Column %s was not found in table %s", oldName, table);
+
+            if (!column.isPrimaryKeyColumn())
+                throw ire("Cannot rename non PRIMARY KEY column %s", oldName);
+
+            if (null != table.getColumn(newName))
+            {
+                throw ire("Cannot rename column %s to %s in table '%s'; another column with that name already exists",
+                          oldName,
+                          newName,
+                          table);
+            }
+
+            // TODO: some day try and find a way to not rely on Keyspace/IndexManager/Index to find dependent indexes
+            Set<IndexMetadata> dependentIndexes = Keyspace.openAndGetStore(table).indexManager.getDependentIndexes(column);
+            if (!dependentIndexes.isEmpty())
+            {
+                throw ire("Can't rename column %s because it has dependent secondary indexes (%s)",
+                          oldName,
+                          join(", ", transform(dependentIndexes, i -> i.name)));
+            }
+
+            for (ViewMetadata view : keyspace.views.forTable(table.id))
+            {
+                if (view.includes(oldName))
+                {
+                    viewsBuilder.put(viewsBuilder.get(view.name()).withRenamedPrimaryKeyColumn(oldName, newName));
+                }
+            }
+
+            tableBuilder.renamePrimaryKeyColumn(oldName, newName);
+        }
+
