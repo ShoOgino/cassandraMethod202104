@@ -1,31 +1,27 @@
-    public long writeFileToChannel(FileChannel file, StreamRateLimiter limiter, int batchSize, int lowWaterMark, int highWaterMark) throws IOException
+    public long writeFileToChannel(FileChannel fc, StreamRateLimiter limiter, int batchSize, int lowWaterMark, int highWaterMark) throws IOException
     {
-        final long length = file.size();
+        final long length = fc.size();
         long bytesTransferred = 0;
-
-        final SharedFileChannel sharedFile = SharedDefaultFileRegion.share(file);
-        try
+        while (bytesTransferred < length)
         {
-            while (bytesTransferred < length)
-            {
-                int toWrite = (int) min(batchSize, length - bytesTransferred);
+            int toWrite = (int) min(batchSize, length - bytesTransferred);
+            final long position = bytesTransferred;
 
-                limiter.acquire(toWrite);
-                ChannelPromise promise = beginFlush(toWrite, lowWaterMark, highWaterMark);
+            writeToChannel(bufferSupplier -> {
+                ByteBuffer outBuffer = bufferSupplier.get(toWrite);
+                long read = fc.read(outBuffer, position);
+                if (read != toWrite)
+                    throw new IOException(String.format("could not read required number of bytes from " +
+                                                        "file to be streamed: read %d bytes, wanted %d bytes",
+                                                        read, toWrite));
+                outBuffer.flip();
+            }, limiter);
 
-                SharedDefaultFileRegion fileRegion = new SharedDefaultFileRegion(sharedFile, bytesTransferred, toWrite);
-                channel.writeAndFlush(fileRegion, promise);
-
-                if (logger.isTraceEnabled())
-                    logger.trace("Writing {} bytes at position {} of {}", toWrite, bytesTransferred, length);
-                bytesTransferred += toWrite;
-            }
-
-            return bytesTransferred;
+            if (logger.isTraceEnabled())
+                logger.trace("Writing {} bytes at position {} of {}", toWrite, bytesTransferred, length);
+            bytesTransferred += toWrite;
         }
-        finally
-        {
-            sharedFile.release();
-        }
+
+        return bytesTransferred;
     }
 
