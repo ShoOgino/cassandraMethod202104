@@ -1,0 +1,34 @@
+    /**
+     * JIRA: CASSANDRA-15595 verify large position with small chunk length won't overflow chunk index
+     */
+    @Test
+    public void testChunkIndexOverflow() throws IOException
+    {
+        File file = File.createTempFile("chunk_idx_overflow", "1");
+        String filename = file.getAbsolutePath();
+        int chunkLength = 4096; // 4k
+
+        try
+        {
+            writeSSTable(file, CompressionParams.snappy(chunkLength), 10);
+            CompressionMetadata metadata = new CompressionMetadata(filename + ".metadata", file.length(), true);
+
+            long chunks = 2761628520L;
+            long midPosition = (chunks / 2L) * chunkLength;
+            int idx = 8 * (int) (midPosition / chunkLength); // before patch
+            assertTrue("Expect integer overflow", idx < 0);
+
+            Throwable thrown = Assertions.catchThrowable(() -> metadata.chunkFor(midPosition));
+            assertThat(thrown).isInstanceOf(CorruptSSTableException.class)
+                              .hasCauseInstanceOf(EOFException.class);
+        }
+        finally
+        {
+            if (file.exists())
+                assertTrue(file.delete());
+            File metadata = new File(filename + ".metadata");
+            if (metadata.exists())
+                metadata.delete();
+        }
+    }
+
