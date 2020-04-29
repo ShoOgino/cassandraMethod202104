@@ -1,0 +1,21 @@
+    /**
+     * Replaces Python Dtest: nodetool_test.py#test_refresh_size_estimates_clears_invalid_entries
+     */
+    @Test
+    public void refreshSizeEstimatesClearsInvalidEntries()
+    {
+        String size_estimatesInsert = "INSERT INTO system.size_estimates (keyspace_name, table_name, range_start, range_end, mean_partition_size, partitions_count) VALUES (?, ?, ?, ?, ?, ?)";
+        IInstance node = CLUSTER.get(1);
+
+        node.executeInternal(size_estimatesInsert, "system_auth", "bad_table", "-5", "5", 0L, 0L);
+        node.executeInternal(size_estimatesInsert, "bad_keyspace", "bad_table", "-5", "5", 0L, 0L);
+
+        node.nodetoolResult("refreshsizeestimates").asserts().success();
+
+        QueryResult qr = CLUSTER.coordinator(1).executeWithResult("SELECT * FROM system.size_estimates WHERE keyspace_name=? AND table_name=?", ConsistencyLevel.ONE, "system_auth", "bad_table");
+        Assertions.assertThat(qr).isExhausted();
+
+        qr = CLUSTER.coordinator(1).executeWithResult("SELECT * FROM system.size_estimates WHERE keyspace_name=?", ConsistencyLevel.ONE, "bad_keyspace");
+        Assertions.assertThat(qr).isExhausted();
+    }
+
