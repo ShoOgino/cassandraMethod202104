@@ -1,0 +1,52 @@
+    /**
+     * Makes sure we don't create duplicates when merging 2 partition updates
+     */
+    @Test
+    public void testMerge()
+    {
+        createTable("CREATE TABLE %s (pk int, ck int, v map<text, text>, PRIMARY KEY (pk, ck))");
+        CFMetaData cfm = currentTableMetadata();
+
+        DecoratedKey dk = Murmur3Partitioner.instance.decorateKey(ByteBufferUtil.bytes(1));
+
+        Row.Builder builder = BTreeRow.unsortedBuilder(FBUtilities.nowInSeconds());
+        builder.newRow(new Clustering(ByteBufferUtil.bytes(2)));
+        builder.addComplexDeletion(cfm.getColumnDefinition(ByteBufferUtil.bytes("v")), new DeletionTime(2, 1588586647));
+        Cell c = BufferCell.live(cfm, cfm.getColumnDefinition(ByteBufferUtil.bytes("v")), 3, ByteBufferUtil.bytes("h"), CellPath.create(ByteBufferUtil.bytes("g")));
+        builder.addCell(c);
+        Row r = builder.build();
+
+        PartitionUpdate p1 = new PartitionUpdate(cfm, dk, cfm.partitionColumns(), 2);
+        p1.add(r);
+
+        builder.newRow(new Clustering(ByteBufferUtil.bytes(2)));
+        builder.addRowDeletion(new Row.Deletion(new DeletionTime(1588586647, 1), false));
+        r = builder.build();
+        PartitionUpdate p2 = new PartitionUpdate(cfm, dk, cfm.partitionColumns(), 2);
+        p2.add(r);
+
+        Mutation m = new Mutation(getCurrentColumnFamilyStore().keyspace.getName(), dk);
+        m.add(PartitionUpdate.merge(Lists.newArrayList(p1, p2)));
+        m.apply();
+
+        getCurrentColumnFamilyStore().forceBlockingFlush();
+
+        SSTableReader sst = getCurrentColumnFamilyStore().getLiveSSTables().iterator().next();
+        int count = 0;
+        try (ISSTableScanner scanner = sst.getScanner())
+        {
+            while (scanner.hasNext())
+            {
+                try (UnfilteredRowIterator iter = scanner.next())
+                {
+                    while (iter.hasNext())
+                    {
+                        iter.next();
+                        count++;
+                    }
+                }
+            }
+        }
+        assertEquals(1, count);
+    }
+
