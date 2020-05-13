@@ -1,0 +1,53 @@
+    /**
+     * This tests that when {@link CellGrouper} gets a collection tombstone for
+     * a non-fetched collection, then that tombstone does not incorrectly stop the grouping of the current row, as
+     * was done before CASSANDRA-15805.
+     *
+     * <p>Please note that this rely on a query only _fetching_ some of the table columns, which in practice only
+     * happens for thrift queries, and thrift queries shouldn't mess up with CQL tables and collection tombstones,
+     * so this test is not of the utmost importance. Nonetheless, the pre-CASSANDRA-15805 behavior was incorrect and
+     * this ensure it is fixed.
+     */
+    @Test
+    public void testCellGrouperOnNonFecthedCollectionTombstone()
+    {
+        // CREATE TABLE %s (pk int, ck int, a text, b set<text>, c text, PRIMARY KEY (pk, ck))
+        CFMetaData cfm = CFMetaData.Builder.create("ks", "table")
+                                           .addPartitionKey("pk", Int32Type.instance)
+                                           .addClusteringColumn("ck", Int32Type.instance)
+                                           .addRegularColumn("a", UTF8Type.instance)
+                                           .addRegularColumn("b", SetType.getInstance(UTF8Type.instance, true))
+                                           .addRegularColumn("c", UTF8Type.instance)
+                                           .build();
+
+        // Creates a filter that _only_ fetches a and c, but not b.
+        ColumnFilter filter = ColumnFilter.selectionBuilder()
+                                          .add(cfm.getColumnDefinition(bytes("a")))
+                                          .add(cfm.getColumnDefinition(bytes("c")))
+                                          .build();
+        SerializationHelper helper = new SerializationHelper(cfm,
+                                                             MessagingService.VERSION_22,
+                                                             SerializationHelper.Flag.LOCAL,
+                                                             filter);
+        CellGrouper grouper = new CellGrouper(cfm, helper);
+        Clustering clustering = new Clustering(bytes(1));
+
+        // We add a cell for a, then a collection tombstone for b, and then a cell for c (for the same clustering).
+        // All those additions should return 'true' as all belong to the same row.
+        LegacyCell ca = cell(clustering, cfm.getColumnDefinition(bytes("a")), bytes("v1"), 1);
+        assertTrue(grouper.addAtom(ca));
+
+        Slice.Bound startBound = Slice.Bound.inclusiveStartOf(bytes(1));
+        Slice.Bound endBound = Slice.Bound.inclusiveEndOf(bytes(1));
+        ColumnDefinition bDef = cfm.getColumnDefinition(bytes("b"));
+        assert bDef != null;
+        LegacyBound start = new LegacyBound(startBound, false, bDef);
+        LegacyBound end = new LegacyBound(endBound, false, bDef);
+        LegacyRangeTombstone rtb = new LegacyRangeTombstone(start, end, new DeletionTime(1, 1588598040));
+        assertTrue(rtb.isCollectionTombstone()); // Ensure we're testing what we think
+        assertTrue(grouper.addAtom(rtb));
+
+        LegacyCell cc = cell(clustering, cfm.getColumnDefinition(bytes("c")), bytes("v2"), 1);
+        assertTrue(grouper.addAtom(cc));
+    }
+
