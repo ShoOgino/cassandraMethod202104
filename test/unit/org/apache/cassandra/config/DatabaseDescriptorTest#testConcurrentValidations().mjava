@@ -1,0 +1,30 @@
+    @Test
+    public void testConcurrentValidations()
+    {
+        Config conf = new Config();
+        conf.concurrent_compactors = 8;
+        // if concurrent_validations is < 1 (including being unset) it should default to concurrent_compactors
+        assertThat(conf.concurrent_validations).isLessThan(1);
+        DatabaseDescriptor.applyConcurrentValidations(conf);
+        assertThat(conf.concurrent_validations).isEqualTo(conf.concurrent_compactors);
+
+        // otherwise, it must be <= concurrent_compactors
+        conf.concurrent_validations = conf.concurrent_compactors + 1;
+        try
+        {
+            DatabaseDescriptor.applyConcurrentValidations(conf);
+            fail("Expected exception");
+        }
+        catch (ConfigurationException e)
+        {
+            assertThat(e.getMessage()).isEqualTo("To set concurrent_validations > concurrent_compactors, " +
+                                                 "set the system property cassandra.allow_unlimited_concurrent_validations=true");
+        }
+
+        // unless we disable that check (done with a system property at startup or via JMX)
+        DatabaseDescriptor.allowUnlimitedConcurrentValidations = true;
+        conf.concurrent_validations = conf.concurrent_compactors + 1;
+        DatabaseDescriptor.applyConcurrentValidations(conf);
+        assertThat(conf.concurrent_validations).isEqualTo(conf.concurrent_compactors + 1);
+    }
+

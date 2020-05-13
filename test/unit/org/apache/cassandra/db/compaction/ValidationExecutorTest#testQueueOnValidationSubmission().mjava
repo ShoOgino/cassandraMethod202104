@@ -1,0 +1,27 @@
+    @Test
+    public void testQueueOnValidationSubmission() throws InterruptedException
+    {
+        Condition taskBlocked = new SimpleCondition();
+        AtomicInteger threadsAvailable = new AtomicInteger(DatabaseDescriptor.getConcurrentValidations());
+        CountDownLatch taskComplete = new CountDownLatch(5);
+        validationExecutor = new CompactionManager.ValidationExecutor();
+
+        ExecutorService testExecutor = Executors.newSingleThreadExecutor();
+        for (int i=0; i< 5; i++)
+            testExecutor.submit(() -> {
+                threadsAvailable.decrementAndGet();
+                validationExecutor.submit(new Task(taskBlocked, taskComplete));
+            });
+
+        // wait for all tasks to be submitted & check that the excess ones were queued
+        while (threadsAvailable.get() > 0)
+            TimeUnit.MILLISECONDS.sleep(10);
+
+        assertEquals(2, validationExecutor.getActiveTaskCount());
+        assertEquals(3, validationExecutor.getPendingTaskCount());
+
+        taskBlocked.signalAll();
+        taskComplete.await(10, TimeUnit.SECONDS);
+        validationExecutor.shutdownNow();
+    }
+
