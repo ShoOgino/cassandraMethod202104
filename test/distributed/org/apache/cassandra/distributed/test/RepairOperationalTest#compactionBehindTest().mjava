@@ -1,0 +1,24 @@
+    @Test
+    public void compactionBehindTest() throws IOException
+    {
+        try(Cluster cluster = init(Cluster.build(2)
+                                          .withConfig(config -> config.with(GOSSIP).with(NETWORK))
+                                          .withInstanceInitializer(ByteBuddyHelper::install)
+                                          .start()))
+        {
+            cluster.schemaChange("create table "+KEYSPACE+".tbl (id int primary key, x int)");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("insert into "+KEYSPACE+".tbl (id, x) VALUES (?,?)", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+            cluster.forEach(i -> i.nodetoolResult("repair", "--full").asserts().success());
+            cluster.get(2).runOnInstance(() -> {
+                ByteBuddyHelper.pendingCompactions = 1000;
+                DatabaseDescriptor.setRepairPendingCompactionRejectThreshold(500);
+            });
+            // make sure repair gets rejected on both nodes if pendingCompactions > threshold:
+            cluster.forEach(i -> i.nodetoolResult("repair", "--full").asserts().failure());
+            cluster.get(2).runOnInstance(() -> ByteBuddyHelper.pendingCompactions = 499);
+            cluster.forEach(i -> i.nodetoolResult("repair", "--full").asserts().success());
+        }
+    }
+
