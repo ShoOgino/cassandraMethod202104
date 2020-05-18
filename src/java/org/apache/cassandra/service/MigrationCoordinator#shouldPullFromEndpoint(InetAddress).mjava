@@ -1,0 +1,40 @@
+    @VisibleForTesting
+    protected boolean shouldPullFromEndpoint(InetAddress endpoint)
+    {
+        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+            return false;
+
+        EndpointState state = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
+        if (state == null)
+            return false;
+
+        final String releaseVersion = state.getApplicationState(ApplicationState.RELEASE_VERSION).value;
+        final String ourMajorVersion = FBUtilities.getReleaseVersionMajor();
+
+        if (!releaseVersion.startsWith(ourMajorVersion))
+        {
+            logger.debug("Not pulling schema from {} because release version in Gossip is not major version {}, it is {}",
+                         endpoint, ourMajorVersion, releaseVersion);
+            return false;
+        }
+
+        if (!MessagingService.instance().knowsVersion(endpoint))
+        {
+            logger.debug("Not pulling schema from {} because their messaging version is unknown", endpoint);
+            return false;
+        }
+
+        if (!is30Compatible(MessagingService.instance().getRawVersion(endpoint)))
+        {
+            logger.debug("Not pulling schema from {} because their schema format is incompatible", endpoint);
+            return false;
+        }
+
+        if (Gossiper.instance.isGossipOnlyMember(endpoint))
+        {
+            logger.debug("Not pulling schema from {} because it's a gossip only member", endpoint);
+            return false;
+        }
+        return true;
+    }
+

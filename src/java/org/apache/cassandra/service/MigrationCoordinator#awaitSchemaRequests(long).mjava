@@ -1,0 +1,45 @@
+    /**
+     * Wait until we've received schema responses for all versions we're aware of
+     * @param waitMillis
+     * @return true if response for all schemas were received, false if we timed out waiting
+     */
+    public boolean awaitSchemaRequests(long waitMillis)
+    {
+        if (!FBUtilities.getBroadcastAddress().equals(InetAddress.getLoopbackAddress()))
+            CassandraDaemon.waitForGossipToSettle();
+
+        WaitQueue.Signal signal = null;
+        try
+        {
+            synchronized (this)
+            {
+                List<WaitQueue.Signal> signalList = new ArrayList<>(versionInfo.size());
+                for (VersionInfo version : versionInfo.values())
+                {
+                    if (version.wasReceived())
+                        continue;
+
+                    signalList.add(version.register());
+                }
+
+                if (signalList.isEmpty())
+                    return true;
+
+                WaitQueue.Signal[] signals = new WaitQueue.Signal[signalList.size()];
+                signalList.toArray(signals);
+                signal = WaitQueue.all(signals);
+            }
+
+            return signal.awaitUntil(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMillis));
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            if (signal != null)
+                signal.cancel();
+        }
+    }
+

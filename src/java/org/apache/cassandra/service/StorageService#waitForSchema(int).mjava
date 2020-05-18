@@ -1,0 +1,28 @@
+    public void waitForSchema(int delay)
+    {
+        // first sleep the delay to make sure we see all our peers
+        for (long i = 0; i < delay; i += 1000)
+        {
+            // if we see schema, we can proceed to the next check directly
+            if (!Schema.instance.isEmpty())
+            {
+                logger.debug("current schema version: {}", Schema.instance.getVersion());
+                break;
+            }
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+        }
+
+        boolean schemasReceived = MigrationCoordinator.instance.awaitSchemaRequests(TimeUnit.SECONDS.toMillis(SCHEMA_DELAY));
+
+        if (schemasReceived)
+            return;
+
+        logger.warn(String.format("There are nodes in the cluster with a different schema version than us we did not merged schemas from, " +
+                                  "our version : (%s), outstanding versions -> endpoints : %s",
+                                  Schema.instance.getVersion(),
+                                  MigrationCoordinator.instance.outstandingVersions()));
+
+        if (REQUIRE_SCHEMAS)
+            throw new RuntimeException("Didn't receive schemas for all known versions within the timeout");
+    }
+
