@@ -11,7 +11,7 @@
                                                            int requiredParticipants,
                                                            ConsistencyLevel consistencyForPaxos,
                                                            ConsistencyLevel consistencyForCommit,
-                                                           final boolean isWrite,
+                                                           CASClientRequestMetrics casMetrics,
                                                            ClientState state)
     throws WriteTimeoutException, WriteFailureException
     {
@@ -44,18 +44,31 @@
                 continue;
             }
 
-            Commit inProgress = summary.mostRecentInProgressCommitWithUpdate;
+            Commit inProgress = summary.mostRecentInProgressCommit;
             Commit mostRecent = summary.mostRecentCommit;
 
             // If we have an in-progress ballot greater than the MRC we know, then it's an in-progress round that
             // needs to be completed, so do it.
+            // One special case we make is for update that are empty (which are proposed by serial reads and
+            // non-applying CAS). While we could handle those as any other updates, we can optimize this somewhat by
+            // neither committing those empty updates, nor replaying in-progress ones. The reasoning is this: as the
+            // update is empty, we have nothing to apply to storage in the commit phase, so the only reason to commit
+            // would be to update the MRC. However, if we skip replaying those empty updates, then we don't need to
+            // update the MRC for following updates to make progress (that is, if we didn't had the empty update skip
+            // below _but_ skipped updating the MRC on empty updates, then we'd be stuck always proposing that same
+            // empty update). And the reason skipping that replay is safe is that when an operation tries to propose
+            // an empty value, there can be only 2 cases:
+            //  1) the propose succeed, meaning a quorum of nodes accept it, in which case we are guaranteed no earlier
+            //     pending operation can ever be replayed (which is what we want to guarantee with the empty update).
+            //  2) the propose does not succeed. But then the operation proposing the empty update will not succeed
+            //     either (it will retry or ultimately timeout), and we're actually ok if earlier pending operation gets
+            //     replayed in that case.
+            // Tl;dr, it is safe to skip committing empty updates _as long as_ we also skip replying them below. And
+            // doing is more efficient, so we do so.
             if (!inProgress.update.isEmpty() && inProgress.isAfter(mostRecent))
             {
                 Tracing.trace("Finishing incomplete paxos round {}", inProgress);
-                if(isWrite)
-                    casWriteMetrics.unfinishedCommit.inc();
-                else
-                    casReadMetrics.unfinishedCommit.inc();
+                casMetrics.unfinishedCommit.inc();
                 Commit refreshedInProgress = Commit.newProposal(ballot, inProgress.update);
                 if (proposePaxos(refreshedInProgress, liveEndpoints, requiredParticipants, false, consistencyForPaxos))
                 {

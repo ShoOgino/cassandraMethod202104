@@ -1,0 +1,100 @@
+    /**
+     * Performs the Paxos rounds for a given proposal, retrying when preempted until the timeout.
+     *
+     * <p>The main 'configurable' of this method is the {@code createUpdateProposal} method: it is called by the method
+     * once a ballot has been successfully 'prepared' to generate the update to 'propose' (and commit if the proposal is
+     * successful). That method also generates the result that the whole method will return. Note that due to retrying,
+     * this method may be called multiple times and does not have to return the same results.
+     *
+     * @param metadata the table to update with Paxos.
+     * @param key the partition updated.
+     * @param consistencyForPaxos the serial consistency of the operation (either {@link ConsistencyLevel#SERIAL} or
+     *     {@link ConsistencyLevel#LOCAL_SERIAL}).
+     * @param consistencyForReplayCommits the consistency for the commit phase of "replayed" in-progress operations.
+     * @param consistencyForCommit the consistency for the commit phase of _this_ operation update.
+     * @param state the client state.
+     * @param queryStartNanoTime the nano time for the start of the query this is part of.
+     * @param casMetrics the metrics to update for this operation.
+     * @param createUpdateProposal method called after a successful 'prepare' phase to obtain 1) the actual update of
+     *     this operation and 2) the result that the whole method should return. This can return {@code null} in the
+     *     special where, after having "prepared" (and thus potentially replayed in-progress upgdates), we don't want
+     *     to propose anything (the whole method then return {@code null}).
+     * @return the second element of the pair returned by {@code createUpdateProposal} (for the last call of that method
+     *     if that method is called multiple times due to retries).
+     */
+    private static RowIterator doPaxos(CFMetaData metadata,
+                                       DecoratedKey key,
+                                       ConsistencyLevel consistencyForPaxos,
+                                       ConsistencyLevel consistencyForReplayCommits,
+                                       ConsistencyLevel consistencyForCommit,
+                                       ClientState state,
+                                       long queryStartNanoTime,
+                                       CASClientRequestMetrics casMetrics,
+                                       Supplier<Pair<PartitionUpdate, RowIterator>> createUpdateProposal)
+    throws UnavailableException, IsBootstrappingException, RequestFailureException, RequestTimeoutException, InvalidRequestException
+    {
+        int contentions = 0;
+        try
+        {
+            consistencyForPaxos.validateForCas();
+            consistencyForReplayCommits.validateForCasCommit(metadata.ksName);
+            consistencyForCommit.validateForCasCommit(metadata.ksName);
+
+            long timeout = TimeUnit.MILLISECONDS.toNanos(DatabaseDescriptor.getCasContentionTimeout());
+            while (System.nanoTime() - queryStartNanoTime < timeout)
+            {
+                // for simplicity, we'll do a single liveness check at the start of each attempt
+                Pair<List<InetAddress>, Integer> p = getPaxosParticipants(metadata, key, consistencyForPaxos);
+                List<InetAddress> liveEndpoints = p.left;
+                int requiredParticipants = p.right;
+
+                final Pair<UUID, Integer> pair = beginAndRepairPaxos(queryStartNanoTime,
+                                                                     key,
+                                                                     metadata,
+                                                                     liveEndpoints,
+                                                                     requiredParticipants,
+                                                                     consistencyForPaxos,
+                                                                     consistencyForReplayCommits,
+                                                                     casMetrics,
+                                                                     state);
+                final UUID ballot = pair.left;
+                contentions += pair.right;
+
+                Pair<PartitionUpdate, RowIterator> proposalPair = createUpdateProposal.get();
+                // See method javadoc: null here is code for "stop here and return null".
+                if (proposalPair == null)
+                    return null;
+
+                Commit proposal = Commit.newProposal(ballot, proposalPair.left);
+                Tracing.trace("CAS precondition is met; proposing client-requested updates for {}", ballot);
+                if (proposePaxos(proposal, liveEndpoints, requiredParticipants, true, consistencyForPaxos))
+                {
+                    // We skip committing accepted updates when they are empty. This is an optimization which works
+                    // because we also skip replaying those same empty update in beginAndRepairPaxos (see the longer
+                    // comment there). As empty update are somewhat common (serial reads and non-applying CAS propose
+                    // them), this is worth bothering.
+                    if (!proposal.update.isEmpty())
+                        commitPaxos(proposal, consistencyForCommit, true);
+                    RowIterator result = proposalPair.right;
+                    if (result != null)
+                        Tracing.trace("CAS did not apply");
+                    else
+                        Tracing.trace("CAS applied successfully");
+                    return result;
+                }
+
+                Tracing.trace("Paxos proposal not accepted (pre-empted by a higher ballot)");
+                contentions++;
+                Uninterruptibles.sleepUninterruptibly(ThreadLocalRandom.current().nextInt(100), TimeUnit.MILLISECONDS);
+                // continue to retry
+            }
+
+            throw new WriteTimeoutException(WriteType.CAS, consistencyForPaxos, 0, consistencyForPaxos.blockFor(Keyspace.open(metadata.ksName)));
+        }
+        finally
+        {
+            if(contentions > 0)
+                casMetrics.contention.update(contentions);
+        }
+    }
+

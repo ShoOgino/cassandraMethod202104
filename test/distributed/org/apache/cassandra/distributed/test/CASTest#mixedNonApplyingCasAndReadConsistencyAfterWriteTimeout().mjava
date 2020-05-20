@@ -1,0 +1,22 @@
+    /**
+     * Tests that if a write timeouts and a following CAS succeed but does not apply in a way that indicate the write
+     * has not applied, then following serial reads do no see that write, even if some nodes still have the write in
+     * their paxos state.
+     *
+     * <p>This specifically test for the inconsistency described/fixed by CASSANDRA-12126.
+     */
+    @Test
+    public void mixedNonApplyingCasAndReadConsistencyAfterWriteTimeout() throws IOException
+    {
+        // Note: we use CL.ANY so that the operation don't timeout in the case where we "lost" the operation1 commits.
+        // The commit CL shouldn't have impact on this test anyway, so this doesn't diminishes the test.
+        BiConsumer<String, ICoordinator> operation1 =
+            (table, coordinator) -> assertCasNotApplied(coordinator.execute("UPDATE " + table + " SET v = 1 WHERE k = 0 IF v = 0",
+                                                                            ConsistencyLevel.ANY));
+        BiConsumer<String, ICoordinator> operation2 =
+            (table, coordinator) -> assertRows(coordinator.execute("SELECT * FROM " + table + " WHERE k=0",
+                                                                   ConsistencyLevel.SERIAL));
+        consistencyAfterWriteTimeoutTest(operation1, operation2, false);
+        consistencyAfterWriteTimeoutTest(operation1, operation2, true);
+    }
+
