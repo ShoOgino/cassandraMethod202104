@@ -1,0 +1,22 @@
+    private void maybeTriggerSnapshot(TableMetadata metadata, String prefix, Iterable<InetAddressAndPort> endpoints)
+    {
+        long now = System.nanoTime();
+        AtomicLong cached = lastSnapshotTimes.computeIfAbsent(metadata.id, u -> new AtomicLong(0));
+        long last = cached.get();
+        long interval = Long.getLong("cassandra.diagnostic_snapshot_interval_nanos", SNAPSHOT_INTERVAL_NANOS);
+        if (now - last > interval && cached.compareAndSet(last, now))
+        {
+            Message<SnapshotCommand> msg = Message.out(Verb.SNAPSHOT_REQ,
+                                                       new SnapshotCommand(metadata.keyspace,
+                                                                           metadata.name,
+                                                                           getSnapshotName(prefix),
+                                                                           false));
+            for (InetAddressAndPort replica : endpoints)
+                MessagingService.instance().send(msg, replica);
+        }
+        else
+        {
+            logger.debug("Diagnostic snapshot request dropped due to throttling");
+        }
+    }
+
