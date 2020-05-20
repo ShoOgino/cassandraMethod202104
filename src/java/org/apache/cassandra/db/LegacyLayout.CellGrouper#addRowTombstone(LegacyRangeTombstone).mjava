@@ -6,10 +6,12 @@
                 // written, as 2.x storage format does not guarantee just one range tombstone, unlike 3.x.
                 // We have to make sure that clustering matches, which would mean that tombstone is for the
                 // same row.
-                if (rowDeletion != null && clustering.equals(tombstone.start.getAsClustering(metadata)))
+                if (clustering.equals(tombstone.start.getAsClustering(metadata)))
                 {
-                    // If the tombstone superceeds the previous delete, we discard the previous one
-                    if (tombstone.deletionTime.supersedes(rowDeletion.deletionTime))
+                    // If the tombstone superceeds the previous delete, we discard the previous one.
+                    // This assumes that we are building the row from a sane source (ie, this row deletion
+                    // does not delete anything already added to the builder). See CASSANDRA-15789 for details
+                    if (rowDeletion == null || tombstone.deletionTime.supersedes(rowDeletion.deletionTime))
                     {
                         builder.addRowDeletion(Row.Deletion.regular(tombstone.deletionTime));
                         rowDeletion = tombstone;
@@ -18,7 +20,7 @@
                     return true;
                 }
 
-                // If we're already within a row and there was no delete written before that one, it can't be the same one
+                // different clustering -> new row
                 return false;
             }
 

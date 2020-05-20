@@ -1,0 +1,30 @@
+    private void validate(UpgradeableCluster cluster, int nodeid, boolean local)
+    {
+        String query = "SELECT * FROM " + KEYSPACE + ".tbl";
+
+        Iterator<Object[]> iter = local
+                                ? Iterators.forArray(cluster.get(nodeid).executeInternal(query))
+                                : cluster.coordinator(nodeid).executeWithPaging(query, ConsistencyLevel.ALL, 2);
+
+        Object[] prevRow = null;
+        Object prevClustering = null;
+
+        while (iter.hasNext())
+        {
+            Object[] row = iter.next();
+            Object clustering = row[1];
+
+            if (clustering.equals(prevClustering))
+            {
+                fail(String.format("Duplicate rows on node %d in %s mode: \n%s\n%s",
+                                   nodeid,
+                                   local ? "local" : "distributed",
+                                   Arrays.toString(prevRow),
+                                   Arrays.toString(row)));
+            }
+
+            prevRow = row;
+            prevClustering = clustering;
+        }
+    }
+

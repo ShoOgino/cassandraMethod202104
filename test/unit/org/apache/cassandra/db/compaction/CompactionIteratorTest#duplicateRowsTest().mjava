@@ -1,0 +1,45 @@
+    @Test
+    public void duplicateRowsTest() throws Throwable
+    {
+        System.setProperty("cassandra.diagnostic_snapshot_interval_nanos", "0");
+        // Create a table and insert some data. The actual rows read in the test will be synthetic
+        // but this creates an sstable on disk to be snapshotted.
+        createTable("CREATE TABLE %s (pk text, ck1 int, ck2 int, v int, PRIMARY KEY (pk, ck1, ck2))");
+        for (int i = 0; i < 10; i++)
+            execute("insert into %s (pk, ck1, ck2, v) values (?, ?, ?, ?)", "key", i, i, i);
+        flush();
+
+        DatabaseDescriptor.setSnapshotOnDuplicateRowDetection(true);
+        CFMetaData metadata = getCurrentColumnFamilyStore().metadata;
+
+        final HashMap<InetAddress, MessageOut> sentMessages = new HashMap<>();
+        IMessageSink sink = new IMessageSink()
+        {
+            public boolean allowOutgoingMessage(MessageOut message, int id, InetAddress to)
+            {
+                sentMessages.put(to, message);
+                return false;
+            }
+
+            public boolean allowIncomingMessage(MessageIn message, int id)
+            {
+                return false;
+            }
+        };
+        MessagingService.instance().addMessageSink(sink);
+
+        // no duplicates
+        sentMessages.clear();
+        iterate(makeRow(metadata,0, 0),
+                makeRow(metadata,0, 1),
+                makeRow(metadata,0, 2));
+        assertCommandIssued(sentMessages, false);
+
+        // now test with a duplicate row and see that we issue a snapshot command
+        sentMessages.clear();
+        iterate(makeRow(metadata, 0, 0),
+                makeRow(metadata, 0, 1),
+                makeRow(metadata, 0, 1));
+        assertCommandIssued(sentMessages, true);
+    }
+
