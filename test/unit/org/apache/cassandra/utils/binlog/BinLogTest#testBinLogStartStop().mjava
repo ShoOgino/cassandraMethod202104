@@ -5,9 +5,10 @@
     @Test
     public void testBinLogStartStop() throws Exception
     {
-        Semaphore blockBinLog = new Semaphore(1);
         AtomicInteger releaseCount = new AtomicInteger();
-        binLog.put(new BinLog.ReleaseableWriteMarshallable()
+        CountDownLatch ready = new CountDownLatch(2);
+        Supplier<BinLog.ReleaseableWriteMarshallable> recordSupplier =
+        () -> new BinLog.ReleaseableWriteMarshallable()
         {
             public void release()
             {
@@ -26,40 +27,13 @@
 
             public void writeMarshallablePayload(WireOut wire)
             {
-                try
-                {
-                    blockBinLog.acquire();
-                }
-                catch (InterruptedException e)
-                {
-                    throw new RuntimeException(e);
-                }
+                ready.countDown();
             }
-        });
-        binLog.put(new BinLog.ReleaseableWriteMarshallable()
-        {
-            protected long version()
-            {
-                return 0;
-            }
-
-            protected String type()
-            {
-                return "test";
-            }
-
-            public void writeMarshallablePayload(WireOut wire)
-            {
-
-            }
-
-            public void release()
-            {
-                releaseCount.incrementAndGet();
-            }
-        });
-        Thread.sleep(1000);
-        assertEquals(2, releaseCount.get());
+        };
+        binLog.put(recordSupplier.get());
+        binLog.put(recordSupplier.get());
+        ready.await(1, TimeUnit.MINUTES);
+        Util.spinAssertEquals("Both records should be released", 2, releaseCount::get, 10, TimeUnit.SECONDS);
         Thread t = new Thread(() -> {
             try
             {
@@ -72,7 +46,7 @@
         });
         t.start();
         t.join(60 * 1000);
-        assertEquals(t.getState(), Thread.State.TERMINATED);
+        assertEquals("BinLog should not take more than 1 minute to stop", t.getState(), Thread.State.TERMINATED);
 
         Util.spinAssertEquals(2, releaseCount::get, 60);
         Util.spinAssertEquals(Thread.State.TERMINATED, binLog.binLogThread::getState, 60);
