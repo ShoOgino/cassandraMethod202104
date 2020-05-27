@@ -1,17 +1,13 @@
-        public UnfilteredPartitionIterator filter(UnfilteredPartitionIterator iter, int nowInSec)
+        protected Transformation<BaseRowIterator<?>> filter(CFMetaData metadata, int nowInSec)
         {
-            if (expressions.isEmpty())
-                return iter;
-
-            final CFMetaData metadata = iter.metadata();
             long numberOfStaticColumnExpressions = expressions.stream().filter(e -> e.column.isStatic()).count();
             final boolean filterStaticColumns = numberOfStaticColumnExpressions != 0;
             final boolean filterNonStaticColumns = (expressions.size() - numberOfStaticColumnExpressions) > 0;
 
-            class IsSatisfiedFilter extends Transformation<UnfilteredRowIterator>
+            return new Transformation<BaseRowIterator<?>>()
             {
                 DecoratedKey pk;
-                public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator partition)
+                protected BaseRowIterator<?> applyToPartition(BaseRowIterator<?> partition)
                 {
                     // The filter might be on static columns, so need to check static row first.
                     if (filterStaticColumns && applyToRow(partition.staticRow()) == null)
@@ -21,7 +17,9 @@
                     }
 
                     pk = partition.partitionKey();
-                    UnfilteredRowIterator iterator = Transformation.apply(partition, this);
+                    BaseRowIterator<?> iterator = partition instanceof UnfilteredRowIterator
+                                                  ? Transformation.apply((UnfilteredRowIterator) partition, this)
+                                                  : Transformation.apply((RowIterator) partition, this);
 
                     if (filterNonStaticColumns && !iterator.hasNext())
                     {
@@ -43,8 +41,6 @@
                             return null;
                     return row;
                 }
-            }
-
-            return Transformation.apply(iter, new IsSatisfiedFilter());
+            };
         }
 
