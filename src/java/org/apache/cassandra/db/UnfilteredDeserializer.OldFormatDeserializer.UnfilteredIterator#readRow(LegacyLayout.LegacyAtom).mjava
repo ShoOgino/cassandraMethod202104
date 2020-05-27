@@ -4,13 +4,57 @@
                                                  ? LegacyLayout.CellGrouper.staticGrouper(metadata, helper)
                                                  : this.grouper;
                 grouper.reset();
+                // We know the first atom is not shadowed and is a "row" atom, so can be added blindly.
                 grouper.addAtom(first);
-                // As long as atoms are part of the same row, consume them. Note that the call to addAtom() uses
-                // atoms.peek() so that the atom is only consumed (by next) if it's part of the row (addAtom returns true)
-                while (atoms.hasNext() && grouper.addAtom(atoms.peek()))
+
+                // We're less sure about the next atoms. In particular, CellGrouper want to make sure we only pass it
+                // "row" atoms (it's the only type it knows how to handle) so we should handle anything else.
+                while (atoms.hasNext())
                 {
-                    atoms.next();
+                    // Peek, but don't consume the next atom just yet
+                    LegacyLayout.LegacyAtom atom = atoms.peek();
+                    // First, that atom may be shadowed in which case we can simply ignore it. Note that this handles
+                    // the case of repeated RT start marker after we've crossed an index boundary, which could well
+                    // appear in the middle of a row (CASSANDRA-14008).
+                    if (!tombstoneTracker.hasClosingMarkerBefore(atom) && tombstoneTracker.isShadowed(atom))
+                    {
+                        atoms.next(); // consume the atom since we only peeked it so far
+                        continue;
+                    }
+
+                    // Second, we should only pass "row" atoms to the cell grouper
+                    if (atom.isRowAtom(metadata))
+                    {
+                        if (!grouper.addAtom(atom))
+                            break; // done with the row; don't consume the atom
+                        atoms.next(); // the grouper "accepted" the atom, consume it since we only peeked above
+                    }
+                    else
+                    {
+                        LegacyLayout.LegacyRangeTombstone rt = (LegacyLayout.LegacyRangeTombstone) atom;
+                        // This means we have a non-row range tombstone. Unfortunately, that does not guarantee the
+                        // current row is finished (though it may), because due to the logic within LegacyRangeTombstone
+                        // constructor, we can get an out-of-order RT that includes on the current row (even if it is
+                        // already started) and extends past it.
+
+                        // So first, evacuate the easy case of the range tombstone simply starting after the current
+                        // row, in which case we're done with the current row (but don't consume the new RT yet so it
+                        // gets handled as any other non-row RT).
+                        if (grouper.startsAfterCurrentRow(rt))
+                            break;
+
+                        // Otherwise, we "split" the RT in 2: the part covering the current row, which is now an
+                        // inRowAtom and can be passed to the grouper, and the part after that, which we push back into
+                        // the iterator for later processing.
+                        Clustering currentRow = grouper.currentRowClustering();
+                        atoms.next(); // consume since we had only just peeked it so far and we're using it
+                        atoms.pushOutOfOrder(rt.withNewStart(ClusteringBound.exclusiveStartOf(currentRow)));
+                        // Note: in theory the withNewStart is a no-op here, but not taking any risk
+                        grouper.addAtom(rt.withNewStart(ClusteringBound.inclusiveStartOf(currentRow))
+                                          .withNewEnd(ClusteringBound.inclusiveEndOf(currentRow)));
+                    }
                 }
+
                 return grouper.getRow();
             }
 
