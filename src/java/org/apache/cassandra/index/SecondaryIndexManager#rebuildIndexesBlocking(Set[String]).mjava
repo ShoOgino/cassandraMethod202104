@@ -1,6 +1,6 @@
     /**
-     * Does a blocking full rebuild of the specifed indexes from all the sstables in the base table.
-     * Note also that this method of (re)building indexes:
+     * Does a blocking full rebuild/recovery of the specifed indexes from all the sstables in the base table.
+     * Note also that this method of (re)building/recovering indexes:
      * a) takes a set of index *names* rather than Indexers
      * b) marks existing indexes removed prior to rebuilding
      * c) fails if such marking operation conflicts with any ongoing index builds, as full rebuilds cannot be run
@@ -10,19 +10,40 @@
      */
     public void rebuildIndexesBlocking(Set<String> indexNames)
     {
+        // Get the set of indexes that require blocking build
+        Set<Index> toRebuild = indexes.values()
+                                      .stream()
+                                      .filter(index -> indexNames.contains(index.getIndexMetadata().name))
+                                      .filter(Index::shouldBuildBlocking)
+                                      .collect(Collectors.toSet());
+
+        if (toRebuild.isEmpty())
+        {
+            logger.info("No defined indexes with the supplied names: {}", Joiner.on(',').join(indexNames));
+            return;
+        }
+
+        // Optimistically mark the indexes as writable, so we don't miss incoming writes
+        boolean needsFlush = false;
+        for (Index index : toRebuild)
+        {
+            String name = index.getIndexMetadata().name;
+            if (writableIndexes.put(name, index) == null)
+            {
+                logger.info("Index [{}] became writable starting recovery.", name);
+                needsFlush = true;
+            }
+        }
+
+        // Once we are tracking new writes, flush any memtable contents to not miss them from the sstable-based rebuild
+        if (needsFlush)
+            baseCfs.forceBlockingFlush();
+
+        // Now that we are tracking new writes and we haven't left untracked contents on the memtables, we are ready to
+        // index the sstables
         try (ColumnFamilyStore.RefViewFragment viewFragment = baseCfs.selectAndReference(View.selectFunction(SSTableSet.CANONICAL));
              Refs<SSTableReader> allSSTables = viewFragment.refs)
         {
-            Set<Index> toRebuild = indexes.values().stream()
-                                          .filter(index -> indexNames.contains(index.getIndexMetadata().name))
-                                          .filter(Index::shouldBuildBlocking)
-                                          .collect(Collectors.toSet());
-            if (toRebuild.isEmpty())
-            {
-                logger.info("No defined indexes with the supplied names: {}", Joiner.on(',').join(indexNames));
-                return;
-            }
-
             buildIndexesBlocking(allSSTables, toRebuild, true);
         }
     }

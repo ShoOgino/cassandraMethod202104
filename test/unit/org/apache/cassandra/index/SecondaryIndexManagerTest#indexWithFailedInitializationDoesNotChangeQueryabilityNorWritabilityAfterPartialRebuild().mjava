@@ -1,0 +1,35 @@
+    @Test
+    public void indexWithFailedInitializationDoesNotChangeQueryabilityNorWritabilityAfterPartialRebuild() throws Throwable
+    {
+        TestingIndex.shouldFailCreate = true;
+        createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String defaultIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        String readOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", ReadOnlyOnFailureIndex.class.getName()));
+        String writeOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", WriteOnlyOnFailureIndex.class.getName()));
+        assertTrue(waitForIndexBuilds(KEYSPACE, defaultIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, readOnlyIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, writeOnlyIndexName));
+        TestingIndex.shouldFailCreate = false;
+
+        // the index should never be queryable, but it could be writable after the failed initialization
+        assertFalse(isQueryable(defaultIndexName));
+        assertFalse(isQueryable(readOnlyIndexName));
+        assertFalse(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertFalse(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+
+        // a successful partial build doesn't set the index as queryable nor writable
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.indexManager.handleNotification(new SSTableAddedNotification(cfs.getLiveSSTables(), null), this);
+        assertTrue(waitForIndexBuilds(KEYSPACE, defaultIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, readOnlyIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, writeOnlyIndexName));
+        assertFalse(isQueryable(defaultIndexName));
+        assertFalse(isQueryable(readOnlyIndexName));
+        assertFalse(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertFalse(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+    }
+

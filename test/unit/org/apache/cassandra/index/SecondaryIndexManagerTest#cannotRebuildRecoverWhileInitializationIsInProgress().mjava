@@ -1,0 +1,36 @@
+    @Test
+    public void cannotRebuildRecoverWhileInitializationIsInProgress() throws Throwable
+    {
+        // create an index which blocks on creation
+        TestingIndex.blockCreate();
+        String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String defaultIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        String readOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(b) USING '%s'", ReadOnlyOnFailureIndex.class.getName()));
+        String writeOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(b) USING '%s'", WriteOnlyOnFailureIndex.class.getName()));
+
+        // try to rebuild/recover the index before the index creation task has finished
+        assertFalse(tryRebuild(defaultIndexName, false));
+        assertFalse(tryRebuild(readOnlyIndexName, false));
+        assertFalse(tryRebuild(writeOnlyIndexName, false));
+        assertNotMarkedAsBuilt(defaultIndexName);
+        assertNotMarkedAsBuilt(readOnlyIndexName);
+        assertNotMarkedAsBuilt(writeOnlyIndexName);
+
+        // check that the index is marked as built when the creation finishes
+        TestingIndex.unblockCreate();
+        waitForIndex(KEYSPACE, tableName, defaultIndexName);
+        waitForIndex(KEYSPACE, tableName, readOnlyIndexName);
+        waitForIndex(KEYSPACE, tableName, writeOnlyIndexName);
+        assertMarkedAsBuilt(defaultIndexName);
+        assertMarkedAsBuilt(readOnlyIndexName);
+        assertMarkedAsBuilt(writeOnlyIndexName);
+
+        // now verify you can rebuild/recover
+        assertTrue(tryRebuild(defaultIndexName, false));
+        assertTrue(tryRebuild(readOnlyIndexName, false));
+        assertTrue(tryRebuild(readOnlyIndexName, false));
+        assertMarkedAsBuilt(defaultIndexName);
+        assertMarkedAsBuilt(readOnlyIndexName);
+        assertMarkedAsBuilt(writeOnlyIndexName);
+    }
+

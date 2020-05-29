@@ -1,0 +1,28 @@
+    @Test
+    public void indexWithFailedInitializationIsQueryableAndWritableAfterFullRebuild() throws Throwable
+    {
+        TestingIndex.shouldFailCreate = true;
+        createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String defaultIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        String readOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", ReadOnlyOnFailureIndex.class.getName()));
+        String writeOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", WriteOnlyOnFailureIndex.class.getName()));
+        assertTrue(waitForIndexBuilds(KEYSPACE, defaultIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, readOnlyIndexName));
+        assertTrue(waitForIndexBuilds(KEYSPACE, writeOnlyIndexName));
+
+        tryRebuild(defaultIndexName, true);
+        tryRebuild(readOnlyIndexName, true);
+        tryRebuild(writeOnlyIndexName, true);
+        TestingIndex.shouldFailCreate = false;
+
+        // a successfull full rebuild should set the index as queryable/writable
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.indexManager.rebuildIndexesBlocking(Sets.newHashSet(defaultIndexName, readOnlyIndexName, writeOnlyIndexName));
+        assertTrue(isQueryable(defaultIndexName));
+        assertTrue(isQueryable(readOnlyIndexName));
+        assertTrue(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertTrue(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+    }
+

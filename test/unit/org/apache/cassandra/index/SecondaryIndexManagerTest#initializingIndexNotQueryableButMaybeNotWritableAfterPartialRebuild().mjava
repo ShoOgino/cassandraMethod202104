@@ -1,0 +1,59 @@
+    @Test
+    public void initializingIndexNotQueryableButMaybeNotWritableAfterPartialRebuild() throws Throwable
+    {
+        TestingIndex.blockCreate();
+        String tableName = createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b))");
+        String defaultIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", TestingIndex.class.getName()));
+        String readOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", ReadOnlyOnFailureIndex.class.getName()));
+        String writeOnlyIndexName = createIndex(String.format("CREATE CUSTOM INDEX ON %%s(c) USING '%s'", WriteOnlyOnFailureIndex.class.getName()));
+
+        // the index should never be queryable while the initialization hasn't finished
+        assertFalse(isQueryable(defaultIndexName));
+        assertFalse(isQueryable(readOnlyIndexName));
+        assertFalse(isQueryable(writeOnlyIndexName));
+
+        // the index should always we writable while the initialization hasn't finished
+        assertTrue(isWritable(defaultIndexName));
+        assertTrue(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+
+        // a failing partial build doesn't set the index as queryable, but might set it as not writable
+        TestingIndex.shouldFailBuild = true;
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        try
+        {
+            cfs.indexManager.handleNotification(new SSTableAddedNotification(cfs.getLiveSSTables(), null), this);
+            fail("Should have failed!");
+        }
+        catch (Throwable ex)
+        {
+            assertTrue(ex.getMessage().contains("configured to fail"));
+        }
+        assertFalse(isQueryable(defaultIndexName));
+        assertFalse(isQueryable(readOnlyIndexName));
+        assertFalse(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertFalse(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+
+        // a successful partial build doesn't set the index as queryable nor writable
+        TestingIndex.shouldFailBuild = false;
+        cfs.indexManager.handleNotification(new SSTableAddedNotification(cfs.getLiveSSTables(), null), this);
+        assertFalse(isQueryable(defaultIndexName));
+        assertFalse(isQueryable(readOnlyIndexName));
+        assertFalse(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertFalse(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+
+        // the index should be queryable once the initialization has finished
+        TestingIndex.unblockCreate();
+        waitForIndex(KEYSPACE, tableName, defaultIndexName);
+        assertTrue(isQueryable(defaultIndexName));
+        assertTrue(isQueryable(readOnlyIndexName));
+        assertTrue(isQueryable(writeOnlyIndexName));
+        assertTrue(isWritable(defaultIndexName));
+        assertTrue(isWritable(readOnlyIndexName));
+        assertTrue(isWritable(writeOnlyIndexName));
+    }
+

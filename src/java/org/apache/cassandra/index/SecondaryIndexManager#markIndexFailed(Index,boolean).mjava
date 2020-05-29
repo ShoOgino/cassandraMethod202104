@@ -3,10 +3,12 @@
      * {@link #markIndexesBuilding(Set, boolean, boolean)} should always be invoked before this method.
      *
      * @param index the index to be marked as built
+     * @param isInitialBuild {@code true} if the index failed during its initial build, {@code false} otherwise
      */
-    private synchronized void markIndexFailed(Index index)
+    private synchronized void markIndexFailed(Index index, boolean isInitialBuild)
     {
         String indexName = index.getIndexMetadata().name;
+
         AtomicInteger counter = inProgressBuilds.get(indexName);
         if (counter != null)
         {
@@ -18,6 +20,12 @@
                 SystemKeyspace.setIndexRemoved(baseCfs.keyspace.getName(), indexName);
 
             needsFullRebuild.add(indexName);
+
+            if (!index.getSupportedLoadTypeOnFailure(isInitialBuild).supportsWrites() && writableIndexes.remove(indexName) != null)
+                logger.info("Index [{}] became not-writable because of failed build.", indexName);
+
+            if (!index.getSupportedLoadTypeOnFailure(isInitialBuild).supportsReads() && queryableIndexes.remove(indexName))
+                logger.info("Index [{}] became not-queryable because of failed build.", indexName);
         }
     }
 

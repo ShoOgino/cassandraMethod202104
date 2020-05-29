@@ -11,23 +11,17 @@
 
         // add sstables in another thread, but make it block:
         TestingIndex.blockBuild();
-        Thread asyncBuild = new Thread()
-        {
-
-            @Override
-            public void run()
+        Thread asyncBuild = new Thread(() -> {
+            ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+            try (Refs<SSTableReader> sstables = Refs.ref(cfs.getSSTables(SSTableSet.CANONICAL)))
             {
-                ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
-                try (Refs<SSTableReader> sstables = Refs.ref(cfs.getSSTables(SSTableSet.CANONICAL)))
-                {
-                    cfs.indexManager.handleNotification(new SSTableAddedNotification(sstables, null), cfs.getTracker());
-                }
-                catch (Throwable ex)
-                {
-                    error.set(true);
-                }
+                cfs.indexManager.handleNotification(new SSTableAddedNotification(sstables, null), cfs.getTracker());
             }
-        };
+            catch (Throwable ex)
+            {
+                error.set(true);
+            }
+        });
         asyncBuild.start();
 
         // wait for the build to block, so that we can proceed unblocking all further operations:

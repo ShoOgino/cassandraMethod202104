@@ -1,6 +1,9 @@
     /**
-     * Performs a blocking (re)indexing of the specified SSTables for the specified indexes.
+     * Performs a blocking (re)indexing/recovery of the specified SSTables for the specified indexes.
      *
+     * If the index doesn't support ALL {@link Index.LoadType} it performs a recovery {@link Index#getRecoveryTaskSupport()}
+     * instead of a build {@link Index#getBuildTaskSupport()}
+     * 
      * @param sstables      the SSTables to be (re)indexed
      * @param indexes       the indexes to be (re)built for the specifed SSTables
      * @param isFullRebuild True if this method is invoked as a full index rebuild, false otherwise
@@ -16,15 +19,16 @@
         markIndexesBuilding(indexes, isFullRebuild, false);
 
         // Build indexes in a try/catch, so that any index not marked as either built or failed will be marked as failed:
-        final Set<Index> builtIndexes = new HashSet<>();
-        final Set<Index> unbuiltIndexes = new HashSet<>();
+        final Set<Index> builtIndexes = Sets.newConcurrentHashSet();
+        final Set<Index> unbuiltIndexes = Sets.newConcurrentHashSet();
 
         // Any exception thrown during index building that could be suppressed by the finally block
         Exception accumulatedFail = null;
 
         try
         {
-            logger.info("Submitting index build of {} for data in {}",
+            logger.info("Submitting index {} of {} for data in {}",
+                        isFullRebuild ? "recovery" : "build",
                         indexes.stream().map(i -> i.getIndexMetadata().name).collect(Collectors.joining(",")),
                         sstables.stream().map(SSTableReader::toString).collect(Collectors.joining(",")));
 
@@ -32,7 +36,10 @@
             Map<Index.IndexBuildingSupport, Set<Index>> byType = new HashMap<>();
             for (Index index : indexes)
             {
-                Set<Index> stored = byType.computeIfAbsent(index.getBuildTaskSupport(), i -> new HashSet<>());
+                IndexBuildingSupport buildOrRecoveryTask = isFullRebuild
+                                                           ? index.getBuildTaskSupport()
+                                                           : index.getRecoveryTaskSupport();
+                Set<Index> stored = byType.computeIfAbsent(buildOrRecoveryTask, i -> new HashSet<>());
                 stored.add(index);
             }
 
@@ -47,7 +54,7 @@
                                    @Override
                                    public void onFailure(Throwable t)
                                    {
-                                       logAndMarkIndexesFailed(groupedIndexes, t);
+                                       logAndMarkIndexesFailed(groupedIndexes, t, false);
                                        unbuiltIndexes.addAll(groupedIndexes);
                                        build.setException(t);
                                    }
@@ -80,7 +87,7 @@
                 Set<Index> failedIndexes = Sets.difference(indexes, Sets.union(builtIndexes, unbuiltIndexes));
                 if (!failedIndexes.isEmpty())
                 {
-                    logAndMarkIndexesFailed(failedIndexes, accumulatedFail);
+                    logAndMarkIndexesFailed(failedIndexes, accumulatedFail, false);
                 }
 
                 // Flush all built indexes with an aynchronous callback to log the success or failure of the flush
