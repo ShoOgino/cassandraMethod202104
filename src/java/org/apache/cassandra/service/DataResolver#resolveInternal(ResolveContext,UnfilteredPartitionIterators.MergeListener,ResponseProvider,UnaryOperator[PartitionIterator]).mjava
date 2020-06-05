@@ -1,0 +1,34 @@
+    private PartitionIterator resolveInternal(ResolveContext context,
+                                              UnfilteredPartitionIterators.MergeListener mergeListener,
+                                              ResponseProvider responseProvider,
+                                              UnaryOperator<PartitionIterator> preCountFilter)
+    {
+        int count = context.sources.length;
+        List<UnfilteredPartitionIterator> results = new ArrayList<>(count);
+        for (int i = 0; i < count; i++)
+            results.add(responseProvider.getResponse(i));
+
+        /*
+         * Even though every response, individually, will honor the limit, it is possible that we will, after the merge,
+         * have more rows than the client requested. To make sure that we still conform to the original limit,
+         * we apply a top-level post-reconciliation counter to the merged partition iterator.
+         *
+         * Short read protection logic (ShortReadRowsProtection.moreContents()) relies on this counter to be applied
+         * to the current partition to work. For this reason we have to apply the counter transformation before
+         * empty partition discard logic kicks in - for it will eagerly consume the iterator.
+         *
+         * That's why the order here is: 1) merge; 2) filter rows; 3) count; 4) discard empty partitions
+         *
+         * See CASSANDRA-13747 for more details.
+         */
+
+        UnfilteredPartitionIterator merged = UnfilteredPartitionIterators.merge(results, command.nowInSec(), mergeListener);
+        FilteredPartitions filtered =
+        FilteredPartitions.filter(merged, new Filter(command.nowInSec(), command.metadata().enforceStrictLiveness()));
+        PartitionIterator counted = Transformation.apply(preCountFilter.apply(filtered), context.mergedResultCounter);
+
+        return command.isForThrift()
+               ? counted
+               : Transformation.apply(counted, new EmptyPartitionsDiscarder());
+    }
+
