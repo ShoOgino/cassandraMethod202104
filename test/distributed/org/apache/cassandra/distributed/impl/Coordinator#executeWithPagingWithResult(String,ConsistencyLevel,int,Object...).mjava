@@ -1,5 +1,5 @@
     @Override
-    public Iterator<Object[]> executeWithPaging(String query, ConsistencyLevel consistencyLevelOrigin, int pageSize, Object... boundValues)
+    public QueryResult executeWithPagingWithResult(String query, ConsistencyLevel consistencyLevelOrigin, int pageSize, Object... boundValues)
     {
         if (pageSize <= 0)
             throw new IllegalArgumentException("Page size should be strictly positive but was " + pageSize);
@@ -32,8 +32,9 @@
 
             // Usually pager fetches a single page (see SelectStatement#execute). We need to iterate over all
             // of the results lazily.
-            return new Iterator<Object[]>() {
-                Iterator<Object[]> iter = RowUtil.toObjects(UntypedResultSet.create(selectStatement, toCassandraCL(consistencyLevel), clientState, pager,  pageSize));
+            UntypedResultSet rs = UntypedResultSet.create(selectStatement, toCassandraCL(consistencyLevel), clientState, pager, pageSize);
+            Iterator<Object[]> it = new Iterator<Object[]>() {
+                Iterator<Object[]> iter = RowUtil.toObjects(rs);
 
                 public boolean hasNext()
                 {
@@ -46,6 +47,7 @@
                     return instance.sync(() -> iter.next()).call();
                 }
             };
+            return QueryResults.fromObjectArrayIterator(RowUtil.getColumnNames(rs.metadata()), it);
         }).call();
     }
 
