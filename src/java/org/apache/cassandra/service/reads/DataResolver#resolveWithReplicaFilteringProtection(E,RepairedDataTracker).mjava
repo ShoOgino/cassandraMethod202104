@@ -1,0 +1,49 @@
+    @SuppressWarnings("resource")
+    private PartitionIterator resolveWithReplicaFilteringProtection(E replicas, RepairedDataTracker repairedDataTracker)
+    {
+        // Protecting against inconsistent replica filtering (some replica returning a row that is outdated but that
+        // wouldn't be removed by normal reconciliation because up-to-date replica have filtered the up-to-date version
+        // of that row) works in 3 steps:
+        //   1) we read the full response just to collect rows that may be outdated (the ones we got from some
+        //      replica but didn't got any response for other; it could be those other replica have filtered a more
+        //      up-to-date result). In doing so, we do not count any of such "potentially outdated" row towards the
+        //      query limit. This simulate the worst case scenario where all those "potentially outdated" rows are
+        //      indeed outdated, and thus make sure we are guaranteed to read enough results (thanks to short read
+        //      protection).
+        //   2) we query all the replica/rows we need to rule out whether those "potentially outdated" rows are outdated
+        //      or not.
+        //   3) we re-read cached copies of each replica response using the "normal" read path merge with read-repair,
+        //      but where for each replica we use their original response _plus_ the additional rows queried in the
+        //      previous step (and apply the command#rowFilter() on the full result). Since the first phase has
+        //      pessimistically collected enough results for the case where all potentially outdated results are indeed
+        //      outdated, we shouldn't need further short-read protection requests during this phase.
+
+        // We need separate contexts, as each context has his own counter
+        ResolveContext firstPhaseContext = new ResolveContext(replicas);
+        ResolveContext secondPhaseContext = new ResolveContext(replicas);
+        ReplicaFilteringProtection<E> rfp = new ReplicaFilteringProtection<>(replicaPlan().keyspace(),
+                                                                             command,
+                                                                             replicaPlan().consistencyLevel(),
+                                                                             queryStartNanoTime,
+                                                                             firstPhaseContext.replicas);
+        PartitionIterator firstPhasePartitions = resolveInternal(firstPhaseContext,
+                                                                 rfp.mergeController(),
+                                                                 i -> shortReadProtectedResponse(i, firstPhaseContext),
+                                                                 UnaryOperator.identity());
+
+        // Consume the first phase partitions to populate the replica filtering protection with both those materialized
+        // partitions and the primary keys to be fetched.
+        PartitionIterators.consume(firstPhasePartitions);
+        firstPhasePartitions.close();
+
+        // After reading the entire query results the protection helper should have cached all the partitions so we can
+        // clear the responses accumulator for the sake of memory usage, given that the second phase might take long if
+        // it needs to query replicas.
+        responses.clearUnsafe();
+
+        return resolveWithReadRepair(secondPhaseContext,
+                                     rfp::queryProtectedPartitions,
+                                     results -> command.rowFilter().filter(results, command.metadata(), command.nowInSec()),
+                                     repairedDataTracker);
+    }
+

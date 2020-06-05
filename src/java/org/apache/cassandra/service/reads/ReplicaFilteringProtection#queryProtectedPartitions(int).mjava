@@ -1,0 +1,24 @@
+    /**
+     * Returns the protected results for the specified replica. These are generated fetching the extra rows and merging
+     * them with the cached original filtered results for that replica.
+     *
+     * @param source the source
+     * @return the protected results for the specified replica
+     */
+    UnfilteredPartitionIterator queryProtectedPartitions(int source)
+    {
+        UnfilteredPartitionIterator original = makeIterator(originalPartitions.get(source));
+        SortedMap<DecoratedKey, BTreeSet.Builder<Clustering>> toFetch = rowsToFetch.get(source);
+
+        if (toFetch.isEmpty())
+            return original;
+
+        // TODO: this would be more efficient if we had multi-key queries internally
+        List<UnfilteredPartitionIterator> fetched = toFetch.keySet()
+                                                           .stream()
+                                                           .map(k -> querySourceOnKey(source, k))
+                                                           .collect(Collectors.toList());
+
+        return UnfilteredPartitionIterators.merge(Arrays.asList(original, UnfilteredPartitionIterators.concat(fetched)), null);
+    }
+

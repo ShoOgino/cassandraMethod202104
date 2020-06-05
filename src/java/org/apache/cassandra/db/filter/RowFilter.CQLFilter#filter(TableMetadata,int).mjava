@@ -1,10 +1,5 @@
-        public UnfilteredPartitionIterator filter(UnfilteredPartitionIterator iter, int nowInSec)
+        protected Transformation<BaseRowIterator<?>> filter(TableMetadata metadata, int nowInSec)
         {
-            if (expressions.isEmpty())
-                return iter;
-
-            final TableMetadata metadata = iter.metadata();
-
             List<Expression> partitionLevelExpressions = new ArrayList<>();
             List<Expression> rowLevelExpressions = new ArrayList<>();
             for (Expression e: expressions)
@@ -18,12 +13,12 @@
             long numberOfRegularColumnExpressions = rowLevelExpressions.size();
             final boolean filterNonStaticColumns = numberOfRegularColumnExpressions > 0;
 
-            class IsSatisfiedFilter extends Transformation<UnfilteredRowIterator>
+            return new Transformation<BaseRowIterator<?>>()
             {
                 DecoratedKey pk;
 
                 @SuppressWarnings("resource")
-                public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator partition)
+                protected BaseRowIterator<?> applyToPartition(BaseRowIterator<?> partition)
                 {
                     pk = partition.partitionKey();
 
@@ -35,7 +30,10 @@
                             return null;
                         }
 
-                    UnfilteredRowIterator iterator = Transformation.apply(partition, this);
+                    BaseRowIterator<?> iterator = partition instanceof UnfilteredRowIterator
+                                                  ? Transformation.apply((UnfilteredRowIterator) partition, this)
+                                                  : Transformation.apply((RowIterator) partition, this);
+
                     if (filterNonStaticColumns && !iterator.hasNext())
                     {
                         iterator.close();
@@ -57,8 +55,6 @@
 
                     return row;
                 }
-            }
-
-            return Transformation.apply(iter, new IsSatisfiedFilter());
+            };
         }
 

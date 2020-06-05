@@ -1,0 +1,23 @@
+    private <E extends Endpoints<E>, P extends ReplicaPlan.ForRead<E>>
+    UnfilteredPartitionIterator executeReadCommand(ReadCommand cmd, Replica source, ReplicaPlan.Shared<E, P> replicaPlan)
+    {
+        DataResolver<E, P> resolver = new DataResolver<>(cmd, replicaPlan, (NoopReadRepair<E, P>)NoopReadRepair.instance, queryStartNanoTime);
+        ReadCallback<E, P> handler = new ReadCallback<>(resolver, cmd, replicaPlan, queryStartNanoTime);
+
+        if (source.isSelf())
+        {
+            Stage.READ.maybeExecuteImmediately(new StorageProxy.LocalReadRunnable(cmd, handler));
+        }
+        else
+        {
+            if (source.isTransient())
+                cmd = cmd.copyAsTransientQuery(source);
+            MessagingService.instance().sendWithCallback(cmd.createMessage(false), source.endpoint(), handler);
+        }
+
+        // We don't call handler.get() because we want to preserve tombstones since we're still in the middle of merging node results.
+        handler.awaitResults();
+        assert resolver.getMessages().size() == 1;
+        return resolver.getMessages().get(0).payload.makeIterator(command);
+    }
+
