@@ -1,0 +1,38 @@
+    @Test
+    public void mixedModeReadColumnSubsetDigestCheck() throws Throwable
+    {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(1)
+        .upgrade(Versions.Major.v30, Versions.Major.v3X)
+        .withConfig(config -> config.with(Feature.GOSSIP, Feature.NETWORK))
+        .setup(cluster -> {
+            cluster.schemaChange(CREATE_TABLE);
+            cluster.coordinator(1).execute(INSERT, ConsistencyLevel.ALL, 1, "foo", "bar", "baz");
+            cluster.coordinator(1).execute(INSERT, ConsistencyLevel.ALL, 2, "foo", "bar", "baz");
+
+            // baseline to show no digest mismatches before upgrade
+            checkTraceForDigestMismatch(cluster, 1);
+            checkTraceForDigestMismatch(cluster, 2);
+        })
+        .runAfterNodeUpgrade((cluster, node) -> {
+            if (node != 1)
+                return; // shouldn't happen but guard for future test changes
+
+
+            // we need to let gossip settle or the test will fail
+            int attempts = 1;
+            while (!((DelegatingInvokableInstance) (cluster.get(1))).delegate().callOnInstance(() -> Gossiper.instance.isAnyNodeOn30()))
+            {
+                if (attempts > 30)
+                    throw new RuntimeException("Gossiper.instance.isAnyNodeOn30() continually returns false despite expecting to be true");
+                Thread.sleep(1000);
+            }
+
+            // should not cause a disgest mismatch in mixed mode
+            checkTraceForDigestMismatch(cluster, 1);
+            checkTraceForDigestMismatch(cluster, 2);
+        })
+        .run();
+    }
+
