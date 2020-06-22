@@ -30,10 +30,15 @@
         // SyncTasks themselves should not contain significant memory
         SyncTaskListAssert.assertThat(syncTasks).hasSizeLessThan(0.2 * singleTreeSize);
 
+        // block syncComplete execution until test has verified session still retains the trees
+        CompletableFuture<?> future = new CompletableFuture<>();
+        session.registerSyncCompleteCallback(future::get);
         ListenableFuture<List<SyncStat>> syncResults = job.executeTasks(syncTasks);
 
         // Immediately following execution the internal execution queue should still retain the trees
         assertThat(ObjectSizes.measureDeep(session)).isGreaterThan(singleTreeSize);
+        // unblock syncComplete callback, session should remove trees
+        future.complete(null);
 
         // The session retains memory in the contained executor until the threads expire, so we wait for the threads
         // that ran the Tree -> SyncTask conversions to die and release the memory
