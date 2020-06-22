@@ -5,14 +5,19 @@
 
             try
             {
-                for (int i = 0; i < concurrencyFactor && ranges.hasNext(); i++)
+                for (int i = 0; i < concurrencyFactor && ranges.hasNext();)
                 {
+                    ReplicaPlan.ForRangeRead range = ranges.next();
+
                     @SuppressWarnings("resource") // response will be closed by concatAndBlockOnRepair, or in the catch block below
-                    SingleRangeResponse response = query(ranges.next(), i == 0);
+                    SingleRangeResponse response = query(range, i == 0);
                     concurrentQueries.add(response);
                     readRepairs.add(response.readRepair);
-                    ++rangesQueried;
+                    // due to RangeMerger, coordinator may fetch more ranges than required by concurrency factor.
+                    rangesQueried += range.vnodeCount();
+                    i += range.vnodeCount();
                 }
+                batchesRequested++;
             }
             catch (Throwable t)
             {

@@ -1,0 +1,48 @@
+    @Test
+    public void testRangeQueried()
+    {
+        List<Token> tokens = setTokens(Arrays.asList(100, 200, 300, 400));
+        int vnodeCount = tokens.size() + 1; // n tokens divide token ring into n+1 ranges
+
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_STANDARD1);
+        cfs.clearUnsafe();
+
+        int rows = 100;
+        for (int i = 0; i < rows; ++i)
+        {
+            RowUpdateBuilder builder = new RowUpdateBuilder(cfs.metadata(), 10, String.valueOf(i));
+            builder.clustering("c");
+            builder.add("val", String.valueOf(i));
+            builder.build().applyUnsafe();
+        }
+        cfs.forceBlockingFlush();
+
+        PartitionRangeReadCommand command = (PartitionRangeReadCommand) Util.cmd(cfs).build();
+
+        // without range merger, there will be 2 batches requested: 1st batch with 1 range and 2nd batch with remaining ranges
+        Iterator<ReplicaPlan.ForRangeRead> ranges = rangeIterator(command, keyspace, false);
+        StorageProxy.RangeCommandIterator data = new StorageProxy.RangeCommandIterator(ranges, command, 1, 1000, vnodeCount, System.nanoTime());
+        verifyRangeCommandIterator(data, rows, 2, vnodeCount);
+
+        // without range merger and initial cf=5, there will be 1 batches requested: 5 vnode ranges for 1st batch
+        ranges = rangeIterator(command, keyspace, false);
+        data = new StorageProxy.RangeCommandIterator(ranges, command, vnodeCount, 1000, vnodeCount, System.nanoTime());
+        verifyRangeCommandIterator(data, rows, 1, vnodeCount);
+
+        // without range merger and max cf=1, there will be 5 batches requested: 1 vnode range per batch
+        ranges = rangeIterator(command, keyspace, false);
+        data = new StorageProxy.RangeCommandIterator(ranges, command, 1, 1, vnodeCount, System.nanoTime());
+        verifyRangeCommandIterator(data, rows, vnodeCount, vnodeCount);
+
+        // with range merger, there will be only 1 batch requested, as all ranges share the same replica - localhost
+        ranges = rangeIterator(command, keyspace, true);
+        data = new StorageProxy.RangeCommandIterator(ranges, command, 1, 1000, vnodeCount, System.nanoTime());
+        verifyRangeCommandIterator(data, rows, 1, vnodeCount);
+
+        // with range merger and max cf=1, there will be only 1 batch requested, as all ranges share the same replica - localhost
+        ranges = rangeIterator(command, keyspace, true);
+        data = new StorageProxy.RangeCommandIterator(ranges, command, 1, 1, vnodeCount, System.nanoTime());
+        verifyRangeCommandIterator(data, rows, 1, vnodeCount);
+    }
+
