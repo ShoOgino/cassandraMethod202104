@@ -1,0 +1,40 @@
+        private UnfilteredPartitionIterator fetchFromSource()
+        {
+            assert toFetch != null;
+
+            NavigableSet<Clustering> clusterings = toFetch.build();
+            tableMetrics.replicaFilteringProtectionRequests.mark();
+            
+            if (logger.isTraceEnabled())
+                logger.trace("Requesting rows {} in partition {} from {} for replica filtering protection",
+                             clusterings, key, source);
+            
+            Tracing.trace("Requesting {} rows in partition {} from {} for replica filtering protection",
+                          clusterings.size(), key, source);
+
+            // build the read command taking into account that we could be requesting only in the static row
+            DataLimits limits = clusterings.isEmpty() ? DataLimits.cqlLimits(1) : DataLimits.NONE;
+            ClusteringIndexFilter filter = new ClusteringIndexNamesFilter(clusterings, command.isReversed());
+            SinglePartitionReadCommand cmd = SinglePartitionReadCommand.create(command.metadata(),
+                                                                               command.nowInSec(),
+                                                                               command.columnFilter(),
+                                                                               RowFilter.NONE,
+                                                                               limits,
+                                                                               key,
+                                                                               filter);
+            try
+            {
+                return executeReadCommand(cmd, source);
+            }
+            catch (ReadTimeoutException e)
+            {
+                int blockFor = consistency.blockFor(keyspace);
+                throw new ReadTimeoutException(consistency, blockFor - 1, blockFor, true);
+            }
+            catch (UnavailableException e)
+            {
+                int blockFor = consistency.blockFor(keyspace);
+                throw new UnavailableException(consistency, blockFor, blockFor - 1);
+            }
+        }
+
