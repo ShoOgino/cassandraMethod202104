@@ -1,0 +1,38 @@
+    @Test
+    public void internodeConnectionsDuringDecom() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(4)
+                                        .withConfig(config -> config.with(NETWORK, GOSSIP, NATIVE_PROTOCOL))
+                                        .start())
+        {
+            BootstrapTest.populate(cluster, 0, 100);
+
+            cluster.run(decomission(), 1);
+
+            cluster.filters().allVerbs().from(1).messagesMatching((i, i1, iMessage) -> {
+                throw new AssertionError("Decomissioned node should not send any messages");
+            }).drop();
+
+
+            Map<Integer, Long> connectionAttempts = new HashMap<>();
+            long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
+
+            // Wait 10 seconds and check if there are any new connection attempts to the decomissioned node
+            while (System.currentTimeMillis() <= deadline)
+            {
+                for (int i = 2; i <= cluster.size(); i++)
+                {
+                    Object[][] res = cluster.get(i).executeInternal("SELECT active_connections, connection_attempts FROM system_views.internode_outbound WHERE address = '127.0.0.1' AND port = 7012");
+                    Assert.assertEquals(1, res.length);
+                    Assert.assertEquals(0L, ((Long) res[0][0]).longValue());
+                    long attempts = ((Long) res[0][1]).longValue();
+                    if (connectionAttempts.get(i) == null)
+                        connectionAttempts.put(i, attempts);
+                    else
+                        Assert.assertEquals(connectionAttempts.get(i), (Long) attempts);
+                }
+                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
+            }
+        }
+    }
+

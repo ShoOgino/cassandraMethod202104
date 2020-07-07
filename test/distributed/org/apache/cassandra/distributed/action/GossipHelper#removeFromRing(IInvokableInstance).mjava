@@ -1,0 +1,23 @@
+    public static InstanceAction removeFromRing(IInvokableInstance peer)
+    {
+        return (target) -> {
+            InetAddressAndPort endpoint = toCassandraInetAddressAndPort(peer.broadcastAddress());
+            VersionedApplicationState newState = statusLeft(peer);
+
+            target.runOnInstance(() -> {
+                // state to 'left'
+                EndpointState currentState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
+                ApplicationState as = toApplicationState(newState);
+                VersionedValue vv = toVersionedValue(newState);
+                currentState.addApplicationState(as, vv);
+                StorageService.instance.onChange(endpoint, as, vv);
+
+                // remove from gossip
+                Gossiper.runInGossipStageBlocking(() -> Gossiper.instance.unsafeAnulEndpoint(endpoint));
+                SystemKeyspace.removeEndpoint(endpoint);
+                PendingRangeCalculatorService.instance.update();
+                PendingRangeCalculatorService.instance.blockUntilFinished();
+            });
+        };
+    }
+

@@ -1,0 +1,57 @@
+    @Test
+    public void testPendingWrites() throws Throwable
+    {
+        int originalNodeCount = 2;
+        int expandedNodeCount = originalNodeCount + 1;
+
+        try (Cluster cluster = builder().withNodes(originalNodeCount)
+                                        .withTokenSupplier(TokenSupplier.evenlyDistributedTokens(expandedNodeCount))
+                                        .withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(expandedNodeCount, "dc0", "rack0"))
+                                        .withConfig(config -> config.with(NETWORK, GOSSIP))
+                                        .start())
+        {
+            BootstrapTest.populate(cluster, 0, 100);
+            IInstanceConfig config = cluster.newInstanceConfig();
+            IInvokableInstance newInstance = cluster.bootstrap(config);
+            withProperty("cassandra.join_ring", false,
+                         () -> newInstance.startup(cluster));
+
+            cluster.forEach(statusToBootstrap(newInstance));
+            cluster.run(bootstrap(false, Duration.ofSeconds(60), Duration.ofSeconds(60)), newInstance.config().num());
+
+            cluster.get(1).acceptsOnInstance((InetSocketAddress ip) -> {
+                Set<InetAddressAndPort> set = new HashSet<>();
+                for (Map.Entry<Range<Token>, EndpointsForRange.Builder> e : StorageService.instance.getTokenMetadata().getPendingRanges(KEYSPACE))
+                {
+                    set.addAll(e.getValue().build().endpoints());
+                }
+                Assert.assertEquals(set.size(), 1);
+                Assert.assertTrue(String.format("%s should contain %s", set, ip),
+                                  set.contains(DistributedTestSnitch.toCassandraInetAddressAndPort(ip)));
+            }).accept(cluster.get(3).broadcastAddress());
+
+            BootstrapTest.populate(cluster, 100, 150);
+
+            newInstance.nodetoolResult("join").asserts().success();
+
+            cluster.run(disseminateGossipState(newInstance),1, 2);
+
+            cluster.run((instance) -> {
+                instance.runOnInstance(() -> {
+                    PendingRangeCalculatorService.instance.update();
+                    PendingRangeCalculatorService.instance.blockUntilFinished();
+                });
+            }, 1, 2);
+
+            cluster.get(1).acceptsOnInstance((InetSocketAddress ip) -> {
+                Set<InetAddressAndPort> set = new HashSet<>();
+                for (Map.Entry<Range<Token>, EndpointsForRange.Builder> e : StorageService.instance.getTokenMetadata().getPendingRanges(KEYSPACE))
+                    set.addAll(e.getValue().build().endpoints());
+                assert set.size() == 0 : set;
+            }).accept(cluster.get(3).broadcastAddress());
+
+            for (Map.Entry<Integer, Long> e : BootstrapTest.count(cluster).entrySet())
+                Assert.assertEquals("Node " + e.getKey() + " has incorrect row state", e.getValue().longValue(), 150L);
+        }
+    }
+

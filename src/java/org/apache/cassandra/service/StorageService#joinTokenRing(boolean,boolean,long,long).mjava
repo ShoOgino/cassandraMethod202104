@@ -1,0 +1,84 @@
+    @VisibleForTesting
+    public void joinTokenRing(boolean finishJoiningRing,
+                              boolean shouldBootstrap,
+                              long schemaTimeoutMillis,
+                              long bootstrapTimeoutMillis) throws ConfigurationException
+    {
+        joined = true;
+
+        // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
+        // If we are a seed, or if the user manually sets auto_bootstrap to false,
+        // we'll skip streaming data from other nodes and jump directly into the ring.
+        //
+        // The seed check allows us to skip the RING_DELAY sleep for the single-node cluster case,
+        // which is useful for both new users and testing.
+        //
+        // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
+        // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
+        Set<InetAddressAndPort> current = new HashSet<>();
+        if (logger.isDebugEnabled())
+        {
+            logger.debug("Bootstrap variables: {} {} {} {}",
+                         DatabaseDescriptor.isAutoBootstrap(),
+                         SystemKeyspace.bootstrapInProgress(),
+                         SystemKeyspace.bootstrapComplete(),
+                         DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddressAndPort()));
+        }
+        if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddressAndPort()))
+        {
+            logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
+        }
+
+        boolean dataAvailable = true; // make this to false when bootstrap streaming failed
+
+        if (shouldBootstrap)
+        {
+            current.addAll(prepareForBootstrap(schemaTimeoutMillis));
+            dataAvailable = bootstrap(bootstrapTokens, bootstrapTimeoutMillis);
+        }
+        else
+        {
+            bootstrapTokens = SystemKeyspace.getSavedTokens();
+            if (bootstrapTokens.isEmpty())
+            {
+                bootstrapTokens = BootStrapper.getBootstrapTokens(tokenMetadata, FBUtilities.getBroadcastAddressAndPort(), schemaTimeoutMillis);
+            }
+            else
+            {
+                if (bootstrapTokens.size() != DatabaseDescriptor.getNumTokens())
+                    throw new ConfigurationException("Cannot change the number of tokens from " + bootstrapTokens.size() + " to " + DatabaseDescriptor.getNumTokens());
+                else
+                    logger.info("Using saved tokens {}", bootstrapTokens);
+            }
+        }
+
+        setUpDistributedSystemKeyspaces();
+
+        if (finishJoiningRing)
+        {
+            if (dataAvailable)
+            {
+                finishJoiningRing(shouldBootstrap, bootstrapTokens);
+                // remove the existing info about the replaced node.
+                if (!current.isEmpty())
+                {
+                    Gossiper.runInGossipStageBlocking(() -> {
+                        for (InetAddressAndPort existing : current)
+                            Gossiper.instance.replacedEndpoint(existing);
+                    });
+                }
+            }
+            else
+            {
+                logger.warn("Some data streaming failed. Use nodetool to check bootstrap state and resume. For more, see `nodetool help bootstrap`. {}", SystemKeyspace.getBootstrapState());
+            }
+        }
+        else
+        {
+            if (dataAvailable)
+                logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
+            else
+                logger.warn("Some data streaming failed. Use nodetool to check bootstrap state and resume. For more, see `nodetool help bootstrap`. {}", SystemKeyspace.getBootstrapState());
+        }
+    }
+

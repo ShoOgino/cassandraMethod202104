@@ -1,0 +1,32 @@
+    @Test
+    public void bootstrapTest() throws Throwable
+    {
+        int originalNodeCount = 2;
+        int expandedNodeCount = originalNodeCount + 1;
+
+        try (Cluster cluster = builder().withNodes(originalNodeCount)
+                                        .withTokenSupplier(TokenSupplier.evenlyDistributedTokens(expandedNodeCount))
+                                        .withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(expandedNodeCount, "dc0", "rack0"))
+                                        .withConfig(config -> config.with(NETWORK, GOSSIP))
+                                        .start())
+        {
+            populate(cluster,0, 100);
+
+            IInstanceConfig config = cluster.newInstanceConfig();
+            IInvokableInstance newInstance = cluster.bootstrap(config);
+            withProperty("cassandra.join_ring", false,
+                         () -> newInstance.startup(cluster));
+
+            cluster.forEach(statusToBootstrap(newInstance));
+
+            cluster.run(asList(pullSchemaFrom(cluster.get(1)),
+                               bootstrap()),
+                        newInstance.config().num());
+
+            for (Map.Entry<Integer, Long> e : count(cluster).entrySet())
+                Assert.assertEquals("Node " + e.getKey() + " has incorrect row state",
+                                    100L,
+                                    e.getValue().longValue());
+        }
+    }
+

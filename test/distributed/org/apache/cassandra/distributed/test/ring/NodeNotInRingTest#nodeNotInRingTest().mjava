@@ -1,0 +1,28 @@
+    @Test
+    public void nodeNotInRingTest() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(3)
+                                        .withConfig(config -> config.with(NETWORK, GOSSIP))
+                                        .start())
+        {
+            cluster.schemaChange("CREATE KEYSPACE IF NOT EXISTS " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2};");
+            cluster.schemaChange("CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+
+            cluster.filters().verbs(Verb.GOSSIP_DIGEST_ACK.id,
+                                    Verb.GOSSIP_DIGEST_SYN.id)
+                   .from(3)
+                   .outbound()
+                   .drop()
+                   .on();
+            cluster.run(GossipHelper.removeFromRing(cluster.get(3)), 1, 2);
+
+            populate(cluster, 0, 50, 1, ConsistencyLevel.ALL);
+            populate(cluster, 50, 100, 2, ConsistencyLevel.ALL);
+
+            Map<Integer, Long> counts = BootstrapTest.count(cluster);
+            Assert.assertEquals(counts.get(1).longValue(), 100L);
+            Assert.assertEquals(counts.get(2).longValue(), 100L);
+            Assert.assertEquals(counts.get(3).longValue(), 0L);
+        }
+    }
+

@@ -1,0 +1,33 @@
+    /**
+     * Changes gossip state of the `peer` on `target`
+     */
+    public static void changeGossipState(IInvokableInstance target, IInstance peer, List<VersionedApplicationState> newState)
+    {
+        InetSocketAddress addr = peer.broadcastAddress();
+        UUID hostId = peer.config().hostId();
+        int netVersion = peer.getMessagingVersion();
+        target.runOnInstance(() -> {
+            InetAddressAndPort endpoint = toCassandraInetAddressAndPort(addr);
+            StorageService storageService = StorageService.instance;
+
+            Gossiper.runInGossipStageBlocking(() -> {
+                EndpointState state = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
+                if (state == null)
+                {
+                    Gossiper.instance.initializeNodeUnsafe(endpoint, hostId, netVersion, 1);
+                    state = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
+                    if (state.isAlive() && !Gossiper.instance.isDeadState(state))
+                        Gossiper.instance.realMarkAlive(endpoint, state);
+                }
+
+                for (VersionedApplicationState value : newState)
+                {
+                    ApplicationState as = toApplicationState(value);
+                    VersionedValue vv = toVersionedValue(value);
+                    state.addApplicationState(as, vv);
+                    storageService.onChange(endpoint, as, vv);
+                }
+            });
+        });
+    }
+
