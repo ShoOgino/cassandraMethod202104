@@ -1,0 +1,33 @@
+    @Test
+    public void testSnapshotWithoutFlushWithSecondaryIndexes() throws Exception
+    {
+        Keyspace keyspace = Keyspace.open(KEYSPACE1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_INDEX1);
+        cfs.truncateBlocking();
+
+        UpdateBuilder builder = UpdateBuilder.create(cfs.metadata.get(), "key")
+                                             .newRow()
+                                             .add("birthdate", 1L)
+                                             .add("notbirthdate", 2L);
+        new Mutation(builder.build()).applyUnsafe();
+        cfs.forceBlockingFlush();
+
+        String snapshotName = "newSnapshot";
+        cfs.snapshotWithoutFlush(snapshotName);
+
+        File snapshotManifestFile = cfs.getDirectories().getSnapshotManifestFile(snapshotName);
+        JSONParser parser = new JSONParser();
+        JSONObject manifest = (JSONObject) parser.parse(new FileReader(snapshotManifestFile));
+        JSONArray files = (JSONArray) manifest.get("files");
+
+        // Keyspace1-Indexed1 and the corresponding index
+        assert files.size() == 2;
+
+        // Snapshot of the secondary index is stored in the subfolder with the same file name
+        String baseTableFile = (String) files.get(0);
+        String indexTableFile = (String) files.get(1);
+        assert !baseTableFile.equals(indexTableFile);
+        assert Directories.isSecondaryIndexFolder(new File(indexTableFile).getParentFile());
+        assert indexTableFile.endsWith(baseTableFile);
+    }
+
