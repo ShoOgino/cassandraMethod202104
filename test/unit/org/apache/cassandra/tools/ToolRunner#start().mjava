@@ -1,0 +1,107 @@
+    public ToolRunner start()
+    {
+        if (process != null)
+            throw new IllegalStateException("Process already started. Create a new ToolRunner instance for each invocation.");
+
+        logger.debug("Starting {} with args {}", runOutOfProcess ? "process" : "class" , argsToLogString());
+
+        try
+        {
+            if (runOutOfProcess)
+            {
+                ProcessBuilder pb = new ProcessBuilder(allArgs);
+                if (envs != null)
+                    pb.environment().putAll(envs);
+                process = pb.start();
+            }
+            else
+            {
+                PrintStream originalSysOut = System.out;
+                PrintStream originalSysErr = System.err;
+                InputStream originalSysIn = System.in;
+                originalSysOut.flush();
+                originalSysErr.flush();
+                ByteArrayOutputStream toolOut = new ByteArrayOutputStream();
+                ByteArrayOutputStream toolErr = new ByteArrayOutputStream();
+                
+                System.setIn(stdin == null ? originalSysIn : stdin);
+                int exit = 0;
+                try (PrintStream newOut = new PrintStream(toolOut); PrintStream newErr = new PrintStream(toolErr);)
+                {
+                    System.setOut(newOut);
+                    System.setErr(newErr);
+                    String clazz = allArgs.get(0);
+                    String[] clazzArgs = allArgs.subList(1, allArgs.size()).toArray(new String[0]);
+                    exit = runClassAsTool(clazz, clazzArgs);
+                }
+                
+                final int exitCode = exit;
+                System.setOut(originalSysOut);
+                System.setErr(originalSysErr);
+                System.setIn(originalSysIn);
+                
+                process = new Process() {
+
+                    @Override
+                    public void destroy()
+                    {
+                    }
+
+                    @Override
+                    public int exitValue()
+                    {
+                        return exitCode;
+                    }
+
+                    @Override
+                    public InputStream getErrorStream()
+                    {
+                        return new ByteArrayInputStream(toolErr.toByteArray());
+                    }
+
+                    @Override
+                    public InputStream getInputStream()
+                    {
+                        return new ByteArrayInputStream(toolOut.toByteArray());
+                    }
+
+                    @Override
+                    public OutputStream getOutputStream()
+                    {
+                        if (stdin == null)
+                            return null;
+                        
+                        ByteArrayOutputStream out = null;
+                        try
+                        {
+                            out = new ByteArrayOutputStream(stdin.available());
+                            IOUtils.copy(stdin, out);
+                        }
+                        catch(IOException e)
+                        {
+                            throw new RuntimeException("Failed to get stdin", e);
+                        }
+                        return out;
+                    }
+
+                    @Override
+                    public int waitFor() throws InterruptedException
+                    {
+                        return exitValue();
+                    }
+                    
+                };
+            }
+            
+            ioWatcher = new Thread(this::watchIO);
+            ioWatcher.setDaemon(true);
+            ioWatcher.start();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Failed to start " + allArgs, e);
+        }
+
+        return this;
+    }
+
