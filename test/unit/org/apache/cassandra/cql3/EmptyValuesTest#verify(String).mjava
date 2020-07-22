@@ -1,0 +1,37 @@
+    private void verify(String emptyValue) throws Throwable
+    {
+        UntypedResultSet result = execute("SELECT * FROM %s");
+        UntypedResultSet.Row row = result.one();
+        Assert.assertTrue(row.getColumns().stream().anyMatch(c -> c.name.toString().equals("v")));
+        Assert.assertEquals(0, row.getBytes("v").remaining());
+
+        ResultSet resultNet = executeNet(Server.CURRENT_VERSION, "SELECT * FROM %s");
+        Row rowNet = resultNet.one();
+        Assert.assertTrue(rowNet.getColumnDefinitions().contains("v"));
+        Assert.assertEquals(0, rowNet.getBytesUnsafe("v").remaining());
+
+        ResultSet jsonNet = executeNet(Server.CURRENT_VERSION, "SELECT JSON * FROM %s");
+        Row jsonRowNet = jsonNet.one();
+        Assert.assertTrue(jsonRowNet.getString("[json]"), jsonRowNet.getString("[json]").matches(".*\"v\"\\s*:\\s*\"" + Pattern.quote(emptyValue) + "\".*"));
+
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        for (SSTableReader ssTable : cfs.getLiveSSTables())
+        {
+            try (PrintStream out = new PrintStream(buf, true))
+            {
+                ProcessBuilder pb = new ProcessBuilder("tools/bin/sstabledump", ssTable.getFilename());
+                Process process = pb.start();
+                process.waitFor();
+                IOUtils.copy(process.getInputStream(), buf);
+            }
+            catch (Throwable t)
+            {
+                Assert.fail(t.getClass().getName());
+            }
+        }
+        
+        String outString = new String(buf.toByteArray(), StandardCharsets.UTF_8);
+        Assert.assertTrue(outString, outString.contains("{ \"name\" : \"v\", \"value\" : \"" + emptyValue + "\" }"));
+    }
+
