@@ -1,0 +1,32 @@
+    @Test
+    public void testWriteWithNestedTupleUdt() throws Exception
+    {
+        // Check the writer does not throw "InvalidRequestException: Non-frozen tuples are not allowed inside collections: list<tuple<int, int>>"
+        // See CASSANDRA-15857
+        final String schema = "CREATE TABLE " + qualifiedTable + " ("
+                              + "  k int,"
+                              + "  v1 frozen<nested_type>,"
+                              + "  PRIMARY KEY (k)"
+                              + ")";
+
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .inDirectory(dataDir)
+                                                  .withType("CREATE TYPE " + keyspace + ".nested_type (a list<tuple<int, int>>)")
+                                                  .forTable(schema)
+                                                  .using("INSERT INTO " + qualifiedTable + " (k, v1) " +
+                                                         "VALUES (?, ?)").build();
+
+        UserType nestedType = writer.getUDType("nested_type");
+        for (int i = 0; i < 100; i++)
+        {
+            writer.addRow(i, nestedType.newValue()
+                                       .setList("a", Collections.emptyList()));
+        }
+
+        writer.close();
+        loadSSTables(dataDir, keyspace);
+
+        UntypedResultSet resultSet = QueryProcessor.executeInternal("SELECT * FROM " + qualifiedTable);
+        assertEquals(100, resultSet.size());
+    }
+
