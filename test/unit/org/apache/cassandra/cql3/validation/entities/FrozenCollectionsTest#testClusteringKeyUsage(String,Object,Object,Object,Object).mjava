@@ -1,0 +1,81 @@
+    private void testClusteringKeyUsage(String type, Object v1, Object v2, Object v3, Object v4) throws Throwable
+    {
+        for (String option : Arrays.asList("", " WITH COMPACT STORAGE"))
+        {
+            createTable(String.format("CREATE TABLE %%s (a int, b frozen<%s>, c int, PRIMARY KEY (a, b)) %s",
+                                      type, option));
+
+            execute("INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, v1, 1);
+            execute("INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, v2, 1);
+            execute("INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, v3, 0);
+            execute("INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, v4, 0);
+
+            // overwrite with an update
+            execute("UPDATE %s SET c=? WHERE a=? AND b=?", 0, 0, v1);
+            execute("UPDATE %s SET c=? WHERE a=? AND b=?", 0, 0, v2);
+
+            assertRows(execute("SELECT * FROM %s"),
+                       row(0, v1, 0),
+                       row(0, v2, 0),
+                       row(0, v3, 0),
+                       row(0, v4, 0)
+            );
+
+            assertRows(execute("SELECT b FROM %s"),
+                       row(v1),
+                       row(v2),
+                       row(v3),
+                       row(v4)
+            );
+
+            assertRows(execute("SELECT * FROM %s LIMIT 2"),
+                       row(0, v1, 0),
+                       row(0, v2, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b=?", 0, v3),
+                       row(0, v3, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b=?", 0, v1),
+                       row(0, v1, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b IN ?", 0, list(v3, v1)),
+                       row(0, v1, 0),
+                       row(0, v3, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b > ?", 0, v3),
+                       row(0, v4, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b >= ?", 0, v3),
+                       row(0, v3, 0),
+                       row(0, v4, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b < ?", 0, v3),
+                       row(0, v1, 0),
+                       row(0, v2, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b <= ?", 0, v3),
+                       row(0, v1, 0),
+                       row(0, v2, 0),
+                       row(0, v3, 0)
+            );
+
+            assertRows(execute("SELECT * FROM %s WHERE a=? AND b > ? AND b <= ?", 0, v2, v3),
+                       row(0, v3, 0)
+            );
+
+            execute("DELETE FROM %s WHERE a=? AND b=?", 0, v1);
+            execute("DELETE FROM %s WHERE a=? AND b=?", 0, v3);
+            assertRows(execute("SELECT * FROM %s"),
+                       row(0, v2, 0),
+                       row(0, v4, 0)
+            );
+        }
+    }
+
