@@ -11,6 +11,16 @@
             if (addType.referencesUserType(toUpdate.getNameAsString()))
                 throw new InvalidRequestException(String.format("Cannot add new field %s of type %s to type %s as this would create a circular reference", fieldName, type, name));
 
+            Collection<CFMetaData> tablesWithTypeInPartitionKey = findTablesReferencingTypeInPartitionKey(ksm, name.getStringTypeName());
+            if (!tablesWithTypeInPartitionKey.isEmpty())
+            {
+                String message =
+                    String.format("Cannot add new field %s of type %s to user type %s.%s as the type is being used in partition key by the following tables: %s",
+                                  fieldName, type, ksm.name, toUpdate.getNameAsString(),
+                                  String.join(", ", transform(tablesWithTypeInPartitionKey, table -> table.ksName + '.' + table.cfName)));
+                throw new InvalidRequestException(message);
+            }
+
             List<AbstractType<?>> newTypes = new ArrayList<>(toUpdate.size() + 1);
             newTypes.addAll(toUpdate.fieldTypes());
             newTypes.add(addType);
