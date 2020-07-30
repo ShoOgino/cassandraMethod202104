@@ -1,0 +1,47 @@
+    /**
+     * Returns the protected results for the specified replica. These are generated fetching the extra rows and merging
+     * them with the cached original filtered results for that replica.
+     *
+     * @param merged the first iteration partitions, that should have been read used with the {@link #mergeController()}
+     * @param source the source
+     * @return the protected results for the specified replica
+     */
+    UnfilteredPartitionIterator queryProtectedPartitions(PartitionIterator merged, int source)
+    {
+        return new UnfilteredPartitionIterator()
+        {
+            final Queue<PartitionBuilder> partitions = originalPartitions.get(source);
+
+            @Override
+            public TableMetadata metadata()
+            {
+                return command.metadata();
+            }
+
+            @Override
+            public void close() { }
+
+            @Override
+            public boolean hasNext()
+            {
+                // If there are no cached partition builders for this source, advance the first phase iterator, which
+                // will force the RFP merge listener to load at least the next protected partition. Note that this may
+                // load more than one partition if any divergence between replicas is discovered by the merge listener.
+                if (partitions.isEmpty())
+                {
+                    PartitionIterators.consumeNext(merged);
+                }
+
+                return !partitions.isEmpty();
+            }
+
+            @Override
+            public UnfilteredRowIterator next()
+            {
+                PartitionBuilder builder = partitions.poll();
+                assert builder != null;
+                return builder.protectedPartition();
+            }
+        };
+    }
+
