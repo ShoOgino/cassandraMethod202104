@@ -1,12 +1,16 @@
     private UnfilteredPartitionIterator extendWithShortReadProtection(UnfilteredPartitionIterator partitions,
-                                                                      InetAddress source,
-                                                                      DataLimits.Counter mergedResultCounter)
+                                                                      ResolveContext context,
+                                                                      int i)
     {
         DataLimits.Counter singleResultCounter =
             command.limits().newCounter(command.nowInSec(), false, command.selectsFullPartition(), enforceStrictLiveness).onlyCount();
 
-        ShortReadPartitionsProtection protection =
-            new ShortReadPartitionsProtection(source, singleResultCounter, mergedResultCounter, queryStartNanoTime);
+        // The pre-fetch callback used here makes the initial round of responses for this replica collectable.
+        ShortReadPartitionsProtection protection = new ShortReadPartitionsProtection(context.sources[i],
+                                                                                     () -> responses.clearUnsafe(i),
+                                                                                     singleResultCounter,
+                                                                                     context.mergedResultCounter,
+                                                                                     queryStartNanoTime);
 
         /*
          * The order of extention and transformations is important here. Extending with more partitions has to happen
