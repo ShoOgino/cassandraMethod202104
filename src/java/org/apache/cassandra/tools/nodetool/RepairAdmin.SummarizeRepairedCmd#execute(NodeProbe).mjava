@@ -1,0 +1,44 @@
+        protected void execute(NodeProbe probe)
+        {
+            List<CompositeData> compositeData = probe.getRepairServiceProxy().getRepairStats(schemaArgs, getRangeString(startToken, endToken));
+
+            if (compositeData.isEmpty())
+            {
+                System.out.println("no stats");
+                return;
+            }
+
+            List<RepairStats> stats = new ArrayList<>(compositeData.size());
+            compositeData.forEach(cd -> stats.add(RepairStats.fromComposite(cd)));
+
+            stats.sort((l, r) -> {
+                int cmp = l.keyspace.compareTo(r.keyspace);
+                if (cmp != 0)
+                    return cmp;
+
+                return l.table.compareTo(r.table);
+            });
+
+            List<String> header = Lists.newArrayList("keyspace", "table", "min_repaired", "max_repaired");
+            if (verbose)
+                header.add("detail");
+
+            List<List<String>> rows = new ArrayList<>(stats.size() + 1);
+            rows.add(header);
+
+            for (RepairStats stat : stats)
+            {
+                List<String> row = Lists.newArrayList(stat.keyspace,
+                                                      stat.table,
+                                                      Long.toString(stat.minRepaired),
+                                                      Long.toString(stat.maxRepaired));
+                if (verbose)
+                {
+                    row.add(Joiner.on(", ").join(Iterables.transform(stat.sections, RepairStats.Section::toString)));
+                }
+                rows.add(row);
+            }
+
+            printTable(rows);
+        }
+

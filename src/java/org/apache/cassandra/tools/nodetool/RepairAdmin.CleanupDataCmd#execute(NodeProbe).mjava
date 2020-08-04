@@ -1,0 +1,38 @@
+        protected void execute(NodeProbe probe)
+        {
+            System.out.println("Cleaning up data from completed sessions...");
+            List<CompositeData> compositeData = probe.getRepairServiceProxy().cleanupPending(schemaArgs, getRangeString(startToken, endToken), force);
+
+            List<CleanupSummary> summaries = new ArrayList<>(compositeData.size());
+            compositeData.forEach(cd -> summaries.add(CleanupSummary.fromComposite(cd)));
+
+            summaries.sort((l, r) -> {
+                int cmp = l.keyspace.compareTo(r.keyspace);
+                if (cmp != 0)
+                    return cmp;
+
+                return l.table.compareTo(r.table);
+            });
+
+            List<String> header = Lists.newArrayList("keyspace", "table", "successful sessions", "unsuccessful sessions");
+            List<List<String>> rows = new ArrayList<>(summaries.size() + 1);
+            rows.add(header);
+
+            boolean hasFailures = false;
+            for (CleanupSummary summary : summaries)
+            {
+                List<String> row = Lists.newArrayList(summary.keyspace,
+                                                      summary.table,
+                                                      Integer.toString(summary.successful.size()),
+                                                      Integer.toString(summary.unsuccessful.size()));
+
+                hasFailures |= !summary.unsuccessful.isEmpty();
+                rows.add(row);
+            }
+
+            if (hasFailures)
+                System.out.println("Some tables couldn't be cleaned up completely");
+
+            printTable(rows);
+        }
+

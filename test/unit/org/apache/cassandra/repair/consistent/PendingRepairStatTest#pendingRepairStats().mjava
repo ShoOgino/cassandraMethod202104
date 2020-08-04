@@ -1,0 +1,52 @@
+    @Test
+    public void pendingRepairStats()
+    {
+        InstrumentedLocalSessions sessions = new InstrumentedLocalSessions();
+        sessions.start();
+        cfs.disableAutoCompaction();
+        SSTableReader sstable1 = createSSTable(0, 10);
+        SSTableReader sstable2 = createSSTable(10, 10);
+        SSTableReader sstable3 = createSSTable(10, 20);
+
+        LocalSession session1 = createSession();
+        sessions.putSessionUnsafe(session1);
+        LocalSession session2 = createSession();
+        sessions.putSessionUnsafe(session2);
+
+        PendingStats stats;
+        stats = sessions.getPendingStats(cfm.id, Collections.singleton(FULL_RANGE));
+        Assert.assertEquals(0, stats.total.numSSTables);
+
+        // set all sstables to pending
+        mutateRepaired(sstable1, UNREPAIRED_SSTABLE, session1.sessionID);
+        mutateRepaired(sstable2, UNREPAIRED_SSTABLE, session2.sessionID);
+        mutateRepaired(sstable3, UNREPAIRED_SSTABLE, session2.sessionID);
+
+        stats = sessions.getPendingStats(cfm.id, Collections.singleton(FULL_RANGE));
+        Assert.assertEquals(Sets.newHashSet(session1.sessionID, session2.sessionID), stats.total.sessions);
+        Assert.assertEquals(3, stats.total.numSSTables);
+        Assert.assertEquals(3, stats.pending.numSSTables);
+        Assert.assertEquals(0, stats.failed.numSSTables);
+        Assert.assertEquals(0, stats.finalized.numSSTables);
+
+        // set the 2 sessions to failed and finalized
+        session1.setState(FAILED);
+        sessions.save(session1);
+        session2.setState(FINALIZED);
+        sessions.save(session2);
+
+        stats = sessions.getPendingStats(cfm.id, Collections.singleton(FULL_RANGE));
+        Assert.assertEquals(3, stats.total.numSSTables);
+        Assert.assertEquals(0, stats.pending.numSSTables);
+        Assert.assertEquals(1, stats.failed.numSSTables);
+        Assert.assertEquals(2, stats.finalized.numSSTables);
+
+        // remove sstables from pending sets
+        mutateRepaired(sstable1, UNREPAIRED_SSTABLE, NO_PENDING_REPAIR);
+        mutateRepaired(sstable2, session2.repairedAt, NO_PENDING_REPAIR);
+        mutateRepaired(sstable3, session2.repairedAt, NO_PENDING_REPAIR);
+
+        stats = sessions.getPendingStats(cfm.id, Collections.singleton(FULL_RANGE));
+        Assert.assertTrue(stats.total.sessions.isEmpty());
+    }
+

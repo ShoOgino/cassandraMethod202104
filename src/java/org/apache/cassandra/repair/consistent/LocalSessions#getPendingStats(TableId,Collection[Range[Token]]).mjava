@@ -1,0 +1,38 @@
+    public PendingStats getPendingStats(TableId tid, Collection<Range<Token>> ranges)
+    {
+        ColumnFamilyStore cfs = Schema.instance.getColumnFamilyStoreInstance(tid);
+        Preconditions.checkArgument(cfs != null);
+
+        PendingStat.Builder pending = new PendingStat.Builder();
+        PendingStat.Builder finalized = new PendingStat.Builder();
+        PendingStat.Builder failed = new PendingStat.Builder();
+
+        Map<UUID, PendingStat> stats = cfs.getPendingRepairStats();
+        for (Map.Entry<UUID, PendingStat> entry : stats.entrySet())
+        {
+            UUID sessionID = entry.getKey();
+            PendingStat stat = entry.getValue();
+            Verify.verify(sessionID.equals(Iterables.getOnlyElement(stat.sessions)));
+
+            LocalSession session = sessions.get(sessionID);
+            Verify.verifyNotNull(session);
+
+            if (!Iterables.any(ranges, r -> r.intersects(session.ranges)))
+                continue;
+
+            switch (session.getState())
+            {
+                case FINALIZED:
+                    finalized.addStat(stat);
+                    break;
+                case FAILED:
+                    failed.addStat(stat);
+                    break;
+                default:
+                    pending.addStat(stat);
+            }
+        }
+
+        return new PendingStats(cfs.keyspace.getName(), cfs.name, pending.build(), finalized.build(), failed.build());
+    }
+
