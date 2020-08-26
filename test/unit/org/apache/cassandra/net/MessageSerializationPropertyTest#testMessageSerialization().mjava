@@ -1,0 +1,46 @@
+    /**
+     * Message and payload don't define equals, so have to rely on another way to define equality; serialized bytes!
+     * The assumption is that serialize(deserialize(serialize(message))) == serialize(message)
+     */
+    @Test
+    public void testMessageSerialization() throws Exception
+    {
+        TableMetadataProvider schema = Mockito.mock(TableMetadataProvider.class, Mockito.CALLS_REAL_METHODS);
+        ReadCommand.Serializer readCommandSerializer = new ReadCommand.Serializer(schema);
+        Supplier<? extends IVersionedAsymmetricSerializer<?, ?>> original = Verb.READ_REQ.unsafeSetSerializer(() -> readCommandSerializer);
+        try (DataOutputBuffer first = new DataOutputBuffer(1024);
+             DataOutputBuffer second = new DataOutputBuffer(1024))
+        {
+            qt().forAll(MESSAGE_GEN).checkAssert(orFail(message -> {
+                withTable(schema, message, orFail(ignore -> {
+                    for (MessagingService.Version version : MessagingService.Version.values())
+                    {
+                        first.clear();
+                        second.clear();
+
+                        serializer.serialize(message, first, version.value);
+                        Message<Object> read = serializer.deserialize(new DataInputBuffer(first.buffer(), true), FBUtilities.getBroadcastAddressAndPort(), version.value);
+                        serializer.serialize(read, second, version.value);
+                        // using hex as byte buffer equality kept failing, and was harder to debug difference
+                        // using hex means the specific section of the string that is different will be shown
+                        Assertions.assertThat(ByteBufferUtil.bytesToHex(second.buffer()))
+                                  .as("Property serialize(deserialize(serialize(message))) == serialize(message) "
+                                      + "was violated for version %s and verb %s"
+                                      + "\n first=%s"
+                                      + "\nsecond=%s\n",
+                                      version,
+                                      message.header.verb,
+                                      // toString methods are not relyable for messages, so use reflection to generate one
+                                      new Object() { public String toString() { return CassandraGenerators.toStringRecursive(message); } },
+                                      new Object() { public String toString() { return CassandraGenerators.toStringRecursive(read); } })
+                                  .isEqualTo(ByteBufferUtil.bytesToHex(first.buffer()));
+                    }
+                }));
+            }));
+        }
+        finally
+        {
+            Verb.READ_REQ.unsafeSetSerializer(original);
+        }
+    }
+

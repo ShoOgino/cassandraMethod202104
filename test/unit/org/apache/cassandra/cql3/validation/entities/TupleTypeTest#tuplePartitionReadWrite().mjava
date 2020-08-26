@@ -1,0 +1,25 @@
+    @Test
+    public void tuplePartitionReadWrite()
+    {
+        qt().withExamples(100).withShrinkCycles(0).forAll(typesAndRowsGen()).checkAssert(orFail(testcase -> {
+            TupleType tupleType = testcase.type;
+            createTable("CREATE TABLE %s (id " + toCqlType(tupleType) + ", value int, PRIMARY KEY(id))");
+            SortedMap<ByteBuffer, Integer> map = new TreeMap<>(Comparator.comparing(currentTableMetadata().partitioner::decorateKey));
+            int count = 0;
+            for (ByteBuffer value : testcase.uniqueRows)
+            {
+                map.put(value, count);
+                ByteBuffer[] tupleBuffers = tupleType.split(value);
+
+                // use cast to avoid warning
+                execute("INSERT INTO %s (id, value) VALUES (?, ?)", tuple((Object[]) tupleBuffers), count);
+
+                assertRows(execute("SELECT * FROM %s WHERE id = ?", tuple((Object[]) tupleBuffers)),
+                           row(tuple((Object[]) tupleBuffers), count));
+                count++;
+            }
+            assertRows(execute("SELECT * FROM %s LIMIT 100"),
+                       map.entrySet().stream().map(e -> row(e.getKey(), e.getValue())).toArray(Object[][]::new));
+        }));
+    }
+

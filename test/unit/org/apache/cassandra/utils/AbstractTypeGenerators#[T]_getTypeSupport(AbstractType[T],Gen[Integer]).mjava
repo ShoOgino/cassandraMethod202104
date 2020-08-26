@@ -1,0 +1,72 @@
+    /**
+     * For a type, create generators for data that matches that type
+     */
+    public static <T> TypeSupport<T> getTypeSupport(AbstractType<T> type, Gen<Integer> sizeGen)
+    {
+        // this doesn't affect the data, only sort order, so drop it
+        if (type.isReversed())
+            type = ((ReversedType<T>) type).baseType;
+        // cast is safe since type is a constant and was type cast while inserting into the map
+        @SuppressWarnings("unchecked")
+        TypeSupport<T> gen = (TypeSupport<T>) PRIMITIVE_TYPE_DATA_GENS.get(type);
+        if (gen != null)
+            return gen;
+        // might be... complex...
+        if (type instanceof SetType)
+        {
+            // T = Set<A> so can not use T here
+            SetType<Object> setType = (SetType<Object>) type;
+            TypeSupport<?> elementSupport = getTypeSupport(setType.getElementsType(), sizeGen);
+            @SuppressWarnings("unchecked")
+            TypeSupport<T> support = (TypeSupport<T>) TypeSupport.of(setType, rnd -> {
+                int size = sizeGen.generate(rnd);
+                HashSet<Object> set = Sets.newHashSetWithExpectedSize(size);
+                for (int i = 0; i < size; i++)
+                    set.add(elementSupport.valueGen.generate(rnd));
+                return set;
+            });
+            return support;
+        }
+        else if (type instanceof ListType)
+        {
+            // T = List<A> so can not use T here
+            ListType<Object> listType = (ListType<Object>) type;
+            TypeSupport<?> elementSupport = getTypeSupport(listType.getElementsType(), sizeGen);
+            @SuppressWarnings("unchecked")
+            TypeSupport<T> support = (TypeSupport<T>) TypeSupport.of(listType, rnd -> {
+                int size = sizeGen.generate(rnd);
+                List<Object> list = new ArrayList<>(size);
+                for (int i = 0; i < size; i++)
+                    list.add(elementSupport.valueGen.generate(rnd));
+                return list;
+            });
+            return support;
+        }
+        else if (type instanceof MapType)
+        {
+            // T = Map<A, B> so can not use T here
+            MapType<Object, Object> mapType = (MapType<Object, Object>) type;
+            TypeSupport<?> keySupport = getTypeSupport(mapType.getKeysType(), sizeGen);
+            TypeSupport<?> valueSupport = getTypeSupport(mapType.getValuesType(), sizeGen);
+            @SuppressWarnings("unchecked")
+            TypeSupport<T> support = (TypeSupport<T>) TypeSupport.of(mapType, rnd -> {
+                int size = sizeGen.generate(rnd);
+                Map<Object, Object> map = Maps.newHashMapWithExpectedSize(size);
+                // if there is conflict thats fine
+                for (int i = 0; i < size; i++)
+                    map.put(keySupport.valueGen.generate(rnd), valueSupport.valueGen.generate(rnd));
+                return map;
+            });
+            return support;
+        }
+        else if (type instanceof TupleType) // includes UserType
+        {
+            // T is ByteBuffer
+            TupleType tupleType = (TupleType) type;
+            @SuppressWarnings("unchecked")
+            TypeSupport<T> support = (TypeSupport<T>) TypeSupport.of(tupleType, new TupleGen(tupleType, sizeGen));
+            return support;
+        }
+        throw new UnsupportedOperationException("Unsupported type: " + type);
+    }
+

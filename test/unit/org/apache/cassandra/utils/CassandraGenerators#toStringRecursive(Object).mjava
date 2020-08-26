@@ -1,0 +1,78 @@
+    /**
+     * Uses reflection to generate a toString.  This method is aware of common Cassandra classes and can be used for
+     * generators or tests to provide more details for debugging.
+     */
+    public static String toStringRecursive(Object o)
+    {
+        return ReflectionToStringBuilder.toString(o, new MultilineRecursiveToStringStyle()
+        {
+            private String spacer = "";
+
+            {
+                // common lang uses start/end chars that are not the common ones used, so switch to the common ones
+                setArrayStart("[");
+                setArrayEnd("]");
+                setContentStart("{");
+                setContentEnd("}");
+                setUseIdentityHashCode(false);
+                setUseShortClassName(true);
+            }
+
+            protected boolean accept(Class<?> clazz)
+            {
+                return !clazz.isEnum() // toString enums
+                       && Stream.of(clazz.getDeclaredFields()).anyMatch(f -> !Modifier.isStatic(f.getModifiers())); // if no fields, just toString
+            }
+
+            public void appendDetail(StringBuffer buffer, String fieldName, Object value)
+            {
+                if (value instanceof ByteBuffer)
+                {
+                    value = ByteBufferUtil.bytesToHex((ByteBuffer) value);
+                }
+                else if (value instanceof AbstractType)
+                {
+                    value = SchemaCQLHelper.toCqlType((AbstractType) value);
+                }
+                else if (value instanceof Token || value instanceof InetAddressAndPort || value instanceof FieldIdentifier)
+                {
+                    value = value.toString();
+                }
+                else if (value instanceof TableMetadata)
+                {
+                    // to make sure the correct indents are taken, convert to CQL, then replace newlines with the indents
+                    // then prefix with the indents.
+                    String cql = SchemaCQLHelper.getTableMetadataAsCQL((TableMetadata) value, true, true, false);
+                    cql = NEWLINE_PATTERN.matcher(cql).replaceAll(Matcher.quoteReplacement("\n  " + spacer));
+                    cql = "\n  " + spacer + cql;
+                    value = cql;
+                }
+                super.appendDetail(buffer, fieldName, value);
+            }
+
+            // MultilineRecursiveToStringStyle doesn't look at what was set and instead hard codes the values when it "resets" the level
+            protected void setArrayStart(String arrayStart)
+            {
+                super.setArrayStart(arrayStart.replace("{", "["));
+            }
+
+            protected void setArrayEnd(String arrayEnd)
+            {
+                super.setArrayEnd(arrayEnd.replace("}", "]"));
+            }
+
+            protected void setContentStart(String contentStart)
+            {
+                // use this to infer the spacer since it isn't exposed.
+                String[] split = contentStart.split("\n", 2);
+                spacer = split.length == 2 ? split[1] : "";
+                super.setContentStart(contentStart.replace("[", "{"));
+            }
+
+            protected void setContentEnd(String contentEnd)
+            {
+                super.setContentEnd(contentEnd.replace("]", "}"));
+            }
+        }, true);
+    }
+
