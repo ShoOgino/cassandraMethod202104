@@ -2,11 +2,66 @@
     public void testGossipSettles() throws Throwable
     {
         /* Use withSubnet(1) to prove seed provider is set correctly - without the fix to pass a seed provider, this test fails */
-        try (ICluster cluster = builder().withNodes(3)
-                                         .withConfig(config -> config.with(GOSSIP).with(NETWORK))
-                                         .withSubnet(1)
-                                         .start())
+        try (Cluster cluster = builder().withNodes(3)
+                                        .withConfig(config -> config.with(GOSSIP).with(NETWORK))
+                                        .withSubnet(1)
+                                        .start())
         {
+            // Verify the 4.0 WithPort versions of status reporting methods match their InetAddress
+            // counterparts.  Disable Gossip first to prevent any bump in heartbeats that would
+            // invalidate the comparison.  Compare the newer WithPort versions by adding the
+            // storage port to IP addresses in keys/values/strings as appropriate.
+            cluster.forEach(i -> i.runOnInstance(() -> { Gossiper.instance.stop(); }));
+            cluster.get(1).runOnInstance(() -> {
+
+                // First prove that the storage port is added
+                Assert.assertEquals("stuff 127.0.0.1:7012 morestuff 127.0.0.2:7012", addStoragePortToIP("stuff 127.0.0.1 morestuff 127.0.0.2"));
+
+                FailureDetector fd = ((FailureDetector) FailureDetector.instance);
+                Assert.assertEquals(addStoragePortToInstanceName(fd.getAllEndpointStates(false)),
+                                    fd.getAllEndpointStates(true));
+                Assert.assertEquals(addPortToKeys(fd.getSimpleStates()), fd.getSimpleStatesWithPort());
+
+                StorageProxy sp = StorageProxy.instance;
+                Assert.assertEquals(addPortToSchemaVersions(sp.getSchemaVersions()), sp.getSchemaVersionsWithPort());
+
+                StorageService ss = StorageService.instance;
+                Assert.assertEquals(addPortToValues(ss.getTokenToEndpointMap()), ss.getTokenToEndpointWithPortMap());
+                Assert.assertEquals(addPortToKeys(ss.getEndpointToHostId()), ss.getEndpointWithPortToHostId());
+                Assert.assertEquals(addPortToValues(ss.getHostIdToEndpoint()), ss.getHostIdToEndpointWithPort());
+                Assert.assertEquals(addPortToKeys(ss.getLoadMap()), ss.getLoadMapWithPort());
+                Assert.assertEquals(addPortToList(ss.getLiveNodes()), ss.getLiveNodesWithPort());
+                List<String> naturalEndpointsAddedPort = ss.getNaturalEndpoints(SchemaConstants.DISTRIBUTED_KEYSPACE_NAME,
+                                                                                SystemDistributedKeyspace.VIEW_BUILD_STATUS, "dummy").stream()
+                                                           .map(e -> addStoragePortToIP(e.getHostAddress())).collect(Collectors.toList());
+                Assert.assertEquals(naturalEndpointsAddedPort,
+                                    ss.getNaturalEndpointsWithPort(SchemaConstants.DISTRIBUTED_KEYSPACE_NAME,
+                                                                   SystemDistributedKeyspace.VIEW_BUILD_STATUS, "dummy"));
+                naturalEndpointsAddedPort = ss.getNaturalEndpoints(SchemaConstants.DISTRIBUTED_KEYSPACE_NAME, ByteBufferUtil.EMPTY_BYTE_BUFFER).stream()
+                                              .map(e -> addStoragePortToIP(e.getHostAddress())).collect(Collectors.toList());
+                Assert.assertEquals(naturalEndpointsAddedPort,
+                                    ss.getNaturalEndpointsWithPort(SchemaConstants.DISTRIBUTED_KEYSPACE_NAME, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+
+
+                // Difference in key type... convert to String and add the port to the older format
+                Map<String, Float> getOwnershipKeyAddedPort = ss.getOwnership().entrySet().stream()
+                                                                .collect(Collectors.<Map.Entry<InetAddress, Float>, String, Float>toMap(
+                                                                e -> addStoragePortToIP(e.getKey().toString()),
+                                                                Map.Entry::getValue));
+                Assert.assertEquals(getOwnershipKeyAddedPort, ss.getOwnershipWithPort());
+
+                MessagingService ms = MessagingService.instance();
+                Assert.assertEquals(addPortToKeys(ms.getTimeoutsPerHost()), ms.getTimeoutsPerHostWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getLargeMessagePendingTasks()), ms.getLargeMessagePendingTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getLargeMessageCompletedTasks()), ms.getLargeMessageCompletedTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getLargeMessageDroppedTasks()), ms.getLargeMessageDroppedTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getSmallMessagePendingTasks()), ms.getSmallMessagePendingTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getSmallMessageCompletedTasks()), ms.getSmallMessageCompletedTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getSmallMessageDroppedTasks()), ms.getSmallMessageDroppedTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getGossipMessagePendingTasks()), ms.getGossipMessagePendingTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getGossipMessageCompletedTasks()), ms.getGossipMessageCompletedTasksWithPort());
+                Assert.assertEquals(addPortToKeys(ms.getGossipMessageDroppedTasks()), ms.getGossipMessageDroppedTasksWithPort());
+            });
         }
     }
 
