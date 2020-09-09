@@ -1,0 +1,21 @@
+    private boolean indexSummaryRedistribution() throws IOException
+    {
+        long nonRedistributingOffHeapSize = 0;
+        long memoryPoolBytes = 1024 * 1024;
+
+        // rewrite index summary file with new min/max index interval
+        TableMetadata origin = store.metadata();
+        MigrationManager.announceTableUpdate(origin.unbuild().minIndexInterval(1).maxIndexInterval(2).build(), true);
+
+        try (LifecycleTransaction txn = store.getTracker().tryModify(sstable, OperationType.INDEX_SUMMARY))
+        {
+            IndexSummaryManager.redistributeSummaries(new IndexSummaryRedistribution(ImmutableMap.of(store.metadata().id, txn),
+                                                                                     nonRedistributingOffHeapSize,
+                                                                                     memoryPoolBytes));
+        }
+
+        // reset min/max index interval
+        MigrationManager.announceTableUpdate(origin, true);
+        return true;
+    }
+

@@ -1,0 +1,37 @@
+        /**
+         * @param validation Metadata for SSTable being loaded
+         * @param isOffline Whether the SSTable is being loaded by an offline tool (sstabledump, scrub, etc)
+         */
+        private void load(ValidationMetadata validation,
+                          boolean isOffline,
+                          Set<Component> components,
+                          DiskOptimizationStrategy optimizationStrategy,
+                          StatsMetadata statsMetadata) throws IOException
+        {
+            if (metadata.params.bloomFilterFpChance == 1.0)
+            {
+                // bf is disabled.
+                load(false, !isOffline, optimizationStrategy, statsMetadata, components);
+                bf = FilterFactory.AlwaysPresent;
+            }
+            else if (!components.contains(Component.PRIMARY_INDEX)) // What happens if filter component and primary index is missing?
+            {
+                // avoid any reading of the missing primary index component.
+                // this should only happen during StandaloneScrubber
+                load(false, !isOffline, optimizationStrategy, statsMetadata, components);
+            }
+            else if (!components.contains(Component.FILTER) || validation == null)
+            {
+                // bf is enabled, but filter component is missing.
+                load(!isOffline, !isOffline, optimizationStrategy, statsMetadata, components);
+                if (isOffline)
+                    bf = FilterFactory.AlwaysPresent;
+            }
+            else
+            {
+                // bf is enabled and fp chance matches the currently configured value.
+                load(false, !isOffline, optimizationStrategy, statsMetadata, components);
+                bf = loadBloomFilter();
+            }
+        }
+

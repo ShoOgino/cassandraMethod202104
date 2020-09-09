@@ -1,0 +1,42 @@
+    private EmbeddedChannel createMockNettyChannel(ByteBuf serializedFile)
+    {
+        WritableByteChannel wbc = new WritableByteChannel()
+        {
+            private boolean isOpen = true;
+            public int write(ByteBuffer src)
+            {
+                int size = src.limit();
+                serializedFile.writeBytes(src);
+                return size;
+            }
+
+            public boolean isOpen()
+            {
+                return isOpen;
+            }
+
+            public void close()
+            {
+                isOpen = false;
+            }
+        };
+
+        return new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+                @Override
+                public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception
+                {
+                    if (msg instanceof BufferPoolAllocator.Wrapped)
+                    {
+
+                        ByteBuffer buf = ((BufferPoolAllocator.Wrapped) msg).adopt();
+                        wbc.write(buf);
+                    }
+                    else
+                    {
+                        ((SharedDefaultFileRegion) msg).transferTo(wbc, 0);
+                    }
+                    super.write(ctx, msg, promise);
+                }
+            });
+    }
+

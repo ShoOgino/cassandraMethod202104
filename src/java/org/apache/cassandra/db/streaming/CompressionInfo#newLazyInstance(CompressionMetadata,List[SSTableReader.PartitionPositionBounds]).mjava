@@ -1,0 +1,49 @@
+    /**
+     * Create a {@code CompressionInfo} that will computes the file chunks only upon request.
+     *
+     * <p>The instance returned by that method will only computes the file chunks when the {@code chunks},
+     * {@code equals} or {@code hashcode} methods are called for the first time. This is done to reduce the GC
+     * pressure. See CASSANDRA-10680 for more details</p>.
+     *
+     * @param metadata the compression metadata
+     * @param sections the file sections
+     * @return a {@code CompressionInfo} that will computes the file chunks only upon request.
+     */
+    static CompressionInfo newLazyInstance(CompressionMetadata metadata, List<SSTableReader.PartitionPositionBounds> sections)
+    {
+        if (metadata == null)
+        {
+            return null;
+        }
+
+        return new CompressionInfo()
+        {
+            private volatile Chunk[] chunks;
+
+            @Override
+            public synchronized Chunk[] chunks()
+            {
+                if (chunks == null)
+                    chunks = metadata.getChunksForSections(sections);
+
+                return chunks;
+            }
+
+            @Override
+            public CompressionParams parameters()
+            {
+                return metadata.parameters;
+            }
+
+            @Override
+            public long getTotalSize()
+            {
+                // If the chunks have not been loaded yet we avoid to compute them.
+                if (chunks == null)
+                    return metadata.getTotalSizeForSections(sections);
+
+                return super.getTotalSize();
+            }
+        };
+    }
+

@@ -1,0 +1,37 @@
+    private void testStreamWithConcurrentComponentMutation(Callable<?> runBeforeStreaming, Callable<?> runConcurrentWithStreaming) throws Exception
+    {
+        ByteBuf serializedFile = Unpooled.buffer(8192);
+        InetAddressAndPort peer = FBUtilities.getBroadcastAddressAndPort();
+        StreamSession session = setupStreamingSessionForTest();
+        Collection<OutgoingStream> outgoingStreams = store.getStreamManager().createOutgoingStreams(session, rangesAtEndpoint, NO_PENDING_REPAIR, PreviewKind.NONE);
+        CassandraOutgoingFile outgoingFile = (CassandraOutgoingFile) Iterables.getOnlyElement(outgoingStreams);
+
+        Future<?> streaming = executeAsync(() -> {
+            runBeforeStreaming.call();
+
+            try (AsyncStreamingOutputPlus out = new AsyncStreamingOutputPlus(createMockNettyChannel(serializedFile)))
+            {
+                outgoingFile.write(session, out, MessagingService.current_version);
+                assertTrue(sstable.descriptor.getTemporaryFiles().isEmpty());
+            }
+            return null;
+        });
+
+        Future<?> concurrentMutations = executeAsync(runConcurrentWithStreaming);
+
+        streaming.get(3, TimeUnit.MINUTES);
+        concurrentMutations.get(3, TimeUnit.MINUTES);
+
+        session.prepareReceiving(new StreamSummary(sstable.metadata().id, 1, 5104));
+        StreamMessageHeader messageHeader = new StreamMessageHeader(sstable.metadata().id, peer, session.planId(), false, 0, 0, 0, null);
+
+        try (DataInputBuffer in = new DataInputBuffer(serializedFile.nioBuffer(), false))
+        {
+            CassandraStreamHeader header = CassandraStreamHeader.serializer.deserialize(in, MessagingService.current_version);
+            CassandraEntireSSTableStreamReader reader = new CassandraEntireSSTableStreamReader(messageHeader, header, session);
+            SSTableReader streamedSSTable = Iterables.getOnlyElement(reader.read(in).finished());
+
+            SSTableUtils.assertContentEquals(sstable, streamedSSTable);
+        }
+    }
+

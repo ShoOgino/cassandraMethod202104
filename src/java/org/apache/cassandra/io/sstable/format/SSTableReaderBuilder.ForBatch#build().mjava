@@ -1,0 +1,35 @@
+        @Override
+        public SSTableReader build()
+        {
+            String dataFilePath = descriptor.filenameFor(Component.DATA);
+            long fileLength = new File(dataFilePath).length();
+            logger.info("Opening {} ({})", descriptor, FBUtilities.prettyPrintMemory(fileLength));
+
+            initSummary(dataFilePath, components, statsMetadata);
+
+            boolean compression = components.contains(Component.COMPRESSION_INFO);
+            try (FileHandle.Builder ibuilder = new FileHandle.Builder(descriptor.filenameFor(Component.PRIMARY_INDEX))
+                    .mmapped(DatabaseDescriptor.getIndexAccessMode() == Config.DiskAccessMode.mmap)
+                    .withChunkCache(ChunkCache.instance);
+                    FileHandle.Builder dbuilder = new FileHandle.Builder(descriptor.filenameFor(Component.DATA)).compressed(compression)
+                                                                                                                .mmapped(DatabaseDescriptor.getDiskAccessMode() == Config.DiskAccessMode.mmap)
+                                                                                                                .withChunkCache(ChunkCache.instance))
+            {
+                long indexFileLength = new File(descriptor.filenameFor(Component.PRIMARY_INDEX)).length();
+                DiskOptimizationStrategy optimizationStrategy = DatabaseDescriptor.getDiskOptimizationStrategy();
+                int dataBufferSize = optimizationStrategy.bufferSize(statsMetadata.estimatedPartitionSize.percentile(DatabaseDescriptor.getDiskOptimizationEstimatePercentile()));
+                int indexBufferSize = optimizationStrategy.bufferSize(indexFileLength / summary.size());
+                ifile = ibuilder.bufferSize(indexBufferSize).complete();
+                dfile = dbuilder.bufferSize(dataBufferSize).complete();
+                bf = FilterFactory.AlwaysPresent;
+
+                SSTableReader sstable = readerFactory.open(this);
+
+                sstable.first = first;
+                sstable.last = last;
+
+                sstable.setup(false);
+                return sstable;
+            }
+        }
+
