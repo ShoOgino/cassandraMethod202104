@@ -1,0 +1,33 @@
+    @Test
+    public void singleTokenSSTableTest()
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        LeveledManifest lm = new LeveledManifest(cfs, 10, 10, new SizeTieredCompactionStrategyOptions());
+        List<SSTableReader> expectedL1 = new ArrayList<>();
+
+        int gen = 1;
+        // single sstable, single token (100)
+        expectedL1.add(MockSchema.sstableWithLevel(gen++, 100, 100, 1, cfs));
+        lm.addSSTables(expectedL1);
+
+        List<SSTableReader> expectedL0 = new ArrayList<>();
+
+        // should get moved to L0:
+        expectedL0.add(MockSchema.sstableWithLevel(gen++, 99, 101, 1, cfs));
+        expectedL0.add(MockSchema.sstableWithLevel(gen++, 100, 101, 1, cfs));
+        expectedL0.add(MockSchema.sstableWithLevel(gen++, 99, 100, 1, cfs));
+        expectedL0.add(MockSchema.sstableWithLevel(gen++, 100, 100, 1, cfs));
+        lm.addSSTables(expectedL0);
+
+        assertLevelsEqual(expectedL0, lm.getLevel(0));
+        assertTrue(expectedL0.stream().allMatch(s -> s.getSSTableLevel() == 0));
+        assertLevelsEqual(expectedL1, lm.getLevel(1));
+        assertTrue(expectedL1.stream().allMatch(s -> s.getSSTableLevel() == 1));
+
+        // should work:
+        expectedL1.add(MockSchema.sstableWithLevel(gen++, 98, 99, 1, cfs));
+        expectedL1.add(MockSchema.sstableWithLevel(gen++, 101, 101, 1, cfs));
+        lm.addSSTables(expectedL1.subList(1, expectedL1.size()));
+        assertLevelsEqual(expectedL1, lm.getLevel(1));
+    }
+

@@ -1,21 +1,32 @@
     public void handleNotification(INotification notification, Object sender)
     {
-        if (notification instanceof SSTableAddedNotification)
+        // we might race with reload adding/removing the sstables, this means that compaction strategies
+        // must handle double notifications.
+        maybeReloadDiskBoundaries();
+        readLock.lock();
+        try
         {
-            handleFlushNotification(((SSTableAddedNotification) notification).added);
+            if (notification instanceof SSTableAddedNotification)
+            {
+                handleFlushNotification(((SSTableAddedNotification) notification).added);
+            }
+            else if (notification instanceof SSTableListChangedNotification)
+            {
+                SSTableListChangedNotification listChangedNotification = (SSTableListChangedNotification) notification;
+                handleListChangedNotification(listChangedNotification.added, listChangedNotification.removed);
+            }
+            else if (notification instanceof SSTableRepairStatusChanged)
+            {
+                handleRepairStatusChangedNotification(((SSTableRepairStatusChanged) notification).sstables);
+            }
+            else if (notification instanceof SSTableDeletingNotification)
+            {
+                handleDeletingNotification(((SSTableDeletingNotification) notification).deleting);
+            }
         }
-        else if (notification instanceof SSTableListChangedNotification)
+        finally
         {
-            SSTableListChangedNotification listChangedNotification = (SSTableListChangedNotification) notification;
-            handleListChangedNotification(listChangedNotification.added, listChangedNotification.removed);
-        }
-        else if (notification instanceof SSTableRepairStatusChanged)
-        {
-            handleRepairStatusChangedNotification(((SSTableRepairStatusChanged) notification).sstables);
-        }
-        else if (notification instanceof SSTableDeletingNotification)
-        {
-            handleDeletingNotification(((SSTableDeletingNotification) notification).deleting);
+            readLock.unlock();
         }
     }
 

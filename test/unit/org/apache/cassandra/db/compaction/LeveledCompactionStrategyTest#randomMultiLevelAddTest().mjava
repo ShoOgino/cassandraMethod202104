@@ -1,0 +1,57 @@
+    @Test
+    public void randomMultiLevelAddTest()
+    {
+        int iterations = 100;
+        int levelCount = 8;
+
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        LeveledManifest lm = new LeveledManifest(cfs, 10, 10, new SizeTieredCompactionStrategyOptions());
+        long seed = System.currentTimeMillis();
+        Random r = new Random(seed);
+        List<SSTableReader> newLevels = generateNewRandomLevels(cfs, 40, levelCount, 0, r);
+
+        int sstableCount = newLevels.size();
+        lm.addSSTables(newLevels);
+
+        int [] expectedLevelSizes = lm.getAllLevelSize();
+
+        for (int j = 0; j < iterations; j++)
+        {
+            newLevels = generateNewRandomLevels(cfs, 20, levelCount, sstableCount, r);
+            sstableCount += newLevels.size();
+
+            int[] canAdd = canAdd(lm, newLevels, levelCount);
+            for (int i = 0; i < levelCount; i++)
+                expectedLevelSizes[i] += canAdd[i];
+            lm.addSSTables(newLevels);
+        }
+
+        // and verify no levels overlap
+        int actualSSTableCount = 0;
+        for (int i = 0; i < levelCount; i++)
+        {
+            actualSSTableCount += lm.getLevelSize(i);
+            List<SSTableReader> level = new ArrayList<>(lm.getLevel(i));
+            int lvl = i;
+            assertTrue(level.stream().allMatch(s -> s.getSSTableLevel() == lvl));
+            if (i > 0)
+            {
+                level.sort(SSTableReader.sstableComparator);
+                SSTableReader prev = null;
+                for (SSTableReader sstable : level)
+                {
+                    if (prev != null && sstable.first.compareTo(prev.last) <= 0)
+                    {
+                        String levelStr = level.stream().map(s -> String.format("[%s, %s]", s.first, s.last)).collect(Collectors.joining(", "));
+                        String overlap = String.format("sstable [%s, %s] overlaps with [%s, %s] in level %d (%s) ", sstable.first, sstable.last, prev.first, prev.last, i, levelStr);
+                        Assert.fail("[seed = "+seed+"] overlap in level "+lvl+": " + overlap);
+                    }
+                    prev = sstable;
+                }
+            }
+        }
+        assertEquals(sstableCount, actualSSTableCount);
+        for (int i = 0; i < levelCount; i++)
+            assertEquals("[seed = " + seed + "] wrong sstable count in level = " + i, expectedLevelSizes[i], lm.getLevel(i).size());
+    }
+

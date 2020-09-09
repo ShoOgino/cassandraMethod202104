@@ -1,0 +1,33 @@
+    /**
+     * given a level with sstables with first tokens [0, 10, 20, 30] and a lastCompactedSSTable with last = 15, we will
+     * return an Iterator over [20, 30, 0, 10].
+     */
+    Iterator<SSTableReader> wrappingIterator(int lvl, SSTableReader lastCompactedSSTable)
+    {
+        assert lvl > 0; // only makes sense in L1+
+        TreeSet<SSTableReader> level = levels[lvl - 1];
+        if (level.isEmpty())
+            return Collections.emptyIterator();
+        if (lastCompactedSSTable == null)
+            return level.iterator();
+
+        PeekingIterator<SSTableReader> tail = Iterators.peekingIterator(level.tailSet(lastCompactedSSTable).iterator());
+        SSTableReader pivot = null;
+        // then we need to make sure that the first token of the pivot is greater than the last token of the lastCompactedSSTable
+        while (tail.hasNext())
+        {
+            SSTableReader potentialPivot = tail.peek();
+            if (potentialPivot.first.compareTo(lastCompactedSSTable.last) > 0)
+            {
+                pivot = potentialPivot;
+                break;
+            }
+            tail.next();
+        }
+
+        if (pivot == null)
+            return level.iterator();
+
+        return Iterators.concat(tail, level.headSet(pivot, false).iterator());
+    }
+

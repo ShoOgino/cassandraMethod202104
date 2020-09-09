@@ -1,0 +1,52 @@
+    @Test
+    public void stressTestCompactionStrategyManager() throws ExecutionException, InterruptedException
+    {
+        System.setProperty(Config.PROPERTY_PREFIX + "test.strict_lcs_checks", "true");
+        // flush/compact tons of sstables, invalidate token metadata in a loop to make CSM reload the strategies
+        createTable("create table %s (id int primary key, i text) with compaction = {'class':'LeveledCompactionStrategy', 'sstable_size_in_mb':1}");
+        ExecutorService es = Executors.newSingleThreadExecutor();
+        DatabaseDescriptor.setConcurrentCompactors(8);
+        AtomicBoolean stop = new AtomicBoolean(false);
+        long start = System.currentTimeMillis();
+        try
+        {
+            Random r = new Random();
+            Future<?> writes = es.submit(() -> {
+
+                byte[] b = new byte[1024];
+                while (!stop.get())
+                {
+
+                    for (int i = 0 ; i < 100; i++)
+                    {
+                        try
+                        {
+                            r.nextBytes(b);
+                            String s = Hex.bytesToHex(b);
+                            execute("insert into %s (id, i) values (?,?)", r.nextInt(), s);
+                        }
+                        catch (Throwable throwable)
+                        {
+                            throw new RuntimeException(throwable);
+                        }
+                    }
+                    getCurrentColumnFamilyStore().forceBlockingFlush();
+                    Uninterruptibles.sleepUninterruptibly(r.nextInt(200), TimeUnit.MILLISECONDS);
+                }
+            });
+
+            while(System.currentTimeMillis() - start < TimeUnit.MILLISECONDS.convert(5, TimeUnit.MINUTES))
+            {
+                StorageService.instance.getTokenMetadata().invalidateCachedRings();
+                Uninterruptibles.sleepUninterruptibly(r.nextInt(1000), TimeUnit.MILLISECONDS);
+            }
+
+            stop.set(true);
+            writes.get();
+        }
+        finally
+        {
+            es.shutdown();
+        }
+    }
+
