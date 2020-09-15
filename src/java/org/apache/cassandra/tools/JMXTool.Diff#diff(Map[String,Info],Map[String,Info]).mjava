@@ -1,0 +1,87 @@
+        private void diff(Map<String, Info> left, Map<String, Info> right)
+        {
+            DiffResult<String> objectNames = diff(left.keySet(), right.keySet(), name -> {
+                for (CliPattern p : excludeObjects)
+                {
+                    if (p.pattern.matcher(name).matches())
+                        return false;
+                }
+                return true;
+            });
+
+            if (!ignoreMissingRight && !objectNames.notInRight.isEmpty())
+            {
+                System.out.println("Objects not in right:");
+                printSet(0, objectNames.notInRight);
+            }
+            if (!ignoreMissingLeft && !objectNames.notInLeft.isEmpty())
+            {
+                System.out.println("Objects not in left: ");
+                printSet(0, objectNames.notInLeft);
+            }
+            Runnable printHeader = new Runnable()
+            {
+                boolean printedHeader = false;
+
+                public void run()
+                {
+                    if (!printedHeader)
+                    {
+                        System.out.println("Difference found in attribute or operation");
+                        printedHeader = true;
+                    }
+                }
+            };
+
+            for (String key : objectNames.shared)
+            {
+                Info leftInfo = left.get(key);
+                Info rightInfo = right.get(key);
+                DiffResult<Attribute> attributes = diff(leftInfo.attributeSet(), rightInfo.attributeSet(), attribute -> {
+                    for (CliPattern p : excludeAttributes)
+                    {
+                        if (p.pattern.matcher(attribute.name).matches())
+                            return false;
+                    }
+                    return true;
+                });
+                if (!ignoreMissingRight && !attributes.notInRight.isEmpty())
+                {
+                    printHeader.run();
+                    System.out.println(key + "\tattribute not in right:");
+                    printSet(1, attributes.notInRight);
+                }
+                if (!ignoreMissingLeft && !attributes.notInLeft.isEmpty())
+                {
+                    printHeader.run();
+                    System.out.println(key + "\tattribute not in left:");
+                    printSet(1, attributes.notInLeft);
+                }
+
+                DiffResult<Operation> operations = diff(leftInfo.operationSet(), rightInfo.operationSet(), operation -> {
+                    for (CliPattern p : excludeOperations)
+                    {
+                        if (p.pattern.matcher(operation.name).matches())
+                            return false;
+                    }
+                    return true;
+                });
+                if (!ignoreMissingRight && !operations.notInRight.isEmpty())
+                {
+                    printHeader.run();
+                    System.out.println(key + "\toperation not in right:");
+                    printSet(1, operations.notInRight, (sb, o) ->
+                                                       rightInfo.getOperation(o.name).ifPresent(match ->
+                                                                                                sb.append("\t").append("similar in right: ").append(match)));
+                }
+                if (!ignoreMissingLeft && !operations.notInLeft.isEmpty())
+                {
+                    printHeader.run();
+                    System.out.println(key + "\toperation not in left:");
+                    printSet(1, operations.notInLeft, (sb, o) ->
+                                                      leftInfo.getOperation(o.name).ifPresent(match ->
+                                                                                              sb.append("\t").append("similar in left: ").append(match)));
+                }
+            }
+        }
+
