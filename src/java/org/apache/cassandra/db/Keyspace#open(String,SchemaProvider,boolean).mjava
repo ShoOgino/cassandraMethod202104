@@ -1,18 +1,19 @@
-    private static Keyspace open(String keyspaceName, Schema schema, boolean loadSSTables)
+    @VisibleForTesting
+    static Keyspace open(String keyspaceName, SchemaProvider schema, boolean loadSSTables)
     {
         Keyspace keyspaceInstance = schema.getKeyspaceInstance(keyspaceName);
 
         if (keyspaceInstance == null)
         {
-            // instantiate the Keyspace.  we could use putIfAbsent but it's important to making sure it is only done once
-            // per keyspace, so we synchronize and re-check before doing it.
-            synchronized (Keyspace.class)
+            // Instantiate the Keyspace while holding the Schema lock. This both ensures we only do it once per
+            // keyspace, and also ensures that Keyspace construction sees a consistent view of the schema.
+            synchronized (schema)
             {
                 keyspaceInstance = schema.getKeyspaceInstance(keyspaceName);
                 if (keyspaceInstance == null)
                 {
                     // open and store the keyspace
-                    keyspaceInstance = new Keyspace(keyspaceName, loadSSTables);
+                    keyspaceInstance = new Keyspace(keyspaceName, schema, loadSSTables);
                     schema.storeKeyspaceInstance(keyspaceInstance);
                 }
             }
