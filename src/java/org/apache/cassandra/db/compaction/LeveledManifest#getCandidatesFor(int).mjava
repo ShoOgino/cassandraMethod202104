@@ -5,14 +5,14 @@
      */
     private Collection<SSTableReader> getCandidatesFor(int level)
     {
-        assert !getLevel(level).isEmpty();
+        assert !generations.get(level).isEmpty();
         logger.trace("Choosing candidates for L{}", level);
 
         final Set<SSTableReader> compacting = cfs.getTracker().getCompacting();
 
         if (level == 0)
         {
-            Set<SSTableReader> compactingL0 = getCompacting(0);
+            Set<SSTableReader> compactingL0 = getCompactingL0();
 
             PartitionPosition lastCompactingKey = null;
             PartitionPosition firstCompactingKey = null;
@@ -38,7 +38,7 @@
             // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
             // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
             Set<SSTableReader> candidates = new HashSet<>();
-            Map<SSTableReader, Bounds<Token>> remaining = genBounds(Iterables.filter(getLevel(0), Predicates.not(suspectP)));
+            Map<SSTableReader, Bounds<Token>> remaining = genBounds(Iterables.filter(generations.get(0), Predicates.not(SSTableReader::isMarkedSuspect)));
 
             for (SSTableReader sstable : ageSortedSSTables(remaining.keySet()))
             {
@@ -51,7 +51,7 @@
 
                 for (SSTableReader newCandidate : overlappedL0)
                 {
-                    if (firstCompactingKey == null || lastCompactingKey == null || overlapping(firstCompactingKey.getToken(), lastCompactingKey.getToken(), Arrays.asList(newCandidate)).size() == 0)
+                    if (firstCompactingKey == null || lastCompactingKey == null || overlapping(firstCompactingKey.getToken(), lastCompactingKey.getToken(), Collections.singleton(newCandidate)).size() == 0)
                         candidates.add(newCandidate);
                     remaining.remove(newCandidate);
                 }
@@ -70,7 +70,7 @@
                 // add sstables from L1 that overlap candidates
                 // if the overlapping ones are already busy in a compaction, leave it out.
                 // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
-                Set<SSTableReader> l1overlapping = overlapping(candidates, getLevel(1));
+                Set<SSTableReader> l1overlapping = overlapping(candidates, generations.get(1));
                 if (Sets.intersection(l1overlapping, compacting).size() > 0)
                     return Collections.emptyList();
                 if (!overlapping(candidates, compactingL0).isEmpty())
@@ -83,27 +83,16 @@
                 return candidates;
         }
 
-        // for non-L0 compactions, pick up where we left off last time
-        Collections.sort(getLevel(level), SSTableReader.sstableComparator);
-        int start = 0; // handles case where the prior compaction touched the very last range
-        for (int i = 0; i < getLevel(level).size(); i++)
-        {
-            SSTableReader sstable = getLevel(level).get(i);
-            if (sstable.first.compareTo(lastCompactedKeys[level]) > 0)
-            {
-                start = i;
-                break;
-            }
-        }
-
         // look for a non-suspect keyspace to compact with, starting with where we left off last time,
         // and wrapping back to the beginning of the generation if necessary
-        Map<SSTableReader, Bounds<Token>> sstablesNextLevel = genBounds(getLevel(level + 1));
-        for (int i = 0; i < getLevel(level).size(); i++)
+        Map<SSTableReader, Bounds<Token>> sstablesNextLevel = genBounds(generations.get(level + 1));
+        Iterator<SSTableReader> levelIterator = generations.wrappingIterator(level, lastCompactedSSTables[level]);
+        while (levelIterator.hasNext())
         {
-            SSTableReader sstable = getLevel(level).get((start + i) % getLevel(level).size());
+            SSTableReader sstable = levelIterator.next();
             Set<SSTableReader> candidates = Sets.union(Collections.singleton(sstable), overlappingWithBounds(sstable, sstablesNextLevel));
-            if (Iterables.any(candidates, suspectP))
+
+            if (Iterables.any(candidates, SSTableReader::isMarkedSuspect))
                 continue;
             if (Sets.intersection(candidates, compacting).isEmpty())
                 return candidates;

@@ -1,0 +1,47 @@
+    /**
+     * brute-force checks if the new sstables can be added to the correct level in manifest
+     *
+     * @return count of expected sstables to add to each level
+     */
+    private static int[] canAdd(LeveledManifest lm, List<SSTableReader> newSSTables, int levelCount)
+    {
+        Map<Integer, Collection<SSTableReader>> sstableGroups = new HashMap<>();
+        newSSTables.forEach(s -> sstableGroups.computeIfAbsent(s.getSSTableLevel(), k -> new ArrayList<>()).add(s));
+
+        int[] canAdd = new int[levelCount];
+        for (Map.Entry<Integer, Collection<SSTableReader>> lvlGroup : sstableGroups.entrySet())
+        {
+            int level = lvlGroup.getKey();
+            if (level == 0)
+            {
+                canAdd[0] += lvlGroup.getValue().size();
+                continue;
+            }
+
+            List<SSTableReader> newLevel = new ArrayList<>(lm.getLevel(level));
+            for (SSTableReader sstable : lvlGroup.getValue())
+            {
+                newLevel.add(sstable);
+                newLevel.sort(SSTableReader.sstableComparator);
+
+                SSTableReader prev = null;
+                boolean kept = true;
+                for (SSTableReader sst : newLevel)
+                {
+                    if (prev != null && prev.last.compareTo(sst.first) >= 0)
+                    {
+                        newLevel.remove(sstable);
+                        kept = false;
+                        break;
+                    }
+                    prev = sst;
+                }
+                if (kept)
+                    canAdd[level] += 1;
+                else
+                    canAdd[0] += 1;
+            }
+        }
+        return canAdd;
+    }
+

@@ -1,0 +1,51 @@
+    @Test
+    public void testAddingOverlapping()
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS();
+        LeveledManifest lm = new LeveledManifest(cfs, 10, 10, new SizeTieredCompactionStrategyOptions());
+        List<SSTableReader> currentLevel = new ArrayList<>();
+        int gen = 1;
+        currentLevel.add(MockSchema.sstableWithLevel(gen++, 10, 20, 1, cfs));
+        currentLevel.add(MockSchema.sstableWithLevel(gen++, 21, 30, 1, cfs));
+        currentLevel.add(MockSchema.sstableWithLevel(gen++, 51, 100, 1, cfs));
+        currentLevel.add(MockSchema.sstableWithLevel(gen++, 80, 120, 1, cfs));
+        currentLevel.add(MockSchema.sstableWithLevel(gen++, 90, 150, 1, cfs));
+
+        lm.addSSTables(currentLevel);
+        assertLevelsEqual(lm.getLevel(1), currentLevel.subList(0, 3));
+        assertLevelsEqual(lm.getLevel(0), currentLevel.subList(3, 5));
+
+        List<SSTableReader> newSSTables = new ArrayList<>();
+        // this sstable last token is the same as the first token of L1 above, should get sent to L0:
+        newSSTables.add(MockSchema.sstableWithLevel(gen++, 5, 10, 1, cfs));
+        lm.addSSTables(newSSTables);
+        assertLevelsEqual(lm.getLevel(1), currentLevel.subList(0, 3));
+        assertEquals(0, newSSTables.get(0).getSSTableLevel());
+        assertTrue(lm.getLevel(0).containsAll(newSSTables));
+
+        newSSTables.clear();
+        newSSTables.add(MockSchema.sstableWithLevel(gen++, 30, 40, 1, cfs));
+        lm.addSSTables(newSSTables);
+        assertLevelsEqual(lm.getLevel(1), currentLevel.subList(0, 3));
+        assertEquals(0, newSSTables.get(0).getSSTableLevel());
+        assertTrue(lm.getLevel(0).containsAll(newSSTables));
+
+        newSSTables.clear();
+        newSSTables.add(MockSchema.sstableWithLevel(gen++, 100, 140, 1, cfs));
+        lm.addSSTables(newSSTables);
+        assertLevelsEqual(lm.getLevel(1), currentLevel.subList(0, 3));
+        assertEquals(0, newSSTables.get(0).getSSTableLevel());
+        assertTrue(lm.getLevel(0).containsAll(newSSTables));
+
+        newSSTables.clear();
+        newSSTables.add(MockSchema.sstableWithLevel(gen++, 100, 140, 1, cfs));
+        newSSTables.add(MockSchema.sstableWithLevel(gen++, 120, 140, 1, cfs));
+        lm.addSSTables(newSSTables);
+        List<SSTableReader> newL1 = new ArrayList<>(currentLevel.subList(0, 3));
+        newL1.add(newSSTables.get(1));
+        assertLevelsEqual(lm.getLevel(1), newL1);
+        newSSTables.remove(1);
+        assertTrue(newSSTables.stream().allMatch(s -> s.getSSTableLevel() == 0));
+        assertTrue(lm.getLevel(0).containsAll(newSSTables));
+    }
+

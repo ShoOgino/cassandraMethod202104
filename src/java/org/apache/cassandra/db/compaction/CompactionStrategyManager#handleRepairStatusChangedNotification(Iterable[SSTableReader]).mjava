@@ -1,37 +1,26 @@
+    /**
+     * Should only be called holding the readLock
+     */
     private void handleRepairStatusChangedNotification(Iterable<SSTableReader> sstables)
     {
-        // If reloaded, SSTables will be placed in their correct locations
-        // so there is no need to process notification
-        if (maybeReloadDiskBoundaries())
-            return;
-        // we need a write lock here since we move sstables from one strategy instance to another
-        readLock.lock();
-        try
+        List<GroupedSSTableContainer> groups = groupSSTables(sstables);
+        for (int i = 0; i < holders.size(); i++)
         {
-            List<GroupedSSTableContainer> groups = groupSSTables(sstables);
-            for (int i = 0; i < holders.size(); i++)
+            GroupedSSTableContainer group = groups.get(i);
+
+            if (group.isEmpty())
+                continue;
+
+            AbstractStrategyHolder dstHolder = holders.get(i);
+            for (AbstractStrategyHolder holder : holders)
             {
-                GroupedSSTableContainer group = groups.get(i);
-
-                if (group.isEmpty())
-                    continue;
-
-                AbstractStrategyHolder dstHolder = holders.get(i);
-
-                for (AbstractStrategyHolder holder : holders)
-                {
-                    if (holder != dstHolder)
-                        holder.removeSSTables(group);
-                }
-
-                // adding sstables into another strategy may change its level,
-                // thus it won't be removed from original LCS. We have to remove sstables first
-                dstHolder.addSSTables(group);
+                if (holder != dstHolder)
+                    holder.removeSSTables(group);
             }
-        }
-        finally
-        {
-            readLock.unlock();
+
+            // adding sstables into another strategy may change its level,
+            // thus it won't be removed from original LCS. We have to remove sstables first
+            dstHolder.addSSTables(group);
         }
     }
 
