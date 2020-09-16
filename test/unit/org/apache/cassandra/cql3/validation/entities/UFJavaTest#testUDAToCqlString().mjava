@@ -1,0 +1,39 @@
+    @Test
+    public void testUDAToCqlString() throws Throwable
+    {
+        // we have to create this function in DB otherwise UDAggregate creation below fails
+        String stateFunctionName = createFunction(KEYSPACE, "int,int",
+                                                  "CREATE OR REPLACE FUNCTION %s(state int, val int)\n" +
+                                                  "    CALLED ON NULL INPUT\n" +
+                                                  "    RETURNS int\n" +
+                                                  "    LANGUAGE java\n" +
+                                                  "    AS $$\n" +
+                                                  "        return state + val;\n" +
+                                                  "    $$;");
+
+        // Java representation of state function so we can construct aggregate programmatically
+        UDFunction stateFunction = UDFunction.create(new FunctionName(KEYSPACE, stateFunctionName.split("\\.")[1]),
+                                                     Arrays.asList(ColumnIdentifier.getInterned("state", false),
+                                                                   ColumnIdentifier.getInterned("val", false)),
+                                                     Arrays.asList(Int32Type.instance, Int32Type.instance),
+                                                     Int32Type.instance,
+                                                     true,
+                                                     "java",
+                                                     "return state + val;");
+
+        UDAggregate aggregate = UDAggregate.create(Collections.singleton(stateFunction),
+                                                   new FunctionName(KEYSPACE, "my_aggregate"),
+                                                   Collections.singletonList(Int32Type.instance),
+                                                   Int32Type.instance,
+                                                   new FunctionName(KEYSPACE, stateFunctionName.split("\\.")[1]),
+                                                   null,
+                                                   Int32Type.instance,
+                                                   null);
+
+        Assert.assertTrue(aggregate.toCqlString(true, true).contains("CREATE AGGREGATE IF NOT EXISTS"));
+        Assert.assertFalse(aggregate.toCqlString(true, false).contains("CREATE AGGREGATE IF NOT EXISTS"));
+
+        Assert.assertEquals(aggregate.toCqlString(true, true), aggregate.toCqlString(false, true));
+        Assert.assertEquals(aggregate.toCqlString(true, false), aggregate.toCqlString(false, false));
+    }
+
