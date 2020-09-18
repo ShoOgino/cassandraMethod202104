@@ -1,0 +1,60 @@
+        public static List<Pair<ReceivingStastistics, SendingStatistics>> parse(final NetstatResults results)
+        {
+            final Set<String> outputs = new LinkedHashSet<>();
+
+            results.netstatOutputs.stream()
+                                  .map(NodeToolResultWithOutput::getStdout)
+                                  .filter(output -> !output.contains("Not sending any streams"))
+                                  .filter(output -> output.contains("Receiving") || output.contains("Sending"))
+                                  .forEach(outputs::add);
+
+            final List<Pair<ReceivingStastistics, SendingStatistics>> parsed = new ArrayList<>();
+
+            for (final String output : outputs)
+            {
+                boolean processingReceiving = false;
+                boolean processingSending = false;
+
+                final ReceivingStastistics receivingStastistics = new ReceivingStastistics();
+                final SendingStatistics sendingStatistics = new SendingStatistics();
+
+                final List<String> sanitisedOutput = Stream.of(output.split("\n"))
+                                                           .map(String::trim)
+                                                           .filter(line -> !line.isEmpty())
+                                                           // sometimes logs are mangled into output
+                                                           .filter(line -> Stream.of("DEBUG", "INFO", "ERROR", "WARN").noneMatch(line::contains))
+                                                           .filter(line -> Stream.of("Mode:", "Read", "Attempted", "Mismatch", "Pool", "Large", "Small", "Gossip").noneMatch(line::startsWith))
+                                                           .collect(toList());
+
+                for (final String outputLine : sanitisedOutput)
+                {
+                    if (outputLine.startsWith("Receiving"))
+                    {
+                        processingReceiving = true;
+                        processingSending = false;
+
+                        receivingStastistics.parseHeader(outputLine);
+                    }
+                    else if (outputLine.startsWith("Sending"))
+                    {
+                        processingSending = true;
+                        processingReceiving = false;
+
+                        sendingStatistics.parseHeader(outputLine);
+                    }
+                    else if (processingReceiving)
+                    {
+                        receivingStastistics.parseTable(outputLine);
+                    }
+                    else if (processingSending)
+                    {
+                        sendingStatistics.parseTable(outputLine);
+                    }
+                }
+
+                parsed.add(Pair.create(receivingStastistics, sendingStatistics));
+            }
+
+            return parsed;
+        }
+

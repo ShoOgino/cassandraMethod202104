@@ -1,0 +1,39 @@
+    private void executeTest(boolean compressionEnabled) throws Exception
+    {
+        final ExecutorService executorService = Executors.newFixedThreadPool(1);
+
+        try (final Cluster cluster = Cluster.build()
+                                            .withNodeIdTopology(NetworkTopology.singleDcNetworkTopology(2, "dc0", "rack0"))
+                                            .withConfig(config -> config.with(NETWORK, GOSSIP, NATIVE_PROTOCOL)
+                                                                        .set("stream_throughput_outbound_megabits_per_sec", 1)
+                                                                        .set("compaction_throughput_mb_per_sec", 1)
+                                                                        .set("stream_entire_sstables", false)).start())
+        {
+            final IInvokableInstance node1 = cluster.get(1);
+            final IInvokableInstance node2 = cluster.get(2);
+
+            createTable(cluster, 1, compressionEnabled);
+
+            node1.nodetoolResult("disableautocompaction", "netstats_test").asserts().success();
+            node2.nodetoolResult("disableautocompaction", "netstats_test").asserts().success();
+
+            populateData(compressionEnabled);
+
+            node1.flush("netstats_test");
+            node2.flush("netstats_test");
+
+            //change RF from 1 to 2 so we need to repair it, repairing will causes streaming shown in netstats
+            changeReplicationFactor();
+
+            final Future<NetstatResults> resultsFuture1 = executorService.submit(new NetstatsCallable(node1));
+
+            node1.nodetoolResult("repair", "netstats_test").asserts().success();
+
+            final NetstatResults results = resultsFuture1.get(1, MINUTES);
+
+            results.assertSuccessful();
+
+            NetstatsOutputParser.validate(NetstatsOutputParser.parse(results));
+        }
+    }
+
