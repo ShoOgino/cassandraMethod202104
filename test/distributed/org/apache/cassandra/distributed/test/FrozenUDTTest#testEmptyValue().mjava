@@ -1,0 +1,30 @@
+    @Test
+    public void testEmptyValue() throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(1).start()))
+        {
+            cluster.schemaChange("create type " + KEYSPACE + ".a (foo text)");
+            cluster.schemaChange("create table " + KEYSPACE + ".x (id int, ck frozen<a>, i int, primary key (id, ck))");
+            cluster.coordinator(1).execute("insert into " + KEYSPACE + ".x (id, ck, i) VALUES (1, system.fromjson('{\"foo\":\"\"}'), 1)", ConsistencyLevel.ALL);
+            cluster.coordinator(1).execute("insert into " + KEYSPACE + ".x (id, ck, i) VALUES (1, system.fromjson('{\"foo\":\"a\"}'), 2)", ConsistencyLevel.ALL);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            Runnable check = () -> {
+                assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = 1 and ck = system.fromjson('{\"foo\":\"\"}')", ConsistencyLevel.ALL),
+                           row(1));
+                assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = 1 and ck = system.fromjson('{\"foo\":\"a\"}')", ConsistencyLevel.ALL),
+                           row(2));
+            };
+
+            check.run();
+            cluster.schemaChange("alter type " + KEYSPACE + ".a add bar text");
+            check.run();
+
+            assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = 1 and ck = system.fromjson('{\"foo\":\"\",\"bar\":\"\"}')", ConsistencyLevel.ALL));
+            cluster.coordinator(1).execute("insert into " + KEYSPACE + ".x (id, ck, i) VALUES (1, system.fromjson('{\"foo\":\"\",\"bar\":\"\"}'), 3)", ConsistencyLevel.ALL);
+            check.run();
+            assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = 1 and ck = system.fromjson('{\"foo\":\"\",\"bar\":\"\"}')", ConsistencyLevel.ALL),
+                       row(3));
+        }
+    }
+

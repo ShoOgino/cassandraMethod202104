@@ -1,0 +1,26 @@
+    @Test
+    public void testAddAndUDTField() throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(1).start()))
+        {
+            cluster.schemaChange("create type " + KEYSPACE + ".a (foo text)");
+            cluster.schemaChange("create table " + KEYSPACE + ".x (id int, ck frozen<a>, i int, primary key (id, ck))");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("insert into " + KEYSPACE + ".x (id, ck, i) VALUES (?, " + json(i) + ", ? )", ConsistencyLevel.ALL, i, i);
+
+            for (int i = 0; i < 10; i++)
+                assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = ? and ck = " + json(i), ConsistencyLevel.ALL, i),
+                           row(i));
+
+            cluster.schemaChange("alter type " + KEYSPACE + ".a add bar text");
+
+            for (int i = 5; i < 15; i++)
+                cluster.coordinator(1).execute("insert into " + KEYSPACE + ".x (id, ck, i) VALUES (?, " + json(i) + ", ? )", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            for (int i = 5; i < 15; i++)
+                assertRows(cluster.coordinator(1).execute("select i from " + KEYSPACE + ".x WHERE id = ? and ck = " + json(i), ConsistencyLevel.ALL, i),
+                           row(i));
+        }
+    }
+
