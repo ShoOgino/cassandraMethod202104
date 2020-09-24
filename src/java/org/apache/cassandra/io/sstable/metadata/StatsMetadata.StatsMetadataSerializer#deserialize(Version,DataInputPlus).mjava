@@ -1,9 +1,29 @@
         public StatsMetadata deserialize(Version version, DataInputPlus in) throws IOException
         {
             EstimatedHistogram partitionSizes = EstimatedHistogram.serializer.deserialize(in);
+
+            if (partitionSizes.isOverflowed())
+            {
+                logger.warn("Deserialized partition size histogram with {} values greater than the maximum of {}. " +
+                            "Clearing the overflow bucket to allow for degraded mean and percentile calculations...",
+                            partitionSizes.overflowCount(), partitionSizes.getLargestBucketOffset());
+
+                partitionSizes.clearOverflow();
+            }
+
             EstimatedHistogram columnCounts = EstimatedHistogram.serializer.deserialize(in);
+            if (columnCounts.isOverflowed())
+            {
+                logger.warn("Deserialized partition cell count histogram with {} values greater than the maximum of {}. " +
+                            "Clearing the overflow bucket to allow for degraded mean and percentile calculations...",
+                            columnCounts.overflowCount(), columnCounts.getLargestBucketOffset());
+
+                columnCounts.clearOverflow();
+            }
+
             ReplayPosition commitLogLowerBound = ReplayPosition.NONE, commitLogUpperBound;
             commitLogUpperBound = ReplayPosition.serializer.deserialize(in);
+
             long minTimestamp = in.readLong();
             long maxTimestamp = in.readLong();
             // We use MAX_VALUE as that's the default value for "no deletion time"
