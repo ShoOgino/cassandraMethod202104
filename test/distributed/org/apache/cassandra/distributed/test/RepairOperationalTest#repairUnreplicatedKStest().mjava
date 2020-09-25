@@ -1,0 +1,26 @@
+    @Test
+    public void repairUnreplicatedKStest() throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(4)
+                                          .withDCs(2)
+                                          .withConfig(config -> config.with(GOSSIP).with(NETWORK))
+                                          .start()))
+        {
+            cluster.schemaChange("alter keyspace "+KEYSPACE+" with replication = {'class': 'NetworkTopologyStrategy', 'datacenter1':2, 'datacenter2':0}");
+            cluster.schemaChange("create table "+KEYSPACE+".tbl (id int primary key, i int)");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("insert into "+KEYSPACE+".tbl (id, i) values (?, ?)", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            cluster.get(3).nodetoolResult("repair", "-full", KEYSPACE , "tbl", "-st", "0", "-et", "1000")
+                   .asserts()
+                   .failure()
+                   .errorContains("Nothing to repair for (0,1000] in distributed_test_keyspace - aborting");
+            cluster.get(3).nodetoolResult("repair", "-full", KEYSPACE , "tbl", "-st", "0", "-et", "1000", "--ignore-unreplicated-keyspaces")
+                   .asserts()
+                   .success()
+                   .notificationContains("unreplicated keyspace is ignored since repair was called with --ignore-unreplicated-keyspaces");
+
+        }
+    }
+

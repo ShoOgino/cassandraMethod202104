@@ -1,0 +1,27 @@
+    @Test
+    public void hostFilterDifferentDC() throws IOException
+    {
+        try (Cluster cluster = Cluster.build().withRacks(2, 1, 2).start())
+        {
+            // 1-2 : datacenter1
+            // 3-4 : datacenter2
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1':2, 'datacenter2':0}");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (id int PRIMARY KEY, i int)");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (id, i) VALUES (?, ?)", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            // choose a node in the DC that doesn't have any replicas
+            IInvokableInstance node = cluster.get(3);
+            assertEquals("datacenter2", node.config().localDatacenter());
+            // fails with "Specified hosts [127.0.0.3, 127.0.0.1] do not share range (0,1000] needed for repair. Either restrict repair ranges with -st/-et options, or specify one of the neighbors that share this range with this node: [].. Check the logs on the repair participants for further details"
+            node.nodetoolResult("repair", "-full",
+                                "-hosts", cluster.get(1).broadcastAddress().getAddress().getHostAddress(),
+                                "-hosts", node.broadcastAddress().getAddress().getHostAddress(),
+                                "--ignore-unreplicated-keyspaces",
+                                "-st", "0", "-et", "1000",
+                                KEYSPACE, "tbl")
+                .asserts().success();
+        }
+    }
+
