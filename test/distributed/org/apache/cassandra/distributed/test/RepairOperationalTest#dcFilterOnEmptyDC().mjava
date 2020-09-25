@@ -1,0 +1,26 @@
+    @Test
+    public void dcFilterOnEmptyDC() throws IOException
+    {
+        try (Cluster cluster = Cluster.build().withRacks(2, 1, 2).start())
+        {
+            // 1-2 : datacenter1
+            // 3-4 : datacenter2
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1':2, 'datacenter2':0}");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (id int PRIMARY KEY, i int)");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (id, i) VALUES (?, ?)", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            // choose a node in the DC that doesn't have any replicas
+            IInvokableInstance node = cluster.get(3);
+            Assertions.assertThat(node.config().localDatacenter()).isEqualTo("datacenter2");
+            // fails with "the local data center must be part of the repair"
+            node.nodetoolResult("repair", "-full",
+                                "-dc", "datacenter1", "-dc", "datacenter2",
+                                "--ignore-unreplicated-keyspaces",
+                                "-st", "0", "-et", "1000",
+                                KEYSPACE, "tbl")
+                .asserts().success();
+        }
+    }
+

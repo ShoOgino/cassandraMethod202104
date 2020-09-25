@@ -1,0 +1,24 @@
+    @Test
+    public void mainDC() throws IOException
+    {
+        try (Cluster cluster = Cluster.build().withRacks(2, 1, 2).start())
+        {
+            // 1-2 : datacenter1
+            // 3-4 : datacenter2
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1':2, 'datacenter2':0}");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (id int PRIMARY KEY, i int)");
+            for (int i = 0; i < 10; i++)
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (id, i) VALUES (?, ?)", ConsistencyLevel.ALL, i, i);
+            cluster.forEach(i -> i.flush(KEYSPACE));
+
+            // choose a node in the DC that doesn't have any replicas
+            IInvokableInstance node = cluster.get(1);
+            Assertions.assertThat(node.config().localDatacenter()).isEqualTo("datacenter1");
+            node.nodetoolResult("repair", "-full",
+                                "--ignore-unreplicated-keyspaces",
+                                "-st", "0", "-et", "1000",
+                                KEYSPACE, "tbl")
+                .asserts().success();
+        }
+    }
+
