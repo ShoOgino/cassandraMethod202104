@@ -1,0 +1,31 @@
+    @Test
+    public void mixedModeReadColumnSubsetDigestCheck() throws Throwable
+    {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(1)
+        .upgrade(Versions.Major.v30, Versions.Major.v4)
+        .upgrade(Versions.Major.v3X, Versions.Major.v4)
+        .setup(cluster -> {
+            cluster.schemaChange(CREATE_TABLE);
+            cluster.coordinator(1).execute(INSERT, ConsistencyLevel.ALL, 1, "static", "foo", "bar", "baz");
+            cluster.coordinator(1).execute(INSERT, ConsistencyLevel.ALL, 1, "static", "fi", "biz", "baz");
+            cluster.coordinator(1).execute(INSERT, ConsistencyLevel.ALL, 1, "static", "fo", "boz", "baz");
+
+            // baseline to show no digest mismatches before upgrade
+            checkTraceForDigestMismatch(cluster, 1, SELECT_C1, 1);
+            checkTraceForDigestMismatch(cluster, 2, SELECT_C1, 1);
+        })
+        .runAfterNodeUpgrade((cluster, node) -> {
+            if (node != 1)
+                return; // shouldn't happen but guard for future test changes
+
+            // should not cause a disgest mismatch in mixed mode
+            checkTraceForDigestMismatch(cluster, 1, SELECT_C1, 1);
+            checkTraceForDigestMismatch(cluster, 2, SELECT_C1, 1);
+            checkTraceForDigestMismatch(cluster, 1, SELECT_C1_S1_ROW, 1, "foo");
+            checkTraceForDigestMismatch(cluster, 2, SELECT_C1_S1_ROW, 1, "fi");
+        })
+        .run();
+    }
+
