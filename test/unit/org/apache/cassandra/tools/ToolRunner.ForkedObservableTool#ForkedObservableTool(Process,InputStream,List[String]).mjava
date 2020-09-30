@@ -1,0 +1,34 @@
+        private ForkedObservableTool(Process process, InputStream stdin, List<String> args)
+        {
+            this.process = process;
+            this.args = args;
+            this.stdin = stdin;
+
+            // Each stream tends to use a bounded buffer, so need to process each stream in its own thread else we
+            // might block on an idle stream, not consuming the other stream which is blocked in the other process
+            // as nothing is consuming
+            int numWatchers = 2;
+            // only need a stdin watcher when forking
+            boolean includeStdinWatcher = stdin != null;
+            if (includeStdinWatcher)
+                numWatchers = 3;
+            ioWatchers = new Thread[numWatchers];
+            ioWatchers[0] = new Thread(new StreamGobbler<>(process.getErrorStream(), err));
+            ioWatchers[0].setDaemon(true);
+            ioWatchers[0].setName("IO Watcher stderr");
+            ioWatchers[0].start();
+
+            ioWatchers[1] = new Thread(new StreamGobbler<>(process.getInputStream(), out));
+            ioWatchers[1].setDaemon(true);
+            ioWatchers[1].setName("IO Watcher stdout");
+            ioWatchers[1].start();
+
+            if (includeStdinWatcher)
+            {
+                ioWatchers[2] = new Thread(new StreamGobbler<>(stdin, process.getOutputStream()));
+                ioWatchers[2].setDaemon(true);
+                ioWatchers[2].setName("IO Watcher stdin");
+                ioWatchers[2].start();
+            }
+        }
+
