@@ -1,0 +1,33 @@
+    private void setupTestSstables() throws Throwable
+    {
+        createTable("CREATE TABLE %s (id text primary key, val text)");
+        for (int i = 0; i < 100000; i++)
+            executeFormattedQuery(formatQuery("INSERT INTO %s (id, val) VALUES (?, ?)"), "mockData" + i, "mockData" + i);
+
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        cfs.forceBlockingFlush();
+
+        Set<SSTableReader> sstables = cfs.getLiveSSTables();
+        sstableFileName = sstables.iterator().next().getFilename();
+        assertTrue("Generated sstable must be at least 1MB", (new File(sstableFileName)).length() > 1024*1024);
+        sstablesDir = new File(sstableFileName).getParentFile();
+        sstablesBackupDir = new File(sstablesDir.getAbsolutePath() + "/testbackup");
+        sstablesBackupDir.mkdir();
+        origSstables = Arrays.asList(sstablesDir.listFiles());
+
+        // Back up orig sstables
+        origSstables.stream().forEach(f -> {
+            if (f.isFile())
+                try
+                {
+                    Files.copy(f, new File(sstablesBackupDir.getAbsolutePath() + "/" + f.getName()));
+                }
+                catch(IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+        });
+
+        System.setProperty(Util.ALLOW_TOOL_REINIT_FOR_TEST, "true"); // Necessary for testing
+    }
+
