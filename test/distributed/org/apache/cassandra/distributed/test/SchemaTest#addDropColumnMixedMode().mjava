@@ -1,0 +1,27 @@
+    @Test
+    public void addDropColumnMixedMode() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(2, CONFIG_CONSUMER)))
+        {
+            cluster.schemaChange("CREATE TABLE "+KEYSPACE+".tbl (id int primary key, v1 int, v2 int)");
+            Object [][] someExpected = new Object[5][];
+            Object [][] allExpected1 = new Object[5][];
+            Object [][] allExpected2 = new Object[5][];
+            for (int i = 0; i < 5; i++)
+            {
+                int v1 = i * 10, v2 = i * 100;
+                cluster.coordinator(1).execute("INSERT INTO "+KEYSPACE+".tbl (id, v1, v2) VALUES (?,?,?)" , ConsistencyLevel.ALL, i, v1, v2);
+                someExpected[i] = new Object[] {i, v1};
+                allExpected1[i] = new Object[] {i, v1, v2, null};
+                allExpected2[i] = new Object[] {i, v1};
+            }
+            cluster.forEach((instance) -> instance.flush(KEYSPACE));
+            cluster.get(1).schemaChangeInternal("ALTER TABLE "+KEYSPACE+".tbl ADD v3 int");
+            cluster.get(2).schemaChangeInternal("ALTER TABLE "+KEYSPACE+".tbl DROP v2");
+            assertRows(cluster.coordinator(1).execute("SELECT id, v1 FROM "+KEYSPACE+".tbl", ConsistencyLevel.ALL), someExpected);
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM "+KEYSPACE+".tbl", ConsistencyLevel.ALL), allExpected1);
+            assertRows(cluster.coordinator(2).execute("SELECT id, v1 FROM "+KEYSPACE+".tbl", ConsistencyLevel.ALL), someExpected);
+            assertRows(cluster.coordinator(2).execute("SELECT * FROM "+KEYSPACE+".tbl", ConsistencyLevel.ALL), allExpected2);
+        }
+    }
+
