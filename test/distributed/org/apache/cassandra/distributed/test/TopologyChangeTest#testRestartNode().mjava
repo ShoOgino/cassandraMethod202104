@@ -1,13 +1,11 @@
     @Test
     public void testRestartNode() throws Throwable
     {
-        try (Cluster control = init(Cluster.build().withNodes(3).withNodeProvisionStrategy(strategy).withConfig(
-        config -> {
-            config.with(GOSSIP, NETWORK, NATIVE_PROTOCOL);
-        }).start()))
+        try (Cluster control = init(Cluster.build().withNodes(3).withNodeProvisionStrategy(strategy)
+                                           .withConfig(config -> config.with(GOSSIP, NETWORK, NATIVE_PROTOCOL)).start());
+             com.datastax.driver.core.Cluster cluster = com.datastax.driver.core.Cluster.builder().addContactPoint("127.0.0.1").build();
+             Session session = cluster.connect())
         {
-            final com.datastax.driver.core.Cluster cluster = com.datastax.driver.core.Cluster.builder().addContactPoint("127.0.0.1").build();
-            Session session = cluster.connect();
             EventStateListener eventStateListener = new EventStateListener();
             session.getCluster().register(eventStateListener);
 
@@ -19,11 +17,10 @@
             await().atMost(30, TimeUnit.SECONDS)
                    .untilAsserted(() -> Assert.assertEquals(3, cluster.getMetadata().getAllHosts().stream().filter(h -> h.isUp()).count()));
 
-            assertThat(eventStateListener.events).containsExactly(new Event(Down, control.get(3)),
-                                                                  new Event(Up, control.get(3)));
-
-            session.close();
-            cluster.close();
+            // DOWN UP can also be seen if the jvm is slow and connections are closed, but make sure it at least happens once
+            // given the node restarts
+            assertThat(eventStateListener.events).containsSequence(new Event(Down, control.get(3)),
+                                                                   new Event(Up, control.get(3)));
         }
     }
 
