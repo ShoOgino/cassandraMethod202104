@@ -1,0 +1,30 @@
+    public void install(ClassLoader cl)
+    {
+        try
+        {
+            for (KlassDetails details : klasses)
+            {
+                byte[] newBytes = transformer.transform(cl, details.klassPath, details.klass, details.protectionDomain, details.bytes);
+                if (newBytes == null)
+                    throw new AssertionError("Unable to transform bytes for " + details.klassPath);
+
+                // inject the bytes into the classloader
+                METHOD.invoke(cl, null, newBytes, 0, newBytes.length,
+                              new ProtectionDomain(new CodeSource(BYTEMAN, new CodeSigner[0]), details.protectionDomain.getPermissions()));
+                if (DEBUG_TRANSFORMATIONS)
+                {
+                    File f = new File(StandardSystemProperty.JAVA_IO_TMPDIR.value(), "byteman/" + details.klassPath + ".class");
+                    f.getParentFile().mkdirs();
+                    File original = new File(f.getParentFile(), "original-" + f.getName());
+                    logger.info("Writing class file for {} to {}", details.klassPath, f.getAbsolutePath());
+                    Files.asByteSink(f).write(newBytes);
+                    Files.asByteSink(original).write(details.bytes);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

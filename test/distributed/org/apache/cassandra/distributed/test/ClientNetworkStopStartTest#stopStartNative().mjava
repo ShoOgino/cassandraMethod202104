@@ -1,0 +1,32 @@
+    /**
+     * @see <a href="https://issues.apache.org/jira/browse/CASSANDRA-16127">CASSANDRA-16127</a>
+     */
+    @Test
+    public void stopStartNative() throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(1).withConfig(c -> c.with(Feature.NATIVE_PROTOCOL)).start()))
+        {
+            IInvokableInstance node = cluster.get(1);
+            assertTransportStatus(node, "binary", true);
+            assertTransportStatus(node, "thrift", true);
+            node.nodetoolResult("disablebinary").asserts().success();
+            assertTransportStatus(node, "binary", false);
+            assertTransportStatus(node, "thrift", true);
+            node.nodetoolResult("enablebinary").asserts().success();
+            assertTransportStatus(node, "binary", true);
+            assertTransportStatus(node, "thrift", true);
+
+            // now use it to make sure it still works!
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, value int, PRIMARY KEY (pk))");
+
+            try (com.datastax.driver.core.Cluster client = com.datastax.driver.core.Cluster.builder().addContactPoints(node.broadcastAddress().getAddress()).build();
+                 Session session = client.connect())
+            {
+                session.execute("INSERT INTO " + KEYSPACE + ".tbl (pk, value) VALUES (?, ?)", 0, 0);
+            }
+
+            SimpleQueryResult qr = cluster.coordinator(1).executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+            AssertUtils.assertRows(qr, QueryResults.builder().row(0, 0).build());
+        }
+    }
+
