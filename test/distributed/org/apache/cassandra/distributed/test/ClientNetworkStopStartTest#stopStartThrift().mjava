@@ -1,0 +1,42 @@
+    /**
+     * @see <a href="https://issues.apache.org/jira/browse/CASSANDRA-16127">CASSANDRA-16127</a>
+     */
+    @Test
+    public void stopStartThrift() throws IOException, TException
+    {
+        try (Cluster cluster = init(Cluster.build(1).withConfig(c -> c.with(Feature.NATIVE_PROTOCOL)).start()))
+        {
+            IInvokableInstance node = cluster.get(1);
+            assertTransportStatus(node, "binary", true);
+            assertTransportStatus(node, "thrift", true);
+            node.nodetoolResult("disablethrift").asserts().success();
+            assertTransportStatus(node, "binary", true);
+            assertTransportStatus(node, "thrift", false);
+            node.nodetoolResult("enablethrift").asserts().success();
+            assertTransportStatus(node, "binary", true);
+            assertTransportStatus(node, "thrift", true);
+
+            // now use it to make sure it still works!
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, value int, PRIMARY KEY (pk))");
+
+            ThriftClientUtils.thriftClient(node, thrift -> {
+                thrift.set_keyspace(KEYSPACE);
+                Mutation mutation = new Mutation();
+                ColumnOrSuperColumn csoc = new ColumnOrSuperColumn();
+                Column column = new Column();
+                column.setName(CompositeType.build(ByteBufferUtil.bytes("value")));
+                column.setValue(ByteBufferUtil.bytes(0));
+                column.setTimestamp(System.currentTimeMillis());
+                csoc.setColumn(column);
+                mutation.setColumn_or_supercolumn(csoc);
+
+                thrift.batch_mutate(Collections.singletonMap(ByteBufferUtil.bytes(0),
+                                                             Collections.singletonMap("tbl", Arrays.asList(mutation))),
+                                    org.apache.cassandra.thrift.ConsistencyLevel.ALL);
+            });
+
+            SimpleQueryResult qr = cluster.coordinator(1).executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+            AssertUtils.assertRows(qr, QueryResults.builder().row(0, 0).build());
+        }
+    }
+
