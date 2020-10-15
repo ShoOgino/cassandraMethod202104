@@ -1,9 +1,9 @@
-    private void startBurnerThreads(TestEnvironment testEnv)
+    private void startBurnerThreads(BufferPool bufferPool, TestEnvironment testEnv)
     {
         // setup some high churn allocate/deallocate, without any checking
         final SPSCQueue<ByteBuffer> burn = new SPSCQueue<>();
         final CountDownLatch doneAdd = new CountDownLatch(1);
-        testEnv.addCheckedFuture(testEnv.executorService.submit(new TestUntil(testEnv.until)
+        testEnv.addCheckedFuture(testEnv.executorService.submit(new TestUntil(bufferPool, testEnv.until)
         {
             int count = 0;
             final ThreadLocalRandom rand = ThreadLocalRandom.current();
@@ -22,8 +22,9 @@
                     return;
                 }
 
-                ByteBuffer buffer = rand.nextInt(4) < 1 ? BufferPool.tryGet(BufferPool.NORMAL_CHUNK_SIZE)
-                                                        : BufferPool.tryGet(BufferPool.TINY_ALLOCATION_LIMIT);
+                ByteBuffer buffer = rand.nextInt(4) < 1
+                        ? bufferPool.tryGet(BufferPool.NORMAL_CHUNK_SIZE)
+                        : bufferPool.tryGet(BufferPool.TINY_ALLOCATION_LIMIT);
                 if (buffer == null)
                 {
                     Thread.yield();
@@ -33,7 +34,7 @@
                 // 50/50 chance of returning the buffer from the producer thread, or
                 // pass it on to the consumer.
                 if (rand.nextBoolean())
-                    BufferPool.put(buffer);
+                    bufferPool.put(buffer);
                 else
                     burn.add(buffer);
 
@@ -44,7 +45,7 @@
                 doneAdd.countDown();
             }
         }));
-        testEnv.threadResultFuture.add(testEnv.executorService.submit(new TestUntil(testEnv.until)
+        testEnv.threadResultFuture.add(testEnv.executorService.submit(new TestUntil(bufferPool, testEnv.until)
         {
             void testOne() throws Exception
             {
@@ -54,7 +55,7 @@
                     Thread.yield();
                     return;
                 }
-                BufferPool.put(buffer);
+                bufferPool.put(buffer);
             }
             void cleanup()
             {

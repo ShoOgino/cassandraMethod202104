@@ -1,0 +1,44 @@
+    @Test
+    public void testTinyPool()
+    {
+        int total = 0;
+        final int size = BufferPool.TINY_ALLOCATION_UNIT;
+        final int allocationPerChunk = 64;
+
+        // occupy 3 tiny chunks
+        List<ByteBuffer> buffers0 = new ArrayList<>();
+        BufferPool.Chunk chunk0 = allocate(allocationPerChunk, size, buffers0);
+        assertTrue(chunk0.owner().isTinyPool());
+        List<ByteBuffer> buffers1 = new ArrayList<>();
+        BufferPool.Chunk chunk1 = allocate(allocationPerChunk, size, buffers1);
+        assertTrue(chunk1.owner().isTinyPool());
+        List<ByteBuffer> buffers2 = new ArrayList<>();
+        BufferPool.Chunk chunk2 = allocate(allocationPerChunk, size, buffers2);
+        assertTrue(chunk2.owner().isTinyPool());
+        total += 3 * BufferPool.TINY_CHUNK_SIZE;
+        assertEquals(total, bufferPool.usedSizeInBytes());
+
+        // allocate another tiny chunk.. chunk2 should be evicted
+        List<ByteBuffer> buffers3 = new ArrayList<>();
+        BufferPool.Chunk chunk3 = allocate(allocationPerChunk, size, buffers3);
+        assertTrue(chunk3.owner().isTinyPool());
+        total += BufferPool.TINY_CHUNK_SIZE;
+        assertEquals(total, bufferPool.usedSizeInBytes());
+
+        // verify chunk2 is full and evicted
+        assertEquals(0, chunk2.free());
+        assertNull(chunk2.owner());
+
+        // release chunk2's buffer
+        for (int i = 0; i < buffers2.size(); i++)
+        {
+            bufferPool.put(buffers2.get(i));
+            total -= buffers2.get(i).capacity();
+            assertEquals(total, bufferPool.usedSizeInBytes());
+        }
+
+        // cleanup allocated buffers
+        for (ByteBuffer buffer : Iterables.concat(buffers0, buffers1, buffers3))
+            bufferPool.put(buffer);
+    }
+

@@ -1,21 +1,16 @@
-    public void testAllocate(int threadCount, long duration, int poolSize) throws InterruptedException, ExecutionException
+    public void testAllocate(BufferPool bufferPool, int threadCount, long duration) throws InterruptedException, ExecutionException
     {
-        System.out.println(String.format("%s - testing %d threads for %dm",
-                                         DATE_FORMAT.format(new Date()),
-                                         threadCount,
-                                         TimeUnit.NANOSECONDS.toMinutes(duration)));
-        long prevPoolSize = BufferPool.getMemoryUsageThreshold();
-        logger.info("Overriding configured BufferPool.MEMORY_USAGE_THRESHOLD={} and enabling BufferPool.DEBUG", poolSize);
-        BufferPool.setMemoryUsageThreshold(poolSize);
+        logger.info("{} - testing {} threads for {}m", DATE_FORMAT.format(new Date()), threadCount, TimeUnit.NANOSECONDS.toMinutes(duration));
+        logger.info("Testing BufferPool with memoryUsageThreshold={} and enabling BufferPool.DEBUG", bufferPool.memoryUsageThreshold());
         Debug debug = new Debug();
-        BufferPool.debug(debug);
+        bufferPool.debug(debug);
 
-        TestEnvironment testEnv = new TestEnvironment(threadCount, duration, poolSize);
+        TestEnvironment testEnv = new TestEnvironment(threadCount, duration, bufferPool.memoryUsageThreshold());
 
-        startBurnerThreads(testEnv);
+        startBurnerThreads(bufferPool, testEnv);
 
         for (int threadIdx = 0; threadIdx < threadCount; threadIdx++)
-            testEnv.addCheckedFuture(startWorkerThread(testEnv, threadIdx));
+            testEnv.addCheckedFuture(startWorkerThread(bufferPool, testEnv, threadIdx));
 
         while (!testEnv.latch.await(10L, TimeUnit.SECONDS))
         {
@@ -41,19 +36,17 @@
             while ( null != (check = queue.poll()) )
             {
                 check.validate();
-                BufferPool.put(check.buffer);
+                bufferPool.put(check.buffer);
             }
         }
 
         assertEquals(0, testEnv.executorService.shutdownNow().size());
 
-        logger.info("Reverting BufferPool.MEMORY_USAGE_THRESHOLD={}", prevPoolSize);
-        BufferPool.setMemoryUsageThreshold(prevPoolSize);
-        BufferPool.debug(null);
+        logger.info("Reverting BufferPool DEBUG config");
+        bufferPool.debug(BufferPool.Debug.NO_OP);
 
         testEnv.assertCheckedThreadsSucceeded();
 
-        System.out.println(String.format("%s - finished.",
-                                         DATE_FORMAT.format(new Date())));
+        logger.info("{} - finished.", DATE_FORMAT.format(new Date()));
     }
 
