@@ -1,0 +1,20 @@
+    /**
+     * Test point queries retrieving data that is contained in a tombstone range in one replica.
+     */
+    @Test
+    public void testPointQueriesWithRowsContainedInTombstoneRange()
+    {
+        tester().createTable("CREATE TABLE %s(k int, c int, PRIMARY KEY (k, c)) " +
+                             "WITH CLUSTERING ORDER BY (c %s) AND read_repair='%s'")
+                .mutate(1, "DELETE FROM %s USING TIMESTAMP 1 WHERE k=0 AND c>0 AND c<3")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 0)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 1)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 2)")
+                .assertRowsDistributed("SELECT * FROM %s WHERE k=0 AND c=1", 1, row(0, 1))
+                .assertRowsDistributed("SELECT * FROM %s WHERE k=0 AND c=2", 1, row(0, 2))
+                .assertRowsDistributed("SELECT * FROM %s WHERE k=0 AND c=3", 0)
+                .assertRowsInternal("SELECT * FROM %s", row(0, 1), row(0, 2))
+                .mutate(2, "DELETE FROM %s WHERE k=0 AND c>0 AND c<3")
+                .assertRowsInternal("SELECT * FROM %s");
+    }
+

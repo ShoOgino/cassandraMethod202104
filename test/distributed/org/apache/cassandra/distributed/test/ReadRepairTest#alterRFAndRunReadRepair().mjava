@@ -1,0 +1,46 @@
+    /**
+     * Test that there is no read repair with RF=1, and that altering it to RF>1 doesn't trigger any repair by
+     * itself but following queries will use read repair accordingly with the new RF.
+     */
+    @Test
+    public void alterRFAndRunReadRepair() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(2).start())
+        {
+            cluster.schemaChange(withKeyspace("CREATE KEYSPACE %s WITH replication = " +
+                                              "{'class': 'SimpleStrategy', 'replication_factor': 1}"));
+            cluster.schemaChange(withKeyspace("CREATE TABLE %s.t (k int PRIMARY KEY, a int, b int)" +
+                                              " WITH read_repair='blocking'"));
+
+            // insert a row that will only get to one node due to the RF=1
+            Object[] row = row(1, 1, 1);
+            cluster.get(1).executeInternal(withKeyspace("INSERT INTO %s.t (k, a, b) VALUES (?, ?, ?)"), row);
+
+            // flush to ensure reads come from sstables
+            cluster.get(1).flush(KEYSPACE);
+
+            // at RF=1 it shouldn't matter which node we query, as the data should always come from the only replica
+            String query = withKeyspace("SELECT * FROM %s.t WHERE k = 1");
+            for (int i = 1; i <= cluster.size(); i++)
+                assertRows(cluster.coordinator(i).execute(query, ALL), row);
+
+            // at RF=1 the prevoius queries shouldn't have triggered read repair
+            assertRows(cluster.get(1).executeInternal(query), row);
+            assertRows(cluster.get(2).executeInternal(query));
+
+            // alter RF
+            System.setProperty(Config.PROPERTY_PREFIX + "allow_alter_rf_during_range_movement", "true");
+            cluster.schemaChange(withKeyspace("ALTER KEYSPACE %s WITH replication = " +
+                                              "{'class': 'SimpleStrategy', 'replication_factor': 2}"));
+
+            // altering the RF shouldn't have triggered any read repair
+            assertRows(cluster.get(1).executeInternal(query), row);
+            assertRows(cluster.get(2).executeInternal(query));
+
+            // query again at CL=ALL, this time the data should be repaired
+            assertRows(cluster.coordinator(2).execute(query, ALL), row);
+            assertRows(cluster.get(1).executeInternal(query), row);
+            assertRows(cluster.get(2).executeInternal(query), row);
+        }
+    }
+

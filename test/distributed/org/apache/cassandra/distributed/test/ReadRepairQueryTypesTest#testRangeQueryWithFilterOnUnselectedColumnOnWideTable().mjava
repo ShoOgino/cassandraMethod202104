@@ -1,0 +1,31 @@
+    /**
+     * Test range queries using filtering on an unselected column on a table with clustering columns.
+     */
+    @Test
+    public void testRangeQueryWithFilterOnUnselectedColumnOnWideTable()
+    {
+        tester("WHERE b=2 ALLOW FILTERING")
+        .createTable("CREATE TABLE %s (k int, c int, a int, b int, PRIMARY KEY(k, c))")
+        .mutate("INSERT INTO %s (k, c, a, b) VALUES (1, 1, 1, 1)",
+                "INSERT INTO %s (k, c, a, b) VALUES (1, 2, 2, 2)",
+                "INSERT INTO %s (k, c, a, b) VALUES (2, 1, 1, 1)",
+                "INSERT INTO %s (k, c, a, b) VALUES (2, 2, 2, 2)")
+        .queryColumns("a", 2, 0,
+                      rows(row(2), row(2)),
+                      rows(row(1, 2, 2, 2), row(2, 2, 2, 2)),
+                      rows(row(1, 2, 2, 2), row(2, 2, 2, 2))) // the filtered column is repaired even if it isn't selected
+        .deleteColumn("DELETE a FROM %s WHERE k=1 AND c=2", "b", 0, 1,
+                      rows(row(2), row(2)),
+                      rows(row(1, 2, null, 2), row(2, 2, 2, 2)),
+                      rows(row(1, 2, 2, 2), row(2, 2, 2, 2)))
+        .deleteRows("DELETE FROM %s WHERE k=2 AND c=2", 1,
+                    rows(row(1, 2, null, 2)),
+                    rows(row(1, 2, null, 2), row(2, 2, 2, 2)))
+        .deleteRows("DELETE FROM %s WHERE k=1", 1,
+                    rows(),
+                    rows(row(1, 2, null, 2)))
+        .tearDown(1,
+                  rows(row(2, 1, 1, 1)),
+                  rows());
+    }
+

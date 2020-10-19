@@ -1,0 +1,38 @@
+    /**
+     * Test that queries repair rows that exist in both replicas but have been updated only in one replica.
+     * The update can be either in the upgraded or in the not-upgraded node.
+     */
+    @Test
+    public void mixedModeReadRepairUpdate() throws Throwable
+    {
+        // rows for columns (k, c, v)
+        Object[] row1 = row(0, 1, 10);
+        Object[] row2 = row(0, 2, 20);
+
+        allSingleNodeUpgrades()
+        .setup(cluster -> {
+            cluster.schemaChange(withKeyspace("CREATE TABLE %s.t (k int, c int, v int, PRIMARY KEY (k, c))"));
+
+            // insert the initial version of the rows in all the nodes
+            String insert = withKeyspace("INSERT INTO %s.t (k, c, v) VALUES (?, ?, ?)");
+            cluster.coordinator(1).execute(insert, ConsistencyLevel.ALL, row1);
+            cluster.coordinator(2).execute(insert, ConsistencyLevel.ALL, row2);
+        })
+        .runAfterClusterUpgrade(cluster -> {
+
+            // internally update one row per replica
+            String update = withKeyspace("UPDATE %s.t SET v=? WHERE k=? AND c=?");
+            cluster.get(1).executeInternal(update, 11, 0, 1);
+            cluster.get(2).executeInternal(update, 22, 0, 2);
+
+            // query to trigger read repair
+            String query = withKeyspace("SELECT * FROM %s.t");
+            assertRows(cluster.get(1).executeInternal(query), row(0, 1, 11), row2);
+            assertRows(cluster.get(2).executeInternal(query), row1, row(0, 2, 22));
+            assertRows(cluster.coordinator(2).execute(query, ConsistencyLevel.ALL), row(0, 1, 11), row(0, 2, 22));
+            assertRows(cluster.get(1).executeInternal(query), row(0, 1, 11), row(0, 2, 22));
+            assertRows(cluster.get(2).executeInternal(query), row(0, 1, 11), row(0, 2, 22));
+        })
+        .run();
+    }
+

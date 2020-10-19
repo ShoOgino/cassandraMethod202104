@@ -1,0 +1,33 @@
+    /**
+     * Test range queries on a table with clustering columns.
+     */
+    @Test
+    public void testRangeQueryOnWideTable()
+    {
+        tester("WHERE token(k) >= token(2)")
+        .createTable("CREATE TABLE %s (k int, c int, a int, b int, PRIMARY KEY(k, c))")
+        .mutate("INSERT INTO %s (k, c, a, b) VALUES (1, 10, 100, 1000)",
+                "INSERT INTO %s (k, c, a, b) VALUES (2, 20, 200, 2000)",
+                "INSERT INTO %s (k, c, a, b) VALUES (2, 21, 201, 2001)",
+                "INSERT INTO %s (k, c, a, b) VALUES (3, 30, 300, 3000)")
+        .queryColumns("a",
+                      paging ? 3 : 2,
+                      paging ? 3 : 2,
+                      rows(row(200), row(201), row(300)),
+                      rows(row(2, 20, 200, 2000), row(2, 21, 201, 2001), row(3, 30, 300, 3000)),
+                      rows(row(2, 20, 200, null), row(2, 21, 201, null), row(3, 30, 300, null)))
+        .deleteColumn("DELETE a FROM %s WHERE k=2 AND c=21", "b", 0, 1,
+                      rows(row(2000), row(2001), row(3000)),
+                      rows(row(2, 20, 200, 2000), row(2, 21, null, 2001), row(3, 30, 300, 3000)),
+                      rows(row(2, 20, 200, 2000), row(2, 21, 201, 2001), row(3, 30, 300, 3000)))
+        .deleteRows("DELETE FROM %s WHERE k=2 AND c=21", 1,
+                    rows(row(2, 20, 200, 2000), row(3, 30, 300, 3000)),
+                    rows(row(2, 20, 200, 2000), row(2, 21, null, 2001), row(3, 30, 300, 3000)))
+        .deleteRows("DELETE FROM %s WHERE k=2", 1,
+                    rows(row(3, 30, 300, 3000)),
+                    rows(row(2, 20, 200, 2000), row(3, 30, 300, 3000)))
+        .tearDown(1,
+                  rows(row(1, 10, 100, 1000), row(3, 30, 300, 3000)),
+                  rows(row(3, 30, 300, 3000)));
+    }
+

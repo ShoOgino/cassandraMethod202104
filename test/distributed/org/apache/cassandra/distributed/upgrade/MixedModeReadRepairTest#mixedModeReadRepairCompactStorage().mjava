@@ -1,24 +1,32 @@
+    /**
+     * Tests {@code COMPACT STORAGE} behaviour with mixed replica versions.
+     * <p>
+     * See CASSANDRA-15363 for further details.
+     */
     @Test
     public void mixedModeReadRepairCompactStorage() throws Throwable
     {
         new TestCase()
         .nodes(2)
         .upgrade(Versions.Major.v22, Versions.Major.v30)
-        .setup((cluster) -> cluster.schemaChange("CREATE TABLE " + DistributedTestBase.KEYSPACE + ".tbl (pk ascii, b boolean, v blob, PRIMARY KEY (pk)) WITH COMPACT STORAGE"))
+        .upgrade(Versions.Major.v22, Versions.Major.v3X)
+        .upgrade(Versions.Major.v30, Versions.Major.v3X)
+        .setup((cluster) -> cluster.schemaChange(withKeyspace("CREATE TABLE %s.tbl" +
+                                                              " (pk ascii, b boolean, v blob, PRIMARY KEY (pk))" +
+                                                              " WITH COMPACT STORAGE")))
         .runAfterNodeUpgrade((cluster, node) -> {
             if (node != 1)
                 return;
-            // now node1 is 3.0 and node2 is 2.2
+            // now node1 is 3.0/3.x and node2 is 2.2
             // make sure 2.2 side does not get the mutation
-            cluster.get(1).executeInternal("DELETE FROM " + DistributedTestBase.KEYSPACE + ".tbl WHERE pk = ?",
-                                                                          "something");
+            cluster.get(1).executeInternal(withKeyspace("DELETE FROM %s.tbl WHERE pk = ?"), "something");
             // trigger a read repair
-            cluster.coordinator(2).execute("SELECT * FROM " + DistributedTestBase.KEYSPACE + ".tbl WHERE pk = ?",
+            cluster.coordinator(2).execute(withKeyspace("SELECT * FROM %s.tbl WHERE pk = ?"),
                                            ConsistencyLevel.ALL,
                                            "something");
-            cluster.get(2).flush(DistributedTestBase.KEYSPACE);
+            cluster.get(2).flush(KEYSPACE);
         })
-        .runAfterClusterUpgrade((cluster) -> cluster.get(2).forceCompact(DistributedTestBase.KEYSPACE, "tbl"))
+        .runAfterClusterUpgrade((cluster) -> cluster.get(2).forceCompact(KEYSPACE, "tbl"))
         .run();
     }
 

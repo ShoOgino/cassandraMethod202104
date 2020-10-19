@@ -1,0 +1,69 @@
+    /**
+     * Verify that range queries with CL>ONE don't do unnecessary read-repairs when there are tombstones.
+     * <p>
+     * See CASSANDRA-8989 and CASSANDRA-9502.
+     * <p>
+     * Migrated from Python dtest read_repair_test.py:TestReadRepair.test_range_slice_query_with_tombstones()
+     */
+    private void testRangeSliceQueryWithTombstones(boolean flush) throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(2)))
+        {
+            cluster.schemaChange(withKeyspace("CREATE TABLE %s.t (k int, c int, v int, PRIMARY KEY(k, c))"));
+
+            ICoordinator coordinator = cluster.coordinator(1);
+
+            // insert some rows in all nodes
+            String insertQuery = withKeyspace("INSERT INTO %s.t (k, c, v) VALUES (?, ?, ?)");
+            for (int k = 0; k < 10; k++)
+            {
+                for (int c = 0; c < 10; c++)
+                    coordinator.execute(insertQuery, ALL, k, c, k * c);
+            }
+
+            // delete a subset of the inserted partitions, plus some others that don't exist
+            String deletePartitionQuery = withKeyspace("DELETE FROM %s.t WHERE k = ?");
+            for (int k = 5; k < 15; k++)
+            {
+                coordinator.execute(deletePartitionQuery, ALL, k);
+            }
+
+            // delete some of the rows of some of the partitions, including deleted and not deleted partitions
+            String deleteRowQuery = withKeyspace("DELETE FROM %s.t WHERE k = ? AND c = ?");
+            for (int k = 2; k < 7; k++)
+            {
+                for (int c = 0; c < 5; c++)
+                    coordinator.execute(deleteRowQuery, ALL, k, c);
+            }
+
+            // delete some of the rows of some not-existent partitions, including deleted and never-written partitions
+            for (int k = 12; k < 17; k++)
+            {
+                for (int c = 0; c < 5; c++)
+                    coordinator.execute(deleteRowQuery, ALL, k, c);
+            }
+
+            // flush all the nodes if specified
+            if (flush)
+            {
+                for (int n = 1; n <= cluster.size(); n++)
+                    cluster.get(n).flush(KEYSPACE);
+            }
+
+            // run a bunch of queries verifying that they don't trigger read repair
+            coordinator.execute(withKeyspace("SELECT * FROM %s.t LIMIT 100"), QUORUM);
+            for (int k = 0; k < 15; k++)
+            {
+                coordinator.execute(withKeyspace("SELECT * FROM %s.t WHERE k=?"), QUORUM, k);
+                for (int c = 0; c < 10; c++)
+                {
+                    coordinator.execute(withKeyspace("SELECT * FROM %s.t WHERE k=? AND c=?"), QUORUM, k, c);
+                    coordinator.execute(withKeyspace("SELECT * FROM %s.t WHERE k=? AND c>?"), QUORUM, k, c);
+                    coordinator.execute(withKeyspace("SELECT * FROM %s.t WHERE k=? AND c<?"), QUORUM, k, c);
+                }
+            }
+            long requests = ReadRepairTester.readRepairRequestsCount(cluster.get(1), "t");
+            assertEquals("No read repair requests were expected, found " + requests, 0, requests);
+        }
+    }
+

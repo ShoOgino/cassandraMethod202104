@@ -1,0 +1,26 @@
+    /**
+     * Test range queries asking for a not-empty range targeting rows overlapping with a tombstone range in one replica.
+     */
+    @Test
+    public void testRangeQueriesWithRowsOverlappingWithTombstoneRangeEnd()
+    {
+        tester().createTable("CREATE TABLE %s(k int, c int, PRIMARY KEY (k, c)) " +
+                             "WITH CLUSTERING ORDER BY (c %s) AND read_repair='%s'")
+                .mutate(1, "DELETE FROM %s USING TIMESTAMP 1 WHERE k=0 AND c>=1 AND c<=4")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 1)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 2)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 3)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 4)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 5)")
+                .mutate(1, "INSERT INTO %s (k, c) VALUES (0, 6)")
+                .assertRowsDistributed("SELECT c FROM %s WHERE k=0 AND c>=2 AND c<=5",
+                                       paging ? (flush && reverse ? 5 : 4) : 1,
+                                       row(2), row(3), row(4), row(5))
+                .assertRowsDistributed("SELECT c FROM %s WHERE k=0 AND c>=3 AND c<=6",
+                                       paging && flush && reverse ? 2 : 1,
+                                       row(3), row(4), row(5), row(6))
+                .assertRowsInternal("SELECT c FROM %s", row(2), row(3), row(4), row(5), row(6))
+                .mutate(2, "DELETE FROM %s WHERE k=0 AND c>=1 AND c<=6")
+                .assertRowsInternal("SELECT * FROM %s");
+    }
+
