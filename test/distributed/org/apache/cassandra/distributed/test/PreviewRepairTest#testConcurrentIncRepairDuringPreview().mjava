@@ -1,0 +1,60 @@
+    /**
+     * Tests that a IR is running, but not completed before validation compaction starts
+     */
+    @Test
+    public void testConcurrentIncRepairDuringPreview() throws IOException, InterruptedException, ExecutionException
+    {
+        try (Cluster cluster = init(Cluster.build(2).withConfig(config ->
+                                                                config.set("disable_incremental_repair", false)
+                                                                      .with(GOSSIP)
+                                                                      .with(NETWORK)).start()))
+        {
+            cluster.schemaChange("create table " + KEYSPACE + ".tbl (id int primary key, t int)");
+            insert(cluster.coordinator(1), 0, 100);
+            cluster.forEach((node) -> node.flush(KEYSPACE));
+            cluster.get(1).callOnInstance(repair(options(false, false)));
+
+            insert(cluster.coordinator(1), 100, 100);
+            cluster.forEach((node) -> node.flush(KEYSPACE));
+
+            SimpleCondition previewRepairStarted = new SimpleCondition();
+            SimpleCondition continuePreviewRepair = new SimpleCondition();
+            // this pauses the validation request sent from node1 to node2 until the inc repair below has run
+            cluster.filters()
+                   .outbound()
+                   .verbs(Verb.VALIDATION_REQ.id)
+                   .from(1).to(2)
+                   .messagesMatching(DelayFirstRepairTypeMessageFilter.validationRequest(previewRepairStarted, continuePreviewRepair))
+                   .drop();
+
+            SimpleCondition irRepairStarted = new SimpleCondition();
+            SimpleCondition continueIrRepair = new SimpleCondition();
+            // this blocks the IR from committing, so we can reenable the preview
+            cluster.filters()
+                   .outbound()
+                   .verbs(Verb.FINALIZE_PROPOSE_MSG.id)
+                   .from(1).to(2)
+                   .messagesMatching(DelayFirstRepairTypeMessageFilter.finalizePropose(irRepairStarted, continueIrRepair))
+                   .drop();
+
+            Future<RepairResult> previewResult = cluster.get(1).asyncCallsOnInstance(repair(options(true, false))).call();
+            previewRepairStarted.await();
+
+            // trigger IR and wait till its ready to commit
+            Future<RepairResult> irResult = cluster.get(1).asyncCallsOnInstance(repair(options(false, false))).call();
+            irRepairStarted.await();
+
+            // unblock preview repair and wait for it to complete
+            continuePreviewRepair.signalAll();
+
+            RepairResult rs = previewResult.get();
+            assertFalse(rs.success); // preview repair should have failed
+            assertFalse(rs.wasInconsistent); // and no mismatches should have been reported
+
+            continueIrRepair.signalAll();
+            RepairResult ir = irResult.get();
+            assertTrue(ir.success);
+            assertFalse(ir.wasInconsistent); // not preview, so we don't care about preview notification
+        }
+    }
+

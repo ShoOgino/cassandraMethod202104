@@ -22,20 +22,21 @@
 
             insert(cluster.coordinator(1), 0, 100);
             cluster.forEach((node) -> node.flush(KEYSPACE));
-            cluster.get(1).callOnInstance(repair(options(false)));
+            cluster.get(1).callOnInstance(repair(options(false, false)));
 
             insert(cluster.coordinator(1), 100, 100);
             cluster.forEach((node) -> node.flush(KEYSPACE));
-
+            
+            SimpleCondition previewRepairStarted = new SimpleCondition();
             SimpleCondition continuePreviewRepair = new SimpleCondition();
-            DelayMessageFilter filter = new DelayMessageFilter(continuePreviewRepair);
+            DelayFirstRepairTypeMessageFilter filter = DelayFirstRepairTypeMessageFilter.validationRequest(previewRepairStarted, continuePreviewRepair);
             // this pauses the validation request sent from node1 to node2 until we have run a full inc repair below
             cluster.filters().outbound().verbs(Verb.VALIDATION_REQ.id).from(1).to(2).messagesMatching(filter).drop();
 
-            Future<RepairResult> rsFuture = es.submit(() -> cluster.get(1).callOnInstance(repair(options(true))));
-            Thread.sleep(1000);
+            Future<RepairResult> rsFuture = es.submit(() -> cluster.get(1).callOnInstance(repair(options(true, false))));
+            previewRepairStarted.await();
             // this needs to finish before the preview repair is unpaused on node2
-            cluster.get(1).callOnInstance(repair(options(false)));
+            cluster.get(1).callOnInstance(repair(options(false, false)));
             continuePreviewRepair.signalAll();
             RepairResult rs = rsFuture.get();
             assertFalse(rs.success); // preview repair should have failed
