@@ -85,9 +85,17 @@
             ++n;
         }
 
-        // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
-        if (clusteringColumns.isEmpty() && !staticColumns.isEmpty())
-            throw ire("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+        // For COMPACT STORAGE, we reject any "feature" that we wouldn't be able to translate back to thrift.
+        if (useCompactStorage)
+        {
+            validateCompactTable(clusteringTypes, columns);
+        }
+        else
+        {
+            // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
+            if (clusteringColumns.isEmpty() && !staticColumns.isEmpty())
+                throw ire("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+        }
 
         /*
          * Counter table validation
@@ -123,14 +131,19 @@
         for (int i = 0; i < clusteringColumns.size(); i++)
             builder.addClusteringColumn(clusteringColumns.get(i), clusteringTypes.get(i));
 
-        columns.forEach((column, type) ->
+        if (useCompactStorage)
         {
-            if (staticColumns.contains(column))
-                builder.addStaticColumn(column, type.getType());
-            else
-                builder.addRegularColumn(column, type.getType());
-        });
-
+            fixupCompactTable(clusteringTypes, columns, hasCounters, builder);
+        }
+        else
+        {
+            columns.forEach((column, type) -> {
+                if (staticColumns.contains(column))
+                    builder.addStaticColumn(column, type.getType());
+                else
+                    builder.addRegularColumn(column, type.getType());
+            });
+        }
         return builder;
     }
 

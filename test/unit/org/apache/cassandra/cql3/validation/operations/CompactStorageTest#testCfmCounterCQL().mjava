@@ -1,0 +1,36 @@
+    @Test
+    public void testCfmCounterCQL()
+    {
+        String keyspace = "cql_test_keyspace_counter";
+        String table = "test_table_counter";
+
+        TableMetadata.Builder metadata;
+        metadata = TableMetadata.builder(keyspace, table)
+                                .flags(EnumSet.of(TableMetadata.Flag.DENSE,
+                                       TableMetadata.Flag.COUNTER))
+                                .isCounter(true)
+                                .addPartitionKeyColumn("pk1", IntegerType.instance)
+                                .addPartitionKeyColumn("pk2", AsciiType.instance)
+                                .addClusteringColumn("ck1", ReversedType.getInstance(IntegerType.instance))
+                                .addClusteringColumn("ck2", IntegerType.instance)
+                                .addRegularColumn("cnt", CounterColumnType.instance);
+
+        SchemaLoader.createKeyspace(keyspace, KeyspaceParams.simple(1), metadata);
+
+        ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
+
+        String actual = SchemaCQLHelper.getTableMetadataAsCQL(cfs.metadata(), true, true, true);
+        String expected = "CREATE TABLE IF NOT EXISTS cql_test_keyspace_counter.test_table_counter (\n" +
+                          "    pk1 varint,\n" +
+                          "    pk2 ascii,\n" +
+                          "    ck1 varint,\n" +
+                          "    ck2 varint,\n" +
+                          "    cnt counter,\n" +
+                          "    PRIMARY KEY ((pk1, pk2), ck1, ck2)\n" +
+                          ") WITH COMPACT STORAGE\n" +
+                          "    AND ID = " + cfs.metadata.id + "\n" +
+                          "    AND CLUSTERING ORDER BY (ck1 DESC, ck2 ASC)";
+        assertTrue(String.format("Expected\n%s\nto contain\n%s", actual, expected),
+                   actual.contains(expected));
+    }
+

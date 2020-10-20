@@ -1,0 +1,23 @@
+    @Test
+    public void compactStoragePagingTest() throws Throwable
+    {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(2)
+        .upgrade(Versions.Major.v30, Versions.Major.v4)
+        .setup((cluster) -> {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH COMPACT STORAGE");
+            for (int i = 1; i < 10; i++)
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (?, ?, ?)", ConsistencyLevel.ALL, 1, i, i);
+        })
+        .runAfterNodeUpgrade((cluster, i) -> {
+            for (int coord = 1; coord <= 2; coord++)
+            {
+                Iterator<Object[]> iter = cluster.coordinator(coord).executeWithPaging("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = 1", ConsistencyLevel.ALL, 2);
+                for (int j = 1; j < 10; j++)
+                    Assert.assertArrayEquals(new Object[] { 1, j, j }, iter.next());
+                Assert.assertFalse(iter.hasNext());
+            }
+        }).run();
+    }
+

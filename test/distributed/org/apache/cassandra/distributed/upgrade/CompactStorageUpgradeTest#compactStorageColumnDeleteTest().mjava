@@ -1,0 +1,31 @@
+    @Test
+    public void compactStorageColumnDeleteTest() throws Throwable
+    {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(2)
+        .upgrade(Versions.Major.v30, Versions.Major.v4)
+        .setup((cluster) -> {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH COMPACT STORAGE");
+        })
+        .runAfterNodeUpgrade((cluster, i) -> {
+            for (int coord = 1; coord <= 2; coord++)
+            {
+                int v1 = coord * 10;
+                int v2 = coord * 10;
+
+                cluster.coordinator(coord).execute("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (?, ?, ?)", ConsistencyLevel.ALL, v1, v1, v1);
+                cluster.coordinator(coord).execute("DELETE v FROM " + KEYSPACE + ".tbl WHERE pk = ? AND ck = ?", ConsistencyLevel.ALL, v1, v1);
+                assertRows(cluster.coordinator(coord).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = ?",
+                                                          ConsistencyLevel.ALL,
+                                                          v1));
+
+                cluster.coordinator(coord).execute("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (?, ?, ?)", ConsistencyLevel.ALL, v2, v2, v2);
+                assertRows(cluster.coordinator(coord).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = ?",
+                                                              ConsistencyLevel.ALL,
+                                                              v2),
+                           row(v2, v2, v2));
+            }
+        }).run();
+    }
+

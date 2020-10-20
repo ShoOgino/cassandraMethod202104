@@ -1,0 +1,43 @@
+    private void fixupCompactTable(List<AbstractType<?>> clusteringTypes,
+                                   Map<ColumnIdentifier, CQL3Type> columns,
+                                   boolean hasCounters,
+                                   TableMetadata.Builder builder)
+    {
+        Set<TableMetadata.Flag> flags = EnumSet.noneOf(TableMetadata.Flag.class);
+        boolean isDense = !clusteringTypes.isEmpty();
+        boolean isCompound = clusteringTypes.size() > 1;
+
+        if (isDense)
+            flags.add(TableMetadata.Flag.DENSE);
+        if (isCompound)
+            flags.add(TableMetadata.Flag.COMPOUND);
+        if (hasCounters)
+            flags.add(TableMetadata.Flag.COUNTER);
+
+        boolean isStaticCompact = !isDense && !isCompound;
+
+        builder.flags(flags);
+
+        columns.forEach((name, type) -> {
+            // Note that for "static" no-clustering compact storage we use static for the defined columns
+            if (staticColumns.contains(name) || isStaticCompact)
+                builder.addStaticColumn(name, type.getType());
+            else
+                builder.addRegularColumn(name, type.getType());
+        });
+
+        DefaultNames names = new DefaultNames(builder.columnNames());
+        // Compact tables always have a clustering and a single regular value.
+        if (isStaticCompact)
+        {
+            builder.addClusteringColumn(names.defaultClusteringName(), UTF8Type.instance);
+            builder.addRegularColumn(names.defaultCompactValueName(), hasCounters ? CounterColumnType.instance : BytesType.instance);
+        }
+        else if (!builder.hasRegularColumns())
+        {
+            // Even for dense, we might not have our regular column if it wasn't part of the declaration. If
+            // that's the case, add it but with a specific EmptyType so we can recognize that case later
+            builder.addRegularColumn(names.defaultCompactValueName(), EmptyType.instance);
+        }
+    }
+
