@@ -1,0 +1,26 @@
+    @Test
+    public void nonSharedConfigClassTest() throws IOException
+    {
+        Map<String,Object> commitLogCompression = ImmutableMap.of("class_name", "org.apache.cassandra.io.compress.LZ4Compressor",
+                                                                  "parameters", Collections.<String,Object>emptyMap());
+        Map<String,Object> encryptionOptions = ImmutableMap.of("cipher_suites", Collections.singletonList("FakeCipher"),
+                                                               "optional", false,
+                                                               "enabled", false);
+
+        try (Cluster cluster = Cluster.build(1)
+                                      .withConfig(c -> {
+                                          c.set("concurrent_reads", 321);
+                                          c.set("internode_compression", Config.InternodeCompression.dc);
+                                          c.set("client_encryption_options", encryptionOptions);
+                                          c.set("commitlog_compression", commitLogCompression);
+                                      }).start())
+        {
+            cluster.get(1).runOnInstance(() -> {
+                assertEquals(321, DatabaseDescriptor.getConcurrentReaders());
+                assertEquals(Config.InternodeCompression.dc, DatabaseDescriptor.internodeCompression());
+                assertEquals("org.apache.cassandra.io.compress.LZ4Compressor", DatabaseDescriptor.getCommitLogCompression().class_name);
+                assertTrue(DatabaseDescriptor.getCommitLogCompression().parameters.isEmpty());
+            });
+        }
+    }
+
