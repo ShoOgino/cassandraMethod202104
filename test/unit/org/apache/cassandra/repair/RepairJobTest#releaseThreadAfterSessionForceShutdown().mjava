@@ -1,0 +1,39 @@
+    /**
+     * CASSANDRA-15902: Verify that repair job will be released after force shutdown on the session
+     */
+    @Test
+    public void releaseThreadAfterSessionForceShutdown() throws Throwable
+    {
+        Map<InetAddress, MerkleTrees> mockTrees = new HashMap<>();
+        mockTrees.put(FBUtilities.getBroadcastAddress(), createInitialTree(false));
+        mockTrees.put(addr2, createInitialTree(false));
+        mockTrees.put(addr3, createInitialTree(false));
+
+        List<MessageOut> observedMessages = new ArrayList<>();
+        interceptRepairMessages(mockTrees, observedMessages);
+
+        session.simulateValidationsOutstanding();
+
+        Thread jobThread = new Thread(() -> job.run());
+        jobThread.start();
+
+        session.waitUntilReceivedFirstValidationComplete();
+
+        session.forceShutdown(new Exception("force shutdown for testing"));
+
+        jobThread.join(TimeUnit.SECONDS.toMillis(TEST_TIMEOUT_S));
+        assertFalse("expect that the job thread has been finished and not waiting on the outstanding validations forever", jobThread.isAlive());
+
+        // RepairJob should send out 3 x SNAPSHOTS -> 1 x VALIDATION -> done
+        // Only one VALIDATION because we shutdown the session after first validation
+        List<RepairMessage.Type> expectedTypes = new ArrayList<>();
+        for (int i = 0; i < 3; i++)
+            expectedTypes.add(RepairMessage.Type.SNAPSHOT);
+
+        expectedTypes.add(RepairMessage.Type.VALIDATION_REQUEST);
+
+        assertEquals(expectedTypes, observedMessages.stream()
+                                                    .map(k -> ((RepairMessage) k.payload).messageType)
+                                                    .collect(Collectors.toList()));
+    }
+
