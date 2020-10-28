@@ -1,0 +1,42 @@
+    @Test
+    public void testTPStats() throws Throwable
+    {
+        ToolResult tool = ToolRunner.invokeNodetool("tpstats");
+        Assertions.assertThat(tool.getStdout()).containsIgnoringCase("Pool Name                    Active Pending Completed Blocked All time blocked");
+        Assertions.assertThat(tool.getStdout()).containsIgnoringCase("Latencies waiting in queue (micros) per dropped message types");
+        assertTrue(tool.getCleanedStderr().isEmpty());
+        assertEquals(0, tool.getExitCode());
+
+        // Does inserting data alter tpstats?
+        String nonZeroedThreadsRegExp = "((?m)\\D.*[1-9].*)";
+        ArrayList<String> origStats = getAllGroupMatches(nonZeroedThreadsRegExp, tool.getStdout());
+        Collections.sort(origStats);
+
+        createTable("CREATE TABLE %s (pk int, c int, PRIMARY KEY(pk))");
+        execute("INSERT INTO %s (pk, c) VALUES (?, ?)", 1, 1);
+        tool = ToolRunner.invokeNodetool("tpstats");
+        assertTrue(tool.getCleanedStderr().isEmpty());
+        assertEquals(0, tool.getExitCode());
+        ArrayList<String> newStats = getAllGroupMatches(nonZeroedThreadsRegExp, tool.getStdout());
+        Collections.sort(newStats);
+
+        assertNotEquals(origStats, newStats);
+
+        // Does sending a message alter Gossip & ECHO stats?
+        String origGossip = getAllGroupMatches("((?m)GossipStage.*)", tool.getStdout()).get(0);
+        Assertions.assertThat(tool.getStdout()).doesNotContainPattern("ECHO_REQ\\D.*[1-9].*");
+        Assertions.assertThat(tool.getStdout()).doesNotContainPattern("ECHO_RSP\\D.*[1-9].*");
+
+        Message<NoPayload> echoMessageOut = Message.out(ECHO_REQ, NoPayload.noPayload);
+        MessagingService.instance().send(echoMessageOut, FBUtilities.getBroadcastAddressAndPort());
+
+        tool = ToolRunner.invokeNodetool("tpstats");
+        assertTrue(tool.getCleanedStderr().isEmpty());
+        assertEquals(0, tool.getExitCode());
+        String newGossip = getAllGroupMatches("((?m)GossipStage.*)", tool.getStdout()).get(0);
+
+        assertNotEquals(origGossip, newGossip);
+        Assertions.assertThat(tool.getStdout()).containsPattern("ECHO_REQ\\D.*[1-9].*");
+        Assertions.assertThat(tool.getStdout()).containsPattern("ECHO_RSP\\D.*[1-9].*");
+    }
+
