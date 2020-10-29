@@ -1,0 +1,31 @@
+    @Test
+    public void testSerializeSizeMatchesEdgeCases() // See CASSANDRA-16103
+    {
+        int v40 = MessagingService.Version.VERSION_40.value;
+        Consumer<Long> subTest = timeGapInMillis ->
+        {
+            long createdAt = 0;
+            long expiresAt = createdAt + TimeUnit.MILLISECONDS.toNanos(timeGapInMillis);
+            Message<NoPayload> message = Message.builder(Verb.READ_REPAIR_RSP, NoPayload.noPayload)
+                                                .from(FBUtilities.getBroadcastAddressAndPort())
+                                                .withCreatedAt(createdAt)
+                                                .withExpiresAt(expiresAt)
+                                                .build();
+
+            try (DataOutputBuffer out = new DataOutputBuffer(20))
+            {
+                Message.serializer.serialize(message, out, v40);
+                Assert.assertEquals(message.serializedSize(v40), out.getLength());
+            }
+            catch (IOException ioe)
+            {
+                Assert.fail("Unexpected IOEception during test. " + ioe.getMessage());
+            }
+        };
+
+        // test cases
+        subTest.accept(-1L);
+        subTest.accept(1L << 7 - 1);
+        subTest.accept(1L << 14 - 1);
+    }
+
