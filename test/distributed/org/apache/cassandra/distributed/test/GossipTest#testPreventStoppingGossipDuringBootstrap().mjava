@@ -1,0 +1,52 @@
+    @Test
+    public void testPreventStoppingGossipDuringBootstrap() throws Exception
+    {
+        ExecutorService es = Executors.newFixedThreadPool(1);
+        try (Cluster cluster = builder().withNodes(2)
+                                        .withConfig(config -> config.with(GOSSIP)
+                                                                    .with(NETWORK)
+                                                                    .set("auto_bootstrap", true))
+                                        .withInstanceInitializer(BBBootstrapInterceptor::install)
+                                        .createWithoutStarting();
+             Closeable ignored = es::shutdown)
+        {
+            Runnable test = () ->
+            {
+                try
+                {
+                    cluster.get(2).runOnInstance(() -> {
+                        Uninterruptibles.awaitUninterruptibly(BBBootstrapInterceptor.bootstrapStart);
+                        BBBootstrapInterceptor.bootstrapReady.countDown();
+                        try
+                        {
+                            StorageService.instance.stopGossiping();
+
+                            Assert.fail("stopGossiping did not fail!");
+                        }
+                        catch (Exception ex)
+                        {
+                            Assert.assertSame(ex.getClass(), IllegalStateException.class);
+                            Assert.assertEquals(ex.getMessage(), "Unable to stop gossip because the node is not in the normal state. Try to stop the node instead.");
+                        }
+                    });
+                }
+                finally
+                {
+                    // shut down the node2 to speed up cluster startup.
+                    cluster.get(2).shutdown();
+                }
+            };
+            Future<?> testResult = es.submit(test);
+            try
+            {
+                cluster.startup();
+            }
+            catch (Exception ex) {
+                // ignore exceptions from startup process. More interested in the test result.
+            }
+            testResult.get();
+        }
+
+        es.awaitTermination(5, TimeUnit.SECONDS);
+    }
+
