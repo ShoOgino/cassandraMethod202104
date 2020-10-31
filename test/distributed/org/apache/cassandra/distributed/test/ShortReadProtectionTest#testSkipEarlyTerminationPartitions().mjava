@@ -1,0 +1,25 @@
+    /**
+     * A regression test to prove that we can no longer rely on {@code !singleResultCounter.isDone()} to abort ranged
+     * partition SRP early if a per partition limit is set.
+     * <p>
+     * See CASSANDRA-13911.
+     * <p>
+     * Replaces Python dtest {@code consistency_test.py:TestConsistency.test_13911_partitions_srp()}.
+     */
+    @Test
+    public void testSkipEarlyTerminationPartitions()
+    {
+        tester.createTable("CREATE TABLE %s (pk int, ck int, PRIMARY KEY (pk, ck))")
+              .toNode1("INSERT INTO %s (pk, ck) VALUES (0, 0) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (0, 1) USING TIMESTAMP 0",
+                       "DELETE FROM %s USING TIMESTAMP 42 WHERE pk = 2 AND ck IN  (0, 1)")
+              .toNode2("INSERT INTO %s (pk, ck) VALUES (0, 2) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (0, 3) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (2, 0) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (2, 1) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (4, 0) USING TIMESTAMP 0",
+                       "INSERT INTO %s (pk, ck) VALUES (4, 1) USING TIMESTAMP 0")
+              .assertRows("SELECT pk, ck FROM %s PER PARTITION LIMIT 2 LIMIT 4",
+                          row(0, 0), row(0, 1), row(4, 0), row(4, 1));
+    }
+

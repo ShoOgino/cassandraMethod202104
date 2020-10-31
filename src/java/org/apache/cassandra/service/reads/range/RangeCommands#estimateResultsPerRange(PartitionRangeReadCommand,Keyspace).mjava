@@ -1,0 +1,20 @@
+    /**
+     * Estimate the number of result rows per range in the ring based on our local data.
+     * <p>
+     * This assumes that ranges are uniformly distributed across the cluster and
+     * that the queried data is also uniformly distributed.
+     */
+    @VisibleForTesting
+    static float estimateResultsPerRange(PartitionRangeReadCommand command, Keyspace keyspace)
+    {
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.metadata().id);
+        Index index = command.getIndex(cfs);
+        float maxExpectedResults = index == null
+                                   ? command.limits().estimateTotalResults(cfs)
+                                   : index.getEstimatedResultRows();
+
+        // adjust maxExpectedResults by the number of tokens this node has and the replication factor for this ks
+        return (maxExpectedResults / DatabaseDescriptor.getNumTokens())
+               / keyspace.getReplicationStrategy().getReplicationFactor().allReplicas;
+    }
+

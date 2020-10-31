@@ -1,0 +1,42 @@
+    @Test
+    public void tesConcurrencyFactor()
+    {
+        new TokenUpdater().withTokens("127.0.0.1", 1, 2)
+                          .withTokens("127.0.0.2", 3, 4)
+                          .update();
+
+        String table = createTable("CREATE TABLE %s (k int PRIMARY KEY, v int)");
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(table);
+
+        // verify that a low concurrency factor is not capped by the max concurrency factor
+        PartitionRangeReadCommand command = command(cfs, 50, 50);
+        try (RangeCommandIterator partitions = RangeCommands.rangeCommandIterator(command, ONE, System.nanoTime());
+             ReplicaPlanIterator ranges = new ReplicaPlanIterator(command.dataRange().keyRange(), keyspace, ONE))
+        {
+            assertEquals(2, partitions.concurrencyFactor());
+            assertEquals(MAX_CONCURRENCY_FACTOR, partitions.maxConcurrencyFactor());
+            assertEquals(5, ranges.size());
+        }
+
+        // verify that a high concurrency factor is capped by the max concurrency factor
+        command = command(cfs, 1000, 50);
+        try (RangeCommandIterator partitions = RangeCommands.rangeCommandIterator(command, ONE, System.nanoTime());
+             ReplicaPlanIterator ranges = new ReplicaPlanIterator(command.dataRange().keyRange(), keyspace, ONE))
+        {
+            assertEquals(MAX_CONCURRENCY_FACTOR, partitions.concurrencyFactor());
+            assertEquals(MAX_CONCURRENCY_FACTOR, partitions.maxConcurrencyFactor());
+            assertEquals(5, ranges.size());
+        }
+
+        // with 0 estimated results per range the concurrency factor should be 1
+        command = command(cfs, 1000, 0);
+        try (RangeCommandIterator partitions = RangeCommands.rangeCommandIterator(command, ONE, System.nanoTime());
+             ReplicaPlanIterator ranges = new ReplicaPlanIterator(command.dataRange().keyRange(), keyspace, ONE))
+        {
+            assertEquals(1, partitions.concurrencyFactor());
+            assertEquals(MAX_CONCURRENCY_FACTOR, partitions.maxConcurrencyFactor());
+            assertEquals(5, ranges.size());
+        }
+    }
+

@@ -1,0 +1,26 @@
+    /**
+     * Writes {@code numPartitions} with {@code rowsPerPartition} each, with overrides in different sstables and memtables.
+     */
+    private void writeRows(int numPartitions, int rowsPerPartition)
+    {
+        String update = withTable("UPDATE %s SET v=? WHERE k=? AND c=?");
+        ICoordinator coordinator = cluster.coordinator(1);
+
+        // insert all the partition rows in a single sstable
+        for (int c = 0; c < rowsPerPartition; c++)
+            for (int k = 0; k < numPartitions; k++)
+                coordinator.execute(update, QUORUM, c, k, c);
+        cluster.forEach(i -> i.flush(KEYSPACE));
+
+        // override some rows in a second sstable
+        for (int c = 0; c < rowsPerPartition; c += SECOND_SSTABLE_INTERVAL)
+            for (int k = 0; k < numPartitions; k++)
+                coordinator.execute(update, QUORUM, c + rowsPerPartition, k, c);
+        cluster.forEach(i -> i.flush(KEYSPACE));
+
+        // override some rows only in memtable
+        for (int c = 0; c < rowsPerPartition; c += MEMTABLE_INTERVAL)
+            for (int k = 0; k < numPartitions; k++)
+                coordinator.execute(update, QUORUM, c + rowsPerPartition * 2, k, c);
+    }
+

@@ -1,0 +1,31 @@
+        public void test(ICoordinator coordinator, int numNodesDown, boolean upgradedCoordinator)
+        {
+            UUID key = UUID.randomUUID();
+            Object[] row1 = row(key, 1, 10);
+            Object[] row2 = row(key, 2, 20);
+
+            try
+            {
+                // test write
+                maybeFail(WriteTimeoutException.class, numNodesDown > maxNodesDown(writeConsistencyLevel), () -> {
+                    coordinator.execute(INSERT, writeConsistencyLevel, row1);
+                    coordinator.execute(INSERT, writeConsistencyLevel, row2);
+                });
+
+                // test read
+                maybeFail(ReadTimeoutException.class, numNodesDown > maxNodesDown(readConsistencyLevel), () -> {
+                    Object[][] rows = coordinator.execute(SELECT, readConsistencyLevel, key);
+                    if (numNodesDown <= maxNodesDown(writeConsistencyLevel))
+                        assertRows(rows, row1, row2);
+                });
+            }
+            catch (Throwable t)
+            {
+                throw new AssertionError(format("Unexpected error in case %s-%s with %s coordinator and %d nodes down",
+                                                writeConsistencyLevel,
+                                                readConsistencyLevel,
+                                                upgradedCoordinator ? "upgraded" : "not upgraded",
+                                                numNodesDown), t);
+            }
+        }
+
