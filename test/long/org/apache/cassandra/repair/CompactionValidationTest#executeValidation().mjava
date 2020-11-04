@@ -1,0 +1,31 @@
+    private long executeValidation() throws Exception
+    {
+        final UUID repairSessionId = UUIDGen.getTimeUUID();
+
+        final List<Range<Token>> ranges = Stream.of(cfs.getLiveSSTables().iterator().next())
+                                                .map(sstable -> new Range<>(sstable.first.getToken(), sstable.last.getToken()))
+                                                .collect(toList());
+
+        final RepairJobDesc repairJobDesc = new RepairJobDesc(repairSessionId,
+                                                              UUIDGen.getTimeUUID(),
+                                                              cfs.keyspace.getName(),
+                                                              cfs.getTableName(),
+                                                              ranges);
+
+        ActiveRepairService.instance.registerParentRepairSession(repairSessionId,
+                                                                 FBUtilities.getBroadcastAddress(),
+                                                                 Collections.singletonList(cfs),
+                                                                 repairJobDesc.ranges,
+                                                                 false,
+                                                                 ActiveRepairService.UNREPAIRED_SSTABLE,
+                                                                 false);
+
+        final Validator validator = new Validator(repairJobDesc, FBUtilities.getBroadcastAddress(), 0, true);
+
+        final long start = System.currentTimeMillis();
+
+        CompactionManager.instance.submitValidation(cfs, validator).get();
+
+        return System.currentTimeMillis() - start;
+    }
+
