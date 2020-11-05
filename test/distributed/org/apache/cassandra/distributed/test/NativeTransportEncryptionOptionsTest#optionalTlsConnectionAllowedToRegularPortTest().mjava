@@ -1,0 +1,33 @@
+    @Test
+    public void optionalTlsConnectionAllowedToRegularPortTest() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(1).withConfig(c -> {
+            c.with(Feature.NATIVE_PROTOCOL);
+            c.set("native_transport_port_ssl", 9043);
+            c.set("client_encryption_options",
+                  ImmutableMap.builder().putAll(validKeystore)
+                              .put("enabled", false)
+                              .put("optional", true)
+                              .build());
+        }).createWithoutStarting())
+        {
+            InetAddress address = cluster.get(1).config().broadcastAddress().getAddress();
+            int unencrypted_port = (int) cluster.get(1).config().get("native_transport_port");
+            int ssl_port = (int) cluster.get(1).config().get("native_transport_port_ssl");
+
+            // Create the connections and prove they cannot connect before server start
+            TlsConnection connectionToUnencryptedPort = new TlsConnection(address.getHostAddress(), unencrypted_port);
+            connectionToUnencryptedPort.assertCannotConnect();
+
+            TlsConnection connectionToEncryptedPort = new TlsConnection(address.getHostAddress(), ssl_port);
+            connectionToEncryptedPort.assertCannotConnect();
+
+            cluster.startup();
+
+            Assert.assertEquals("TLS native connection should be possible to native_transport_port_ssl",
+                                ConnectResult.NEGOTIATED, connectionToEncryptedPort.connect());
+            Assert.assertEquals("TLS native connection should not be possible on the regular port if an SSL port is specified",
+                                ConnectResult.FAILED_TO_NEGOTIATE, connectionToUnencryptedPort.connect()); // but did connect
+        }
+    }
+

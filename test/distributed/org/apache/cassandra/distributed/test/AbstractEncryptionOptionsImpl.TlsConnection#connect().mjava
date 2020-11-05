@@ -1,0 +1,118 @@
+        ConnectResult connect() throws Throwable
+        {
+            AtomicInteger connectAttempts = new AtomicInteger(0);
+            result.set(ConnectResult.UNINITIALIZED);
+            setLastThrowable(null);
+
+            SslContext sslContext = SSLFactory.getOrCreateSslContext(encryptionOptions, true,
+                                                                     SSLFactory.SocketType.CLIENT);
+
+            EventLoopGroup workerGroup = new NioEventLoopGroup();
+            Bootstrap b = new Bootstrap();
+            SimpleCondition attemptCompleted = new SimpleCondition();
+
+            // Listener on the SSL handshake makes sure that the test completes immediately as
+            // the server waits to receive a message over the TLS connection, so the discardHandler.decode
+            // will likely never be called. The lambda has to handle it's own exceptions as it's a listener,
+            // not in the request pipeline to pass them on to discardHandler.
+            FutureListener<Channel> handshakeResult = channelFuture -> {
+                try
+                {
+                    logger.debug("handshakeFuture() listener called");
+                    channelFuture.get();
+                    successProgress();
+                }
+                catch (Throwable cause)
+                {
+                    logger.info("handshakeFuture() threw", cause);
+                    failure();
+                    setLastThrowable(cause);
+                }
+                attemptCompleted.signalAll();
+            };
+
+            ChannelHandler connectHandler = new ByteToMessageDecoder()
+            {
+                @Override
+                public void channelActive(ChannelHandlerContext ctx) throws Exception
+                {
+                    logger.debug("connectHandler.channelActive");
+                    int count = connectAttempts.incrementAndGet();
+                    if (count > 1)
+                    {
+                        logger.info("connectHandler.channelActive called more than once - {}", count);
+                    }
+                    successProgress();
+
+                    // Add the handler after the connection is established to make sure the connection
+                    // progress is recorded
+                    final SslHandler sslHandler = ctx.pipeline().get(SslHandler.class);
+                    sslHandler.handshakeFuture().addListener(handshakeResult);
+
+                    super.channelActive(ctx);
+                }
+
+                @Override
+                public void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out)
+                {
+                    logger.debug("connectHandler.decode - readable bytes {}", in.readableBytes());
+
+                    ctx.pipeline().remove(this);
+                }
+
+                @Override
+                public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause)
+                {
+                    logger.debug("connectHandler.exceptionCaught", cause);
+                    setLastThrowable(cause);
+                    failure();
+                    attemptCompleted.signalAll();
+                }
+            };
+            ChannelHandler discardHandler = new ByteToMessageDecoder()
+            {
+                @Override
+                public void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out)
+                {
+                    logger.info("discardHandler.decode - {} readable bytes made it past SSL negotiation, discarding.",
+                                in.readableBytes());
+                    in.readBytes(in.readableBytes());
+                    attemptCompleted.signalAll();
+                }
+
+                @Override
+                public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause)
+                {
+                    logger.debug("discardHandler.exceptionCaught", cause);
+                    setLastThrowable(cause);
+                    failure();
+                    attemptCompleted.signalAll();
+                }
+            };
+
+            b.group(workerGroup);
+            b.channel(NioSocketChannel.class);
+            b.handler(new ChannelInitializer<Channel>()
+            {
+                @Override
+                protected void initChannel(Channel channel)
+                {
+                    SslHandler sslHandler = sslContext.newHandler(channel.alloc());
+                    channel.pipeline().addFirst(connectHandler, sslHandler, discardHandler);
+                }
+            });
+
+            result.set(ConnectResult.CONNECTING);
+            ChannelFuture f = b.connect(host, port);
+            try
+            {
+                f.sync();
+                attemptCompleted.await(15, TimeUnit.SECONDS);
+            }
+            finally
+            {
+                f.channel().close();
+            }
+            return result.get();
+        }
+

@@ -1,0 +1,24 @@
+    @Test
+    public void allInternodeEncryptionEstablishedTest() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(2).withConfig(c -> {
+            c.with(Feature.NETWORK)
+             .with(Feature.GOSSIP) // To make sure AllMembersAliveMonitor checks gossip (which uses internode conns)
+             .with(Feature.NATIVE_PROTOCOL); // For virtual tables
+            c.set("server_encryption_options",
+                  ImmutableMap.builder().putAll(validKeystore)
+                              .put("internode_encryption", "all")
+                              .build());
+        }).start())
+        {
+            // Just check startup - cluster should not be able to establish internode connections xwithout encrypted connections
+            for (int i = 1; i <= cluster.size(); i++)
+            {
+                Object[][] result = cluster.get(i).executeInternal("SELECT successful_connection_attempts, address, port FROM system_views.internode_outbound");
+                Assert.assertEquals(1, result.length);
+                long successfulConnectionAttempts = (long) result[0][0];
+                Assert.assertTrue("At least one connection: " + successfulConnectionAttempts, successfulConnectionAttempts > 0);
+            }
+        }
+    }
+

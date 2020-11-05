@@ -1,0 +1,30 @@
+    @Test
+    public void testSSLPortWithEnabledSSL()
+    {
+        // ssl+non-ssl settings: client encryption enabled and additional ssl port specified
+        // encryption is enabled and not optional, so listen on both ports requiring encryption
+        DatabaseDescriptor.updateNativeProtocolEncryptionOptions(
+        options -> options.withEnabled(true)
+                          .withOptional(false)
+                          .withKeyStore("test/conf/cassandra_ssl_test.keystore"));
+        DatabaseDescriptor.setNativeTransportPortSSL(8432);
+
+        withService((NativeTransportService service) ->
+                    {
+                        service.initialize();
+                        assertEquals(2, service.getServers().size());
+                        assertEquals(
+                        Sets.newHashSet(Arrays.asList(
+                        Pair.create(EncryptionOptions.TlsEncryptionPolicy.ENCRYPTED,
+                                    DatabaseDescriptor.getNativeTransportPortSSL()),
+                        Pair.create(EncryptionOptions.TlsEncryptionPolicy.UNENCRYPTED,
+                                    DatabaseDescriptor.getNativeTransportPort())
+                                        )
+                        ),
+                        service.getServers().stream().map((Server s) ->
+                                                          Pair.create(s.tlsEncryptionPolicy,
+                                                                      s.socket.getPort())).collect(Collectors.toSet())
+                        );
+                    }, false, 1);
+    }
+

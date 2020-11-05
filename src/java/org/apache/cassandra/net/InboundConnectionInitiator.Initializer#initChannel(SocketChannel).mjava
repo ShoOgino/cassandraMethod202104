@@ -14,17 +14,19 @@
 
             // order of handlers: ssl -> logger -> handshakeHandler
             // For either unencrypted or transitional modes, allow Ssl optionally.
-            if (settings.encryption.optional)
+            switch(settings.encryption.tlsEncryptionPolicy())
             {
-                pipeline.addFirst("ssl", new OptionalSslHandler(settings.encryption));
-            }
-            else
-            {
-                SslContext sslContext = SSLFactory.getOrCreateSslContext(settings.encryption, true, SSLFactory.SocketType.SERVER);
-                InetSocketAddress peer = settings.encryption.require_endpoint_verification ? channel.remoteAddress() : null;
-                SslHandler sslHandler = newSslHandler(channel, sslContext, peer);
-                logger.trace("creating inbound netty SslContext: context={}, engine={}", sslContext.getClass().getName(), sslHandler.engine().getClass().getName());
-                pipeline.addFirst("ssl", sslHandler);
+                case UNENCRYPTED:
+                    // Handler checks for SSL connection attempts and cleanly rejects them if encryption is disabled
+                    pipeline.addFirst("rejectssl", new RejectSslHandler());
+                    break;
+                case OPTIONAL:
+                    pipeline.addFirst("ssl", new OptionalSslHandler(settings.encryption));
+                    break;
+                case ENCRYPTED:
+                    SslHandler sslHandler = getSslHandler("creating", channel, settings.encryption);
+                    pipeline.addFirst("ssl", sslHandler);
+                    break;
             }
 
             if (WIRETRACE)
