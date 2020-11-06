@@ -1,10 +1,12 @@
         private Flush(boolean truncate)
         {
+            if (logger.isTraceEnabled())
+                logger.trace("Creating flush task {}@{}", hashCode(), name);
             // if true, we won't flush, we'll just wait for any outstanding writes, switch the memtable, and discard
             this.truncate = truncate;
 
             metric.pendingFlushes.inc();
-            /**
+            /*
              * To ensure correctness of switch without blocking writes, run() needs to wait for all write operations
              * started prior to the switch to complete. We do this by creating a Barrier on the writeOrdering
              * that all write operations register themselves with, and assigning this barrier to the memtables,
@@ -13,7 +15,7 @@
              * In doing so it also tells the write operations to update the commitLogUpperBound of the memtable, so
              * that we know the CL position we are dirty to, which can be marked clean when we complete.
              */
-            writeBarrier = keyspace.writeOrder.newBarrier();
+            writeBarrier = Keyspace.writeOrder.newBarrier();
 
             // submit flushes for the memtable for any indexed sub-cfses, and our own
             AtomicReference<ReplayPosition> commitLogUpperBound = new AtomicReference<>();
@@ -37,5 +39,8 @@
             // replay positions have also completed, i.e. the memtables are done and ready to flush
             writeBarrier.issue();
             postFlush = new PostFlush(memtables);
+
+            if (logger.isTraceEnabled())
+                logger.trace("Created flush task {}@{}", hashCode(), name);
         }
 

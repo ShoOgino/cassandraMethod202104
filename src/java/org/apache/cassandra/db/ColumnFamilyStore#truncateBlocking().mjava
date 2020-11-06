@@ -46,25 +46,21 @@
                 now = Math.max(now, sstable.maxDataAge);
         truncatedAt = now;
 
-        Runnable truncateRunnable = new Runnable()
-        {
-            public void run()
-            {
-                logger.debug("Discarding sstable data for truncated CF + indexes");
-                data.notifyTruncated(truncatedAt);
+        Runnable truncateRunnable = () -> {
+            logger.debug("Discarding sstable data for truncated CF + indexes");
+            data.notifyTruncated(truncatedAt);
 
-                if (DatabaseDescriptor.isAutoSnapshot())
-                    snapshot(Keyspace.getTimestampedSnapshotName(name));
+            if (DatabaseDescriptor.isAutoSnapshot())
+                snapshot(Keyspace.getTimestampedSnapshotName(name));
 
-                discardSSTables(truncatedAt);
+            discardSSTables(truncatedAt);
 
-                indexManager.truncateAllIndexesBlocking(truncatedAt);
-                viewManager.truncateBlocking(replayAfter, truncatedAt);
+            indexManager.truncateAllIndexesBlocking(truncatedAt);
+            viewManager.truncateBlocking(replayAfter, truncatedAt);
 
-                SystemKeyspace.saveTruncationRecord(ColumnFamilyStore.this, truncatedAt, replayAfter);
-                logger.trace("cleaning out row cache");
-                invalidateCaches();
-            }
+            SystemKeyspace.saveTruncationRecord(ColumnFamilyStore.this, truncatedAt, replayAfter);
+            logger.trace("cleaning out row cache");
+            invalidateCaches();
         };
 
         runWithCompactionsDisabled(Executors.callable(truncateRunnable), true, true);

@@ -1,0 +1,37 @@
+    @Test
+    public void testCleanerInvoked() throws Exception
+    {
+        CountDownLatch cleanerExecutedLatch = new CountDownLatch(1);
+        CompletableFuture<Boolean> fut = new CompletableFuture<>();
+        AtomicBoolean needsCleaning = new AtomicBoolean(false);
+
+        when(pool.needsCleaning()).thenAnswer(invocation -> needsCleaning.get());
+
+        when(cleaner.clean()).thenAnswer(invocation -> {
+            needsCleaning.set(false);
+            cleanerExecutedLatch.countDown();
+            return fut;
+        });
+
+        // start the thread with needsCleaning returning false, the cleaner should not be invoked
+        needsCleaning.set(false);
+        startThread();
+        assertFalse(cleanerExecutedLatch.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(1, cleanerExecutedLatch.getCount());
+        assertEquals(0, cleanerThread.numPendingTasks());
+
+        // now invoke the cleaner
+        needsCleaning.set(true);
+        cleanerThread.trigger();
+        assertTrue(cleanerExecutedLatch.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(0, cleanerExecutedLatch.getCount());
+        assertEquals(1, cleanerThread.numPendingTasks());
+
+        // now complete the cleaning task
+        needsCleaning.set(false);
+        fut.complete(true);
+        waitForPendingTasks();
+
+        stopThread();
+    }
+
