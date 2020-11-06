@@ -1,0 +1,19 @@
+    @Test
+    public void noWarningForNetworkTopologyStategyConfigOnRestart() throws Exception {
+        int nodesPerDc = 2;
+        try (Cluster cluster = builder().withConfig(c -> c.with(GOSSIP, NETWORK))
+                                        .withRacks(2, 1, nodesPerDc)
+                                        .start()) {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE +
+                                 " WITH replication = {'class': 'NetworkTopologyStrategy', " +
+                                 "'datacenter1' : " + nodesPerDc + ", 'datacenter2' : " + nodesPerDc + " };");
+            cluster.get(2).nodetool("flush");
+            // Stop node 2 in datacenter 1
+            cluster.get(2).shutdown().get();
+            // Restart node 2 in datacenter 1
+            cluster.get(2).startup();
+            List<String> result = cluster.get(2).logs().grep("Ignoring Unrecognized strategy option \\{datacenter2\\}").getResult();
+            Assert.assertTrue("Not expected to see the warning about unrecognized option", result.isEmpty());
+        }
+    }
+
