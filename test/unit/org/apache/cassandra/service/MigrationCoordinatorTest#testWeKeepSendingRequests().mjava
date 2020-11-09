@@ -1,0 +1,43 @@
+    @Test
+    public void testWeKeepSendingRequests()
+    {
+        InstrumentedCoordinator coordinator = new InstrumentedCoordinator();
+
+        getUnchecked(coordinator.reportEndpointVersion(EP3, V2));
+        coordinator.requests.remove().response(Collections.emptyList());
+
+        getUnchecked(coordinator.reportEndpointVersion(EP1, V1));
+        getUnchecked(coordinator.reportEndpointVersion(EP2, V1));
+
+        MigrationCoordinator.Callback prev = null;
+        Set<InetAddress> EPs = Sets.newHashSet(EP1, EP2);
+        int ep1requests = 0;
+        int ep2requests = 0;
+
+        for (int i=0; i<10; i++)
+        {
+            Assert.assertEquals(String.format("%s", i), 2, coordinator.requests.size());
+
+            MigrationCoordinator.Callback next = coordinator.requests.remove();
+
+            // we should be contacting endpoints in a round robin fashion
+            Assert.assertTrue(EPs.contains(next.endpoint));
+            if (prev != null && prev.endpoint.equals(next.endpoint))
+                Assert.fail(String.format("Not expecting prev %s to be equal to next %s", prev.endpoint, next.endpoint));
+
+            // should send a new request
+            next.fail();
+            prev = next;
+            Assert.assertFalse(coordinator.awaitSchemaRequests(1));
+
+            Assert.assertEquals(2, coordinator.requests.size());
+        }
+        logger.info("{} -> {}", EP1, ep1requests);
+        logger.info("{} -> {}", EP2, ep2requests);
+
+        // a single success should unblock startup though
+        coordinator.requests.remove().response(Collections.emptyList());
+        Assert.assertTrue(coordinator.awaitSchemaRequests(1));
+
+    }
+
