@@ -1,0 +1,29 @@
+    synchronized Future<Void> maybePullSchema(VersionInfo info)
+    {
+        if (info.endpoints.isEmpty() || info.wasReceived() || !shouldPullSchema(info.version))
+            return FINISHED_FUTURE;
+
+        if (info.outstandingRequests.size() >= getMaxOutstandingVersionRequests())
+            return FINISHED_FUTURE;
+
+        for (int i=0, isize=info.requestQueue.size(); i<isize; i++)
+        {
+            InetAddressAndPort endpoint = info.requestQueue.remove();
+            if (!info.endpoints.contains(endpoint))
+                continue;
+
+            if (shouldPullFromEndpoint(endpoint) && info.outstandingRequests.add(endpoint))
+            {
+                return scheduleSchemaPull(endpoint, info);
+            }
+            else
+            {
+                // return to queue
+                info.requestQueue.offer(endpoint);
+            }
+        }
+
+        // no suitable endpoints were found, check again in a minute, the periodic task will pick it up
+        return null;
+    }
+

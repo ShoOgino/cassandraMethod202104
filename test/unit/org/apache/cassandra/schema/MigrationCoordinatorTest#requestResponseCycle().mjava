@@ -1,0 +1,40 @@
+    @Test
+    public void requestResponseCycle() throws InterruptedException
+    {
+        InstrumentedCoordinator coordinator = new InstrumentedCoordinator();
+        coordinator.maxOutstandingRequests = 1;
+
+        Assert.assertTrue(coordinator.requests.isEmpty());
+
+        // first schema report should send a migration request
+        getUnchecked(coordinator.reportEndpointVersion(EP1, V1));
+        Assert.assertEquals(1, coordinator.requests.size());
+        Assert.assertFalse(coordinator.awaitSchemaRequests(1));
+
+        // second should not
+        getUnchecked(coordinator.reportEndpointVersion(EP2, V1));
+        Assert.assertEquals(1, coordinator.requests.size());
+        Assert.assertFalse(coordinator.awaitSchemaRequests(1));
+
+        // until the first request fails, then the second endpoint should be contacted
+        MigrationCoordinator.Callback request1 = coordinator.requests.poll();
+        Assert.assertEquals(EP1, request1.endpoint);
+        getUnchecked(request1.fail());
+        Assert.assertTrue(coordinator.mergedSchemasFrom.isEmpty());
+        Assert.assertFalse(coordinator.awaitSchemaRequests(1));
+
+        // ... then the second endpoint should be contacted
+        Assert.assertEquals(1, coordinator.requests.size());
+        MigrationCoordinator.Callback request2 = coordinator.requests.poll();
+        Assert.assertEquals(EP2, request2.endpoint);
+        Assert.assertFalse(coordinator.awaitSchemaRequests(1));
+        getUnchecked(request2.response(Collections.emptyList()));
+        Assert.assertEquals(EP2, Iterables.getOnlyElement(coordinator.mergedSchemasFrom));
+        Assert.assertTrue(coordinator.awaitSchemaRequests(1));
+
+        // and migration tasks should not be sent out for subsequent version reports
+        getUnchecked(coordinator.reportEndpointVersion(EP3, V1));
+        Assert.assertTrue(coordinator.requests.isEmpty());
+
+    }
+
