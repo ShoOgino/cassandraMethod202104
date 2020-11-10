@@ -3,19 +3,25 @@
      */
     SSTableTidier obsoleted(SSTableReader reader, LogRecord logRecord)
     {
-        if (txnFile.contains(Type.ADD, reader, logRecord))
+        synchronized (lock)
         {
-            if (txnFile.contains(Type.REMOVE, reader, logRecord))
-                throw new IllegalArgumentException();
+            if (logger.isTraceEnabled())
+                logger.trace("Track OLD sstable {} in {}", reader.getFilename(), txnFile.toString());
 
-            return new SSTableTidier(reader, true, this);
+            if (txnFile.contains(Type.ADD, reader, logRecord))
+            {
+                if (txnFile.contains(Type.REMOVE, reader, logRecord))
+                    throw new IllegalArgumentException();
+
+                return new SSTableTidier(reader, true, this);
+            }
+
+            txnFile.addRecord(logRecord);
+
+            if (tracker != null)
+                tracker.notifyDeleting(reader);
+
+            return new SSTableTidier(reader, false, this);
         }
-
-        txnFile.addRecord(logRecord);
-
-        if (tracker != null)
-            tracker.notifyDeleting(reader);
-
-        return new SSTableTidier(reader, false, this);
     }
 
