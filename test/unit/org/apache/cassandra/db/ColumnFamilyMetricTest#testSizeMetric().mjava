@@ -7,15 +7,29 @@
 
         store.truncateBlocking();
 
-        assertEquals(0, store.metric.liveDiskSpaceUsed.getCount());
-        assertEquals(0, store.metric.totalDiskSpaceUsed.getCount());
+        Supplier<Object> getLiveDiskSpaceUsed = new Supplier<Object>()
+        {
+            public Long get()
+            {
+                return store.metric.liveDiskSpaceUsed.getCount();
+            }
+        };
+
+        Supplier<Object> getTotalDiskSpaceUsed = new Supplier<Object>()
+        {
+            public Long get()
+            {
+                return store.metric.totalDiskSpaceUsed.getCount();
+            }
+        };
+
+        Util.spinAssertEquals(0L, getLiveDiskSpaceUsed, 30);
+        Util.spinAssertEquals(0L, getTotalDiskSpaceUsed, 30);
 
         for (int j = 0; j < 10; j++)
         {
             ByteBuffer key = ByteBufferUtil.bytes(String.valueOf(j));
-            Mutation rm = new Mutation("Keyspace1", key);
-            rm.add("Standard2", cellname("0"), ByteBufferUtil.EMPTY_BYTE_BUFFER, j);
-            rm.apply();
+            applyStandard2Mutation(key, ByteBufferUtil.EMPTY_BYTE_BUFFER, j);
         }
         store.forceBlockingFlush();
         Collection<SSTableReader> sstables = store.getSSTables();
@@ -32,26 +46,8 @@
         store.truncateBlocking();
 
         // after truncate, size metrics should be down to 0
-        Util.spinAssertEquals(
-                0L,
-                new Supplier<Object>()
-                {
-                    public Long get()
-                    {
-                        return store.metric.liveDiskSpaceUsed.getCount();
-                    }
-                },
-                30);
-        Util.spinAssertEquals(
-                0L,
-                new Supplier<Object>()
-                {
-                    public Long get()
-                    {
-                        return store.metric.totalDiskSpaceUsed.getCount();
-                    }
-                },
-                30);
+        Util.spinAssertEquals(0L, getLiveDiskSpaceUsed, 30);
+        Util.spinAssertEquals(0L, getTotalDiskSpaceUsed, 30);
 
         store.enableAutoCompaction();
     }

@@ -1,0 +1,47 @@
+    @Test
+    public void testEstimatedColumnCountHistogramAndEstimatedRowSizeHistogram()
+    {
+        Keyspace keyspace = Keyspace.open("Keyspace1");
+        ColumnFamilyStore store = keyspace.getColumnFamilyStore("Standard2");
+
+        store.disableAutoCompaction();
+
+        try
+        {
+            // Ensure that there is no SSTables
+            store.truncateBlocking();
+
+            assertArrayEquals(new long[0], store.metric.estimatedColumnCountHistogram.getValue());
+
+            applyStandard2Mutation(bytes(0), bytes(0), 0);
+            applyStandard2Mutation(bytes(1), bytes(1), 0);
+
+            // Flushing first SSTable
+            store.forceBlockingFlush();
+
+            long[] estimatedColumnCountHistogram = store.metric.estimatedColumnCountHistogram.getValue();
+            assertNumberOfNonZeroValue(estimatedColumnCountHistogram, 1);
+            assertEquals(2, estimatedColumnCountHistogram[0]); //2 rows of one cell in 1 SSTable
+
+            long[] estimatedRowSizeHistogram = store.metric.estimatedRowSizeHistogram.getValue();
+            // Due to the timestamps we cannot guaranty the size of the row. So we can only check the number of histogram updates.
+            assertEquals(sumValues(estimatedRowSizeHistogram), 2);
+
+            applyStandard2Mutation(bytes(2), bytes(2), 0);
+
+            // Flushing second SSTable
+            store.forceBlockingFlush();
+
+            estimatedColumnCountHistogram = store.metric.estimatedColumnCountHistogram.getValue();
+            assertNumberOfNonZeroValue(estimatedColumnCountHistogram, 1);
+            assertEquals(3, estimatedColumnCountHistogram[0]); //2 rows of one cell in the first SSTable and 1 row of one cell int the second sstable
+
+            estimatedRowSizeHistogram = store.metric.estimatedRowSizeHistogram.getValue();
+            assertEquals(sumValues(estimatedRowSizeHistogram), 3);
+        }
+        finally
+        {
+            store.enableAutoCompaction();
+        }
+    }
+
