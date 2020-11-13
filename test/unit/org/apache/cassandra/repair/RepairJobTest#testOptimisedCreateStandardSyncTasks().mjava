@@ -1,0 +1,41 @@
+    @Test
+    public void testOptimisedCreateStandardSyncTasks()
+    {
+        /*
+        addr1 will stream range1 from addr3
+                          range2 from addr2 or addr3
+        addr2 will stream range1 from addr3
+                          range2 from addr1
+        addr3 will stream range1 from addr1 or addr2
+                          range2 from addr1
+         */
+
+        List<TreeResponse> treeResponses = Arrays.asList(treeResponse(addr1, RANGE_1, "one", RANGE_2, "one"),
+                                                         treeResponse(addr2, RANGE_1, "one", RANGE_2, "two"),
+                                                         treeResponse(addr3, RANGE_1, "three", RANGE_2, "two"));
+
+        Map<SyncNodePair, SyncTask> tasks = toMap(RepairJob.createOptimisedSyncingSyncTasks(JOB_DESC,
+                                                                                            treeResponses,
+                                                                                            addr4, // local
+                                                                                            noTransient(),
+                                                                                            addr -> "DC1",
+                                                                                            false,
+                                                                                            PreviewKind.ALL));
+
+        assertThat(tasks.values()).areAllInstanceOf(AsymmetricRemoteSyncTask.class);
+
+        // addr1 streams range1 from addr3:
+        assertThat(tasks.get(pair(addr1, addr3)).rangesToSync).contains(RANGE_1);
+        // addr1 can get range2 from either addr2 or addr3 but not from both
+        assertStreamRangeFromEither(tasks, RANGE_2, addr1, addr2, addr3);
+
+        // addr2 streams range1 from addr3
+        assertThat(tasks.get(pair(addr2, addr3)).rangesToSync).contains(RANGE_1);
+        // addr2 streams range2 from addr1
+        assertThat(tasks.get(pair(addr2, addr1)).rangesToSync).contains(RANGE_2);
+        // addr3 can get range1 from either addr1 or addr2 but not from both
+        assertStreamRangeFromEither(tasks, RANGE_1, addr3, addr2, addr1);
+        // addr3 streams range2 from addr1
+        assertThat(tasks.get(pair(addr3, addr1)).rangesToSync).contains(RANGE_2);
+    }
+

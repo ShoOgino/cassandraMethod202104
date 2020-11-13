@@ -1,0 +1,34 @@
+    /**
+     * Consistently picks the node after the streaming node to stream from
+     *
+     * this is done to reduce the amount of sstables created on the receiving node
+     *
+     * todo: note that this can be improved - if we have a case like:
+     *         addr3 will stream range1 from addr1 or addr2
+     *                           range2 from addr1
+     *       in a perfect world we would stream both range1 and range2 from addr1 - but in this case we might stream
+     *       range1 from addr2 depending on how the addresses sort
+     */
+    private static Collection<InetAddressAndPort> pickConsistent(InetAddressAndPort streamingNode,
+                                                                 StreamFromOptions toStreamFrom,
+                                                                 PreferedNodeFilter filter)
+    {
+        Set<InetAddressAndPort> retSet = new HashSet<>();
+        for (Set<InetAddressAndPort> toStream : toStreamFrom.allStreams())
+        {
+            List<InetAddressAndPort> toSearch = new ArrayList<>(filter.apply(streamingNode, toStream));
+            if (toSearch.isEmpty())
+                toSearch = new ArrayList<>(toStream);
+
+            toSearch.sort(comparator);
+            int pos = Collections.binarySearch(toSearch, streamingNode, comparator);
+            assert pos < 0;
+            pos = -pos - 1;
+            if (pos == toSearch.size())
+                retSet.add(toSearch.get(0));
+            else
+                retSet.add(toSearch.get(pos));
+        }
+        return retSet;
+    }
+
