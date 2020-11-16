@@ -1,6 +1,21 @@
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause)
         {
+            if (isClosed && cause instanceof SslClosedEngineException)
+            {
+                /*
+                 * Occasionally Netty will invoke this handler to process an exception of the following kind:
+                 *      io.netty.channel.unix.Errors$NativeIoException: readAddress(..) failed: Connection reset by peer
+                 *
+                 * When we invoke ctx.close() later in this method, the listener, set up in channelActive(), might be
+                 * failed with an SslClosedEngineException("SSLEngine closed already") by Netty, and exceptionCaught() will be invoked
+                 * once again, this time to handle the SSLException triggered by ctx.close().
+                 *
+                 * The exception at this stage is benign, and we shouldn't be double-logging the failure to connect.
+                 */
+                return;
+            }
+
             try
             {
                 JVMStabilityInspector.inspectThrowable(cause, false);
@@ -9,6 +24,7 @@
                     logger.info("Failed to connect to peer {}", settings.connectToId(), cause);
                 else
                     logger.error("Failed to handshake with peer {}", settings.connectToId(), cause);
+                isClosed = true;
                 ctx.close();
             }
             catch (Throwable t)
