@@ -1,0 +1,34 @@
+    @Test
+    public void testSkipScrubCorruptedCounterRowWithTool() throws IOException, WriteTimeoutException
+    {
+        int numPartitions = 1000;
+
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE2);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(COUNTER_CF);
+        cfs.clearUnsafe();
+
+        fillCounterCF(cfs, numPartitions);
+        assertOrderedAll(cfs, numPartitions);
+        assertEquals(1, cfs.getLiveSSTables().size());
+        SSTableReader sstable = cfs.getLiveSSTables().iterator().next();
+
+        overrideWithGarbage(sstable, ByteBufferUtil.bytes("0"), ByteBufferUtil.bytes("1"));
+
+        // with skipCorrupted == false, the scrub is expected to fail
+        try
+        {
+            ToolRunner.invokeClass(StandaloneScrubber.class, KEYSPACE2, COUNTER_CF);
+            fail("Expected a CorruptSSTableException to be thrown");
+        }
+        catch (IOError err) {}
+
+        // with skipCorrupted == true, the corrupt rows will be skipped
+        ToolResult tool = ToolRunner.invokeClass(StandaloneScrubber.class, "-s", KEYSPACE2, COUNTER_CF);
+        Assertions.assertThat(tool.getStdout()).contains("0 empty");
+        Assertions.assertThat(tool.getStdout()).contains("rows that were skipped");
+        tool.assertOnCleanExit();
+
+        assertEquals(1, cfs.getLiveSSTables().size());
+    }
+
