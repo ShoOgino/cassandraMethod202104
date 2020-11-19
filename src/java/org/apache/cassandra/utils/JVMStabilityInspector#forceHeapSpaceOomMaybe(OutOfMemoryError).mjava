@@ -1,0 +1,28 @@
+    /**
+     * Intentionally produce a heap space OOM upon seeing a Direct buffer memory OOM.
+     * Direct buffer OOM cannot trigger JVM OOM error related options,
+     * e.g. OnOutOfMemoryError, HeapDumpOnOutOfMemoryError, etc.
+     * See CASSANDRA-15214 for more details
+     */
+    @Exclude // Exclude from just in time compilation.
+    private static void forceHeapSpaceOomMaybe(OutOfMemoryError oom)
+    {
+        // See the oom thrown from java.nio.Bits.reserveMemory.
+        // In jdk 13 and up, the message is "Cannot reserve XX bytes of direct buffer memory (...)"
+        // In jdk 11 and below, the message is "Direct buffer memory"
+        if ((oom.getMessage() != null && oom.getMessage().toLowerCase().contains("direct buffer memory")) ||
+            Arrays.stream(oom.getStackTrace()).anyMatch(x -> x.getClassName().equals("java.nio.Bits")
+                                                             && x.getMethodName().equals("reserveMemory")))
+        {
+            logger.error("Force heap space OutOfMemoryError in the presence of", oom);
+            // Start to produce heap space OOM forcibly.
+            List<long[]> ignored = new ArrayList<>();
+            while (true)
+            {
+                // java.util.AbstractCollection.MAX_ARRAY_SIZE is defined as Integer.MAX_VALUE - 8
+                // so Integer.MAX_VALUE / 2 should be a large enough and safe size to request.
+                ignored.add(new long[Integer.MAX_VALUE / 2]);
+            }
+        }
+    }
+
