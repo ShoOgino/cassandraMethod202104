@@ -1,0 +1,26 @@
+    @Test
+    public void incompletePropose() throws Throwable
+    {
+        try (Cluster cluster = init(Cluster.create(3, config -> config.set("write_request_timeout_in_ms", 200L).set("cas_contention_timeout_in_ms", 200L))))
+        {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+
+            IMessageFilters.Filter drop1 = cluster.filters().verbs(PAXOS_PROPOSE.ordinal()).from(1).to(2, 3).drop();
+            try
+            {
+                cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl (pk, ck, v) VALUES (1, 1, 1) IF NOT EXISTS", ConsistencyLevel.QUORUM);
+                Assert.fail();
+            }
+            catch (RuntimeException wrapped)
+            {
+                Assert.assertEquals("Operation timed out - received only 1 responses.", wrapped.getCause().getMessage());
+            }
+            drop1.off();
+            // make sure we encounter one of the in-progress proposals so we complete it
+            cluster.filters().verbs(PAXOS_PREPARE.ordinal()).from(1).to(2).drop();
+            cluster.coordinator(1).execute("UPDATE " + KEYSPACE + ".tbl SET v = 2 WHERE pk = 1 and ck = 1 IF v = 1", ConsistencyLevel.QUORUM);
+            assertRows(cluster.coordinator(1).execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE pk = 1", ConsistencyLevel.SERIAL),
+                    row(1, 1, 2));
+        }
+    }
+

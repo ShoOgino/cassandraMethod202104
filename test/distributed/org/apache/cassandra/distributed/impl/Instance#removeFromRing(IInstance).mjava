@@ -1,0 +1,23 @@
+    public static void removeFromRing(IInstance peer)
+    {
+        try
+        {
+            IInstanceConfig config = peer.config();
+            IPartitioner partitioner = FBUtilities.newPartitioner(config.getString("partitioner"));
+            Token token = partitioner.getTokenFactory().fromString(config.getString("initial_token"));
+            InetAddress address = config.broadcastAddress().getAddress();
+
+            Gossiper.runInGossipStageBlocking(() -> {
+                StorageService.instance.onChange(address,
+                        ApplicationState.STATUS,
+                        new VersionedValue.VersionedValueFactory(partitioner).left(Collections.singleton(token), 0L));
+                Gossiper.instance.removeEndpoint(address);
+            });
+            PendingRangeCalculatorService.instance.blockUntilFinished();
+        }
+        catch (Throwable e) // UnknownHostException
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
