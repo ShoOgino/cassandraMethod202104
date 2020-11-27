@@ -51,23 +51,12 @@
     throws UnavailableException, IsBootstrappingException, RequestFailureException, RequestTimeoutException, InvalidRequestException, CasWriteUnknownResultException
     {
         final long startTimeForMetrics = System.nanoTime();
-        TableMetadata metadata = Schema.instance.getTableMetadata(keyspaceName, cfName);
-        int contentions = 0;
         try
         {
-            consistencyForPaxos.validateForCas();
-            consistencyForCommit.validateForCasCommit(keyspaceName);
+            TableMetadata metadata = Schema.instance.validateTable(keyspaceName, cfName);
 
-            long timeoutNanos = DatabaseDescriptor.getCasContentionTimeout(NANOSECONDS);
-            while (System.nanoTime() - queryStartNanoTime < timeoutNanos)
+            Supplier<Pair<PartitionUpdate, RowIterator>> updateProposer = () ->
             {
-                // for simplicity, we'll do a single liveness check at the start of each attempt
-                ReplicaPlan.ForPaxosWrite replicaPlan = ReplicaPlans.forPaxos(Keyspace.open(keyspaceName), key, consistencyForPaxos);
-
-                final PaxosBallotAndContention pair = beginAndRepairPaxos(queryStartNanoTime, key, metadata, replicaPlan, consistencyForPaxos, consistencyForCommit, true, state);
-                final UUID ballot = pair.ballot;
-                contentions += pair.contentions;
-
                 // read the current values and check they validate the conditions
                 Tracing.trace("Reading existing values for CAS precondition");
                 SinglePartitionReadCommand readCommand = (SinglePartitionReadCommand) request.readCommand(nowInSeconds);
@@ -83,11 +72,10 @@
                 {
                     Tracing.trace("CAS precondition does not match current values {}", current);
                     casWriteMetrics.conditionNotMet.inc();
-                    return current.rowIterator();
+                    return Pair.create(PartitionUpdate.emptyUpdate(metadata, key), current.rowIterator());
                 }
 
-                // finish the paxos round w/ the desired updates
-                // TODO turn null updates into delete?
+                // Create the desired updates
                 PartitionUpdate updates = request.makeUpdates(current);
 
                 long size = updates.dataSize();
@@ -103,34 +91,30 @@
                 // InvalidRequestException) any which aren't.
                 updates = TriggerExecutor.instance.execute(updates);
 
+                return Pair.create(updates, null);
+            };
 
-                Commit proposal = Commit.newProposal(ballot, updates);
-                Tracing.trace("CAS precondition is met; proposing client-requested updates for {}", ballot);
-                if (proposePaxos(proposal, replicaPlan, true, queryStartNanoTime))
-                {
-                    commitPaxos(proposal, consistencyForCommit, true, queryStartNanoTime);
-                    Tracing.trace("CAS successful");
-                    return null;
-                }
+            return doPaxos(metadata,
+                           key,
+                           consistencyForPaxos,
+                           consistencyForCommit,
+                           consistencyForCommit,
+                           state,
+                           queryStartNanoTime,
+                           casWriteMetrics,
+                           updateProposer);
 
-                Tracing.trace("Paxos proposal not accepted (pre-empted by a higher ballot)");
-                contentions++;
-                Uninterruptibles.sleepUninterruptibly(ThreadLocalRandom.current().nextInt(100), MILLISECONDS);
-                // continue to retry
-            }
-
-            throw new WriteTimeoutException(WriteType.CAS, consistencyForPaxos, 0, consistencyForPaxos.blockFor(Keyspace.open(keyspaceName)));
         }
         catch (CasWriteUnknownResultException e)
         {
             casWriteMetrics.unknownResult.mark();
             throw e;
         }
-        catch (WriteTimeoutException wte)
+        catch (CasWriteTimeoutException wte)
         {
             casWriteMetrics.timeouts.mark();
             writeMetricsMap.get(consistencyForPaxos).timeouts.mark();
-            throw new CasWriteTimeoutException(wte.writeType, wte.consistency, wte.received, wte.blockFor, contentions);
+            throw new CasWriteTimeoutException(wte.writeType, wte.consistency, wte.received, wte.blockFor, wte.contentions);
         }
         catch (ReadTimeoutException e)
         {
@@ -138,7 +122,7 @@
             writeMetricsMap.get(consistencyForPaxos).timeouts.mark();
             throw e;
         }
-        catch (WriteFailureException|ReadFailureException e)
+        catch (WriteFailureException | ReadFailureException e)
         {
             casWriteMetrics.failures.mark();
             writeMetricsMap.get(consistencyForPaxos).failures.mark();
@@ -152,8 +136,6 @@
         }
         finally
         {
-            recordCasContention(contentions);
-            Keyspace.open(keyspaceName).getColumnFamilyStore(cfName).metric.topCasPartitionContention.addSample(key.getKey(), contentions);
             final long latency = System.nanoTime() - startTimeForMetrics;
             casWriteMetrics.addNano(latency);
             writeMetricsMap.get(consistencyForPaxos).addNano(latency);

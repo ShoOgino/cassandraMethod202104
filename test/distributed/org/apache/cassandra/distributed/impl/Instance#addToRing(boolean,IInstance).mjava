@@ -1,0 +1,36 @@
+    public static void addToRing(boolean bootstrapping, IInstance peer)
+    {
+        try
+        {
+            IInstanceConfig config = peer.config();
+            IPartitioner partitioner = FBUtilities.newPartitioner(config.getString("partitioner"));
+            Token token = partitioner.getTokenFactory().fromString(config.getString("initial_token"));
+            InetAddressAndPort addressAndPort = toCassandraInetAddressAndPort(peer.broadcastAddress());
+
+            UUID hostId = config.hostId();
+            Gossiper.runInGossipStageBlocking(() -> {
+                Gossiper.instance.initializeNodeUnsafe(addressAndPort, hostId, 1);
+                Gossiper.instance.injectApplicationState(addressAndPort,
+                                                         ApplicationState.TOKENS,
+                                                         new VersionedValue.VersionedValueFactory(partitioner).tokens(Collections.singleton(token)));
+                StorageService.instance.onChange(addressAndPort,
+                                                 ApplicationState.STATUS,
+                                                 bootstrapping
+                                                 ? new VersionedValue.VersionedValueFactory(partitioner).bootstrapping(Collections.singleton(token))
+                                                 : new VersionedValue.VersionedValueFactory(partitioner).normal(Collections.singleton(token)));
+                Gossiper.instance.realMarkAlive(addressAndPort, Gossiper.instance.getEndpointStateForEndpoint(addressAndPort));
+            });
+            int messagingVersion = peer.isShutdown()
+                    ? MessagingService.current_version
+                    : Math.min(MessagingService.current_version, peer.getMessagingVersion());
+            MessagingService.instance().versions.set(addressAndPort, messagingVersion);
+
+            assert bootstrapping || StorageService.instance.getTokenMetadata().isMember(addressAndPort);
+            PendingRangeCalculatorService.instance.blockUntilFinished();
+        }
+        catch (Throwable e) // UnknownHostException
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

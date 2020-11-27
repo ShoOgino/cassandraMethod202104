@@ -13,19 +13,31 @@
         PartitionIterator result = null;
         try
         {
-            // make sure any in-progress paxos writes are done (i.e., committed to a majority of replicas), before performing a quorum read
-            ReplicaPlan.ForPaxosWrite replicaPlan = ReplicaPlans.forPaxos(Keyspace.open(metadata.keyspace), key, consistencyLevel);
-
-            // does the work of applying in-progress writes; throws UAE or timeout if it can't
-            final ConsistencyLevel consistencyForCommitOrFetch = consistencyLevel == ConsistencyLevel.LOCAL_SERIAL
-                                                                                   ? ConsistencyLevel.LOCAL_QUORUM
-                                                                                   : ConsistencyLevel.QUORUM;
+            final ConsistencyLevel consistencyForReplayCommitsOrFetch = consistencyLevel == ConsistencyLevel.LOCAL_SERIAL
+                                                                        ? ConsistencyLevel.LOCAL_QUORUM
+                                                                        : ConsistencyLevel.QUORUM;
 
             try
             {
-                final PaxosBallotAndContention pair = beginAndRepairPaxos(start, key, metadata, replicaPlan, consistencyLevel, consistencyForCommitOrFetch, false, state);
-                if (pair.contentions > 0)
-                    casReadMetrics.contention.update(pair.contentions);
+                // Commit an empty update to make sure all in-progress updates that should be finished first is, _and_
+                // that no other in-progress can get resurrected.
+                Supplier<Pair<PartitionUpdate, RowIterator>> updateProposer =
+                    disableSerialReadLinearizability
+                    ? () -> null
+                    : () -> Pair.create(PartitionUpdate.emptyUpdate(metadata, key), null);
+                // When replaying, we commit at quorum/local quorum, as we want to be sure the following read (done at
+                // quorum/local_quorum) sees any replayed updates. Our own update is however empty, and those don't even
+                // get committed due to an optimiation described in doPaxos/beingRepairAndPaxos, so the commit
+                // consistency is irrelevant (we use ANY just to emphasis that we don't wait on our commit).
+                doPaxos(metadata,
+                        key,
+                        consistencyLevel,
+                        consistencyForReplayCommitsOrFetch,
+                        ConsistencyLevel.ANY,
+                        state,
+                        start,
+                        casReadMetrics,
+                        updateProposer);
             }
             catch (WriteTimeoutException e)
             {
@@ -36,7 +48,7 @@
                 throw new ReadFailureException(consistencyLevel, e.received, e.blockFor, false, e.failureReasonByEndpoint);
             }
 
-            result = fetchRows(group.queries, consistencyForCommitOrFetch, queryStartNanoTime);
+            result = fetchRows(group.queries, consistencyForReplayCommitsOrFetch, queryStartNanoTime);
         }
         catch (UnavailableException e)
         {
