@@ -1,0 +1,32 @@
+    protected void flushWrittenChannels()
+    {
+        // flush the channels pre-V5 to which messages were written in writeSingleResponse
+        for (Channel channel : channels)
+            channel.flush();
+
+        // Framed messages (V5) are grouped by channel, now encode them into payloads, write and flush
+        for (FlushBuffer buffer : payloads.values())
+            buffer.finish();
+
+        // Ultimately, this passes the flush item to the Consumer<FlushItem> configured in
+        // whichever Dispatcher.FlushItemConverter implementation created it. Due to the quite
+        // different ways in which resource allocation is handled in protocol V5 and later
+        // there are distinct implementations for V5 and pre-V5 connections:
+        //   * o.a.c.t.CQLMessageHandler::toFlushItem for V5, which relates to FlushItem.Framed.
+        //   * o.a.c.t.PreV5Handlers.LegacyDispatchHandler::toFlushItem, relating to FlushItem.Unframed
+        // In both cases, the Consumer releases the buffers for the source envelope and returns the
+        // capacity claimed for message processing back to the global and per-endpoint reserves.
+        // Those reserves are used to determine if capacity is available for any inbound message
+        // or whether we should attempt to shed load or apply backpressure.
+        // The response buffers are handled differently though. In V5, CQL message envelopes are
+        // collated into frames, and so their buffers can be released immediately after flushing.
+        // In V4 however, the buffers containing each CQL envelope are emitted from Envelope.Encoder
+        // and so releasing them is handled by Netty internally.
+        for (FlushItem<?> item : processed)
+            item.release();
+
+        payloads.clear();
+        channels.clear();
+        processed.clear();
+    }
+

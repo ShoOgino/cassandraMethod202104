@@ -1,0 +1,39 @@
+        static Message decodeMessage(Channel channel, Envelope inbound)
+        {
+            boolean isRequest = inbound.header.type.direction == Direction.REQUEST;
+            boolean isTracing = inbound.header.flags.contains(Envelope.Header.Flag.TRACING);
+            boolean isCustomPayload = inbound.header.flags.contains(Envelope.Header.Flag.CUSTOM_PAYLOAD);
+            boolean hasWarning = inbound.header.flags.contains(Envelope.Header.Flag.WARNING);
+
+            UUID tracingId = isRequest || !isTracing ? null : CBUtil.readUUID(inbound.body);
+            List<String> warnings = isRequest || !hasWarning ? null : CBUtil.readStringList(inbound.body);
+            Map<String, ByteBuffer> customPayload = !isCustomPayload ? null : CBUtil.readBytesMap(inbound.body);
+
+            if (isCustomPayload && inbound.header.version.isSmallerThan(ProtocolVersion.V4))
+                throw new ProtocolException("Received frame with CUSTOM_PAYLOAD flag for native protocol version < 4");
+
+            Message message = inbound.header.type.codec.decode(inbound.body, inbound.header.version);
+            message.setStreamId(inbound.header.streamId);
+            message.setSource(inbound);
+            message.setCustomPayload(customPayload);
+
+            if (isRequest)
+            {
+                assert message instanceof Request;
+                Request req = (Request) message;
+                Connection connection = channel.attr(Connection.attributeKey).get();
+                req.attach(connection);
+                if (isTracing)
+                    req.setTracingRequested();
+            }
+            else
+            {
+                assert message instanceof Response;
+                if (isTracing)
+                    ((Response) message).setTracingId(tracingId);
+                if (hasWarning)
+                    ((Response) message).setWarnings(warnings);
+            }
+            return message;
+        }
+

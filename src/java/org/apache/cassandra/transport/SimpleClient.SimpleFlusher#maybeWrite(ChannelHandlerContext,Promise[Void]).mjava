@@ -1,0 +1,39 @@
+        public void maybeWrite(ChannelHandlerContext ctx, Promise<Void> promise)
+        {
+            if (outbound.isEmpty())
+            {
+                promise.setSuccess(null);
+                return;
+            }
+
+            PromiseCombiner combiner = new PromiseCombiner(ctx.executor());
+            List<Envelope> buffer = new ArrayList<>();
+            long bufferSize = 0L;
+            boolean pending = false;
+            Envelope f;
+            while ((f = outbound.poll()) != null)
+            {
+                if (f.header.bodySizeInBytes > MAX_FRAMED_PAYLOAD_SIZE)
+                {
+                    combiner.addAll(writeLargeMessage(ctx, f));
+                }
+                else
+                {
+                    int messageSize = envelopeSize(f.header);
+                    if (bufferSize + messageSize >= MAX_FRAMED_PAYLOAD_SIZE)
+                    {
+                        combiner.add(flushBuffer(ctx, buffer, bufferSize));
+                        buffer.clear();
+                        bufferSize = 0;
+                    }
+                    buffer.add(f);
+                    bufferSize += messageSize;
+                    pending = true;
+                }
+            }
+
+            if (pending)
+                combiner.add(flushBuffer(ctx, buffer, bufferSize));
+            combiner.finish(promise);
+        }
+

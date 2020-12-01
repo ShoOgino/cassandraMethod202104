@@ -1,0 +1,21 @@
+    /**
+     * Note: this method may be executed on the netty event loop, during initial protocol negotiation
+     */
+    static Message.Response processRequest(ServerConnection connection, Message.Request request)
+    {
+        long queryStartNanoTime = System.nanoTime();
+        if (connection.getVersion().isGreaterOrEqualTo(ProtocolVersion.V4))
+            ClientWarn.instance.captureWarnings();
+
+        QueryState qstate = connection.validateNewMessage(request.type, connection.getVersion());
+
+        Message.logger.trace("Received: {}, v={}", request, connection.getVersion());
+        connection.requests.inc();
+        Message.Response response = request.execute(qstate, queryStartNanoTime);
+        response.setStreamId(request.getStreamId());
+        response.setWarnings(ClientWarn.instance.getWarnings());
+        response.attach(connection);
+        connection.applyStateTransition(request.type, response.type);
+        return response;
+    }
+

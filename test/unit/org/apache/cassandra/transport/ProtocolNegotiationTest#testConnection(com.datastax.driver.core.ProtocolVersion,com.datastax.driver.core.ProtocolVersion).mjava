@@ -1,0 +1,37 @@
+    private void testConnection(com.datastax.driver.core.ProtocolVersion requestedVersion,
+                                com.datastax.driver.core.ProtocolVersion expectedVersion)
+    {
+        boolean expectError = requestedVersion != null && requestedVersion != expectedVersion;
+        Cluster.Builder builder = Cluster.builder()
+                                         .addContactPoints(nativeAddr)
+                                         .withClusterName("Test Cluster" + clusterId++)
+                                         .withPort(nativePort);
+
+        if (requestedVersion != null)
+        {
+            if (requestedVersion.toInt() > org.apache.cassandra.transport.ProtocolVersion.CURRENT.asInt())
+                builder = builder.allowBetaProtocolVersion();
+            else
+                builder = builder.withProtocolVersion(requestedVersion);
+        }
+
+        Cluster cluster = builder.build();
+        try (Session session = cluster.connect())
+        {
+            if (expectError)
+                fail("Expected a protocol exception");
+        }
+        catch (Exception e)
+        {
+            if (!expectError)
+            {
+                e.printStackTrace();
+                fail("Did not expect any exception");
+            }
+            e.printStackTrace();
+            assertTrue(e.getMessage().contains(String.format("Host does not support protocol version %s", requestedVersion)));
+        } finally {
+            cluster.closeAsync();
+        }
+    }
+

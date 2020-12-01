@@ -1,0 +1,30 @@
+    private void messageDecodingErrorEncounteredMidFrame(int messageCount, Codec codec)
+    {
+        final int streamWithError = messageCount / 2;
+        TestConsumer consumer = new TestConsumer(new ResultMessage.Void(), codec.encoder);
+        AllocationObserver observer = new AllocationObserver();
+        Message.Decoder<Message.Request> decoder = new FixedDecoder()
+        {
+            Message.Request decode(Channel channel, Envelope source)
+            {
+                if (source.header.streamId != streamWithError)
+                    return super.decode(channel, source);
+
+                throw new RequestExecutionException(ExceptionCode.SYNTAX_ERROR,
+                                                    "Error decoding message " + source.header.streamId)
+                {/*test exception*/};
+            }
+        };
+
+        Predicate<Envelope.Header> responseMatcher =
+            h -> (h.streamId == streamWithError && h.type == Message.Type.ERROR) || h.type == Message.Type.RESULT;
+
+        ServerConfigurator configurator = ServerConfigurator.builder()
+                                                            .withConsumer(consumer)
+                                                            .withAllocationObserver(observer)
+                                                            .withDecoder(decoder)
+                                                            .build();
+
+        runTest(configurator, codec, messageCount, responseMatcher, observer.verifier());
+    }
+

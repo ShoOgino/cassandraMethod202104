@@ -1,0 +1,33 @@
+        public Envelope decompress(Envelope compressed) throws IOException
+        {
+            byte[] input = CBUtil.readRawBytes(compressed.body);
+
+            int uncompressedLength = ((input[0] & 0xFF) << 24)
+                                   | ((input[1] & 0xFF) << 16)
+                                   | ((input[2] & 0xFF) <<  8)
+                                   | ((input[3] & 0xFF));
+
+            ByteBuf output = CBUtil.allocator.heapBuffer(uncompressedLength);
+
+            try
+            {
+                int read = decompressor.decompress(input, INTEGER_BYTES, output.array(), output.arrayOffset(), uncompressedLength);
+                if (read != input.length - INTEGER_BYTES)
+                    throw new IOException("Compressed lengths mismatch");
+
+                output.writerIndex(uncompressedLength);
+
+                return compressed.with(output);
+            }
+            catch (final Throwable e)
+            {
+                output.release();
+                throw e;
+            }
+            finally
+            {
+                //release the old message
+                compressed.release();
+            }
+        }
+

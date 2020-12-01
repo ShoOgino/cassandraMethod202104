@@ -1,0 +1,43 @@
+    private void runTest(ServerConfigurator configurator,
+                         Codec codec,
+                         int messageCount,
+                         Predicate<Envelope.Header> responseMatcher,
+                         LongConsumer allocationVerifier)
+    {
+        Server server = server(configurator);
+        Client client = new Client(codec, messageCount);
+        try
+        {
+            server.start();
+            client.connect(address, port);
+            assertTrue(configurator.waitUntilReady());
+
+            for (int i = 0; i < messageCount; i++)
+                client.send(randomEnvelope(i, Message.Type.OPTIONS));
+
+            long totalBytes = client.sendSize;
+
+            // verify that all messages went through the pipeline & our test message consumer
+            client.awaitResponses();
+            Envelope response;
+            while ((response = client.pollResponses()) != null)
+            {
+                response.release();
+                assertThat(response.header).matches(responseMatcher);
+            }
+
+            // verify that we did have to acquire some resources from the global/endpoint reserves
+            allocationVerifier.accept(totalBytes);
+        }
+        catch (Throwable t)
+        {
+            logger.error("Unexpected error", t);
+            throw new RuntimeException(t);
+        }
+        finally
+        {
+            client.stop();
+            server.stop();
+        }
+    }
+

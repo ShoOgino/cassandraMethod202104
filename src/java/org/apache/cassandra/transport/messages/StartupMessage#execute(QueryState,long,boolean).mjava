@@ -15,18 +15,27 @@
             throw new ProtocolException(e.getMessage());
         }
 
-        ChecksumType checksumType = getChecksumType();
-        Compressor compressor = getCompressor();
+        if (options.containsKey(COMPRESSION))
+        {
+            String compression = options.get(COMPRESSION).toLowerCase();
+            if (compression.equals("snappy"))
+            {
+                if (Compressor.SnappyCompressor.instance == null)
+                    throw new ProtocolException("This instance does not support Snappy compression");
 
-        if (null != checksumType)
-        {
-            if (!connection.getVersion().supportsChecksums())
-                throw new ProtocolException(String.format("Invalid message flag. Protocol version %s does not support frame body checksums", connection.getVersion().toString()));
-            connection.setTransformer(ChecksummingTransformer.getTransformer(checksumType, compressor));
-        }
-        else if (null != compressor)
-        {
-            connection.setTransformer(CompressingTransformer.getTransformer(compressor));
+                if (getSource().header.version.isGreaterOrEqualTo(ProtocolVersion.V5))
+                    throw new ProtocolException("Snappy compression is not supported in protocol V5");
+
+                connection.setCompressor(Compressor.SnappyCompressor.instance);
+            }
+            else if (compression.equals("lz4"))
+            {
+                connection.setCompressor(Compressor.LZ4Compressor.instance);
+            }
+            else
+            {
+                throw new ProtocolException(String.format("Unknown compression algorithm: %s", compression));
+            }
         }
 
         connection.setThrowOnOverload("1".equals(options.get(THROW_ON_OVERLOAD)));

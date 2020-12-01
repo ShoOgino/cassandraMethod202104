@@ -1,0 +1,35 @@
+    @Test
+    public void handleErrorDuringNegotiation() throws Throwable
+    {
+        int messageCount = 0;
+        Codec codec = Codec.crc(alloc);
+        AllocationObserver observer = new AllocationObserver();
+        InboundProxyHandler.Controller controller = new InboundProxyHandler.Controller();
+        // Force protocol version to an unsupported version
+        controller.withPayloadTransform(msg -> {
+            ByteBuf bb = (ByteBuf)msg;
+            bb.setByte(0, 99 & Envelope.PROTOCOL_VERSION_MASK);
+            return msg;
+        });
+
+        ServerConfigurator configurator = ServerConfigurator.builder()
+                                                            .withAllocationObserver(observer)
+                                                            .withProxyController(controller)
+                                                            .build();
+        Server server = server(configurator);
+        Client client = new Client(codec, messageCount);
+        server.start();
+        client.connect(address, port);
+        assertFalse(client.isConnected());
+        assertThat(client.getConnectionError())
+            .isNotNull()
+            .matches(message ->
+                message.error.getMessage()
+                             .equals("Invalid or unsupported protocol version (99); " +
+                                     "supported versions are (3/v3, 4/v4, 5/v5-beta)"));
+        server.stop();
+
+        // the failure happens before any capacity is allocated
+        observer.verifier().accept(0);
+    }
+

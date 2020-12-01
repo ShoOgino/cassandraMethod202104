@@ -1,0 +1,42 @@
+    public Map<Message.Request, Message.Response> execute(List<Message.Request> requests)
+    {
+        try
+        {
+            Map<Message.Request, Message.Response> rrMap = new HashMap<>();
+
+            if (version.isGreaterOrEqualTo(ProtocolVersion.V5))
+            {
+                for (int i = 0; i < requests.size(); i++)
+                {
+                    Message.Request message = requests.get(i);
+                    message.setStreamId(i);
+                    message.attach(connection);
+                }
+                lastWriteFuture = channel.writeAndFlush(requests);
+
+                long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
+                for (int i = 0; i < requests.size(); i++)
+                {
+                    Message.Response msg = responseHandler.responses.poll(deadline - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
+                    if (msg == null)
+                        throw new RuntimeException("timeout");
+                    if (msg instanceof ErrorMessage)
+                        throw new RuntimeException((Throwable) ((ErrorMessage) msg).error);
+                    rrMap.put(requests.get(msg.getStreamId()), msg);
+                }
+            }
+            else
+            {
+                // V4 doesn't support batching
+                for (Message.Request request : requests)
+                    rrMap.put(request, execute(request));
+            }
+
+            return rrMap;
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+

@@ -1,0 +1,89 @@
+    public Envelope encode(ProtocolVersion version)
+    {
+        EnumSet<Envelope.Header.Flag> flags = EnumSet.noneOf(Envelope.Header.Flag.class);
+        @SuppressWarnings("unchecked")
+        Codec<Message> codec = (Codec<Message>)this.type.codec;
+        try
+        {
+            int messageSize = codec.encodedSize(this, version);
+            ByteBuf body;
+            if (this instanceof Response)
+            {
+                Response message = (Response)this;
+                UUID tracingId = message.getTracingId();
+                Map<String, ByteBuffer> customPayload = message.getCustomPayload();
+                if (tracingId != null)
+                    messageSize += CBUtil.sizeOfUUID(tracingId);
+                List<String> warnings = message.getWarnings();
+                if (warnings != null)
+                {
+                    if (version.isSmallerThan(ProtocolVersion.V4))
+                        throw new ProtocolException("Must not send frame with WARNING flag for native protocol version < 4");
+                    messageSize += CBUtil.sizeOfStringList(warnings);
+                }
+                if (customPayload != null)
+                {
+                    if (version.isSmallerThan(ProtocolVersion.V4))
+                        throw new ProtocolException("Must not send frame with CUSTOM_PAYLOAD flag for native protocol version < 4");
+                    messageSize += CBUtil.sizeOfBytesMap(customPayload);
+                }
+                body = CBUtil.allocator.buffer(messageSize);
+                if (tracingId != null)
+                {
+                    CBUtil.writeUUID(tracingId, body);
+                    flags.add(Envelope.Header.Flag.TRACING);
+                }
+                if (warnings != null)
+                {
+                    CBUtil.writeStringList(warnings, body);
+                    flags.add(Envelope.Header.Flag.WARNING);
+                }
+                if (customPayload != null)
+                {
+                    CBUtil.writeBytesMap(customPayload, body);
+                    flags.add(Envelope.Header.Flag.CUSTOM_PAYLOAD);
+                }
+            }
+            else
+            {
+                assert this instanceof Request;
+                if (((Request)this).isTracingRequested())
+                    flags.add(Envelope.Header.Flag.TRACING);
+                Map<String, ByteBuffer> payload = getCustomPayload();
+                if (payload != null)
+                    messageSize += CBUtil.sizeOfBytesMap(payload);
+                body = CBUtil.allocator.buffer(messageSize);
+                if (payload != null)
+                {
+                    CBUtil.writeBytesMap(payload, body);
+                    flags.add(Envelope.Header.Flag.CUSTOM_PAYLOAD);
+                }
+            }
+
+            try
+            {
+                codec.encode(this, body, version);
+            }
+            catch (Throwable e)
+            {
+                body.release();
+                throw e;
+            }
+
+            // if the driver attempted to connect with a protocol version lower than the minimum supported
+            // version, respond with a protocol error message with the correct message header for that version
+            ProtocolVersion responseVersion = forcedProtocolVersion == null
+                                              ? version
+                                              : forcedProtocolVersion;
+
+            if (responseVersion.isBeta())
+                flags.add(Envelope.Header.Flag.USE_BETA);
+
+            return Envelope.create(type, getStreamId(), responseVersion, flags, body);
+        }
+        catch (Throwable e)
+        {
+            throw ErrorMessage.wrap(e, getStreamId());
+        }
+    }
+

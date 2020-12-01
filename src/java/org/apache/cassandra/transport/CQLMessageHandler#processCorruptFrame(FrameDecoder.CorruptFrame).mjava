@@ -1,0 +1,30 @@
+    /*
+     * Although it would be possible to recover when certain types of corrupt frame are encountered,
+     * this could cause problems for clients as the payload may contain CQL messages from multiple
+     * streams. Simply dropping the corrupt frame or returning an error response would not give the
+     * client enough information to map back to inflight requests, leading to timeouts.
+     * Instead, we need to fail fast, possibly dropping the connection whenever a corrupt frame is
+     * encountered. Consequently, we terminate the connection (via a ProtocolException) whenever a
+     * corrupt frame is encountered, regardless of its type.
+     */
+    protected void processCorruptFrame(FrameDecoder.CorruptFrame frame)
+    {
+        corruptFramesUnrecovered++;
+        String error = String.format("%s invalid, unrecoverable CRC mismatch detected in frame %s. Read %d, Computed %d",
+                                     id(), frame.isRecoverable() ? "body" : "header", frame.readCRC, frame.computedCRC);
+
+        noSpamLogger.error(error);
+
+        // If this is part of a multi-frame message, process it before passing control to the error handler.
+        // This is so we can take care of any housekeeping associated with large messages.
+        if (!frame.isSelfContained)
+        {
+            if (null == largeMessage) // first frame of a large message
+                receivedBytes += frame.frameSize;
+            else // subsequent frame of a large message
+                processSubsequentFrameOfLargeMessage(frame);
+        }
+
+        handleError(new ProtocolException(error));
+    }
+

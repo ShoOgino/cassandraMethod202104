@@ -1,0 +1,50 @@
+    @Test
+    public void handleCorruptionAfterNegotiation() throws Throwable
+    {
+        // A corrupt messaging frame should terminate the connection as clients
+        // generally don't track which stream IDs are present in the frame, and the
+        // server has no way to signal which streams are affected.
+        // Before closing, the server should send an ErrorMessage to inform the
+        // client of the corrupt message.
+        int messageCount = 10;
+        Codec codec = Codec.crc(alloc);
+        AllocationObserver observer = new AllocationObserver();
+        InboundProxyHandler.Controller controller = new InboundProxyHandler.Controller();
+
+        ServerConfigurator configurator = ServerConfigurator.builder()
+                                                            .withAllocationObserver(observer)
+                                                            .withProxyController(controller)
+                                                            .build();
+        Server server = server(configurator);
+        Client client = new Client(codec, messageCount);
+        server.start();
+        client.connect(address, port);
+        assertTrue(client.isConnected());
+
+        // Only install the transform after protocol negotiation is complete
+        controller.withPayloadTransform(msg -> {
+            // Corrupt frame
+            ByteBuf bb = (ByteBuf) msg;
+            bb.setByte(bb.readableBytes() / 2, 0xffff);
+            return msg;
+        });
+
+        for (int i=0; i < messageCount; i++)
+            client.send(randomEnvelope(i, Message.Type.OPTIONS));
+
+        client.awaitResponses();
+        // Client has disconnected
+        assertFalse(client.isConnected());
+        // But before it did, it sent an error response
+        Envelope receieved = client.inboundMessages.poll();
+        assertNotNull(receieved);
+        Message.Response response = Message.responseDecoder().decode(client.channel, receieved);
+        assertEquals(Message.Type.ERROR, response.type);
+        assertTrue(((ErrorMessage)response).error.getMessage().contains("unrecoverable CRC mismatch detected in frame body"));
+
+        // the failure happens before any capacity is allocated
+        observer.verifier().accept(0);
+
+        server.stop();
+    }
+

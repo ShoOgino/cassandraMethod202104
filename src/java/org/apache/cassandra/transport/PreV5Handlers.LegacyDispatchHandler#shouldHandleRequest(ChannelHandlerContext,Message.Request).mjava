@@ -1,0 +1,42 @@
+        /**
+         * This check for inflight payload to potentially discard the request should have been ideally in one of the
+         * first handlers in the pipeline (Envelope.Decoder::decode()). However, incase of any exception thrown between that
+         * handler (where inflight payload is incremented) and this handler (Dispatcher::channelRead0) (where inflight
+         * payload in decremented), inflight payload becomes erroneous. ExceptionHandler is not sufficient for this
+         * purpose since it does not have the message envelope associated with the exception.
+         * <p>
+         * Note: this method should execute on the netty event loop.
+         */
+        private boolean shouldHandleRequest(ChannelHandlerContext ctx, Message.Request request)
+        {
+            long requestSize = request.getSource().header.bodySizeInBytes;
+
+            // check for overloaded state by trying to allocate the message size from inflight payload trackers
+            if (endpointPayloadTracker.tryAllocate(requestSize) != ResourceLimits.Outcome.SUCCESS)
+            {
+                if (request.connection.isThrowOnOverload())
+                {
+                    // discard the request and throw an exception
+                    ClientMetrics.instance.markRequestDiscarded();
+                    logger.trace("Discarded request of size: {}. InflightChannelRequestPayload: {}, {}, Request: {}",
+                                 requestSize,
+                                 channelPayloadBytesInFlight,
+                                 endpointPayloadTracker.toString(),
+                                 request);
+                    throw ErrorMessage.wrap(new OverloadedException("Server is in overloaded state. Cannot accept more requests at this point"),
+                                            request.getSource().header.streamId);
+                }
+                else
+                {
+                    // set backpressure on the channel, and handle the request
+                    endpointPayloadTracker.allocate(requestSize);
+                    ctx.channel().config().setAutoRead(false);
+                    ClientMetrics.instance.pauseConnection();
+                    paused = true;
+                }
+            }
+
+            channelPayloadBytesInFlight += requestSize;
+            return true;
+        }
+

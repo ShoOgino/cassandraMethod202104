@@ -1,0 +1,58 @@
+    protected EncryptionConfig encryptionConfig()
+    {
+        final EncryptionOptions encryptionOptions = DatabaseDescriptor.getNativeProtocolEncryptionOptions();
+        switch (tlsEncryptionPolicy)
+        {
+            case UNENCRYPTED:
+                // if encryption is not enabled, no further steps are required after the initial setup
+                return channel -> {};
+            case OPTIONAL:
+                // If optional, install a handler which detects whether or not the client is sending
+                // encrypted bytes. If so, on receipt of the next bytes, replace that handler with
+                // an SSL Handler, otherwise just remove it and proceed with an unencrypted channel.
+                logger.debug("Enabling optionally encrypted CQL connections between client and server");
+                return channel -> {
+                    SslContext sslContext = SSLFactory.getOrCreateSslContext(encryptionOptions,
+                                                                             encryptionOptions.require_client_auth,
+                                                                             SSLFactory.SocketType.SERVER);
+
+                    channel.pipeline().addFirst(SSL_HANDLER, new ByteToMessageDecoder()
+                    {
+                        @Override
+                        protected void decode(ChannelHandlerContext channelHandlerContext, ByteBuf byteBuf, List<Object> list) throws Exception
+                        {
+                            if (byteBuf.readableBytes() < 5)
+                            {
+                                // To detect if SSL must be used we need to have at least 5 bytes, so return here and try again
+                                // once more bytes a ready.
+                                return;
+                            }
+                            if (SslHandler.isEncrypted(byteBuf))
+                            {
+                                // Connection uses SSL/TLS, replace the detection handler with a SslHandler and so use
+                                // encryption.
+                                SslHandler sslHandler = sslContext.newHandler(channel.alloc());
+                                channelHandlerContext.pipeline().replace(SSL_HANDLER, SSL_HANDLER, sslHandler);
+                            }
+                            else
+                            {
+                                // Connection use no TLS/SSL encryption, just remove the detection handler and continue without
+                                // SslHandler in the pipeline.
+                                channelHandlerContext.pipeline().remove(SSL_HANDLER);
+                            }
+                        }
+                    });
+                };
+            case ENCRYPTED:
+                logger.debug("Enabling encrypted CQL connections between client and server");
+                return channel -> {
+                    SslContext sslContext = SSLFactory.getOrCreateSslContext(encryptionOptions,
+                                                                             encryptionOptions.require_client_auth,
+                                                                             SSLFactory.SocketType.SERVER);
+                    channel.pipeline().addFirst(SSL_HANDLER, sslContext.newHandler(channel.alloc()));
+                };
+            default:
+                throw new IllegalStateException("Unrecognized TLS encryption policy: " + this.tlsEncryptionPolicy);
+        }
+    }
+

@@ -1,0 +1,52 @@
+        @Override
+        public boolean apply(Throwable exception)
+        {
+            String message;
+            try
+            {
+                message = "Unexpected exception during request; channel = " + channel;
+            }
+            catch (Exception ignore)
+            {
+                // We don't want to make things worse if String.valueOf() throws an exception
+                message = "Unexpected exception during request; channel = <unprintable>";
+            }
+
+            // netty wraps SSL errors in a CodecExcpetion
+            if (!alwaysLogAtError && (exception instanceof IOException || (exception.getCause() instanceof IOException)))
+            {
+                String errorMessage = exception.getMessage();
+                boolean logAtTrace = false;
+
+                for (String ioException : ioExceptionsAtDebugLevel)
+                {
+                    // exceptions thrown from the netty epoll transport add the name of the function that failed
+                    // to the exception string (which is simply wrapping a JDK exception), so we can't do a simple/naive comparison
+                    if (errorMessage.contains(ioException))
+                    {
+                        logAtTrace = true;
+                        break;
+                    }
+                }
+
+                if (logAtTrace)
+                {
+                    // Likely unclean client disconnects
+                    logger.trace(message, exception);
+                }
+                else
+                {
+                    // Generally unhandled IO exceptions are network issues, not actual ERRORS
+                    logger.info(message, exception);
+                }
+            }
+            else
+            {
+                // Anything else is probably a bug in server of client binary protocol handling
+                logger.error(message, exception);
+            }
+
+            // We handled the exception.
+            return true;
+        }
+

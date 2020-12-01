@@ -1,0 +1,50 @@
+    protected boolean processOneContainedMessage(ShareableBytes bytes, Limit endpointReserve, Limit globalReserve)
+    {
+        Envelope.Header header = extractHeader(bytes);
+        // null indicates a failure to extract the CQL message header.
+        // This will trigger a protocol exception and closing of the connection.
+        if (null == header)
+            return false;
+
+        // max CQL message size defaults to 256mb, so should be safe to downcast
+        int messageSize = Ints.checkedCast(header.bodySizeInBytes);
+
+        if (throwOnOverload)
+        {
+            if (!acquireCapacity(header, endpointReserve, globalReserve))
+            {
+                // discard the request and throw an exception
+                ClientMetrics.instance.markRequestDiscarded();
+                logger.trace("Discarded request of size: {}. InflightChannelRequestPayload: {}, " +
+                             "InflightEndpointRequestPayload: {}, InflightOverallRequestPayload: {}, Header: {}",
+                             messageSize,
+                             channelPayloadBytesInFlight,
+                             endpointReserve.using(),
+                             globalReserve.using(),
+                             header);
+
+                handleError(new OverloadedException("Server is in overloaded state. " +
+                                                    "Cannot accept more requests at this point"), header);
+
+                // Don't stop processing incoming messages, rely on the client to apply
+                // backpressure when it receives OverloadedException
+                // but discard this message as we're responding with the overloaded error
+                incrementReceivedMessageMetrics(messageSize);
+                ByteBuffer buf = bytes.get();
+                buf.position(buf.position() + Envelope.Header.LENGTH + messageSize);
+                return true;
+            }
+        }
+        else if (!acquireCapacityAndQueueOnFailure(header, endpointReserve, globalReserve))
+        {
+            // set backpressure on the channel, queuing the request until we have capacity
+            ClientMetrics.instance.pauseConnection();
+            return false;
+        }
+
+        channelPayloadBytesInFlight += messageSize;
+        incrementReceivedMessageMetrics(messageSize);
+        processRequest(composeRequest(header, bytes));
+        return true;
+    }
+

@@ -1,0 +1,32 @@
+    private static void initializeNetwork(Consumer<Server.Builder> decorator)
+    {
+        Server.Builder serverBuilder = new Server.Builder().withHost(nativeAddr).withPort(nativePort);
+        decorator.accept(serverBuilder);
+        server = serverBuilder.build();
+        ClientMetrics.instance.init(Collections.singleton(server));
+        server.start();
+
+        for (ProtocolVersion version : PROTOCOL_VERSIONS)
+        {
+            if (clusters.containsKey(version))
+                continue;
+
+            Cluster.Builder builder = Cluster.builder()
+                                             .withoutJMXReporting()
+                                             .addContactPoints(nativeAddr)
+                                             .withClusterName("Test Cluster")
+                                             .withPort(nativePort);
+
+            if (version.isBeta())
+                builder = builder.allowBetaProtocolVersion();
+            else
+                builder = builder.withProtocolVersion(com.datastax.driver.core.ProtocolVersion.fromInt(version.asInt()));
+
+            Cluster cluster = builder.build();
+            clusters.put(version, cluster);
+            sessions.put(version, cluster.connect());
+
+            logger.info("Started Java Driver instance for protocol version {}", version);
+        }
+    }
+

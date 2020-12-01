@@ -1,0 +1,58 @@
+    private void backPressureTest(Runnable limitLifter, Consumer<ClientResourceLimits.ResourceProvider> signaller)
+    throws Throwable
+    {
+        final AtomicReference<Exception> error = new AtomicReference<>();
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch complete = new CountDownLatch(1);
+        try(SimpleClient client = client(false))
+        {
+            QueryMessage queryMessage = new QueryMessage("CREATE TABLE atable (pk int PRIMARY KEY, v text)",
+                                                         V5_DEFAULT_OPTIONS);
+            client.execute(queryMessage);
+
+            // There should be no paused client connections yet
+            Gauge<Integer> pausedConnections = getPausedConnectionsGauge();
+            int before = pausedConnections.getValue();
+
+            Thread t = new Thread(() -> {
+                try
+                {
+                    started.countDown();
+                    client.execute(queryMessage());
+                    complete.countDown();
+                }
+                catch (Exception e)
+                {
+                    // if backpressure blocks the request execution for too long
+                    // (10 seconds per SimpleClient), we'll catch a timeout exception
+                    error.set(e);
+                }
+            });
+            t.start();
+
+            // When the client attempts to execute the second query, the backpressure
+            // mechanism should report the client connection is paused
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            spinAssertEquals("Timed out after waiting 5 seconds for paused " +
+                             "connections metric to increment due to backpressure",
+                             before + 1, pausedConnections::getValue, 5, TimeUnit.SECONDS);
+
+            // verify the request hasn't completed
+            assertFalse(complete.await(1, TimeUnit.SECONDS));
+
+            // backpressure has been applied, if we increase the limits of the exhausted reserve and signal
+            // the appropriate WaitQueue, it should be released and the client request will complete
+            limitLifter.run();
+            // We need a ResourceProvider to get access to the WaitQueue
+            ClientResourceLimits.Allocator allocator = ClientResourceLimits.getAllocatorForEndpoint(FBUtilities.getJustLocalAddress());
+            ClientResourceLimits.ResourceProvider queueHandle = new ClientResourceLimits.ResourceProvider.Default(allocator);
+            signaller.accept(queueHandle);
+
+            // SimpleClient has a 10 second timeout, so if we have to wait
+            // longer than that assume that we're not going to receive a
+            // reply. If all's well, the completion should happen immediately
+            assertTrue(complete.await(11, TimeUnit.SECONDS));
+            assertNull(error.get());
+        }
+    }
+

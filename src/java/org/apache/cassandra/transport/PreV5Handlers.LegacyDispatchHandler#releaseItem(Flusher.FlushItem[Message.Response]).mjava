@@ -1,0 +1,31 @@
+        private void releaseItem(Flusher.FlushItem<Message.Response> item)
+        {
+            // Note: in contrast to the equivalent for V5 protocol, CQLMessageHandler::release(FlushItem item),
+            // this does not release the FlushItem's Message.Response. In V4, the buffers for the response's body
+            // and serialised header are emitted directly down the Netty pipeline from Envelope.Encoder, so
+            // releasing them is handled by the pipeline itself.
+            long itemSize = item.request.header.bodySizeInBytes;
+            item.request.release();
+
+            // since the request has been processed, decrement inflight payload at channel, endpoint and global levels
+            channelPayloadBytesInFlight -= itemSize;
+            ResourceLimits.Outcome endpointGlobalReleaseOutcome = endpointPayloadTracker.release(itemSize);
+
+            // now check to see if we need to reenable the channel's autoRead.
+            // If the current payload side is zero, we must reenable autoread as
+            // 1) we allow no other thread/channel to do it, and
+            // 2) there's no other events following this one (becuase we're at zero bytes in flight),
+            // so no successive to trigger the other clause in this if-block
+            //
+            // note: this path is only relevant when part of a pre-V5 pipeline, as only in this case is
+            // paused ever set to true. In pipelines configured for V5 or later, backpressure and control
+            // over the inbound pipeline's autoread status are handled by the FrameDecoder/FrameProcessor.
+            ChannelConfig config = item.channel.config();
+            if (paused && (channelPayloadBytesInFlight == 0 || endpointGlobalReleaseOutcome == ResourceLimits.Outcome.BELOW_LIMIT))
+            {
+                paused = false;
+                ClientMetrics.instance.unpauseConnection();
+                config.setAutoRead(true);
+            }
+        }
+

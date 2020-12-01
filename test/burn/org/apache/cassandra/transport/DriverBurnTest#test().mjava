@@ -1,0 +1,118 @@
+    @Test
+    public void test() throws Throwable
+    {
+        final SizeCaps smallMessageCap = new SizeCaps(10, 20, 5, 10);
+        final SizeCaps largeMessageCap = new SizeCaps(1000, 2000, 5, 150);
+        int largeMessageFrequency = 1000;
+
+        Message.Type.QUERY.unsafeSetCodec(new Message.Codec<QueryMessage>() {
+            public QueryMessage decode(ByteBuf body, ProtocolVersion version)
+            {
+                QueryMessage queryMessage = QueryMessage.codec.decode(body, version);
+                return new QueryMessage(queryMessage.query, queryMessage.options) {
+                    protected Message.Response execute(QueryState state, long queryStartNanoTime, boolean traceRequest)
+                    {
+                        try
+                        {
+                            int idx = Integer.parseInt(queryMessage.query);
+                            SizeCaps caps = idx % largeMessageFrequency == 0 ? largeMessageCap : smallMessageCap;
+                            return generateRows(idx, caps);
+                        }
+                        catch (NumberFormatException e)
+                        {
+                            // for the requests driver issues under the hood
+                            return super.execute(state, queryStartNanoTime, traceRequest);
+                        }
+                    }
+                };
+            }
+
+            public void encode(QueryMessage queryMessage, ByteBuf dest, ProtocolVersion version)
+            {
+                QueryMessage.codec.encode(queryMessage, dest, version);
+            }
+
+            public int encodedSize(QueryMessage queryMessage, ProtocolVersion version)
+            {
+                return 0;
+            }
+        });
+
+        List<AssertUtil.ThrowingSupplier<Cluster.Builder>> suppliers =
+        Arrays.asList(() -> Cluster.builder().addContactPoint(nativeAddr.getHostAddress())
+                                   .withProtocolVersion(com.datastax.driver.core.ProtocolVersion.V4)
+                                   .withPort(nativePort),
+                      () -> Cluster.builder().addContactPoint(nativeAddr.getHostAddress())
+                                   .allowBetaProtocolVersion()
+                                   .withPort(nativePort),
+                      () -> Cluster.builder().addContactPoint(nativeAddr.getHostAddress())
+                                   .withCompression(ProtocolOptions.Compression.LZ4)
+                                   .allowBetaProtocolVersion()
+                                   .withPort(nativePort),
+                      () -> Cluster.builder().addContactPoint(nativeAddr.getHostAddress())
+                                   .withCompression(ProtocolOptions.Compression.LZ4)
+                                   .withProtocolVersion(com.datastax.driver.core.ProtocolVersion.V4)
+                                   .withPort(nativePort)
+        );
+
+        int threads = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        CountDownLatch signal = new CountDownLatch(1);
+
+        for (int t = 0; t < threads; t++)
+        {
+            int threadId = t;
+            executor.execute(() -> {
+                try (Cluster driver = suppliers.get(threadId % suppliers.size()).get().build();
+                     Session session = driver.connect())
+                {
+                    int counter = 0;
+                    while(!Thread.interrupted())
+                    {
+                        Map<Integer, ResultSetFuture> futures = new HashMap<>();
+
+                        for (int j = 0; j < 10; j++)
+                        {
+                            int descriptor = counter + j * 100 + threadId * 10000;
+                            SizeCaps caps = descriptor % largeMessageFrequency == 0 ? largeMessageCap : smallMessageCap;
+                            futures.put(j, session.executeAsync(generateQueryStatement(descriptor, caps)));
+                        }
+
+                        for (Map.Entry<Integer, ResultSetFuture> e : futures.entrySet())
+                        {
+                            final int j = e.getKey().intValue();
+                            final int descriptor = counter + j * 100 + threadId * 10000;
+                            SizeCaps caps = descriptor % largeMessageFrequency == 0 ? largeMessageCap : smallMessageCap;
+                            ResultMessage.Rows expectedRS = generateRows(descriptor, caps);
+                            List<Row> actualRS = e.getValue().get().all();
+
+                            for (int i = 0; i < actualRS.size(); i++)
+                            {
+                                List<ByteBuffer> expected = expectedRS.result.rows.get(i);
+                                Row actual = actualRS.get(i);
+
+                                for (int col = 0; col < expected.size(); col++)
+                                    Assert.assertEquals(actual.getBytes(col), expected.get(col));
+                            }
+                        }
+                        counter++;
+                    }
+                }
+                catch (Throwable e)
+                {
+                    e.printStackTrace();
+                    error.set(e);
+                    signal.countDown();
+                }
+            });
+        }
+
+        Assert.assertFalse(signal.await(120, TimeUnit.SECONDS));
+        executor.shutdown();
+        executor.awaitTermination(10, TimeUnit.SECONDS);
+
+        assertThat(allocationObserver.endpointAllocationTotal()).isEqualTo(allocationObserver.endpointReleaseTotal());
+        assertThat(allocationObserver.globalAllocationTotal()).isEqualTo(allocationObserver.globalReleaseTotal());
+    }
+

@@ -1,0 +1,104 @@
+        private void configureModernPipeline(ChannelHandlerContext ctx, Envelope response)
+        {
+            logger.info("Configuring modern pipeline");
+            ChannelPipeline pipeline = ctx.pipeline();
+            pipeline.remove(HandlerNames.ENVELOPE_DECODER);
+            pipeline.remove(HandlerNames.MESSAGE_DECODER);
+            pipeline.remove(HandlerNames.MESSAGE_ENCODER);
+            pipeline.remove(HandlerNames.RESPONSE_HANDLER);
+
+            BufferPoolAllocator allocator = GlobalBufferPoolAllocator.instance;
+            Channel channel = ctx.channel();
+            channel.config().setOption(ChannelOption.ALLOCATOR, allocator);
+            int queueCapacity = 1 << 20;  // 1MiB
+
+            Envelope.Decoder envelopeDecoder = new Envelope.Decoder();
+            Message.Decoder<Message.Response> messageDecoder = Message.responseDecoder();
+            FrameDecoder frameDecoder = frameDecoder(ctx, allocator);
+            FrameEncoder frameEncoder = frameEncoder(ctx);
+            FrameEncoder.PayloadAllocator payloadAllocator = frameEncoder.allocator();
+
+            CQLMessageHandler.MessageConsumer<Message.Response> responseConsumer = (c, message, converter) -> {
+                responseHandler.handleResponse(c, message);
+            };
+
+            CQLMessageHandler.ErrorHandler errorHandler = (error) -> {
+                throw new RuntimeException("Unexpected error", error);
+            };
+
+            ClientResourceLimits.ResourceProvider resources = new ClientResourceLimits.ResourceProvider()
+            {
+                final ResourceLimits.Limit endpointReserve = new ResourceLimits.Basic(1024 * 1024 * 64);
+                final AbstractMessageHandler.WaitQueue endpointQueue = AbstractMessageHandler.WaitQueue.endpoint(endpointReserve);
+
+                final ResourceLimits.Limit globalReserve = new ResourceLimits.Basic(1024 * 1024 * 64);
+                final AbstractMessageHandler.WaitQueue globalQueue = AbstractMessageHandler.WaitQueue.global(endpointReserve);
+
+                public ResourceLimits.Limit globalLimit()
+                {
+                    return globalReserve;
+                }
+
+                public AbstractMessageHandler.WaitQueue globalWaitQueue()
+                {
+                    return globalQueue;
+                }
+
+                public ResourceLimits.Limit endpointLimit()
+                {
+                    return endpointReserve;
+                }
+
+                public AbstractMessageHandler.WaitQueue endpointWaitQueue()
+                {
+                    return endpointQueue;
+                }
+
+                public void release()
+                {
+                }
+            };
+
+            CQLMessageHandler<Message.Response> processor =
+                new CQLMessageHandler<Message.Response>(ctx.channel(),
+                                        frameDecoder,
+                                        envelopeDecoder,
+                                        messageDecoder,
+                                        responseConsumer,
+                                        payloadAllocator,
+                                        queueCapacity,
+                                        resources,
+                                        handler -> {},
+                                        errorHandler,
+                                        ctx.channel().attr(Connection.attributeKey).get().isThrowOnOverload())
+                {
+                    protected void processRequest(Envelope request)
+                    {
+                        super.processRequest(request);
+                        releaseCapacity(Ints.checkedCast(request.header.bodySizeInBytes));
+                    }
+                };
+
+            pipeline.addLast(HandlerNames.FRAME_DECODER, frameDecoder);
+            pipeline.addLast(HandlerNames.FRAME_ENCODER, frameEncoder);
+            pipeline.addLast(HandlerNames.PROCESSOR, processor);
+            pipeline.addLast(HandlerNames.MESSAGE_ENCODER, new ChannelOutboundHandlerAdapter() {
+
+                public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception
+                {
+                    Connection connection = ctx.channel().attr(Connection.attributeKey).get();
+                    // The only case the connection can be null is when we send the initial STARTUP message (client side thus)
+                    ProtocolVersion version = connection == null ? ProtocolVersion.CURRENT : connection.getVersion();
+                    SimpleFlusher flusher = new SimpleFlusher(frameEncoder);
+                    for (Message message : (List<Message>) msg)
+                        flusher.enqueue(message.encode(version));
+
+                    flusher.maybeWrite(ctx, promise);
+                }
+            });
+            pipeline.remove(this);
+
+            Message.Response message = messageDecoder.decode(ctx.channel(), response);
+            responseConsumer.accept(channel, message, (ch, req, resp) -> null);
+        }
+

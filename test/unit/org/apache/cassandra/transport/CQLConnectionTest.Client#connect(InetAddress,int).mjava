@@ -1,0 +1,125 @@
+        private void connect(InetAddress address, int port) throws IOException, InterruptedException
+        {
+            final CountDownLatch ready = new CountDownLatch(1);
+            Bootstrap bootstrap = new Bootstrap()
+                                    .group(new NioEventLoopGroup(0, new NamedThreadFactory("TEST-CLIENT")))
+                                    .channel(io.netty.channel.socket.nio.NioSocketChannel.class)
+                                    .option(ChannelOption.TCP_NODELAY, true);
+            bootstrap.handler(new ChannelInitializer<Channel>()
+            {
+                protected void initChannel(Channel channel) throws Exception
+                {
+                    BufferPoolAllocator allocator = GlobalBufferPoolAllocator.instance;
+                    channel.config().setOption(ChannelOption.ALLOCATOR, allocator);
+                    ChannelPipeline pipeline = channel.pipeline();
+                    // Outbound handlers to enable us to send the initial STARTUP
+                    pipeline.addLast("envelopeEncoder", Envelope.Encoder.instance);
+                    pipeline.addLast("messageEncoder", PreV5Handlers.ProtocolEncoder.instance);
+                    pipeline.addLast("envelopeDecoder", new Envelope.Decoder());
+                    // Inbound handler to perform the handshake & modify the pipeline on receipt of a READY
+                    pipeline.addLast("handshake", new MessageToMessageDecoder<Envelope>()
+                    {
+                        final Envelope.Decoder decoder = new Envelope.Decoder();
+                        protected void decode(ChannelHandlerContext ctx, Envelope msg, List<Object> out) throws Exception
+                        {
+                            // Handle ERROR responses during initial connection and protocol negotiation
+                            if ( msg.header.type == Message.Type.ERROR)
+                            {
+                                connectionError = (ErrorMessage)Message.responseDecoder()
+                                                                       .decode(ctx.channel(), msg);
+
+                                msg.release();
+                                logger.info("ERROR");
+                                stop();
+                                ready.countDown();
+                                return;
+                            }
+
+                            // As soon as we receive a READY message, modify the pipeline
+                            assert msg.header.type == Message.Type.READY;
+                            msg.release();
+
+                            // just split the messaging into cql messages and stash them for verification
+                            FrameDecoder.FrameProcessor processor =  frame -> {
+                                if (frame instanceof FrameDecoder.IntactFrame)
+                                {
+                                    ByteBuffer bytes = ((FrameDecoder.IntactFrame)frame).contents.get();
+                                    while(bytes.hasRemaining())
+                                    {
+                                        ByteBuf buffer = Unpooled.wrappedBuffer(bytes);
+                                        try
+                                        {
+                                            inboundMessages.add(decoder.decode(buffer));
+                                            responsesReceived.countDown();
+                                        }
+                                        catch (Exception e)
+                                        {
+                                            throw new IOException(e);
+                                        }
+                                        bytes.position(bytes.position() + buffer.readerIndex());
+                                    }
+                                }
+                                return true;
+                            };
+
+                            // for testing purposes, don't actually encode CQL messages,
+                            // we supply messaging frames directly to this client
+                            channel.pipeline().remove("envelopeEncoder");
+                            channel.pipeline().remove("messageEncoder");
+                            channel.pipeline().remove("envelopeDecoder");
+
+                            // replace this handshake handler with an inbound message frame decoder
+                            channel.pipeline().replace(this, "frameDecoder", codec.decoder);
+                            // add an outbound message frame encoder
+                            channel.pipeline().addLast("frameEncoder", codec.encoder);
+                            channel.pipeline().addLast("errorHandler", new ChannelInboundHandlerAdapter()
+                            {
+                                @Override
+                                public void exceptionCaught(final ChannelHandlerContext ctx, Throwable cause) throws Exception
+                                {
+                                    // if the connection is closed finish early as
+                                    // we don't want to wait for expected responses
+                                    if (cause instanceof IOException)
+                                    {
+                                        connected = false;
+                                        disconnectionError = cause;
+                                        int remaining = (int) responsesReceived.getCount();
+                                        for (int i=0; i < remaining; i++)
+                                            responsesReceived.countDown();
+                                    }
+                                }
+                            });
+                            codec.decoder.activate(processor);
+                            connected = true;
+                            // Schedule the proto-flusher to collate any messages that have been
+                            // written, via enqueue(Envelope message), and flush them to the outbound pipeline
+                            flusher.schedule(channel.pipeline().lastContext());
+                            ready.countDown();
+                        }
+                    });
+                }
+            });
+
+            ChannelFuture future = bootstrap.connect(address, port);
+
+            // Wait until the connection attempt succeeds or fails.
+            channel = future.awaitUninterruptibly().channel();
+            if (!future.isSuccess())
+            {
+                bootstrap.group().shutdownGracefully();
+                throw new IOException("Connection Error", future.cause());
+            }
+
+            // Send an initial STARTUP message to kick off the handshake with the server
+            Map<String, String> options = new HashMap<>();
+            options.put(StartupMessage.CQL_VERSION, QueryProcessor.CQL_VERSION.toString());
+            if (codec.encoder instanceof FrameEncoderLZ4)
+                options.put(StartupMessage.COMPRESSION, "LZ4");
+            Connection connection = new Connection(channel, ProtocolVersion.V5, (ch, connection1) -> {});
+            channel.attr(Connection.attributeKey).set(connection);
+            channel.writeAndFlush(new StartupMessage(options)).sync();
+
+            if (!ready.await(10, TimeUnit.SECONDS))
+                throw new RuntimeException("Failed to establish client connection in 10s");
+        }
+

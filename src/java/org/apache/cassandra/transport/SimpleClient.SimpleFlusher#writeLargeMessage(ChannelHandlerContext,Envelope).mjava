@@ -1,0 +1,35 @@
+        private ChannelFuture[] writeLargeMessage(ChannelHandlerContext ctx, Envelope f)
+        {
+            List<ChannelFuture> futures = new ArrayList<>();
+            FrameEncoder.Payload payload;
+            ByteBuffer buf;
+            boolean firstFrame = true;
+            while (f.body.readableBytes() > 0 || firstFrame)
+            {
+                int payloadSize = Math.min(f.body.readableBytes(), MAX_FRAMED_PAYLOAD_SIZE);
+                payload = allocate(f.body.readableBytes(), false);
+
+                buf = payload.buffer;
+                // BufferPool may give us a buffer larger than we asked for.
+                // FrameEncoder may object if buffer.remaining is >= MAX_SIZE.
+                if (payloadSize >= MAX_FRAMED_PAYLOAD_SIZE)
+                    buf.limit(MAX_FRAMED_PAYLOAD_SIZE);
+
+                if (firstFrame)
+                {
+                    f.encodeHeaderInto(buf);
+                    firstFrame = false;
+                }
+
+                int remaining = Math.min(buf.remaining(), f.body.readableBytes());
+                if (remaining > 0)
+                    buf.put(f.body.slice(f.body.readerIndex(), remaining).nioBuffer());
+
+                f.body.readerIndex(f.body.readerIndex() + remaining);
+                payload.finish();
+                futures.add(ctx.writeAndFlush(payload, ctx.newPromise()));
+            }
+            f.release();
+            return futures.toArray(EMPTY_FUTURES_ARRAY);
+        }
+
