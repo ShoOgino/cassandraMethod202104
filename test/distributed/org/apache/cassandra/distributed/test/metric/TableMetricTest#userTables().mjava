@@ -1,0 +1,41 @@
+    /**
+     * Tests that other table metrics are not modified when a single table is modified/deleted.
+     *
+     * @see <a href="https://issues.apache.org/jira/browse/CASSANDRA-16095">CASSANDRA-16095</a>
+     */
+    @Test
+    public void userTables() throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(3).start()))
+        {
+            loadSystemTables(cluster);
+            assertSystemTableMetrics(cluster);
+
+            cluster.schemaChange(withKeyspace("CREATE TABLE %s.tbl (pk bigint PRIMARY KEY)"));
+            cluster.forEach(i -> assertTableMetricsExist(i, KEYSPACE, "tbl"));
+
+            // alter table can change metrics, so monitor for it
+            cluster.schemaChange(withKeyspace("ALTER TABLE %s.tbl WITH comment = 'testing'"));
+            cluster.forEach(i -> assertTableMetricsExist(i, KEYSPACE, "tbl"));
+
+            cluster.schemaChange(withKeyspace("ALTER TABLE %s.tbl ADD (value bigint)"));
+            cluster.forEach(i -> assertTableMetricsExist(i, KEYSPACE, "tbl"));
+
+            cluster.schemaChange(withKeyspace("ALTER TABLE %s.tbl RENAME pk TO pk2"));
+            cluster.forEach(i -> assertTableMetricsExist(i, KEYSPACE, "tbl"));
+
+            cluster.schemaChange(withKeyspace("ALTER TABLE %s.tbl DROP value"));
+            cluster.forEach(i -> assertTableMetricsExist(i, KEYSPACE, "tbl"));
+
+            // drop and make sure table no longer exists
+            cluster.schemaChange(withKeyspace("DROP TABLE %s.tbl"));
+            cluster.forEach(i -> assertTableMetricsDoesNotExist(i, KEYSPACE, "tbl"));
+
+            cluster.schemaChange(withKeyspace("DROP KEYSPACE %s"));
+            cluster.forEach(i -> assertKeyspaceMetricDoesNotExists(i, KEYSPACE));
+
+            // no other table impacted?
+            assertSystemTableMetrics(cluster);
+        }
+    }
+
