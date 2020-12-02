@@ -3,9 +3,11 @@
             AtomicInteger connectAttempts = new AtomicInteger(0);
             result.set(ConnectResult.UNINITIALIZED);
             setLastThrowable(null);
+            setProtocolAndCipher(null, null);
 
-            SslContext sslContext = SSLFactory.getOrCreateSslContext(encryptionOptions, true,
-                                                                     SSLFactory.SocketType.CLIENT);
+            SslContext sslContext = SSLFactory.getOrCreateSslContext(
+                encryptionOptions.withAcceptedProtocols(acceptedProtocols).withCipherSuites(cipherSuites),
+                true, SSLFactory.SocketType.CLIENT);
 
             EventLoopGroup workerGroup = new NioEventLoopGroup();
             Bootstrap b = new Bootstrap();
@@ -19,7 +21,11 @@
                 try
                 {
                     logger.debug("handshakeFuture() listener called");
-                    channelFuture.get();
+                    Channel channel = channelFuture.get();
+                    SslHandler sslHandler = channel.pipeline().get(SslHandler.class);
+                    SSLSession session = sslHandler.engine().getSession();
+                    setProtocolAndCipher(session.getProtocol(), session.getCipherSuite());
+
                     successProgress();
                 }
                 catch (Throwable cause)

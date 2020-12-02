@@ -1,0 +1,25 @@
+    @Test
+    public void connectionCannotAgreeOnClientAndServerTest() throws Throwable
+    {
+        try (Cluster cluster = builder().withNodes(1).withConfig(c -> {
+            c.with(Feature.NATIVE_PROTOCOL);
+            c.set("client_encryption_options",
+                  ImmutableMap.builder().putAll(validKeystore)
+                              .put("enabled", true)
+                              .put("accepted_protocols", Collections.singletonList("TLSv1.2"))
+                              .put("cipher_suites", Collections.singletonList("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"))
+                              .build());
+        }).start())
+        {
+            InetAddress address = cluster.get(1).config().broadcastAddress().getAddress();
+            int port = (int) cluster.get(1).config().get("native_transport_port");
+
+            TlsConnection connection = new TlsConnection(address.getHostAddress(), port,
+                                                         Collections.singletonList("TLSv1.2"),
+                                                         Collections.singletonList("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"));
+            Assert.assertEquals("Should not be possible to establish a TLSv1.2 connection with different ciphers",
+                                ConnectResult.FAILED_TO_NEGOTIATE, connection.connect());
+            connection.assertReceivedHandshakeException();
+        }
+    }
+

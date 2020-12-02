@@ -1,0 +1,54 @@
+    public static void validateSslContext(String contextDescription, EncryptionOptions options, boolean buildTrustStore, boolean logProtocolAndCiphers) throws IOException
+    {
+        if (options != null && options.tlsEncryptionPolicy() != EncryptionOptions.TlsEncryptionPolicy.UNENCRYPTED)
+        {
+            try
+            {
+                CipherSuiteFilter loggingCipherSuiteFilter = logProtocolAndCiphers ? new LoggingCipherSuiteFilter(contextDescription)
+                                                                                   : LoggingCipherSuiteFilter.QUIET_FILTER;
+                SslContext serverSslContext = createNettySslContext(options, buildTrustStore, SocketType.SERVER, openSslIsAvailable(), loggingCipherSuiteFilter);
+                try
+                {
+                    SSLEngine engine = serverSslContext.newEngine(ByteBufAllocator.DEFAULT);
+                    try
+                    {
+                        if (logProtocolAndCiphers)
+                        {
+                            String[] supportedProtocols = engine.getSupportedProtocols();
+                            String[] supportedCiphers = engine.getSupportedCipherSuites();
+                            String[] enabledProtocols = engine.getEnabledProtocols();
+                            String[] enabledCiphers = engine.getEnabledCipherSuites();
+
+                            logger.debug("{} supported TLS protocols: {}", contextDescription,
+                                         supportedProtocols == null ? "system default" : String.join(", ", supportedProtocols));
+                            logger.info("{} enabled TLS protocols: {}", contextDescription,
+                                        enabledProtocols == null ? "system default" : String.join(", ", enabledProtocols));
+                            logger.debug("{} supported cipher suites: {}", contextDescription,
+                                         supportedCiphers == null ? "system default" : String.join(", ", supportedCiphers));
+                            logger.info("{} enabled cipher suites: {}", contextDescription,
+                                        enabledCiphers == null ? "system default" : String.join(", ", enabledCiphers));
+                        }
+                    }
+                    finally
+                    {
+                        engine.closeInbound();
+                        engine.closeOutbound();
+                        ReferenceCountUtil.release(engine);
+                    }
+                }
+                finally
+                {
+                    ReferenceCountUtil.release(serverSslContext);
+                }
+
+                // Make sure it is possible to build the client context too
+                SslContext clientSslContext = createNettySslContext(options, buildTrustStore, SocketType.CLIENT, openSslIsAvailable());
+                ReferenceCountUtil.release(clientSslContext);
+            }
+            catch (Exception e)
+            {
+                throw new IOException("Failed to create SSL context using " + contextDescription, e);
+            }
+        }
+    }
+
