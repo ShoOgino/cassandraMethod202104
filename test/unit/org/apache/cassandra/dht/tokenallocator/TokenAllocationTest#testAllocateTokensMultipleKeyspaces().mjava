@@ -1,0 +1,39 @@
+    /**
+     * TODO: This scenario isn't supported very well. Investigate a multi-keyspace version of the algorithm.
+     */
+    @Test
+    public void testAllocateTokensMultipleKeyspaces() throws UnknownHostException
+    {
+        final int TOKENS = 16;
+
+        TokenMetadata tokenMetadata = new TokenMetadata();
+        generateFakeEndpoints(tokenMetadata, 10, TOKENS);
+
+        // Do not clone token metadata so tokens allocated by different allocators are reflected on the parent TokenMetadata
+        TokenAllocation rf2Allocator = createForTest(tokenMetadata, 2, TOKENS);
+        TokenAllocation rf3Allocator = createForTest(tokenMetadata, 3, TOKENS);
+
+        SummaryStatistics rf2StatsBefore = rf2Allocator.getAllocationRingOwnership(FBUtilities.getBroadcastAddressAndPort());
+        SummaryStatistics rf3StatsBefore = rf3Allocator.getAllocationRingOwnership(FBUtilities.getBroadcastAddressAndPort());
+
+        TokenAllocation current = rf3Allocator;
+        TokenAllocation next = rf2Allocator;
+
+        for (int i=11; i<=20; ++i)
+        {
+            InetAddressAndPort endpoint = InetAddressAndPort.getByName("127.0.0." + (i + 1));
+            Collection<Token> tokens = current.allocate(endpoint);
+            // Update tokens on next to verify ownership calculation below
+            next.tokenMetadata.updateNormalTokens(tokens, endpoint);
+            TokenAllocation tmp = current;
+            current = next;
+            next = tmp;
+        }
+
+        SummaryStatistics rf2StatsAfter = rf2Allocator.getAllocationRingOwnership(FBUtilities.getBroadcastAddressAndPort());
+        SummaryStatistics rf3StatsAfter = rf3Allocator.getAllocationRingOwnership(FBUtilities.getBroadcastAddressAndPort());
+
+        verifyImprovement(rf2StatsBefore, rf2StatsAfter);
+        verifyImprovement(rf3StatsBefore, rf3StatsAfter);
+    }
+

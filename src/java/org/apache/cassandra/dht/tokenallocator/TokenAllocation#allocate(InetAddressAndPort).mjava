@@ -1,0 +1,24 @@
+    Collection<Token> allocate(InetAddressAndPort endpoint)
+    {
+        StrategyAdapter strategy = getOrCreateStrategy(endpoint);
+        Collection<Token> tokens = strategy.createAllocator().addUnit(endpoint, numTokens);
+        tokens = strategy.adjustForCrossDatacenterClashes(tokens);
+
+        SummaryStatistics os = strategy.replicatedOwnershipStats();
+        tokenMetadata.updateNormalTokens(tokens, endpoint);
+
+        SummaryStatistics ns = strategy.replicatedOwnershipStats();
+        logger.info("Selected tokens {}", tokens);
+        logger.debug("Replicated node load in datacenter before allocation {}", statToString(os));
+        logger.debug("Replicated node load in datacenter after allocation {}", statToString(ns));
+
+        double stdDevGrowth = ns.getStandardDeviation() - os.getStandardDeviation();
+        if (stdDevGrowth > TokenAllocation.WARN_STDEV_GROWTH)
+        {
+            logger.warn(String.format("Growth of %.2f%% in token ownership standard deviation after allocation above warning threshold of %d%%",
+                                      stdDevGrowth * 100, (int)(TokenAllocation.WARN_STDEV_GROWTH * 100)));
+        }
+
+        return tokens;
+    }
+

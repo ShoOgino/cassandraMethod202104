@@ -1,0 +1,64 @@
+    public static void main(String[] args)
+    {
+        Options options = null;
+        int rf = 0;
+        int tokens = 0;
+        int nodes = 0;
+        IPartitioner partitioner = null;
+        int[] racksDef = null;
+
+        OutputHandler logger = null;
+
+        try
+        {
+            // disable the summary statistics logging, since this is a command-line tool with dedicated output
+            ((Logger) LoggerFactory.getLogger(TokenAllocation.class)).setLevel(Level.ERROR);
+
+            Util.initDatabaseDescriptor();
+            options = getOptions();
+            CommandLine cmd = parseCommandLine(args, options);
+
+            rf = Integer.parseInt(cmd.getOptionValue(RF));
+            tokens = Integer.parseInt(cmd.getOptionValue(TOKENS));
+            nodes = Integer.parseInt(cmd.getOptionValue(NODES));
+            logger = new OutputHandler.SystemOutput(cmd.hasOption(VERBOSE), true, true);
+
+            partitioner = FBUtilities.newPartitioner(cmd.getOptionValue(PARTITIONER, Murmur3Partitioner.class.getSimpleName()));
+            racksDef = getRacks(cmd.getOptionValue(RACKS, cmd.getOptionValue(NODES)));
+            if (Arrays.stream(racksDef).sum() != nodes)
+            {
+                throw new AssertionError(String.format("The sum of nodes in each rack %s must equal total node count %s.",
+                                                       cmd.getOptionValue(RACKS),
+                                                       cmd.getOptionValue(NODES)));
+            }
+        }
+        catch (NumberFormatException e)
+        {
+            System.err.println("Invalid integer " + e.getMessage());
+            System.out.println();
+            printUsage(options);
+            System.exit(1);
+        }
+        catch (AssertionError | ConfigurationException | ParseException t)
+        {
+            System.err.println(t.getMessage());
+            System.out.println();
+            printUsage(options);
+            System.exit(1);
+        }
+
+        try
+        {
+            logger.output(String.format("Generating tokens for %d nodes with %d vnodes each for replication factor %d and partitioner %s",
+                                             nodes, tokens, rf, partitioner.getClass().getSimpleName()));
+
+            for (OfflineTokenAllocator.FakeNode node : OfflineTokenAllocator.allocate(rf, tokens, racksDef, logger, partitioner))
+                logger.output(String.format("Node %d rack %d: %s", node.nodeId(), node.rackId(), node.tokens().toString()));
+        }
+        catch (Throwable t)
+        {
+            logger.warn("Error running tool.", t);
+            System.exit(1);
+        }
+    }
+

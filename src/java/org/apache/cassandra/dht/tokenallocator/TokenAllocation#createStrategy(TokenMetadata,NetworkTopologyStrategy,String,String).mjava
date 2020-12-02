@@ -1,0 +1,34 @@
+    private StrategyAdapter createStrategy(TokenMetadata tokenMetadata, NetworkTopologyStrategy strategy, String dc, String rack)
+    {
+        int replicas = strategy.getReplicationFactor(dc).allReplicas;
+
+        Topology topology = tokenMetadata.getTopology();
+        // if topology hasn't been setup yet for this dc+rack then treat it as a separate unit
+        int racks = topology.getDatacenterRacks().get(dc) != null && topology.getDatacenterRacks().get(dc).containsKey(rack)
+                ? topology.getDatacenterRacks().get(dc).asMap().size()
+                : 1;
+
+        if (replicas <= 1)
+        {
+            // each node is treated as separate and replicates once
+            return createStrategy(strategy.snitch, dc, null, 1, false);
+        }
+        else if (racks == replicas)
+        {
+            // each node is treated as separate and replicates once, with separate allocation rings for each rack
+            return createStrategy(strategy.snitch, dc, rack, 1, false);
+        }
+        else if (racks > replicas)
+        {
+            // group by rack
+            return createStrategy(strategy.snitch, dc, null, replicas, true);
+        }
+        else if (racks == 1)
+        {
+            return createStrategy(strategy.snitch, dc, null, replicas, false);
+        }
+
+        throw new ConfigurationException(String.format("Token allocation failed: the number of racks %d in datacenter %s is lower than its replication factor %d.",
+                                                       racks, dc, replicas));
+    }
+
