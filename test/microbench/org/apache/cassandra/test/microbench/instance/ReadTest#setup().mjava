@@ -1,0 +1,63 @@
+    @Setup(Level.Trial)
+    public void setup() throws Throwable
+    {
+        rand = new Random(1);
+        CQLTester.setUpClass();
+        CQLTester.prepareServer();
+        System.err.println("setupClass done.");
+        keyspace = createKeyspace("CREATE KEYSPACE %s with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 } and durable_writes = false");
+        table = createTable(keyspace, "CREATE TABLE %s ( userid bigint, picid bigint, commentid bigint, PRIMARY KEY(userid, picid)) with compression = {'enabled': false}");
+        execute("use "+keyspace+";");
+        switch (async)
+        {
+            case SERIAL_NET:
+            case PARALLEL_NET:
+                CQLTester.requireNetwork();
+                executeNet(getDefaultVersion(), "use " + keyspace + ";");
+        }
+        String writeStatement = "INSERT INTO "+table+"(userid,picid,commentid)VALUES(?,?,?)";
+        System.err.println("Prepared, batch " + BATCH + " flush " + flush);
+        System.err.println("Disk access mode " + DatabaseDescriptor.getDiskAccessMode() + " index " + DatabaseDescriptor.getIndexAccessMode());
+
+        cfs = Keyspace.open(keyspace).getColumnFamilyStore(table);
+        cfs.disableAutoCompaction();
+        cfs.forceBlockingFlush();
+
+        //Warm up
+        System.err.println("Writing " + count);
+        long i;
+        for (i = 0; i <= count - BATCH; i += BATCH)
+            performWrite(writeStatement, i, BATCH);
+        if (i < count)
+            performWrite(writeStatement, i, count - i);
+
+        Memtable memtable = cfs.getTracker().getView().getCurrentMemtable();
+        System.err.format("Memtable in %s mode: %d ops, %s serialized bytes, %s (%.0f%%) on heap, %s (%.0f%%) off-heap\n",
+                          DatabaseDescriptor.getMemtableAllocationType(),
+                          memtable.getOperations(),
+                          FBUtilities.prettyPrintMemory(memtable.getLiveDataSize()),
+                          FBUtilities.prettyPrintMemory(memtable.getAllocator().onHeap().owns()),
+                          100 * memtable.getAllocator().onHeap().ownershipRatio(),
+                          FBUtilities.prettyPrintMemory(memtable.getAllocator().offHeap().owns()),
+                          100 * memtable.getAllocator().offHeap().ownershipRatio());
+
+        switch (flush)
+        {
+        case YES:
+            cfs.forceBlockingFlush();
+            break;
+        case INMEM:
+            if (!cfs.getLiveSSTables().isEmpty())
+                throw new AssertionError("SSTables created for INMEM test.");
+        default:
+            // don't flush
+        }
+
+        // Needed to stabilize sstable count for off-cache sized tests (e.g. count = 100_000_000)
+        while (cfs.getLiveSSTables().size() >= 15)
+        {
+            cfs.enableAutoCompaction(true);
+            cfs.disableAutoCompaction();
+        }
+    }
+
