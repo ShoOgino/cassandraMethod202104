@@ -1,0 +1,52 @@
+    /**
+     * When the full cluster crashes, make sure that we can replace a dead node after recovery.  This can happen
+     * with DC outages (assuming single DC setup) where the recovery isn't able to recover a specific node.
+     */
+    @Test
+    public void hostReplacementOfDeadNode() throws IOException
+    {
+        // start with 2 nodes, stop both nodes, start the seed, host replace the down node)
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(2);
+        try (Cluster cluster = Cluster.build(2)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+                                      .withTokenSupplier(node -> even.token(node == 3 ? 2 : node))
+                                      .start())
+        {
+            IInvokableInstance seed = cluster.get(1);
+            IInvokableInstance nodeToRemove = cluster.get(2);
+            InetSocketAddress addressToReplace = nodeToRemove.broadcastAddress();
+
+            setupCluster(cluster);
+
+            // collect rows/tokens to detect issues later on if the state doesn't match
+            SimpleQueryResult expectedState = nodeToRemove.coordinator().executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+            List<String> beforeCrashTokens = getTokenMetadataTokens(seed);
+
+            // now stop all nodes
+            stopAll(cluster);
+
+            // with all nodes down, now start the seed (should be first node)
+            seed.startup();
+
+            // at this point node2 should be known in gossip, but with generation/version of 0
+            assertGossipInfo(seed, addressToReplace, 0, -1);
+
+            // make sure node1 still has node2's tokens
+            List<String> currentTokens = getTokenMetadataTokens(seed);
+            Assertions.assertThat(currentTokens)
+                      .as("Tokens no longer match after restarting")
+                      .isEqualTo(beforeCrashTokens);
+
+            // now create a new node to replace the other node
+            IInvokableInstance replacingNode = replaceHostAndStart(cluster, nodeToRemove);
+
+            awaitRingJoin(seed, replacingNode);
+            awaitRingJoin(replacingNode, seed);
+            assertNotInRing(seed, nodeToRemove);
+            logger.info("Current ring is {}", assertNotInRing(replacingNode, nodeToRemove));
+
+            validateRows(seed.coordinator(), expectedState);
+            validateRows(replacingNode.coordinator(), expectedState);
+        }
+    }
+

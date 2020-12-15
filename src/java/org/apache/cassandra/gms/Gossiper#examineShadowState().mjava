@@ -1,0 +1,58 @@
+    /**
+     * Used during a shadow round to collect the current state; this method clones the current state, no filtering
+     * is done.
+     *
+     * During the shadow round its desirable to return gossip state for remote instances that were created by this
+     * process also known as "empty", this is done for host replacement to be able to replace downed hosts that are
+     * in the ring but have no state in gossip (see CASSANDRA-16213).
+     *
+     * This method is different than {@link #examineGossiper(List, List, Map)} with respect to how "empty" states are
+     * dealt with; they are kept.
+     */
+    Map<InetAddressAndPort, EndpointState> examineShadowState()
+    {
+        logger.debug("Shadow request received, adding all states");
+        Map<InetAddressAndPort, EndpointState> map = new HashMap<>();
+        for (Entry<InetAddressAndPort, EndpointState> e : endpointStateMap.entrySet())
+        {
+            InetAddressAndPort endpoint = e.getKey();
+            EndpointState state = new EndpointState(e.getValue());
+            if (state.isEmptyWithoutStatus())
+            {
+                // We have no app states loaded for this endpoint, but we may well have
+                // some state persisted in the system keyspace. This can happen in the case
+                // of a full cluster bounce where one or more nodes fail to come up. As
+                // gossip state is transient, the peers which do successfully start will be
+                // aware of the failed nodes thanks to StorageService::initServer calling
+                // Gossiper.instance::addSavedEndpoint with every endpoint in TokenMetadata,
+                // which itself is populated from the system tables at startup.
+                // Here we know that a peer which is starting up and attempting to perform
+                // a shadow round of gossip. This peer is in one of two states:
+                // * it is replacing a down node, in which case it needs to learn the tokens
+                //   of the down node and optionally its host id.
+                // * it needs to check that no other instance is already associated with its
+                //   endpoint address and port.
+                // To support both of these cases, we can add the tokens and host id from
+                // the system table, if they exist. These are only ever persisted to the system
+                // table when the actual node to which they apply enters the UP/NORMAL state.
+                // This invariant will be preserved as nodes never persist or propagate the
+                // results of a shadow round, so this communication will be strictly limited
+                // to this node and the node performing the shadow round.
+                UUID hostId = SystemKeyspace.loadHostIds().get(endpoint);
+                if (null != hostId)
+                {
+                    state.addApplicationState(ApplicationState.HOST_ID,
+                                                 StorageService.instance.valueFactory.hostId(hostId));
+                }
+                Set<Token> tokens = SystemKeyspace.loadTokens().get(endpoint);
+                if (null != tokens && !tokens.isEmpty())
+                {
+                    state.addApplicationState(ApplicationState.TOKENS,
+                                                 StorageService.instance.valueFactory.tokens(tokens));
+                }
+            }
+            map.put(endpoint, state);
+        }
+        return map;
+    }
+

@@ -1,0 +1,66 @@
+    /**
+     * Cluster stops completely, then start seed, then host replace node2; after all complete start node3 to make sure
+     * it comes up correctly with the new host in the ring.
+     */
+    @Test
+    public void hostReplacementOfDeadNodeAndOtherNodeStartsAfter() throws IOException
+    {
+        // start with 3 nodes, stop both nodes, start the seed, host replace the down node)
+        int numStartNodes = 3;
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(numStartNodes);
+        try (Cluster cluster = Cluster.build(numStartNodes)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+                                      .withTokenSupplier(node -> even.token(node == (numStartNodes + 1) ? 2 : node))
+                                      .start())
+        {
+            IInvokableInstance seed = cluster.get(1);
+            IInvokableInstance nodeToRemove = cluster.get(2);
+            IInvokableInstance nodeToStartAfterReplace = cluster.get(3);
+            InetSocketAddress addressToReplace = nodeToRemove.broadcastAddress();
+
+            setupCluster(cluster);
+
+            // collect rows/tokens to detect issues later on if the state doesn't match
+            SimpleQueryResult expectedState = nodeToRemove.coordinator().executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+            List<String> beforeCrashTokens = getTokenMetadataTokens(seed);
+
+            // now stop all nodes
+            stopAll(cluster);
+
+            // with all nodes down, now start the seed (should be first node)
+            seed.startup();
+
+            // at this point node2 should be known in gossip, but with generation/version of 0
+            assertGossipInfo(seed, addressToReplace, 0, -1);
+
+            // make sure node1 still has node2's tokens
+            List<String> currentTokens = getTokenMetadataTokens(seed);
+            Assertions.assertThat(currentTokens)
+                      .as("Tokens no longer match after restarting")
+                      .isEqualTo(beforeCrashTokens);
+
+            // now create a new node to replace the other node
+            IInvokableInstance replacingNode = replaceHostAndStart(cluster, nodeToRemove);
+
+            // wait till the replacing node is in the ring
+            awaitRingJoin(seed, replacingNode);
+            awaitRingJoin(replacingNode, seed);
+
+            // we see that the replaced node is properly in the ring, now lets add the other node back
+            nodeToStartAfterReplace.startup();
+
+            awaitRingJoin(seed, nodeToStartAfterReplace);
+            awaitRingJoin(replacingNode, nodeToStartAfterReplace);
+
+            // make sure all nodes are healthy
+            awaitRingHealthy(seed);
+
+            assertRingIs(seed, seed, replacingNode, nodeToStartAfterReplace);
+            assertRingIs(replacingNode, seed, replacingNode, nodeToStartAfterReplace);
+            logger.info("Current ring is {}", assertRingIs(nodeToStartAfterReplace, seed, replacingNode, nodeToStartAfterReplace));
+
+            validateRows(seed.coordinator(), expectedState);
+            validateRows(replacingNode.coordinator(), expectedState);
+        }
+    }
+

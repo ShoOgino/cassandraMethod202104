@@ -1,0 +1,45 @@
+    /**
+     * Attempt to do a host replacement on a down host
+     */
+    @Test
+    public void replaceDownedHost() throws IOException
+    {
+        // start with 2 nodes, stop both nodes, start the seed, host replace the down node)
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(2);
+        try (Cluster cluster = Cluster.build(2)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+                                      .withTokenSupplier(node -> even.token(node == 3 ? 2 : node))
+                                      .start())
+        {
+            IInvokableInstance seed = cluster.get(1);
+            IInvokableInstance nodeToRemove = cluster.get(2);
+
+            setupCluster(cluster);
+
+            // collect rows to detect issues later on if the state doesn't match
+            SimpleQueryResult expectedState = nodeToRemove.coordinator().executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+
+            stopUnchecked(nodeToRemove);
+
+            // now create a new node to replace the other node
+            IInvokableInstance replacingNode = replaceHostAndStart(cluster, nodeToRemove, props -> {
+                // since we have a downed host there might be a schema version which is old show up but
+                // can't be fetched since the host is down...
+                props.set(BOOTSTRAP_SKIP_SCHEMA_CHECK, true);
+            });
+
+            // wait till the replacing node is in the ring
+            awaitRingJoin(seed, replacingNode);
+            awaitRingJoin(replacingNode, seed);
+
+            // make sure all nodes are healthy
+            awaitRingHealthy(seed);
+
+            assertRingIs(seed, seed, replacingNode);
+            logger.info("Current ring is {}", assertRingIs(replacingNode, seed, replacingNode));
+
+            validateRows(seed.coordinator(), expectedState);
+            validateRows(replacingNode.coordinator(), expectedState);
+        }
+    }
+

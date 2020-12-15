@@ -1,0 +1,60 @@
+    /**
+     * If the seed goes down, then another node, once the seed comes back, make sure host replacements still work.
+     */
+    @Test
+    public void seedGoesDownBeforeDownHost() throws IOException
+    {
+        // start with 3 nodes, stop both nodes, start the seed, host replace the down node)
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(3);
+        try (Cluster cluster = Cluster.build(3)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+                                      .withTokenSupplier(node -> even.token(node == 4 ? 2 : node))
+                                      .start())
+        {
+            // call early as this can't be touched on a down node
+            IInvokableInstance seed = cluster.get(1);
+            IInvokableInstance nodeToRemove = cluster.get(2);
+            IInvokableInstance nodeToStayAlive = cluster.get(3);
+
+            setupCluster(cluster);
+
+            // collect rows/tokens to detect issues later on if the state doesn't match
+            SimpleQueryResult expectedState = nodeToRemove.coordinator().executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+            List<String> beforeCrashTokens = getTokenMetadataTokens(seed);
+
+            // shutdown the seed, then the node to remove
+            stopUnchecked(seed);
+            stopUnchecked(nodeToRemove);
+
+            // restart the seed
+            seed.startup();
+
+            // make sure the node to remove is still in the ring
+            assertInRing(seed, nodeToRemove);
+
+            // make sure node1 still has node2's tokens
+            List<String> currentTokens = getTokenMetadataTokens(seed);
+            Assertions.assertThat(currentTokens)
+                      .as("Tokens no longer match after restarting")
+                      .isEqualTo(beforeCrashTokens);
+
+            // now create a new node to replace the other node
+            IInvokableInstance replacingNode = replaceHostAndStart(cluster, nodeToRemove);
+
+            List<IInvokableInstance> expectedRing = Arrays.asList(seed, replacingNode, nodeToStayAlive);
+
+            // wait till the replacing node is in the ring
+            awaitRingJoin(seed, replacingNode);
+            awaitRingJoin(replacingNode, seed);
+            awaitRingJoin(nodeToStayAlive, replacingNode);
+
+            // make sure all nodes are healthy
+            logger.info("Current ring is {}", awaitRingHealthy(seed));
+
+            expectedRing.forEach(i -> assertRingIs(i, expectedRing));
+
+            validateRows(seed.coordinator(), expectedState);
+            validateRows(replacingNode.coordinator(), expectedState);
+        }
+    }
+

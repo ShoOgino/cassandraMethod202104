@@ -1,0 +1,39 @@
+    /**
+     * Attempt to do a host replacement on a alive host
+     */
+    @Test
+    public void replaceAliveHost() throws IOException
+    {
+        // start with 2 nodes, stop both nodes, start the seed, host replace the down node)
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(2);
+        try (Cluster cluster = Cluster.build(2)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK)
+                                                        .set(Constants.KEY_DTEST_API_STARTUP_FAILURE_AS_SHUTDOWN, false))
+                                      .withTokenSupplier(node -> even.token(node == 3 ? 2 : node))
+                                      .start())
+        {
+            IInvokableInstance seed = cluster.get(1);
+            IInvokableInstance nodeToRemove = cluster.get(2);
+
+            setupCluster(cluster);
+
+            // collect rows to detect issues later on if the state doesn't match
+            SimpleQueryResult expectedState = nodeToRemove.coordinator().executeWithResult("SELECT * FROM " + KEYSPACE + ".tbl", ConsistencyLevel.ALL);
+
+            // now create a new node to replace the other node
+            Assertions.assertThatThrownBy(() -> replaceHostAndStart(cluster, nodeToRemove))
+                      .as("Startup of instance should have failed as you can not replace a alive node")
+                      .hasMessageContaining("Cannot replace a live node")
+                      .isInstanceOf(UnsupportedOperationException.class);
+
+            // make sure all nodes are healthy
+            awaitRingHealthy(seed);
+
+            assertRingIs(seed, seed, nodeToRemove);
+            logger.info("Current ring is {}", assertRingIs(nodeToRemove, seed, nodeToRemove));
+
+            validateRows(seed.coordinator(), expectedState);
+            validateRows(nodeToRemove.coordinator(), expectedState);
+        }
+    }
+

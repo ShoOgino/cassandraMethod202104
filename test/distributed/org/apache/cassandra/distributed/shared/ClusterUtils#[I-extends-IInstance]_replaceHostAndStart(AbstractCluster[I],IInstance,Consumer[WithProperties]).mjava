@@ -1,0 +1,32 @@
+    /**
+     * Create and start a new instance that replaces an existing instance.
+     *
+     * The instance will be in the same datacenter and rack as the existing instance.
+     *
+     * @param cluster to add to
+     * @param toReplace instance to replace
+     * @param fn lambda to add additional properties
+     * @param <I> instance type
+     * @return the instance added
+     */
+    public static <I extends IInstance> I replaceHostAndStart(AbstractCluster<I> cluster,
+                                                              IInstance toReplace,
+                                                              Consumer<WithProperties> fn)
+    {
+        IInstanceConfig toReplaceConf = toReplace.config();
+        I inst = addInstance(cluster, toReplaceConf.localDatacenter(), toReplaceConf.localRack(), c -> c.set("auto_bootstrap", true));
+
+        return start(inst, properties -> {
+            // lower this so the replacement waits less time
+            properties.setProperty("cassandra.broadcast_interval_ms", Long.toString(TimeUnit.SECONDS.toMillis(30)));
+            // default is 30s, lowering as it should be faster
+            properties.setProperty("cassandra.ring_delay_ms", Long.toString(TimeUnit.SECONDS.toMillis(10)));
+            properties.set(BOOTSTRAP_SCHEMA_DELAY_MS, TimeUnit.SECONDS.toMillis(10));
+
+            // state which node to replace
+            properties.setProperty("cassandra.replace_address_first_boot", toReplace.config().broadcastAddress().getAddress().getHostAddress());
+
+            fn.accept(properties);
+        });
+    }
+

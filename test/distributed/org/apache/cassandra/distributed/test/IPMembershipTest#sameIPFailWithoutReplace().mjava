@@ -1,0 +1,28 @@
+    /**
+     * Port of replace_address_test.py::fail_without_replace_test to jvm-dtest
+     */
+    @Test
+    public void sameIPFailWithoutReplace() throws IOException
+    {
+        try (Cluster cluster = Cluster.build(3)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NATIVE_PROTOCOL)
+                                                        .set(Constants.KEY_DTEST_API_STARTUP_FAILURE_AS_SHUTDOWN, false))
+                                      .start())
+        {
+            IInvokableInstance nodeToReplace = cluster.get(3);
+
+            ToolRunner.invokeCassandraStress("write", "n=10000", "-schema", "replication(factor=3)", "-port", "native=9042").assertOnExitCode();
+
+            for (boolean auto_bootstrap : Arrays.asList(true, false))
+            {
+                stopUnchecked(nodeToReplace);
+                getDirectories(nodeToReplace).forEach(FileUtils::deleteRecursive);
+
+                nodeToReplace.config().set("auto_bootstrap", auto_bootstrap);
+
+                Assertions.assertThatThrownBy(() -> nodeToReplace.startup())
+                          .hasMessage("A node with address /127.0.0.3:7012 already exists, cancelling join. Use cassandra.replace_address if you want to replace this node.");
+            }
+        }
+    }
+

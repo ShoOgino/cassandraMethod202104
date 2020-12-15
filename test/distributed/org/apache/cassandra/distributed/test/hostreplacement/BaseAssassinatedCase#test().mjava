@@ -1,0 +1,40 @@
+    @Test
+    public void test() throws IOException
+    {
+        TokenSupplier even = TokenSupplier.evenlyDistributedTokens(3);
+        try (Cluster cluster = Cluster.build(3)
+                                      .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+                                      .withTokenSupplier(node -> even.token(node == 4 || node == 5 ? NODE_TO_REMOVE_NUM : node))
+                                      .start())
+        {
+            IInvokableInstance seed = cluster.get(SEED_NUM);
+            IInvokableInstance nodeToRemove = cluster.get(NODE_TO_REMOVE_NUM);
+            IInvokableInstance peer = cluster.get(PEER_NUM);
+
+            setupCluster(cluster);
+
+            consume(cluster, nodeToRemove);
+
+            assertRingState(seed, nodeToRemove, "Normal");
+
+            // assassinate the node
+            peer.nodetoolResult("assassinate", getBroadcastAddressHostWithPortString(nodeToRemove))
+                .asserts().success();
+
+            // wait until the peer sees this assassination
+            awaitGossipStatus(seed, nodeToRemove, "LEFT");
+
+            // allow replacing nodes with the LEFT state, this should fail since the token isn't in the ring
+            assertThatThrownBy(() ->
+                               replaceHostAndStart(cluster, nodeToRemove, properties -> {
+                                   // since there are downed nodes its possible gossip has the downed node with an old schema, so need
+                                   // this property to allow startup
+                                   properties.set(BOOTSTRAP_SKIP_SCHEMA_CHECK, true);
+                                   // since the bootstrap should fail because the token, don't wait "too long" on schema as it doesn't
+                                   // matter for this test
+                                   properties.set(BOOTSTRAP_SCHEMA_DELAY_MS, 10);
+                               }))
+            .hasMessage(expectedMessage(nodeToRemove));
+        }
+    }
+
