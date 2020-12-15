@@ -1,0 +1,44 @@
+    @Test
+    public void testNotifications() throws Exception
+    {
+        SimpleClient.Builder builder = SimpleClient.builder(nativeAddr.getHostAddress(), nativePort)
+                                                   .protocolVersion(version);
+        if (version.isBeta())
+            builder.useBeta();
+
+        try (SimpleClient client = builder.build())
+        {
+            EventHandler handler = new EventHandler();
+            client.setEventHandler(handler);
+            client.connect(false);
+            client.execute(new RegisterMessage(Collections.singletonList(Event.Type.STATUS_CHANGE)));
+            client.execute(new RegisterMessage(Collections.singletonList(Event.Type.TOPOLOGY_CHANGE)));
+            client.execute(new RegisterMessage(Collections.singletonList(Event.Type.SCHEMA_CHANGE)));
+
+            InetAddressAndPort broadcastAddress = FBUtilities.getBroadcastAddressAndPort();
+            InetAddressAndPort nativeAddress = FBUtilities.getBroadcastNativeAddressAndPort();
+
+            // Necessary or else the NEW_NODE notification is deferred (CASSANDRA-11038)
+            // (note: this works because the notifications are for the local address)
+            StorageService.instance.setRpcReady(true);
+
+            notifier.onUp(broadcastAddress);
+            notifier.onDown(broadcastAddress);
+            notifier.onJoinCluster(broadcastAddress);
+            notifier.onMove(broadcastAddress);
+            notifier.onLeaveCluster(broadcastAddress);
+            notifier.onCreateKeyspace("ks");
+            notifier.onAlterKeyspace("ks");
+            notifier.onDropKeyspace("ks");
+
+            handler.assertNextEvent(Event.StatusChange.nodeUp(nativeAddress));
+            handler.assertNextEvent(Event.StatusChange.nodeDown(nativeAddress));
+            handler.assertNextEvent(Event.TopologyChange.newNode(nativeAddress));
+            handler.assertNextEvent(Event.TopologyChange.movedNode(nativeAddress));
+            handler.assertNextEvent(Event.TopologyChange.removedNode(nativeAddress));
+            handler.assertNextEvent(new Event.SchemaChange(Event.SchemaChange.Change.CREATED, "ks"));
+            handler.assertNextEvent(new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, "ks"));
+            handler.assertNextEvent(new Event.SchemaChange(Event.SchemaChange.Change.DROPPED, "ks"));
+        }
+    }
+
