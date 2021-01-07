@@ -1,0 +1,23 @@
+    @Test
+    public void testCompactTableDeleteOverlappingSSTables() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk int, ck int, PRIMARY KEY (pk, ck)) WITH COMPACT STORAGE");
+
+        execute("INSERT INTO %s (pk, ck) VALUES (1, 51) USING TIMESTAMP 1000002");
+        flush();
+        execute("DELETE FROM %s WHERE pk = 1 AND ck = 51");
+        flush();
+
+        execute("INSERT INTO %s (pk, ck) VALUES (1, 51) USING TIMESTAMP 1000001");
+        execute("INSERT INTO %s (pk, ck) VALUES (2, 51)");
+        flush();
+
+        // If it weren't for the write to pk = 2, ck = 51, we could skip the third SSTable too and hit only one here.
+        executeAndCheck("SELECT * FROM %s WHERE pk = 1 AND ck = 51", 2);
+
+        // Dropping compact storage forces us to hit an extra SSTable, since we can't rely on the isDense flag
+        // to determine that a row with a complete set of column deletes is complete.
+        execute("ALTER TABLE %s DROP COMPACT STORAGE");
+        executeAndCheck("SELECT * FROM %s WHERE pk = 1 AND ck = 51", 3);
+    }
+
