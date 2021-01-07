@@ -16,9 +16,21 @@
             throw new RuntimeException("Could not create SSL Context.", e);
         }
 
-        return JdkSSLOptions.builder()
-                            .withSSLContext(sslContext)
-                            .withCipherSuites(clientEncryptionOptions.cipherSuitesArray())
-                            .build();
+        // Temporarily override newSSLEngine to set accepted protocols until it is added to
+        // RemoteEndpointAwareJdkSSLOptions.  See CASSANDRA-13325 and CASSANDRA-16362.
+        RemoteEndpointAwareJdkSSLOptions sslOptions = new RemoteEndpointAwareJdkSSLOptions(sslContext, null)
+        {
+            protected SSLEngine newSSLEngine(SocketChannel channel, InetSocketAddress remoteEndpoint)
+            {
+                SSLEngine engine = super.newSSLEngine(channel, remoteEndpoint);
+
+                String[] acceptedProtocols = clientEncryptionOptions.acceptedProtocolsArray();
+                if (acceptedProtocols != null && acceptedProtocols.length > 0)
+                    engine.setEnabledProtocols(acceptedProtocols);
+
+                return engine;
+            }
+        };
+        return sslOptions;
     }
 
