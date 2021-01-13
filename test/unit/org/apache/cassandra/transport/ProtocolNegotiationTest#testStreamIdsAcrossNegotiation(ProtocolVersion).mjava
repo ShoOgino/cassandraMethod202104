@@ -1,0 +1,51 @@
+    private void testStreamIdsAcrossNegotiation(ProtocolVersion version)
+    {
+        long seed = System.currentTimeMillis();
+        Random random = new Random(seed);
+        reinitializeNetwork();
+        SimpleClient.Builder builder = SimpleClient.builder(nativeAddr.getHostAddress(), nativePort);
+        if (version.isBeta())
+            builder.useBeta();
+        else
+            builder.protocolVersion(version);
+
+        try (SimpleClient client = builder.build())
+        {
+            client.establishConnection();
+            // Before STARTUP the client hasn't yet negotiated a protocol version.
+            // All OPTIONS messages are received by the intial connection handler.
+            OptionsMessage options = new OptionsMessage();
+            for (int i = 0; i < 100; i++)
+            {
+                int streamId = random.nextInt(254) + 1;
+                options.setStreamId(streamId);
+                Message.Response response = client.execute(options);
+                assertEquals(String.format("StreamId mismatch; version: %s, seed: %s, iter: %s, expected: %s, actual: %s",
+                                           version, seed, i, streamId, response.getStreamId()),
+                             streamId, response.getStreamId());
+            }
+
+            int streamId = random.nextInt(254) + 1;
+            // STARTUP messages are handled by the initial connection handler
+            StartupMessage startup = new StartupMessage(ImmutableMap.of(CQL_VERSION, QueryProcessor.CQL_VERSION.toString()));
+            startup.setStreamId(streamId);
+            Message.Response response = client.execute(startup);
+            assertEquals(String.format("StreamId mismatch after negotiation; version: %s, expected: %s, actual %s",
+                                       version, streamId, response.getStreamId()),
+                         streamId, response.getStreamId());
+
+            // Following STARTUP, the version specific handlers are fully responsible for processing messages
+            QueryMessage query = new QueryMessage("SELECT * FROM system.local", QueryOptions.DEFAULT);
+            query.setStreamId(streamId);
+            response = client.execute(query);
+            assertEquals(String.format("StreamId mismatch after negotiation; version: %s, expected: %s, actual %s",
+                                       version, streamId, response.getStreamId()),
+                         streamId, response.getStreamId());
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+            fail("Error establishing connection");
+        }
+    }
+
