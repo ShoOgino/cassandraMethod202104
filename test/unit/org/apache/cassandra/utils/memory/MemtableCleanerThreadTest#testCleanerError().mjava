@@ -1,0 +1,66 @@
+    @Test
+    public void testCleanerError() throws Exception
+    {
+        AtomicReference<CountDownLatch> cleanerLatch = new AtomicReference<>(new CountDownLatch(1));
+        AtomicReference<CompletableFuture<Boolean>> fut = new AtomicReference<>(new CompletableFuture<>());
+        AtomicBoolean needsCleaning = new AtomicBoolean(false);
+        AtomicInteger numTimeCleanerInvoked = new AtomicInteger(0);
+
+        when(pool.needsCleaning()).thenAnswer(invocation -> needsCleaning.get());
+
+        when(cleaner.clean()).thenAnswer(invocation -> {
+            needsCleaning.set(false);
+            numTimeCleanerInvoked.incrementAndGet();
+            cleanerLatch.get().countDown();
+            return fut.get();
+        });
+
+        // start the thread with needsCleaning returning true, the cleaner should be invoked
+        needsCleaning.set(true);
+        startThread();
+        assertTrue(cleanerLatch.get().await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(0, cleanerLatch.get().getCount());
+        assertEquals(1, cleanerThread.numPendingTasks());
+        assertEquals(1, numTimeCleanerInvoked.get());
+
+        // complete the cleaning task with an error, no other cleaning task should be invoked
+        cleanerLatch.set(new CountDownLatch(1));
+        CompletableFuture<Boolean> oldFut = fut.get();
+        fut.set(new CompletableFuture<>());
+        needsCleaning.set(false);
+        oldFut.completeExceptionally(new RuntimeException("Test"));
+        assertFalse(cleanerLatch.get().await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(1, cleanerLatch.get().getCount());
+        assertEquals(1, numTimeCleanerInvoked.get());
+
+        // now trigger cleaning again and verify that a new task is invoked
+        cleanerLatch.set(new CountDownLatch(1));
+        fut.set(new CompletableFuture<>());
+        needsCleaning.set(true);
+        cleanerThread.trigger();
+        assertTrue(cleanerLatch.get().await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(0, cleanerLatch.get().getCount());
+        assertEquals(2, numTimeCleanerInvoked.get());
+
+        //  complete the cleaning task with false (nothing should be scheduled)
+        cleanerLatch.set(new CountDownLatch(1));
+        oldFut = fut.get();
+        fut.set(new CompletableFuture<>());
+        needsCleaning.set(false);
+        oldFut.complete(false);
+        assertFalse(cleanerLatch.get().await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(1, cleanerLatch.get().getCount());
+        assertEquals(2, numTimeCleanerInvoked.get());
+
+        // now trigger cleaning again and verify that a new task is invoked
+        cleanerLatch.set(new CountDownLatch(1));
+        fut.set(new CompletableFuture<>());
+        needsCleaning.set(true);
+        cleanerThread.trigger();
+        assertTrue(cleanerLatch.get().await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(0, cleanerLatch.get().getCount());
+        assertEquals(3, numTimeCleanerInvoked.get());
+
+        stopThread();
+    }
+

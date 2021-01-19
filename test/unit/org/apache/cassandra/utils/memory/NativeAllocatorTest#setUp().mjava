@@ -1,0 +1,35 @@
+    @Before
+    public void setUp()
+    {
+        exec = Executors.newScheduledThreadPool(2);
+        order = new OpOrder();
+        group = order.start();
+        canClean = new CountDownLatch(1);
+        isClean = new CountDownLatch(1);
+        allocatorRef = new AtomicReference<>();
+        barrier = new AtomicReference<>();
+        pool = new NativePool(1, 100, 0.75f, () -> {
+            try
+            {
+                canClean.await();
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError();
+            }
+            if (isClean.getCount() > 0)
+            {
+                allocatorRef.get().offHeap().released(80);
+                isClean.countDown();
+            }
+            return CompletableFuture.completedFuture(true);
+        });
+        allocator = new NativeAllocator(pool);
+        allocatorRef.set(allocator);
+        markBlocking = () -> {
+            barrier.set(order.newBarrier());
+            barrier.get().issue();
+            barrier.get().markBlocking();
+        };
+    }
+
