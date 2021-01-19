@@ -1,9 +1,17 @@
         public void run()
         {
+            if (logger.isTraceEnabled())
+                logger.trace("Flush task {}@{} starts executing, waiting on barrier", hashCode(), name);
+
+            long start = System.nanoTime();
+
             // mark writes older than the barrier as blocking progress, permitting them to exceed our memory limit
             // if they are stuck waiting on it, then wait for them all to complete
             writeBarrier.markBlocking();
             writeBarrier.await();
+
+            if (logger.isTraceEnabled())
+                logger.trace("Flush task for task {}@{} waited {} ms at the barrier", hashCode(), name, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
 
             // mark all memtables as flushing, removing them from the live memtable list
             for (Memtable memtable : memtables)
@@ -23,7 +31,14 @@
                 JVMStabilityInspector.inspectThrowable(t);
                 postFlush.flushFailure = t;
             }
+
+            if (logger.isTraceEnabled())
+                logger.trace("Flush task {}@{} signaling post flush task", hashCode(), name);
+
             // signal the post-flush we've done our work
             postFlush.latch.countDown();
+
+            if (logger.isTraceEnabled())
+                logger.trace("Flush task task {}@{} finished", hashCode(), name);
         }
 
