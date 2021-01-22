@@ -1,0 +1,24 @@
+    @Setup
+    public void setup() throws Throwable
+    {
+        Schema.instance.load(KeyspaceMetadata.create(keyspace, KeyspaceParams.simple(1)));
+        KeyspaceMetadata ksm = Schema.instance.getKeyspaceMetadata(keyspace);
+        TableMetadata metadata = CreateTableStatement.parse(String.format("CREATE TABLE %s (id int, ck int, v int, primary key (id, ck))", table), keyspace).build();
+
+        Schema.instance.load(ksm.withSwapped(ksm.tables.with(metadata)));
+
+        List<ModificationStatement> modifications = new ArrayList<>(batchSize);
+        List<List<ByteBuffer>> parameters = new ArrayList<>(batchSize);
+        List<Object> queryOrIdList = new ArrayList<>(batchSize);
+        QueryHandler.Prepared prepared = QueryProcessor.prepareInternal(String.format("INSERT INTO %s.%s (id, ck, v) VALUES (?,?,?)", keyspace, table));
+
+        for (int i = 0; i < batchSize; i++)
+        {
+            modifications.add((ModificationStatement) prepared.statement);
+            parameters.add(Lists.newArrayList(bytes(uniquePartition ? i : 1), bytes(i), bytes(i)));
+            queryOrIdList.add(prepared.rawCQLStatement);
+        }
+        bs = new BatchStatement(BatchStatement.Type.UNLOGGED, VariableSpecifications.empty(), modifications, Attributes.none());
+        bqo = BatchQueryOptions.withPerStatementVariables(QueryOptions.DEFAULT, parameters, queryOrIdList);
+    }
+
