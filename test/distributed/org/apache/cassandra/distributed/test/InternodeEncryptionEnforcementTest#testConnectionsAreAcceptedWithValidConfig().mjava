@@ -1,0 +1,45 @@
+    @Test
+    public void testConnectionsAreAcceptedWithValidConfig() throws Throwable
+    {
+        Cluster.Builder builder = builder()
+            .withNodes(2)
+            .withConfig(c ->
+            {
+                c.with(Feature.NETWORK);
+                c.with(Feature.NATIVE_PROTOCOL);
+
+                HashMap<String, Object> encryption = new HashMap<>();
+                encryption.put("keystore", "test/conf/cassandra_ssl_test.keystore");
+                encryption.put("keystore_password", "cassandra");
+                encryption.put("truststore", "test/conf/cassandra_ssl_test.truststore");
+                encryption.put("truststore_password", "cassandra");
+                encryption.put("internode_encryption", "dc");
+                c.set("server_encryption_options", encryption);
+            })
+            .withNodeIdTopology(ImmutableMap.of(1, NetworkTopology.dcAndRack("dc1", "r1a"),
+                                                2, NetworkTopology.dcAndRack("dc2", "r2a")));
+
+        try (Cluster cluster = builder.start())
+        {
+            /*
+             * instance (1) should connect to instance (2) without any issues;
+             * instance (2) should connect to instance (1) without any issues.
+             */
+
+            SerializableRunnable runnable = () ->
+            {
+                List<MessagingService.SocketThread> threads = MessagingService.instance().getSocketThreads();
+                assertEquals(2, threads.size());
+
+                MessagingService.SocketThread sslThread = threads.get(0);
+                assertEquals(1, sslThread.connections.size());
+
+                MessagingService.SocketThread plainThread = threads.get(1);
+                assertEquals(0, plainThread.connections.size());
+            };
+
+            cluster.get(1).runOnInstance(runnable);
+            cluster.get(2).runOnInstance(runnable);
+        }
+    }
+
