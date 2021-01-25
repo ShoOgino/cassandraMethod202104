@@ -1,0 +1,24 @@
+    private String getDigest(ColumnFilter filter)
+    {
+        ColumnFamilyStore cfs = getCurrentColumnFamilyStore();
+        NavigableSet<Clustering<?>> clusterings = Sets.newTreeSet(new ClusteringComparator());
+        clusterings.add(Clustering.EMPTY);
+        BufferDecoratedKey key = new BufferDecoratedKey(DatabaseDescriptor.getPartitioner().getToken(Int32Type.instance.decompose(1)),
+                                                        Int32Type.instance.decompose(1));
+        SinglePartitionReadCommand cmd = SinglePartitionReadCommand
+                                         .create(cfs.metadata(),
+                                                 (int) (System.currentTimeMillis() / 1000),
+                                                 key,
+                                                 filter,
+                                                 new ClusteringIndexNamesFilter(clusterings, false)).copyAsDigestQuery();
+        cmd.setDigestVersion(MessagingService.current_version);
+        ReadResponse resp;
+        try (ReadExecutionController ctrl = ReadExecutionController.forCommand(cmd); UnfilteredRowIterator iterator = cmd.queryMemtableAndDisk(cfs, ctrl))
+        {
+            resp = ReadResponse.createDataResponse(new SingletonUnfilteredPartitionIterator(iterator), cmd);
+            logger.info("Response is: {}", resp.toDebugString(cmd, key));
+            ByteBuffer digest = resp.digest(cmd);
+            return ByteBufferUtil.bytesToHex(digest);
+        }
+    }
+
