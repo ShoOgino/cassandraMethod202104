@@ -1,0 +1,55 @@
+    @Test
+    public void testConnectionsAreRejectedWithInvalidConfig() throws Throwable
+    {
+        Cluster.Builder builder = builder()
+            .withNodes(2)
+            .withConfig(c ->
+            {
+                c.with(Feature.NETWORK);
+                c.with(Feature.NATIVE_PROTOCOL);
+
+                if (c.num() == 1)
+                {
+                    HashMap<String, Object> encryption = new HashMap<>();
+                    encryption.put("keystore", "test/conf/cassandra_ssl_test.keystore");
+                    encryption.put("keystore_password", "cassandra");
+                    encryption.put("truststore", "test/conf/cassandra_ssl_test.truststore");
+                    encryption.put("truststore_password", "cassandra");
+                    encryption.put("internode_encryption", "dc");
+                    c.set("server_encryption_options", encryption);
+                }
+            })
+            .withNodeIdTopology(ImmutableMap.of(1, NetworkTopology.dcAndRack("dc1", "r1a"),
+                                                2, NetworkTopology.dcAndRack("dc2", "r2a")));
+
+        try (Cluster cluster = builder.start())
+        {
+            /*
+             * instance (1) won't connect to (2), since (2) won't have a TLS listener;
+             * instance (2) won't connect to (1), since inbound check will reject
+             * the unencrypted connection attempt;
+             *
+             * without the patch, instance (2) *CAN* connect to (1), without encryption,
+             * despite being in a different dc.
+             */
+
+            cluster.get(1).runOnInstance(() ->
+            {
+                List<MessagingService.SocketThread> threads = MessagingService.instance().getSocketThreads();
+                assertEquals(2, threads.size());
+
+                for (MessagingService.SocketThread thread : threads)
+                {
+                    assertEquals(0, thread.connections.size());
+                }
+            });
+
+            cluster.get(2).runOnInstance(() ->
+            {
+                List<MessagingService.SocketThread> threads = MessagingService.instance().getSocketThreads();
+                assertEquals(1, threads.size());
+                assertTrue(getOnlyElement(threads).connections.isEmpty());
+            });
+        }
+    }
+
