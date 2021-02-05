@@ -1,8 +1,8 @@
     /**
-     * Startup happy path
+     * Stop happy path
      */
     @Test
-    public void startup() throws Exception
+    public void stop() throws Exception
     {
         InstrumentedLocalSessions initialSessions = new InstrumentedLocalSessions();
         initialSessions.start();
@@ -26,7 +26,10 @@
         initialSessions.setStateAndSave(session3, REPAIRING);
         initialSessions.setStateAndSave(session3, FINALIZE_PROMISED);
         initialSessions.setStateAndSave(session3, FINALIZED);
-        Assert.assertEquals(3, initialSessions.getNumSessions());
+
+        initialSessions.stop();
+        // clean shutdown should fail session1 & notify coordinator
+        assertMessagesSent(initialSessions, session1.coordinator, new FailSession(session1.sessionID));
 
         // subsequent startups should load persisted sessions
         InstrumentedLocalSessions nextSessions = new InstrumentedLocalSessions();
@@ -38,13 +41,12 @@
         LocalSession session2next = nextSessions.getSession(id2);
         LocalSession session3next = nextSessions.getSession(id3);
 
-        // non-finalized sessions should fail & notify coordinator after startup
-        assertMessagesSent(nextSessions, session1next.coordinator, new FailSession(session1next.sessionID));
-        Assert.assertEquals(session1.sessionID, session1next.sessionID);
-        Assert.assertEquals(FAILED, session1next.getState());
-
+        Assert.assertEquals(session1, session1next);
         Assert.assertEquals(session2, session2next);
         Assert.assertEquals(session3, session3next);
-
+        // clean shutdown above should make startup send no messages;
+        assertNoMessagesSent(nextSessions, session1next.coordinator);
+        assertNoMessagesSent(nextSessions, session2next.coordinator);
+        assertNoMessagesSent(nextSessions, session3next.coordinator);
     }
 

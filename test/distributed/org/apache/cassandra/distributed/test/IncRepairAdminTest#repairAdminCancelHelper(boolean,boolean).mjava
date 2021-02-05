@@ -1,0 +1,43 @@
+    private void repairAdminCancelHelper(boolean coordinator, boolean force) throws IOException
+    {
+        try (Cluster cluster = init(Cluster.build(3)
+                                           .withConfig(config -> config.with(GOSSIP)
+                                                                       .with(NETWORK))
+                                           .start()))
+        {
+            boolean shouldFail = !coordinator && !force;
+            cluster.schemaChange("CREATE TABLE "+KEYSPACE+".tbl (k INT PRIMARY KEY, v INT)");
+
+            cluster.forEach(i -> {
+                NodeToolResult res = i.nodetoolResult("repair_admin");
+                res.asserts().stdoutContains("no sessions");
+            });
+
+            UUID uuid = makeFakeSession(cluster);
+            awaitNodetoolRepairAdminContains(cluster, uuid, "REPAIRING", false);
+            IInvokableInstance instance = cluster.get(coordinator ? 1 : 2);
+
+            NodeToolResult res;
+            if (force)
+            {
+                res = instance.nodetoolResult("repair_admin", "cancel", "--session", uuid.toString(), "--force");
+            }
+            else
+            {
+                res = instance.nodetoolResult("repair_admin", "cancel", "--session", uuid.toString());
+            }
+
+            if (shouldFail)
+            {
+                res.asserts().failure();
+                // if nodetool repair_admin cancel fails, the session should still be repairing:
+                awaitNodetoolRepairAdminContains(cluster, uuid, "REPAIRING", true);
+            }
+            else
+            {
+                res.asserts().success();
+                awaitNodetoolRepairAdminContains(cluster, uuid, "FAILED", true);
+            }
+        }
+    }
+
