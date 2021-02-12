@@ -1,0 +1,38 @@
+    // by moving all sstables from the first data directory to the second.
+    private void setupMisplacedSSTables()
+    {
+        NODE.runOnInstance(() -> {
+            ColumnFamilyStore cfs = Keyspace.open(KEYSPACE).getColumnFamilyStore("cf");
+            Assert.assertNotEquals(0, cfs.getLiveSSTables().size());
+            Iterator<SSTableReader> sstables = cfs.getLiveSSTables().iterator();
+            // finding 2 descriptors that live in different data directory
+            Descriptor first = sstables.next().descriptor;
+            Descriptor second = null;
+            while (sstables.hasNext() && second == null) {
+                second = sstables.next().descriptor;
+                if (first.directory.equals(second.directory))
+                    second = null;
+            }
+            Assert.assertNotNull("There should be SSTables in multiple data directories", second);
+            // getting a new file index in order to move SSTable between directories.
+            second = cfs.newSSTableDescriptor(second.directory);
+            // now we just move all sstables from first to second
+            for (Component component : SSTableReader.componentsFor(first))
+            {
+                File file = new File(first.filenameFor(component));
+                if (file.exists())
+                {
+                    try
+                    {
+                        Files.copy(file.toPath(), new File(second.filenameFor(component)).toPath());
+                    }
+                    catch (IOException e)
+                    {
+                        throw new RuntimeException("Something wrong with copying sstables", e);
+                    }
+                }
+            }
+            ColumnFamilyStore.loadNewSSTables(KEYSPACE, "cf");
+        });
+    }
+
