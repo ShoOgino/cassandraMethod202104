@@ -1,0 +1,27 @@
+    @Test
+    public void testGroupWithDeletesAndPaging() throws Throwable
+    {
+        try (Cluster cluster = init(builder().withNodes(2).withConfig(cfg -> cfg.with(Feature.GOSSIP, NETWORK, NATIVE_PROTOCOL)).start()))
+        {
+            cluster.schemaChange(withKeyspace("CREATE TABLE %s.tbl (pk int, ck int, PRIMARY KEY (pk, ck))"));
+            ICoordinator coordinator = cluster.coordinator(1);
+            coordinator.execute(withKeyspace("INSERT INTO %s.tbl (pk, ck) VALUES (0, 0)"), ConsistencyLevel.ALL);
+            coordinator.execute(withKeyspace("INSERT INTO %s.tbl (pk, ck) VALUES (1, 1)"), ConsistencyLevel.ALL);
+
+            cluster.get(1).executeInternal(withKeyspace("DELETE FROM %s.tbl WHERE pk=0 AND ck=0"));
+            cluster.get(2).executeInternal(withKeyspace("DELETE FROM %s.tbl WHERE pk=1 AND ck=1"));
+            String query = withKeyspace("SELECT * FROM %s.tbl GROUP BY pk");
+            Iterator<Object[]> rows = coordinator.executeWithPaging(query, ConsistencyLevel.ALL, 1);
+            assertRows(Iterators.toArray(rows, Object[].class));
+
+            try (com.datastax.driver.core.Cluster c = com.datastax.driver.core.Cluster.builder().addContactPoint("127.0.0.1").build();
+                 Session session = c.connect())
+            {
+                SimpleStatement stmt = new SimpleStatement(withKeyspace("select * from %s.tbl where pk = 1 group by pk"));
+                stmt.setFetchSize(1);
+                Iterator<Row> rs = session.execute(stmt).iterator();
+                Assert.assertFalse(rs.hasNext());
+            }
+        }
+    }
+
