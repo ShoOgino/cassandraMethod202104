@@ -1,0 +1,21 @@
+    public void reserializePre40RequestPaxosTest(Consumer<IInstanceConfig> configConsumer) throws Throwable
+    {
+        new UpgradeTestBase.TestCase()
+        .nodes(2)
+        .withConfig(configConsumer)
+        .nodesToUpgrade(1)
+        .upgrade(Versions.Major.v30, Versions.Major.v4)
+        .setup((cluster) -> {
+            cluster.filters().outbound().allVerbs().messagesMatching((f,t,m) -> false).drop();
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))");
+            cluster.coordinator(1).execute("INSERT INTO " + KEYSPACE + ".tbl(pk,ck,v) VALUES (1, 1, 1) IF NOT EXISTS",
+                                           ConsistencyLevel.QUORUM,
+                                           1);
+        })
+        .runAfterNodeUpgrade((cluster, node) -> {
+            cluster.coordinator(node).execute("UPDATE " + KEYSPACE + ".tbl SET v = ? WHERE pk = ? AND ck = ?  IF v = ?",
+                                              ConsistencyLevel.QUORUM,
+                                              2, 1, 1, 1);
+        }).run();
+    }
+
