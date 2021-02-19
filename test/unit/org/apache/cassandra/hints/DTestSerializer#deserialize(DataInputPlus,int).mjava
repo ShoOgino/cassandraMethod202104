@@ -1,0 +1,26 @@
+    /*
+     * It's not an exceptional scenario to have a hints file streamed that have partition updates for tables
+     * that don't exist anymore. We want to handle that case gracefully instead of dropping the connection for every
+     * one of them.
+     */
+    public HintMessage deserialize(DataInputPlus in, int version) throws IOException
+    {
+        UUID hostId = UUIDSerializer.serializer.deserialize(in, version);
+
+        long hintSize = in.readUnsignedVInt();
+        TrackedDataInputPlus countingIn = new TrackedDataInputPlus(in);
+
+        if (hintSize == 0)
+            return new HintMessage(hostId, UUIDSerializer.serializer.deserialize(in, version));
+
+        try
+        {
+            return new HintMessage(hostId, Hint.serializer.deserialize(countingIn, version));
+        }
+        catch (UnknownColumnFamilyException e)
+        {
+            in.skipBytes(Ints.checkedCast(hintSize - countingIn.getBytesRead()));
+            return new HintMessage(hostId, e.cfId);
+        }
+    }
+
