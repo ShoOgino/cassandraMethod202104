@@ -1,0 +1,41 @@
+    public static void checkTraceForDigestMismatch(ICoordinator coordinator, String query, Object... boundValues)
+    {
+        UUID sessionId = UUID.randomUUID();
+        try
+        {
+            coordinator.executeWithTracing(sessionId, query, ConsistencyLevel.ALL, boundValues);
+        }
+        catch (RuntimeException ex)
+        {
+            if (Throwables.isCausedBy(ex, t -> t.getClass().getName().equals(SyntaxException.class.getName())))
+            {
+                if (coordinator.instance().getReleaseVersionString().startsWith("3.") && query.contains("["))
+                {
+                    logger.warn("Query {} is not supported on node {} version {}",
+                                query,
+                                coordinator.instance().broadcastAddress().getAddress().getHostAddress(),
+                                coordinator.instance().getReleaseVersionString());
+
+                    // we can forgive SyntaxException for C* < 4.0 if the query contains collection element selection
+                    return;
+                }
+            }
+            logger.error("Failing for coordinator {} and query {}", coordinator.instance().getReleaseVersionString(), query);
+            throw ex;
+        }
+        Object[][] results = coordinator.execute(SELECT_TRACE,
+                                                 ConsistencyLevel.ALL,
+                                                 sessionId,
+                                                 coordinator.instance().broadcastAddress().getAddress());
+        for (Object[] result : results)
+        {
+            String activity = (String) result[0];
+            Assert.assertFalse(String.format("Found Digest Mismatch while executing query: %s with bound values %s on %s/%s",
+                                             query,
+                                             Arrays.toString(boundValues),
+                                             coordinator.instance().broadcastAddress(),
+                                             coordinator.instance().getReleaseVersionString()),
+                               activity.toLowerCase().contains("mismatch for key"));
+        }
+    }
+

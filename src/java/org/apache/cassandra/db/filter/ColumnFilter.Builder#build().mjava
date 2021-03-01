@@ -19,10 +19,18 @@
                 }
             }
 
-            // see CASSANDRA-15833
-            if (isFetchAll && Gossiper.instance.haveMajorVersion3Nodes())
-                queried = null;
-
-            return new ColumnFilter(isFetchAll, metadata, queried, s);
+            // When fetchAll is enabled on pre CASSANDRA-10657 (3.4-), queried columns are not considered at all, and it
+            // is assumed that all columns are queried. CASSANDRA-10657 (3.4+) brings back skipping values of columns
+            // which are not in queried set when fetchAll is enabled. That makes exactly the same filter being
+            // interpreted in a different way on 3.4- and 3.4+.
+            //
+            // Moreover, there is no way to convert the filter with fetchAll and queried != null so that it is
+            // interpreted the same way on 3.4- because that Cassandra version does not support such filtering.
+            //
+            // In order to avoid inconsitencies in data read by 3.4- and 3.4+ we need to avoid creation of incompatible
+            // filters when the cluster contains 3.4- nodes. We do that by forcibly setting queried to null.
+            //
+            // see CASSANDRA-10657, CASSANDRA-15833, CASSANDRA-16415
+            return new ColumnFilter(isFetchAll, isFetchAll && shouldFetchAllStatics(), metadata, isFetchAll && shouldQueriedBeNull() ? null : queried, s);
         }
 
