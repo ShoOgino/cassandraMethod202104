@@ -1,5 +1,5 @@
     @Test
-    public void testIndexMemtableSwitching()
+    public void testIndexMemtableSwitching() throws Exception
     {
         // write some data but don't flush
         ColumnFamilyStore store = loadData(new HashMap<String, Pair<String, Integer>>()
@@ -23,14 +23,14 @@
                 new org.apache.cassandra.index.sasi.plan.Expression(controller, index)
                                                     .add(Operator.LIKE_MATCHES, UTF8Type.instance.fromString("Pavel"));
 
-        Assert.assertTrue(beforeFlushMemtable.search(expression).getCount() > 0);
+        Assert.assertTrue(rangesSize(beforeFlushMemtable, expression) > 0);
 
         store.forceBlockingFlush();
 
         IndexMemtable afterFlushMemtable = index.getCurrentMemtable();
 
         Assert.assertNotSame(afterFlushMemtable, beforeFlushMemtable);
-        Assert.assertEquals(afterFlushMemtable.search(expression).getCount(), 0);
+        Assert.assertEquals(rangesSize(afterFlushMemtable, expression), 0);
         Assert.assertEquals(0, index.getPendingMemtables().size());
 
         loadData(new HashMap<String, Pair<String, Integer>>()
@@ -42,7 +42,7 @@
                         .add(Operator.LIKE_MATCHES, UTF8Type.instance.fromString("Sam"));
 
         beforeFlushMemtable = index.getCurrentMemtable();
-        Assert.assertTrue(beforeFlushMemtable.search(expression).getCount() > 0);
+        Assert.assertTrue(rangesSize(beforeFlushMemtable, expression) > 0);
 
         // let's emulate switching memtable and see if we can still read-data in "pending"
         index.switchMemtable(store.getTracker().getView().getCurrentMemtable());
@@ -50,13 +50,13 @@
         Assert.assertNotSame(index.getCurrentMemtable(), beforeFlushMemtable);
         Assert.assertEquals(1, index.getPendingMemtables().size());
 
-        Assert.assertTrue(index.searchMemtable(expression).getCount() > 0);
+        Assert.assertTrue(rangesSize(index, expression) > 0);
 
         // emulate "everything is flushed" notification
         index.discardMemtable(store.getTracker().getView().getCurrentMemtable());
 
         Assert.assertEquals(0, index.getPendingMemtables().size());
-        Assert.assertEquals(index.searchMemtable(expression).getCount(), 0);
+        Assert.assertEquals(rangesSize(index, expression), 0);
 
         // test discarding data from memtable
         loadData(new HashMap<String, Pair<String, Integer>>()
@@ -67,9 +67,9 @@
         expression = new org.apache.cassandra.index.sasi.plan.Expression(controller, index)
                 .add(Operator.LIKE_MATCHES, UTF8Type.instance.fromString("Jonathan"));
 
-        Assert.assertTrue(index.searchMemtable(expression).getCount() > 0);
+        Assert.assertTrue(rangesSize(index, expression) > 0);
 
         index.switchMemtable();
-        Assert.assertEquals(index.searchMemtable(expression).getCount(), 0);
+        Assert.assertEquals(rangesSize(index, expression), 0);
     }
 
