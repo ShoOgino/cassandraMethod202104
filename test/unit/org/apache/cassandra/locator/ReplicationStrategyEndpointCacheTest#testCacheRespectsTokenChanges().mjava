@@ -1,7 +1,34 @@
     @Test
     public void testCacheRespectsTokenChanges() throws Exception
     {
-        runCacheRespectsTokenChangesTest(SimpleStrategy.class, null);
-        runCacheRespectsTokenChangesTest(NetworkTopologyStrategy.class, new HashMap<String, String>());
+        setup();
+        EndpointsForToken initial;
+        EndpointsForToken replicas;
+
+        replicas = strategy.getNaturalReplicasForToken(searchToken);
+        assert replicas.size() == 5 : StringUtils.join(replicas, ",");
+
+        // test token addition, in DC2 before existing token
+        initial = strategy.getNaturalReplicasForToken(searchToken);
+        tmd.updateNormalToken(new BigIntegerToken(String.valueOf(35)), InetAddressAndPort.getByName("127.0.0.5"));
+        replicas = strategy.getNaturalReplicasForToken(searchToken);
+        assert replicas.size() == 5 : StringUtils.join(replicas, ",");
+        Util.assertNotRCEquals(replicas, initial);
+
+        // test token removal, newly created token
+        initial = strategy.getNaturalReplicasForToken(searchToken);
+        tmd.removeEndpoint(InetAddressAndPort.getByName("127.0.0.5"));
+        replicas = strategy.getNaturalReplicasForToken(searchToken);
+        assert replicas.size() == 5 : StringUtils.join(replicas, ",");
+        assert !replicas.endpoints().contains(InetAddressAndPort.getByName("127.0.0.5"));
+        Util.assertNotRCEquals(replicas, initial);
+
+        // test token change
+        initial = strategy.getNaturalReplicasForToken(searchToken);
+        //move .8 after search token but before other DC3
+        tmd.updateNormalToken(new BigIntegerToken(String.valueOf(25)), InetAddressAndPort.getByName("127.0.0.8"));
+        replicas = strategy.getNaturalReplicasForToken(searchToken);
+        assert replicas.size() == 5 : StringUtils.join(replicas, ",");
+        Util.assertNotRCEquals(replicas, initial);
     }
 

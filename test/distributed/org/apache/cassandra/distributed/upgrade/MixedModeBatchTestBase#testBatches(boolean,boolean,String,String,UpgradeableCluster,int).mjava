@@ -1,0 +1,77 @@
+    private void testBatches(boolean isLogged, boolean failBatchlog, String insert, String select, UpgradeableCluster cluster, int upgraded)
+    {
+        List<Long> initialTokens = new ArrayList<>(cluster.size());
+
+        for (int i = 1; i <= cluster.size(); i++)
+            initialTokens.add(Long.valueOf(cluster.get(i).config().get("initial_token").toString()));
+
+        // Exercise all the coordinators...
+        for (int i = 1; i <= cluster.size(); i++)
+        {
+            StringBuilder batchBuilder = new StringBuilder("BEGIN " + (isLogged ? "" : "UNLOGGED ") + "BATCH\n");
+            String name = "Julia";
+            Runnable[] tests = new Runnable[KEYS_PER_BATCH];
+
+            // ...and sample enough keys that we cover the ring.
+            for (int j = 0; j < KEYS_PER_BATCH; j++)
+            {
+                int key = j + (i * KEYS_PER_BATCH);
+                batchBuilder.append(String.format(insert, key, name)).append('\n');
+
+                // Track the test that will later verify that this mutation was replicated properly.
+                tests[j] = () -> {
+                    Object[] row = row(key, name);
+                    Long token = tokenFrom(key);
+                    int node = primaryReplica(initialTokens, token);
+                    
+                    Object[][] primaryResult = cluster.get(node).executeInternal(select, key);
+                    
+                    // We shouldn't expect to see any results if the batchlog write failed.
+                    if (failBatchlog)
+                        assertRows(primaryResult);
+                    else
+                        assertRows(primaryResult, row);
+
+                    node = nextNode(node, cluster.size());
+
+                    Object[][] nextResult = cluster.get(node).executeInternal(select, key);
+
+                    if (failBatchlog)
+                        assertRows(nextResult);
+                    else
+                        assertRows(nextResult, row);
+
+                    // At RF=2, this node should not have received the write.
+                    node = nextNode(node, cluster.size());
+                    assertRows(cluster.get(node).executeInternal(select, key));
+                };
+            }
+
+            String batch = batchBuilder.append("APPLY BATCH").toString();
+            
+            try
+            {
+                cluster.coordinator(i).execute(batch, ConsistencyLevel.ALL);
+            }
+            catch (Throwable t)
+            {
+                if (!failBatchlog || !exceptionMatches(t, WriteTimeoutException.class))
+                {
+                    // The standard write failure exception won't give us any context for what actually failed.
+                    if (exceptionMatches(t, WriteFailureException.class))
+                    {
+                        String message = "Failed to write following batch to coordinator %d after upgrading node %d:\n%s";
+                        throw new AssertionError(String.format(message, i, upgraded, batch), t);
+                    }
+
+                    throw t;
+                }
+                
+                // Failing the batchlog write will involve a timeout, so that's expected. Just continue...
+            }
+            
+            for (Runnable test : tests)
+                test.run();
+        }
+    }
+

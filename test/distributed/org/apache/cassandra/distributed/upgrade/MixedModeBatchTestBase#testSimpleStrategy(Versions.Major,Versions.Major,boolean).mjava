@@ -1,0 +1,30 @@
+    protected void testSimpleStrategy(Versions.Major from, Versions.Major to, boolean isLogged) throws Throwable
+    {
+        String insert = "INSERT INTO test_simple.names (key, name) VALUES (%d, '%s')";
+        String select = "SELECT * FROM test_simple.names WHERE key = ?";
+
+        new TestCase()
+        .nodes(3)
+        .nodesToUpgrade(1, 2)
+        .upgrade(from, to)
+        .setup(cluster -> {
+            cluster.schemaChange("CREATE KEYSPACE test_simple WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2};");
+            cluster.schemaChange("CREATE TABLE test_simple.names (key int PRIMARY KEY, name text)");
+        })
+        .runAfterNodeUpgrade((cluster, upgraded) -> {
+            if (isLogged)
+            {
+                // If we're testing logged batches, exercise the case were batchlog writes fail.
+                IMessageFilters.Filter dropBatchlogWrite = cluster.filters().inbound().verbs(BATCH_STORE_REQ.id, REQUEST_RSP.id).drop();
+                dropBatchlogWrite.on();
+                testBatches(true, true, insert, select, cluster, upgraded);
+                cluster.filters().reset();
+            }
+
+            cluster.coordinator(1).execute("TRUNCATE test_simple.names", ConsistencyLevel.ALL);
+            testBatches(isLogged, false, insert, select, cluster, upgraded);
+            cluster.coordinator(1).execute("TRUNCATE test_simple.names", ConsistencyLevel.ALL);
+        })
+        .run();
+    }
+
