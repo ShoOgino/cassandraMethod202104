@@ -158,24 +158,24 @@
 
                     switch (def.kind)
                     {
-                         case PARTITION_KEY:
-                         case CLUSTERING:
-                              throw new InvalidRequestException(String.format("Cannot drop PRIMARY KEY part %s", columnName));
-                         case REGULAR:
-                         case STATIC:
-                              ColumnDefinition toDelete = null;
-                              for (ColumnDefinition columnDef : cfm.partitionColumns())
-                              {
-                                   if (columnDef.name.equals(columnName))
-                                   {
-                                       toDelete = columnDef;
-                                       break;
-                                   }
-                               }
-                             assert toDelete != null;
-                             cfm.removeColumnDefinition(toDelete);
-                             cfm.recordColumnDrop(toDelete, deleteTimestamp  == null ? queryState.getTimestamp() : deleteTimestamp);
-                             break;
+                        case PARTITION_KEY:
+                        case CLUSTERING:
+                            throw new InvalidRequestException(String.format("Cannot drop PRIMARY KEY part %s", columnName));
+                        case REGULAR:
+                        case STATIC:
+                            ColumnDefinition toDelete = null;
+                            for (ColumnDefinition columnDef : cfm.partitionColumns())
+                            {
+                                if (columnDef.name.equals(columnName))
+                                {
+                                    toDelete = columnDef;
+                                    break;
+                                }
+                            }
+                            assert toDelete != null;
+                            cfm.removeColumnDefinition(toDelete);
+                            cfm.recordColumnDrop(toDelete, deleteTimestamp == null ? queryState.getTimestamp() : deleteTimestamp);
+                            break;
                     }
 
                     // If the dropped column is required by any secondary indexes
@@ -195,22 +195,17 @@
                     }
 
                     if (!Iterables.isEmpty(views))
-                    throw new InvalidRequestException(String.format("Cannot drop column %s on base table %s with materialized views.",
+                        throw new InvalidRequestException(String.format("Cannot drop column %s on base table %s with materialized views.",
                                                                         columnName.toString(),
                                                                         columnFamily()));
                 }
+
                 break;
             case DROP_COMPACT_STORAGE:
                 if (!meta.isCompactTable())
                     throw new InvalidRequestException("Cannot DROP COMPACT STORAGE on table without COMPACT STORAGE");
 
-                // TODO: Global check of the sstables to be added as part of CASSANDRA-15897.
-                // Currently this is only a local check of the SSTables versions
-                for (SSTableReader ssTableReader : Keyspace.open(keyspace()).getColumnFamilyStore(columnFamily()).getLiveSSTables())
-                {
-                    if (!ssTableReader.descriptor.version.isLatestVersion())
-                        throw new InvalidRequestException("Cannot DROP COMPACT STORAGE until all SSTables are upgraded, please run `nodetool upgradesstables` first.");
-                }
+                validateCanDropCompactStorage();
 
                 cfm = meta.asNonCompact();
                 break;
