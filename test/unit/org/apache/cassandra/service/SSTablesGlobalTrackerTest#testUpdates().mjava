@@ -1,0 +1,28 @@
+    /**
+     * Ensures that the tracker properly maintains the set of versions in use.
+     *
+     * <p>Using 'Quick Theories', we generate a number of random sstables notification and validate that after each
+     * update the tracker computes the proper set of versions in use (using a simplisitic model that keeps the set
+     * of all sstables in use and maps it to the set of its versions).
+     */
+    @Test
+    public void testUpdates()
+    {
+        qt().forAll(lists().of(updates()).ofSizeBetween(0, MAX_UPDATES_PER_GEN),
+                    sstableFormatTypes())
+            .checkAssert((updates, formatType) -> {
+                SSTablesGlobalTracker tracker = new SSTablesGlobalTracker(formatType);
+                Set<Descriptor> all = new HashSet<>();
+                Set<VersionAndType> previous = Collections.emptySet();
+                for (Update update : updates)
+                {
+                    update.applyTo(all);
+                    boolean triggerUpdate = tracker.handleSSTablesChange(update.removed, update.added);
+                    Set<VersionAndType> expectedInUse = versionAndTypes(all);
+                    assertEquals(expectedInUse, tracker.versionsInUse());
+                    assertEquals(!expectedInUse.equals(previous), triggerUpdate);
+                    previous = expectedInUse;
+                }
+            });
+    }
+
