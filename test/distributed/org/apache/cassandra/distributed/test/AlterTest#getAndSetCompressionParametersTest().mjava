@@ -1,0 +1,30 @@
+    @Test
+    public void getAndSetCompressionParametersTest() throws Throwable
+    {
+        try (ICluster<IInvokableInstance> cluster = init(builder().withNodes(2)
+                                                                  .start()))
+        {
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE + ".tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck));");
+            cluster.stream().forEach((i) -> {
+                i.acceptsOnInstance((IIsolatedExecutor.SerializableConsumer<String>) (ks) -> {
+                    Keyspace.open(ks)
+                            .getColumnFamilyStore("tbl")
+                            .setCompressionParametersJson("{\"chunk_length_in_kb\": \"128\"," +
+                                                          "  \"class\": \"org.apache.cassandra.io.compress.LZ4Compressor\"}");
+                    Assert.assertTrue(Keyspace.open(ks)
+                                              .getColumnFamilyStore("tbl")
+                                              .getCompressionParametersJson().contains("128"));
+                }).accept(KEYSPACE);
+            });
+            cluster.schemaChange("ALTER TABLE " + KEYSPACE + ".tbl ADD v2 int");
+
+            cluster.stream().forEach((i) -> {
+                i.acceptsOnInstance((IIsolatedExecutor.SerializableConsumer<String>) (ks) -> {
+                    Assert.assertFalse(Keyspace.open(ks)
+                                               .getColumnFamilyStore("tbl")
+                                               .getCompressionParametersJson().contains("128"));
+                }).accept(KEYSPACE);
+            });
+        }
+    }
+
