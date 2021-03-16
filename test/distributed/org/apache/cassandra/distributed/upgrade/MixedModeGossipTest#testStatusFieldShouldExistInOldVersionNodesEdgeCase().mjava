@@ -1,0 +1,49 @@
+    /**
+     * Similar to {@link #testStatusFieldShouldExistInOldVersionNodes}, but in an edge case that
+     * 1) node2 and node3 cannot gossip with each other.
+     * 2) node2 sends SYN to node1 first when upgrading.
+     * 3) node3 is at the lower version during the cluster upgrade
+     * In this case, node3 gossip info does not contain STATUS field for node2
+     */
+    @Test
+    public void testStatusFieldShouldExistInOldVersionNodesEdgeCase() throws Throwable
+    {
+        AtomicReference<IMessageFilters.Filter> n1GossipSynBlocker = new AtomicReference<>();
+        new TestCase()
+        .withConfig(c -> c.with(Feature.GOSSIP, Feature.NETWORK))
+        .nodes(3)
+        .nodesToUpgradeOrdered(1, 2, 3)
+        .upgrade(Versions.Major.v30, Versions.Major.v4)
+        .upgrade(Versions.Major.v3X, Versions.Major.v4)
+        .setup(cluster -> {
+            // node2 and node3 gossiper cannot talk with each other
+            cluster.filters().verbs(Verb.GOSSIP_DIGEST_SYN.id).from(2).to(3).drop();
+            cluster.filters().verbs(Verb.GOSSIP_DIGEST_SYN.id).from(3).to(2).drop();
+        })
+        .runAfterNodeUpgrade((cluster, node) -> {
+            // let node2 sends the SYN to node1 first
+            if (node == 1)
+            {
+                IMessageFilters.Filter filter = cluster.filters().verbs(Verb.GOSSIP_DIGEST_SYN.id).from(1).to(2).drop();
+                n1GossipSynBlocker.set(filter);
+            }
+            else if (node == 2)
+            {
+                n1GossipSynBlocker.get().off();
+                String node3GossipView = cluster.get(3).nodetoolResult("gossipinfo").getStdout();
+                String node2GossipState = getGossipStateOfNode(node3GossipView, "/127.0.0.2");
+                Assertions.assertThat(node2GossipState)
+                          .as("The node2's gossip state from node3's perspective should contain status. " +
+                              "And it should carry an unrecognized field X3 with NORMAL.")
+                          .containsPattern(expectedNormalStatus)
+                          .containsPattern(expectedNormalX3);
+            }
+        })
+        .runAfterClusterUpgrade(cluster -> {
+            // wait 1 minute for `org.apache.cassandra.gms.Gossiper.upgradeFromVersionSupplier` to update
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MINUTES);
+            checkPeerGossipInfoOfAllNodesShouldContainNewStatusAfterUpgrade(cluster);
+        })
+        .run();
+    }
+

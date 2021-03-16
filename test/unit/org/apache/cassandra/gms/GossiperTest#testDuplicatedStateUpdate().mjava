@@ -4,6 +4,7 @@
         VersionedValue.VersionedValueFactory valueFactory =
             new VersionedValue.VersionedValueFactory(DatabaseDescriptor.getPartitioner());
 
+        SimpleStateChangeListener stateChangeListener = null;
         Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, hostIds, 2);
         try
         {
@@ -22,28 +23,12 @@
             VersionedValue tokensValue = valueFactory.tokens(Collections.singletonList(token));
             proposedRemoteState.addApplicationState(ApplicationState.TOKENS, tokensValue);
 
-            Gossiper.instance.register(
-            new IEndpointStateChangeSubscriber()
-            {
-                public void onJoin(InetAddressAndPort endpoint, EndpointState epState) { }
-
-                public void beforeChange(InetAddressAndPort endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) { }
-
-                public void onChange(InetAddressAndPort endpoint, ApplicationState state, VersionedValue value)
-                {
-                    assertEquals(ApplicationState.TOKENS, state);
-                    stateChangedNum++;
-                }
-
-                public void onAlive(InetAddressAndPort endpoint, EndpointState state) { }
-
-                public void onDead(InetAddressAndPort endpoint, EndpointState state) { }
-
-                public void onRemove(InetAddressAndPort endpoint) { }
-
-                public void onRestart(InetAddressAndPort endpoint, EndpointState state) { }
-            }
-            );
+            stateChangeListener = new SimpleStateChangeListener();
+            stateChangeListener.setOnChangeVerifier(onChangeParams -> {
+                assertEquals(ApplicationState.TOKENS, onChangeParams.state);
+                stateChangedNum++;
+            });
+            Gossiper.instance.register(stateChangeListener);
 
             stateChangedNum = 0;
             Gossiper.instance.applyStateLocally(ImmutableMap.of(remoteHostAddress, proposedRemoteState));
@@ -71,6 +56,8 @@
         {
             // clean up the gossip states
             Gossiper.instance.endpointStateMap.clear();
+            if (stateChangeListener != null)
+                Gossiper.instance.unregister(stateChangeListener);
         }
     }
 
