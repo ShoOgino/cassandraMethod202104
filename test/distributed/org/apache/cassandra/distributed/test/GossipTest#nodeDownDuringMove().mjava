@@ -1,0 +1,77 @@
+    @Test
+    public void nodeDownDuringMove() throws Throwable
+    {
+        int liveCount = 1;
+        try (Cluster cluster = Cluster.build(2 + liveCount)
+                                      .withConfig(config -> config.with(NETWORK).with(GOSSIP))
+                                      .createWithoutStarting())
+        {
+            int fail = liveCount + 1;
+            int late = fail + 1;
+            for (int i = 1 ; i <= liveCount ; ++i)
+                cluster.get(i).startup();
+            cluster.get(fail).startup();
+            Collection<String> expectTokens =
+                cluster.get(fail)
+                       .callsOnInstance(() -> StorageService.instance.getTokenMetadata()
+                                                                     .getTokens(FBUtilities.getBroadcastAddressAndPort())
+                                                                     .stream()
+                                                                     .map(Object::toString)
+                                                                     .collect(Collectors.toList()))
+                       .call();
+
+            InetSocketAddress failAddress = cluster.get(fail).broadcastAddress();
+            // wait for NORMAL state
+            for (int i = 1 ; i <= liveCount ; ++i)
+            {
+                cluster.get(i).acceptsOnInstance((InetSocketAddress address) -> {
+                    EndpointState ep;
+                    InetAddressAndPort endpoint = toCassandraInetAddressAndPort(address);
+                    while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                           || ep.getApplicationState(ApplicationState.STATUS_WITH_PORT) == null
+                           || !ep.getApplicationState(ApplicationState.STATUS_WITH_PORT).value.startsWith("NORMAL"))
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10L));
+                }).accept(failAddress);
+            }
+
+            // set ourselves to MOVING, and wait for it to propagate
+            cluster.get(fail).runOnInstance(() -> {
+                Token token = Iterables.getFirst(StorageService.instance.getTokenMetadata().getTokens(FBUtilities.getBroadcastAddressAndPort()), null);
+                Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS_WITH_PORT, StorageService.instance.valueFactory.moving(token));
+            });
+            for (int i = 1 ; i <= liveCount ; ++i)
+            {
+                cluster.get(i).acceptsOnInstance((InetSocketAddress address) -> {
+                    EndpointState ep;
+                    InetAddressAndPort endpoint = toCassandraInetAddressAndPort(address);
+                    while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                           || (ep.getApplicationState(ApplicationState.STATUS_WITH_PORT) == null
+                           || !ep.getApplicationState(ApplicationState.STATUS_WITH_PORT).value.startsWith("MOVING")))
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100L));
+                }).accept(failAddress);
+            }
+
+            cluster.get(fail).shutdown(false).get();
+            cluster.get(late).startup();
+            cluster.get(late).acceptsOnInstance((InetSocketAddress address) -> {
+                EndpointState ep;
+                InetAddressAndPort endpoint = toCassandraInetAddressAndPort(address);
+                while (null == (ep = Gossiper.instance.getEndpointStateForEndpoint(endpoint))
+                       || !ep.getApplicationState(ApplicationState.STATUS_WITH_PORT).value.startsWith("MOVING"))
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100L));
+            }).accept(failAddress);
+
+            Collection<String> tokens =
+                cluster.get(late)
+                       .appliesOnInstance((InetSocketAddress address) ->
+                                          StorageService.instance.getTokenMetadata()
+                                                                 .getTokens(toCassandraInetAddressAndPort(address))
+                                                                 .stream()
+                                                                 .map(Object::toString)
+                                                                 .collect(Collectors.toList()))
+                       .apply(failAddress);
+
+            Assert.assertEquals(expectTokens, tokens);
+        }
+    }
+
