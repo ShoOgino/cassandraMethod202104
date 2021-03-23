@@ -6,9 +6,7 @@
         int numPartitions = 1000;
 
         CompactionManager.instance.disableAutoCompaction();
-        Keyspace keyspace = Keyspace.open(KEYSPACE);
         ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(COUNTER_CF);
-        cfs.clearUnsafe();
 
         fillCounterCF(cfs, numPartitions);
 
@@ -22,17 +20,19 @@
         overrideWithGarbage(sstable, ByteBufferUtil.bytes("0"), ByteBufferUtil.bytes("1"));
 
         // with skipCorrupted == false, the scrub is expected to fail
-        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Collections.singletonList(sstable), OperationType.SCRUB);
              Scrubber scrubber = new Scrubber(cfs, txn, false, true))
         {
             scrubber.scrub();
             fail("Expected a CorruptSSTableException to be thrown");
         }
-        catch (IOError err) {}
+        catch (IOError err) {
+            assertTrue(err.getCause() instanceof CorruptSSTableException);
+        }
 
         // with skipCorrupted == true, the corrupt rows will be skipped
         Scrubber.ScrubResult scrubResult;
-        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
+        try (LifecycleTransaction txn = cfs.getTracker().tryModify(Collections.singletonList(sstable), OperationType.SCRUB);
              Scrubber scrubber = new Scrubber(cfs, txn, true, true))
         {
             scrubResult = scrubber.scrubWithResult();
@@ -41,16 +41,15 @@
         assertNotNull(scrubResult);
 
         boolean compression = Boolean.parseBoolean(System.getProperty("cassandra.test.compression", "false"));
+        assertEquals(0, scrubResult.emptyRows);
         if (compression)
         {
-            assertEquals(0, scrubResult.emptyRows);
             assertEquals(numPartitions, scrubResult.badRows + scrubResult.goodRows);
             //because we only corrupted 1 chunk and we chose enough partitions to cover at least 3 chunks
             assertTrue(scrubResult.goodRows >= scrubResult.badRows * 2);
         }
         else
         {
-            assertEquals(0, scrubResult.emptyRows);
             assertEquals(1, scrubResult.badRows);
             assertEquals(numPartitions-1, scrubResult.goodRows);
         }
