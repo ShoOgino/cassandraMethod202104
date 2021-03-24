@@ -1,0 +1,27 @@
+    private void checkDataReceived(Cluster cluster, int node, int peer, long receivedBytes, int files)
+    {
+        InetAddressAndPort address = getNodeAddress(cluster, peer);
+        cluster.get(node).runOnInstance(() -> {
+
+            StreamingMetrics metrics = StreamingMetrics.get(address);
+
+            long actual = metrics.incomingBytes.getCount();
+            assertThat(actual)
+                .describedAs("The amount of data received by node" + node + " from node" + peer + " is not the expected one. [expected: " + receivedBytes + ", actual: " + actual + "]")
+                .isEqualTo(receivedBytes);
+
+            actual = metrics.incomingProcessTime.getCount();
+            // The incomingProcessTime timer is updated for each incoming file. By consequence incomingProcessTime.getCount() should be equals to the number of files received by the node.
+            assertThat(actual)
+                .describedAs("The amount of files received by node" + node + " from node" + peer + " is not the expected one. [expected: " + files + ", actual: " + actual + "]")
+                .isEqualTo(files);
+
+            if (metrics.incomingProcessTime.getCount() != 0)
+            {
+                assertThat(metrics.incomingProcessTime.getSnapshot().getMedian())
+                    .describedAs("The median processing time for data streamed from node"+ peer + " to node" + node + " should be non-0")
+                    .isGreaterThan(0);
+            }
+        });
+    }
+

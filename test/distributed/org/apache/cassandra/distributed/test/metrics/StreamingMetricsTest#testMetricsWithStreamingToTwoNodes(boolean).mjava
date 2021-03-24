@@ -1,0 +1,142 @@
+    public void testMetricsWithStreamingToTwoNodes(boolean useRepair) throws Exception
+    {
+        try(Cluster cluster = init(Cluster.build(3)
+                                          .withDataDirCount(1)
+                                          .withConfig(config -> config.with(NETWORK)
+                                                                      .set("stream_entire_sstables", false)
+                                                                      .set("hinted_handoff_enabled", false))
+                                          .start(), 2))
+        {
+            cluster.schemaChange(String.format("CREATE TABLE %s.cf (k text, c1 text, c2 text, PRIMARY KEY (k)) WITH compaction = {'class': '%s', 'enabled': 'false'}", KEYSPACE, "LeveledCompactionStrategy"));
+
+            final int rowsPerFile = 500;
+            final int files = 5;
+
+            cluster.get(3).shutdown().get(10, TimeUnit.SECONDS);
+            cluster.get(1).nodetool("disableautocompaction", KEYSPACE);
+            cluster.get(2).nodetool("disableautocompaction", KEYSPACE);
+
+            int sstablesInitiallyOnNode2 = 0;
+            int sstablesInitiallyOnNode3 = 0;
+
+            for (int k = 0; k < 3; k++)
+            {
+                for (int i = k * rowsPerFile; i < k * rowsPerFile + rowsPerFile; ++i)
+                {
+                    cluster.coordinator(1).execute(withKeyspace("INSERT INTO %s.cf (k, c1, c2) VALUES (?, 'value1', 'value2');"),
+                                                   ConsistencyLevel.ONE,
+                                                   Integer.toString(i));
+                }
+                cluster.get(1).nodetool("flush");
+                cluster.get(2).nodetool("flush");
+                sstablesInitiallyOnNode2++;
+            }
+
+            cluster.get(3).startup();
+            cluster.get(3).nodetool("disableautocompaction", KEYSPACE);
+
+            cluster.get(2).shutdown().get(10, TimeUnit.SECONDS);
+
+            for (int k = 3; k < files; k++)
+            {
+                for (int i = k * rowsPerFile; i < k * rowsPerFile + rowsPerFile; ++i)
+                {
+                    cluster.coordinator(1).execute(withKeyspace("INSERT INTO %s.cf (k, c1, c2) VALUES (?, 'value1', 'value2');"),
+                                                   ConsistencyLevel.ONE,
+                                                   Integer.toString(i));
+                }
+                cluster.get(1).nodetool("flush");
+                cluster.get(3).nodetool("flush");
+                sstablesInitiallyOnNode3++;
+            }
+
+            cluster.get(2).startup();
+            cluster.get(2).nodetool("disableautocompaction", KEYSPACE);
+
+            checkThatNoStreamingOccuredBetweenTheThreeNodes(cluster);
+
+            // Trigger streaming from node 3 and node 2
+
+            long bytesFrom2To1;
+            int sstablesFrom2To1;
+
+            long bytesFrom3To1;
+            int sstablesFrom3To1;
+
+            int sstablesFrom3To2;
+            int sstablesFrom2To3;
+
+            if (useRepair)
+            {
+                cluster.get(3).nodetool("repair", "--full");
+                cluster.get(2).nodetool("repair", "--full");
+
+                bytesFrom2To1 = checkDataSent(cluster, 2, 1);
+                sstablesFrom2To1 = sstablesInitiallyOnNode2;
+
+                bytesFrom3To1 = checkDataSent(cluster, 3, 1) ;
+                sstablesFrom3To1 = sstablesInitiallyOnNode3;
+
+                sstablesFrom2To3 = sstablesInitiallyOnNode2;
+                sstablesFrom3To2 = sstablesInitiallyOnNode3;
+            }
+            else
+            {
+                cluster.get(3).nodetool("rebuild", "--keyspace", KEYSPACE);
+                cluster.get(2).nodetool("rebuild", "--keyspace", KEYSPACE);
+
+                bytesFrom2To1 = 0;
+                sstablesFrom2To1 = 0;
+
+                bytesFrom3To1 = 0;
+                sstablesFrom3To1 = 0;
+
+                sstablesFrom2To3 = sstablesInitiallyOnNode2;
+                sstablesFrom3To2 = sstablesInitiallyOnNode3 + sstablesInitiallyOnNode2;
+            }
+
+            // Check streaming metrics on node 1
+            long bytesFrom1To2 = checkDataSent(cluster, 1, 2);
+            long bytesFrom1To3 = checkDataSent(cluster, 1, 3);
+
+            long totalBytesSentFrom1 = bytesFrom1To2 + bytesFrom1To3;
+
+            if (useRepair)
+                checkTotalDataSent(cluster, 1, totalBytesSentFrom1, totalBytesSentFrom1, 10);
+            else
+                checkTotalDataSent(cluster, 1, totalBytesSentFrom1, 0, 0);
+
+            checkDataReceived(cluster, 1, 2, bytesFrom2To1, sstablesFrom2To1);
+            checkDataReceived(cluster, 1, 3, bytesFrom3To1, sstablesFrom3To1);
+            checkTotalDataReceived(cluster, 1, bytesFrom2To1 + bytesFrom3To1);
+
+            // Check streaming metrics on node 2 and 3
+            long bytesFrom2To3 = checkDataSent(cluster, 2, 3);
+            long bytesFrom3To2 = checkDataSent(cluster, 3, 2);
+
+            long totalBytesReceivedBy2 = bytesFrom1To2 + bytesFrom3To2;
+
+            checkDataReceived(cluster, 2, 1, bytesFrom1To2, files);
+            checkDataReceived(cluster, 2, 3, bytesFrom3To2, sstablesFrom3To2);
+
+            if (useRepair)
+                checkTotalDataSent(cluster, 2, bytesFrom2To3 + bytesFrom2To1, bytesFrom2To3 + bytesFrom2To1, sstablesFrom2To3 + sstablesFrom2To1);
+            else
+                checkTotalDataSent(cluster, 2, bytesFrom2To3, 0, 0);
+
+            checkTotalDataReceived(cluster, 2, totalBytesReceivedBy2);
+
+            long totalBytesReceivedBy3 = bytesFrom1To3 + bytesFrom2To3;
+
+            checkDataReceived(cluster, 3, 1, bytesFrom1To3, files);
+            checkDataReceived(cluster, 3, 2, bytesFrom2To3, sstablesFrom2To3);
+
+            if (useRepair)
+                checkTotalDataSent(cluster, 3, bytesFrom3To2 + bytesFrom3To1, bytesFrom3To2 + bytesFrom3To1, sstablesFrom3To2 + sstablesFrom3To1);
+            else
+                checkTotalDataSent(cluster, 3, bytesFrom3To2, 0, 0);
+
+            checkTotalDataReceived(cluster, 3, totalBytesReceivedBy3);
+        }
+    }
+
